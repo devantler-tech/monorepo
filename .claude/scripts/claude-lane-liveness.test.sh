@@ -704,7 +704,9 @@ esac
 
 # --- The four fields with NO per-task fallback stay asserted store-wide ---------------------------
 # Narrowing the gate to one field is only safe while the others still abort: each of these makes
-# every lookup below return empty, and empty reads exactly like "nothing to report".
+# every lookup below return empty, and empty reads exactly like "nothing to report". `lastRunAt` is
+# asserted on the store as a whole (monorepo#4156): this single-task store has no other record that
+# carries it, so removing it here still aborts.
 for missing in id enabled lastRunAt cronExpression; do
   mkcase "gate_$missing"
   mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
@@ -791,6 +793,57 @@ expect_msg 2 "named twice" "a repeated id is UNKNOWN" --task alpha,alpha
 expect_msg 2 "empty task id" "an empty id in the list is UNKNOWN" --task alpha,,beta
 expect_msg 2 "empty task id" "a trailing comma is UNKNOWN" --task alpha,
 expect_msg 2 "at most four" "more than four ids is UNKNOWN" --task a,b,c,d,e
+
+# --- AN ENTRY THAT HAS NEVER RUN MUST NOT BLIND THE REST (monorepo#4156) ---------------------------
+# The real store writes no `lastRunAt` (and no `lastScheduledFor`) on an entry until its first
+# dispatch. Asserting the field on EVERY record made one never-run entry, switched off or not, turn
+# the whole check UNKNOWN: the lane's running entry could no longer be judged at all. The field is
+# missing from one record here, never from all, so it is that entry's finding and nobody else's.
+never_run() {
+  jq --arg id "$1" '(.scheduledTasks[] | select(.id == $id)) |= del(.lastRunAt, .lastScheduledFor)' \
+    "$STORE" > "$STORE.tmp" && mv "$STORE.tmp" "$STORE"
+}
+mkcase never_run_switched_off
+mkstore "$STORE" alpha true "$H" beta false "$H"
+never_run beta
+mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
+expect 0 "a switched-off entry that never ran does not hide the healthy entry" --task alpha
+expect 0 "a switched-off entry that never ran does not blind the unfiltered read"
+expect_msg 0 "OK  alpha" "the healthy entry is judged on its own run" --task alpha
+expect 2 "the never-run switched-off entry itself is UNKNOWN, never a verdict" --task beta
+expect_stdout "  NOT-SCHEDULED  beta -- the scheduler holds this entry switched off" \
+  "a never-run switched-off entry is named as not scheduled" --task beta
+# CONTROL: the same store with a DEAD first entry still reads NOT-PRODUCING, so the narrowed gate
+# did not turn "could not check" into "healthy".
+mkcase never_run_switched_off_dead
+mkstore "$STORE" alpha true "$H" beta false "$H"
+never_run beta
+mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 0 5 >/dev/null
+expect_msg 1 "NOT-PRODUCING  alpha" "control: a dead entry beside a never-run one is still seen" --task alpha
+
+mkcase never_run_enabled
+mkstore "$STORE" alpha true "$H" beta true "$H"
+never_run beta
+mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
+expect 0 "an enabled entry that never ran does not hide the healthy entry" --task alpha
+expect_msg 2 "UNKNOWN  beta -- no lastRunAt recorded" \
+  "an enabled entry that never ran is UNKNOWN on its own line" --task alpha,beta
+expect_msg 2 "OK  alpha" "the healthy entry is still reported beside the never-run one" --task alpha,beta
+asserts=$(( asserts + 1 ))
+case "$(stdout_of --task alpha,beta)" in
+  *NOT-SCHEDULED*) note_fail "an enabled never-run entry must not be named as not scheduled" ;;
+  *) : ;;
+esac
+
+# CONTROL: the store-wide gate still fires when NO record carries the field. A renamed field makes
+# every lookup empty, and that must stay an unexpected schema rather than a row of per-entry lines.
+mkcase never_run_all
+mkstore "$STORE" alpha true "$H" beta true "$H"
+never_run alpha
+never_run beta
+mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
+expect_msg 2 "unexpected store schema: no scheduled task carries .lastRunAt" \
+  "a store in which no record carries lastRunAt is an unexpected schema"
 
 echo "claude-lane-liveness.test.sh: $asserts assertion(s), $fails failure(s)"
 completed=1
