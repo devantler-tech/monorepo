@@ -9785,6 +9785,15 @@ n=$(cxgone_sleeps); [ "$n" = 2 ] && ok "gone worktree: a recorded portfolio addr
 OUT=$(cxgone_run a2a)
 check "gone worktree: read transcripts are counted"                    "$OUT" "codex sessions in window ... 2  (scope-filtered)"
 check "gone worktree: the left-out count does not include read ones"   "$OUT" "left out, worktree gone and no portfolio address recorded: 3"
+# A recorded folder holding a line break must not supply its own address: its
+# second line reads like a portfolio address, and the record carries none.
+cxgone_file twoline "$FIX/cxgone/worktrees/gone6/monorepo/x\\ngit@github.com:devantler-tech/monorepo.git" '' 23
+n=$(cxgone_sleeps); [ "$n" = 2 ] && ok "gone worktree: a folder value with a line break admits nothing" \
+  || bad "gone worktree: a folder value with a line break admits nothing" "sleep count '$n', expected 2"
+# The same for an address value: only its first line would be compared.
+cxgone_file twolineurl "$FIX/cxgone/worktrees/gone7/monorepo" '{"repository_url":"git@github.com:devantler-tech/monorepo.git\nx"}' 24
+n=$(cxgone_sleeps); [ "$n" = 2 ] && ok "gone worktree: an address value with a line break admits nothing" \
+  || bad "gone worktree: an address value with a line break admits nothing" "sleep count '$n', expected 2"
 # A folder that EXISTS but cannot be read is not an empty folder (review of
 # monorepo#4147): the report must say unknown and exit 2, never print a clean
 # Codex count. Root reads through any mode, so the case cannot be built as root.

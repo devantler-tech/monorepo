@@ -2373,11 +2373,15 @@ codex_session_walk() {
         # header without touching conversation records.
         # Two values, one per line: the recorded cwd, then the recorded
         # repository address (empty when the record has none or it is not text).
+        # A value holding a line break is read as EMPTY: printed raw it would
+        # span two lines, and a folder value's second line would then be taken
+        # as the address — a transcript with no recorded address admitting itself.
         cwd=''; rurl=''
         { IFS= read -r cwd; IFS= read -r rurl; } < <(head -n 1 "$f" 2>/dev/null \
-              | jq -r 'select(.type=="session_meta")
-                       | (.payload.cwd? // .cwd? // ""),
-                         ((.payload.git? | objects | .repository_url? | strings) // "")' 2>/dev/null) || true
+              | jq -r 'def oneline: if type == "string" and (test("[\n\r]") | not) then . else "" end;
+                       select(.type=="session_meta")
+                       | ((.payload.cwd? // .cwd? // "") | oneline),
+                         (((.payload.git? | objects | .repository_url? | strings) // "") | oneline)' 2>/dev/null) || true
         in_scope_cwd "$cwd" "$rurl" && rc=0 || rc=$?
         case "$rc" in
           0) printf 'F %s\n' "$f" ;;
