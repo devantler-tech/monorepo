@@ -2351,6 +2351,31 @@ codex_session_files() {
       done | head -n "$MAX_FILES"
 }
 
+# Names every Codex transcript folder that EXISTS but could not be read in full,
+# one per line. An absent folder is a known empty reading (an older runtime has
+# no archive folder); a folder or a transcript the walk cannot open is not — the
+# listing above discards `find`'s errors and treats an unreadable first record as
+# out of scope, so without this check a failed read would print a clean count.
+codex_unreadable_folders() {
+  local d list f
+  for d in sessions archived_sessions; do
+    [ -d "$CODEX_HOME/$d" ] || continue
+    # Listed twice before it counts as unreadable: the app moves a transcript
+    # between the two folders when a run settles, and a file that vanishes
+    # mid-listing makes one `find` fail on a folder that reads fine.
+    if ! list=$(find "$CODEX_HOME/$d" -name '*.jsonl' -mtime "-${SINCE_DAYS}" 2>/dev/null) \
+       && ! list=$(find "$CODEX_HOME/$d" -name '*.jsonl' -mtime "-${SINCE_DAYS}" 2>/dev/null); then
+      printf '%s\n' "$d"; continue
+    fi
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      # A transcript the app moved between the listing and this test is gone,
+      # not unreadable: only a file that is still there and cannot be opened counts.
+      if [ -e "$f" ] && [ ! -r "$f" ]; then printf '%s\n' "$d"; break; fi
+    done <<<"$list"
+  done
+}
+
 SF_CACHE=''
 SF_COUNT=0
 WINDOW_SINCE=''
@@ -2358,6 +2383,7 @@ CX_CACHE=''
 CX_COUNT=0
 CX_LIVE=0
 CX_ARCHIVED=0
+CX_UNREADABLE=''
 ALL_CACHE=''
 
 # ── The window cutoff, computed ONCE for every section that bounds by record ──
@@ -2390,6 +2416,7 @@ populate_session_cache() {
   WINDOW_SINCE=$(date -u -v-"${SINCE_DAYS}"d '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null \
                  || date -u -d "${SINCE_DAYS} days ago" '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null)
   [ "$SAFETY_SCOPE" = claude ] || CX_CACHE="$(codex_session_files)"
+  [ "$SAFETY_SCOPE" = claude ] || CX_UNREADABLE="$(codex_unreadable_folders)"
   CX_COUNT=$(printf '%s' "$CX_CACHE" | grep -c . || true)
   # How many listed transcripts came from each folder, so a folder the walk never
   # reached is visible in the output instead of being inferred from the total.
@@ -2427,6 +2454,16 @@ if [ "$SAFETY_WORKER" = 0 ] && [ "$SECTION" = safety ]; then
   SF_COUNT='bounded inside safety worker'
 else
   populate_session_cache
+fi
+# An unreadable Codex folder makes every Codex figure below incomplete: name it
+# and carry it to the exit status (.claude/scripts/AGENTS.md: a failed read is
+# exit 2, never a clean result).
+if [ -n "$CX_UNREADABLE" ]; then
+  while IFS= read -r cx_dir; do
+    echo " UNKNOWN: the Codex folder ${cx_dir}/ exists but could not be read in full —"
+    echo "          every Codex figure in this report is incomplete, not zero."
+  done <<<"$CX_UNREADABLE"
+  main_rc=2
 fi
 if [ "$SAFETY_WORKER" = 0 ] || { [ "$SAFETY_STANDALONE" = 1 ] && [ "$SAFETY_SCOPE" != codex ]; }; then
 echo "════════════════════════════════════════════════════════════════"

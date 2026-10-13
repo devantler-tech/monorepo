@@ -9739,6 +9739,31 @@ check "archived Codex run: each folder has its own count"      "$OUT" "from sess
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxonly" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1)
 check "archived Codex run: a missing archive folder reads zero, not an error" "$OUT" "from sessions/ 1, from archived_sessions/ 0"
+# A folder that EXISTS but cannot be read is not an empty folder (review of
+# monorepo#4147): the report must say unknown and exit 2, never print a clean
+# Codex count. Root reads through any mode, so the case cannot be built as root.
+if [ "$(id -u)" -ne 0 ]; then
+  mkdir -p "$FIX/cxlocked/sessions" "$FIX/cxlocked/archived_sessions"
+  cxarch_file "$FIX/cxlocked/sessions/rollout-live.jsonl" "$FIX/cxlocked" "ok"
+  chmod 000 "$FIX/cxlocked/archived_sessions"
+  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxlocked" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+  chmod 700 "$FIX/cxlocked/archived_sessions"
+  check "unreadable Codex folder: the report names it as unknown" "$OUT" "UNKNOWN: the Codex folder archived_sessions/ exists but could not be read in full"
+  if [ "$rc" -eq 2 ]; then ok "unreadable Codex folder: exit 2"; else bad "unreadable Codex folder: exit 2" "exit $rc"; fi
+  # The same corpus once readable is a known reading again.
+  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxlocked" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+  nocheck "readable Codex folders: no unknown line" "$OUT" "UNKNOWN: the Codex folder"
+  if [ "$rc" -eq 0 ]; then ok "readable Codex folders: exit 0"; else bad "readable Codex folders: exit 0" "exit $rc"; fi
+  # One transcript that cannot be opened is the same unknown, not a transcript out of scope.
+  chmod 000 "$FIX/cxlocked/sessions/rollout-live.jsonl"
+  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxlocked" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+  chmod 600 "$FIX/cxlocked/sessions/rollout-live.jsonl"
+  check "unreadable Codex transcript: the report names its folder as unknown" "$OUT" "UNKNOWN: the Codex folder sessions/ exists but could not be read in full"
+  if [ "$rc" -eq 2 ]; then ok "unreadable Codex transcript: exit 2"; else bad "unreadable Codex transcript: exit 2" "exit $rc"; fi
+fi
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
