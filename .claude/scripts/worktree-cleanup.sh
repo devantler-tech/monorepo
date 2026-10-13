@@ -116,6 +116,12 @@
 # parent's status) makes the worktree a salvage candidate in the same way, past the
 # salvage age. Which branch or tag held a commit is in the parent's
 # module-files tree (<label>/refs/..., packed-refs, logs/...).
+# The Claude desktop app writes an empty `claude-desktop-worktree` file into the admin
+# directory of each session worktree it creates (#4152). That empty regular file is the one
+# entry git did not write that the removal may delete: the manifest row of any reaped
+# worktree that held it gains a `desktop-marker=empty` field, and restoring the marker is
+# `: > "$(git -C <dir> rev-parse --absolute-git-dir)/claude-desktop-worktree"`. With
+# content, or as a link or directory, it keeps the worktree like any unlisted entry.
 # Restore a submodule's work from the manifest row alone, with D=<git directory>/<label>
 # (the git directory is the main checkout's .git):
 #   git --git-dir="$D" --work-tree="$D" worktree add --detach <dir> refs/salvaged/<id>/head
@@ -2829,6 +2835,11 @@ worktree_state_blocker() {
     case "${entry##*/}" in
       HEAD|ORIG_HEAD|FETCH_HEAD|COMMIT_EDITMSG|commondir|gitdir|index|config.worktree|logs|refs|modules)
         entry_type_ok "$entry" || { SALVAGE_NOTE="the worktree's ${entry##*/} is not the kind of entry git writes there"; return 0; } ;;
+      # The Claude desktop app drops an empty marker into each session worktree's admin
+      # directory (#4152). An empty regular file carries nothing to lose, and the manifest
+      # row notes it; with content, or as a link or directory, it is unlisted state.
+      claude-desktop-worktree)
+        desktop_marker_empty "$entry" || { SALVAGE_NOTE="the worktree's ${entry##*/} is not the empty marker the desktop app writes (salvage cannot carry it)"; return 0; } ;;
       *) SALVAGE_NOTE="the worktree's git state holds ${entry##*/} (salvage cannot carry it)"; return 0 ;;
     esac
   done
@@ -2889,6 +2900,10 @@ worktree_state_blocker() {
   fi
   return 1
 }
+
+# desktop_marker_empty <path> -> 0 only for an empty regular file that is not a symlink: the
+# one form of the desktop app's marker the removal can delete without losing anything.
+desktop_marker_empty() { [ -f "$1" ] && [ ! -L "$1" ] && [ ! -s "$1" ]; }
 
 # entry_type_ok <path> -> 0 when a whitelisted git-directory entry has the type git gives it:
 # the directory-shaped names are real directories, everything else a file (a symlink to a
@@ -3873,6 +3888,11 @@ while IFS= read -r wt <&3; do
   # carried: the same ref names exist in that repository of the main checkout.
   [ -n "$SALVAGE_SUBMODULES" ] && reach_evidence="$reach_evidence;$SALVAGE_SUBMODULES"
   [ -n "$RESOLVE_UNDO_REF" ] && reach_evidence="$reach_evidence;resolve-undo=$RESOLVE_UNDO_REF"
+  # The desktop app's empty marker dies with the admin directory; the row keeps the fact,
+  # so a restore can tell the folder was a desktop-app session (#4152).
+  desktop_admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) \
+    && desktop_marker_empty "$desktop_admin/claude-desktop-worktree" \
+    && reach_evidence="$reach_evidence;desktop-marker=empty"
   if ! record "$wt_real" "$branch" "$sha" "$reach_evidence;no-live-process;age=${age_h}h;ignored=${ign:-0}" pending; then
     die "cannot write the restore manifest ($MANIFEST) — aborting before any removal"
   fi

@@ -3161,6 +3161,55 @@ t_salvage_keeps_unlisted_git_state() {
   rm -rf "$root"
 }
 
+
+t_salvage_carries_the_empty_desktop_marker() {
+  # The desktop app's empty marker (#4152) must not keep abandoned work from being saved;
+  # the manifest row keeps the fact that it was there. A worktree without one says nothing.
+  local name="salvage apply reaps a worktree holding the empty desktop marker and records it"
+  local root; root=$(make_repo)
+  abandoned_wt "$root" desk || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  abandoned_wt "$root" plain || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/desk" admin
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  : > "$admin/claude-desktop-worktree"
+  local out; out=$(run_salvage "$root" apply 1)
+  local problems=""
+  [ -e "$wt" ] && problems="$problems worktree-still-present"
+  grep -q '^SALVAGED .*desk .*refs/salvaged/' <<<"$out" || problems="$problems no-SALVAGED-line"
+  grep '/desk	' "$root/manifest.tsv" 2>/dev/null | grep -q 'salvaged=.*;desktop-marker=empty;' \
+    || problems="$problems manifest-lacks-marker"
+  grep '/plain	' "$root/manifest.tsv" 2>/dev/null | grep -q 'salvaged=' || problems="$problems control-not-recorded"
+  grep '/plain	' "$root/manifest.tsv" 2>/dev/null | grep -q 'desktop-marker' && problems="$problems control-claims-marker"
+  if [ -z "$problems" ]; then ok "$name"; else bad "$name" "$problems :: $out"; fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_desktop_marker_that_is_not_empty() {
+  # Only the empty regular file is known to carry nothing: content, a link or a directory
+  # under that name is unlisted state like any other.
+  local kind
+  for kind in content symlink directory; do
+    local name="salvage dry-run KEEPs a worktree whose desktop marker is a $kind"
+    local root; root=$(make_repo)
+    abandoned_wt "$root" desk || { bad "$name" "FIXTURE"; rm -rf "$root"; continue; }
+    local wt="$root/repo/.claude/worktrees/desk" admin
+    admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+    case "$kind" in
+      content) echo data > "$admin/claude-desktop-worktree" ;;
+      symlink) : > "$root/empty" && ln -s "$root/empty" "$admin/claude-desktop-worktree" ;;
+      directory) mkdir "$admin/claude-desktop-worktree" ;;
+    esac
+    local out; out=$(run_salvage "$root" dry-run 1)
+    if grep -q 'KEEP .*desk .*claude-desktop-worktree is not the empty marker' <<<"$out" \
+       && ! grep -q '^SALVAGE .*desk ' <<<"$out" && [ -e "$wt" ]; then
+      ok "$name"
+    else
+      bad "$name" "$out"
+    fi
+    rm -rf "$root"
+  done
+}
+
 t_salvage_keeps_a_filtered_path() {
   local name="salvage dry-run KEEPs a changed path with a clean filter"
   local root; root=$(make_repo)
@@ -6426,6 +6475,8 @@ t_salvage_keeps_an_intent_to_add_entry
 t_salvage_dry_run_refuses_an_unsnappable_gitlink_change
 t_salvage_keeps_a_hidden_edit_in_an_embedded_submodule
 t_salvage_keeps_unlisted_git_state
+t_salvage_carries_the_empty_desktop_marker
+t_salvage_keeps_a_desktop_marker_that_is_not_empty
 t_salvage_keeps_a_filtered_path
 t_salvage_keeps_a_submodule_mid_bisect
 t_salvage_keeps_when_file_modes_are_ignored
