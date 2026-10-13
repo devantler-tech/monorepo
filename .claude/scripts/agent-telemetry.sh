@@ -5845,6 +5845,11 @@ if want drift; then
   CLAUDE_ENGINEER_CREATED_SCHEDULES=""
   if [ "$CLAUDE_ENGINEER_ENTRY_COUNT" -eq 0 ]; then
     CLAUDE_ENGINEER_UNREADABLE="entry list is unreadable (CLAUDE_ENGINEER_ENTRIES: ids of lowercase letters, digits and hyphens, at most four, none twice)"
+  elif [ "$CLAUDE_ENGINEER_ENTRY_COUNT" -eq 1 ] \
+       && [ -f "$(claude_engineer_entry_loader "$CLAUDE_ENGINEER_ENTRY_IDS")" ] \
+       && claude_entry_switched_off "$CLAUDE_ENGINEER_ENTRY_IDS" \
+            "$(claude_engineer_entry_loader "$CLAUDE_ENGINEER_ENTRY_IDS")"; then
+    CLAUDE_ENGINEER_UNREADABLE="entry $CLAUDE_ENGINEER_ENTRY_IDS is switched off in the scheduler store"
   elif [ "$CLAUDE_ENGINEER_ENTRY_COUNT" -eq 1 ]; then
     CLAUDE_ENGINEER_ACTUAL=$(claude_store_schedule "$CLAUDE_SCHEDULE_STORE" \
       "$CLAUDE_ENGINEER_ENTRY_IDS" "$(claude_engineer_entry_loader "$CLAUDE_ENGINEER_ENTRY_IDS")")

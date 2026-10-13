@@ -1062,7 +1062,9 @@ unreadable_two() { # $1 = case label, $2 = the UNKNOWN text expected
     "claude engineer dispatch refusals: UNKNOWN (claude engineer schedule unmeasured)"
 }
 set_entry2 '(.scheduledTasks[] | select(.id == $id) | .enabled) = false'
-unreadable_two "a disabled second entry" "entry $ENTRY2 has no readable scheduler record"
+# A switched-off entry is named as that (monorepo#4158), and is as unreadable as
+# any other: no schedule, no drift of the lane, no figures.
+unreadable_two "a disabled second entry" "entry $ENTRY2 is switched off in the scheduler store"
 set_entry2 'del(.scheduledTasks[] | select(.id == $id))'
 unreadable_two "a second entry absent from the store" "entry $ENTRY2 has no readable scheduler record"
 set_entry2 '(.scheduledTasks[] | select(.id == $id) | .cronExpression) = "*/30 * * * *"'
@@ -1117,8 +1119,8 @@ check "a missing second loader is listed as missing" "$OUT" \
   "MISSING: $FIX/claude-sched/$ENTRY2/SKILL.md"
 mv "$FIX/claude-sched/$ENTRY2/SKILL.md.hidden" "$FIX/claude-sched/$ENTRY2/SKILL.md"
 # The scheduler store is found by the entries the lane names. Without an explicit
-# store path, a store qualifies only when it holds every named entry, enabled and
-# pointing at its own loader.
+# store path, a store qualifies only when it holds every named entry, switched on
+# or off, pointing at its own loader (monorepo#4158).
 mkdir -p "$FIX/claude-root/a/b"
 DISCOVER() { CLAUDE_SCHEDULE_STORE_PATH='' CLAUDE_SCHEDULE_STORE_ROOT="$FIX/claude-root" NOBASE "$@"; }
 cp "$FIX/claude-store/scheduled-tasks.json" "$FIX/claude-root/a/b/scheduled-tasks.json"
@@ -1134,11 +1136,18 @@ check "a store holding only the named replacement entry is discovered" "$OUT" \
   "claude engineer: expected=*@20 actual=*@20 MATCH"
 nocheck "a named replacement entry does not leave the store missing" "$OUT" \
   "MISSING: authoritative Claude scheduled-tasks store"
-# CONTROLS: the same store does not qualify for a lane that names an entry it
-# holds disabled, and discovery itself still works for the default lane.
+# CONTROLS: the same store is still the store for a lane that names an entry it
+# holds disabled (monorepo#4158), and that lane reads the entry's state, never a
+# schedule. Discovery itself still works for the default lane.
 OUT=$(DISCOVER --section drift)
-check "a store with a named entry disabled is not discovered" "$OUT" \
+nocheck "a store with a named entry disabled is still discovered" "$OUT" \
   "MISSING: authoritative Claude scheduled-tasks store"
+check "a one-entry lane whose entry is disabled says so" "$OUT" \
+  "UNKNOWN: claude engineer entry daily-ai-assistant is switched off in the scheduler store"
+nocheck "a one-entry lane whose entry is disabled never reads as a schedule" "$OUT" \
+  "claude engineer: expected="
+check "a one-entry lane whose entry is disabled suppresses the slot count" "$OUT" \
+  "local engineer slots scheduled/day: UNKNOWN"
 set_cadence_cell Claude 'Every hour at `:50`'
 cp "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-root/a/b/scheduled-tasks.json"
 OUT=$(DISCOVER --section drift)
