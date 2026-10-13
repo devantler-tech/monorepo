@@ -2428,6 +2428,19 @@ module_durable() {
   if grep -Eiq '^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter))$' <<< "$keys"; then
     DURABLE_NOTE="the main checkout's $rel is a partial clone"; return 2
   fi
+  # The copy is a fetch run in this repository, so its own configuration applies to it. A
+  # rule that rewrites URLs could point the source path at another repository or a network
+  # endpoint, and an include could bring such a rule from a file not read here.
+  if grep -Eiq '^(url\..*\.(insteadof|pushinsteadof)|include\.path|includeif\..*\.path)$' <<< "$keys"; then
+    DURABLE_NOTE="the main checkout's $rel rewrites URLs or includes other configuration"; return 2
+  fi
+  if [ -e "$d/config.worktree" ] || [ -L "$d/config.worktree" ]; then
+    keys=$(git config --file "$d/config.worktree" --name-only --list 2>/dev/null) \
+      || { DURABLE_NOTE="the main checkout's $rel has a worktree configuration that cannot be read"; return 2; }
+    if grep -Eiq '^(url\..*\.(insteadof|pushinsteadof)|include\.path|includeif\..*\.path)$' <<< "$keys"; then
+      DURABLE_NOTE="the main checkout's $rel rewrites URLs or includes other configuration"; return 2
+    fi
+  fi
   a=$(portfolio_repo "$(module_origin_url "$d" || true)")
   b=$(portfolio_repo "$(module_origin_url "$g" || true)")
   if [ -z "$a" ] || [ "$a" != "$b" ]; then
@@ -2632,7 +2645,7 @@ module_carry_write() {
   # rewrite there could name another source). The source is an absolute path.
   if ! GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_TERMINAL_PROMPT=0 GIT_NO_LAZY_FETCH=1 \
        module_git "$durable" -c core.hooksPath=/dev/null -c gc.auto=0 -c maintenance.auto=false \
-         -c protocol.file.allow=always -c uploadpack.allowAnySHA1InWant=true \
+         -c protocol.allow=never -c protocol.file.allow=always -c uploadpack.allowAnySHA1InWant=true \
          fetch --quiet --no-tags --no-recurse-submodules --no-write-fetch-head --no-auto-maintenance \
          -- "$g" "${specs[@]}" > /dev/null 2>&1; then
     SALVAGE_NOTE="cannot copy the work of $label into the main checkout's repository for it"; return 1

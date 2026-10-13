@@ -6260,6 +6260,26 @@ t_salvage_keeps_submodule_work_when_the_main_checkout_repository_is_a_partial_cl
     'git config --file "$d/config" remote.origin.promisor true'
 }
 
+t_salvage_keeps_submodule_work_when_the_main_checkout_repository_rewrites_urls() {
+  # The copy is a fetch run in the receiving repository, so a rewrite rule of its own could
+  # send it somewhere else, the network included.
+  keeps_uncarried "salvage KEEPs submodule work when the main checkout's repository rewrites URLs" rewritedurable \
+    'its work cannot be carried either: the main checkout.s modules/sub rewrites URLs or includes other configuration' \
+    'git config --file "$d/config" url.https://example.invalid/.insteadOf "$root/"'
+}
+
+t_salvage_keeps_submodule_work_when_the_main_checkout_repository_includes_configuration() {
+  keeps_uncarried "salvage KEEPs submodule work when the main checkout's repository includes other configuration" includedurable \
+    'its work cannot be carried either: the main checkout.s modules/sub rewrites URLs or includes other configuration' \
+    'git config --file "$d/config" include.path "$root/elsewhere.config"'
+}
+
+t_salvage_keeps_submodule_work_when_the_main_checkout_worktree_configuration_rewrites_urls() {
+  keeps_uncarried "salvage KEEPs submodule work when the main checkout's worktree configuration rewrites URLs" rewritewtdurable \
+    'its work cannot be carried either: the main checkout.s modules/sub rewrites URLs or includes other configuration' \
+    'git config --file "$d/config.worktree" url.https://example.invalid/.insteadOf "$root/"'
+}
+
 t_salvage_carries_one_submodule_and_clears_another() {
   # Two worktrees in one sweep: one whose submodule holds work, one whose submodule is
   # pristine. The pristine one is salvaged exactly as before, with nothing carried.
@@ -6535,6 +6555,9 @@ t_aborts_when_the_shared_git_directory_cannot_be_resolved
 t_salvage_keeps_submodule_work_when_its_namespace_already_exists
 t_salvage_limits_the_refs_carried_from_one_submodule
 t_salvage_keeps_submodule_work_when_the_main_checkout_repository_is_a_partial_clone
+t_salvage_keeps_submodule_work_when_the_main_checkout_repository_rewrites_urls
+t_salvage_keeps_submodule_work_when_the_main_checkout_repository_includes_configuration
+t_salvage_keeps_submodule_work_when_the_main_checkout_worktree_configuration_rewrites_urls
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 cleanup_test_finished=1
 [ "$fail" -eq 0 ]
