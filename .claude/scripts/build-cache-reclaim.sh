@@ -25,8 +25,10 @@
 #
 # What it covers, in the order it runs:
 #   1. GOCACHE and GOMODCACHE, each cleaned only when it exceeds cache_budget_gb.
-#   2. Per-run agent trees (codex-*, war-*, dpc-*, ksail-*) under the temp root, older
-#      than min_age_days.
+#   2. Per-run trees under the temp root: every directory there this user owns, whatever
+#      it is named, once nothing in it was written for a threshold counted in HOURS
+#      (2026-10-12: 14 GB of one-to-three-day-old trees, half under names no prefix list
+#      knew, monorepo#4136). A short keep-list names what is never considered.
 #   2b. Per-run Go and golangci-lint caches directly under the temp root, or one level below
 #      a Claude Code session scratchpad (claude-*/<project>/<session>/scratchpad/<cache>),
 #      whatever they are named, recognised by the README each tool writes into its cache and
@@ -37,7 +39,8 @@
 #      only when it exceeds cache_budget_gb.
 #   3. The golangci-lint cache, emptied only when it exceeds its own, smaller budget.
 #   4. Go's orphaned work dirs (go-build<digits>, go-link-<digits>) directly under the
-#      per-user temp dir, older than a threshold counted in HOURS.
+#      per-user temp dir and under the temp root (a lane may run with TMPDIR set to either),
+#      older than a threshold counted in HOURS.
 #   4b. Abandoned browser test profiles (rod/user-data/<16 hex digits>) under that same
 #      temp dir, older than a threshold counted in HOURS (2026-10-06: 30 GB, monorepo#3883).
 #   5. The local container runtime's image store, when the `container` CLI is installed:
@@ -50,6 +53,10 @@
 #
 # Environment (all optional):
 #   BUILD_CACHE_RECLAIM_TMPDIR                temp root for (2); default /private/tmp
+#   BUILD_CACHE_RECLAIM_RUN_TREE_MIN_AGE_HOURS  idle threshold for (2); default 24, and
+#                                             min_age_days * 24 when that is smaller
+#   BUILD_CACHE_RECLAIM_RUN_TREE_KEEP         colon-separated name patterns (2) never
+#                                             considers, added to the built-in keep-list
 #   BUILD_CACHE_RECLAIM_LINT_BUDGET_GB        budget for (3); default 2
 #   GOLANGCI_LINT_CACHE                       golangci-lint's own cache-dir override
 #   BUILD_CACHE_RECLAIM_GO_TMPDIR             temp dir for (4); default `getconf
@@ -73,9 +80,11 @@
 #   BUILD_CACHE_RECLAIM_CONSUMER_SCAN_SECONDS time (6) spends on each of them; default 20
 #
 # SAFETY — this deletes, so every rule below fails closed:
-#   * Only trees matching a known agent-generated name pattern, carrying a Go or
-#     golangci-lint cache README marker (2b), or named go-mod-* and laid out like a Go
-#     module cache (2c), are ever considered.
+#   * Under the temp root only directories this user owns are considered, never a name on
+#     the keep-list, a tree holding a mount point, or one with a socket, FIFO or device
+#     inside (2). Elsewhere only a tree carrying a Go or golangci-lint cache README marker
+#     (2b), named go-mod-* and laid out like a Go module cache (2c), or shaped exactly like
+#     a Go work dir (4) or a browser test profile (4b) is.
 #   * A tree younger than its age threshold is KEPT. The one exception is a marked Go build
 #     cache over cache_budget_gb (2b), which is emptied while recent -- never while held open.
 #   * A tree any running process holds open is KEPT, and each cache or tree is asked about
@@ -157,6 +166,17 @@ GO_TMP_MIN_AGE_HOURS=$(uint_setting BUILD_CACHE_RECLAIM_GO_TMP_MIN_AGE_HOURS \
 # day at 6-12 GB each, and 75 GB of them filled the host before any reached four days.
 RUN_CACHE_IDLE_HOURS=$(uint_setting BUILD_CACHE_RECLAIM_RUN_CACHE_IDLE_HOURS \
   "${BUILD_CACHE_RECLAIM_RUN_CACHE_IDLE_HOURS:-6}") || exit 2
+# Per-run trees are aged in HOURS as well (monorepo#4136): the temp root turns over about
+# 10 GB a day, so three whole days of it standing is more than the host's margin.
+# min_age_days is still accepted, because the scheduled launcher passes it, but it can only
+# SHORTEN this threshold: a caller asking for one day gets 24 hours, where `find -mtime +1`
+# gave it two days.
+MIN_AGE_DAYS=$(uint_setting min_age_days "$MIN_AGE_DAYS") || exit 2
+RUN_TREE_MIN_AGE_HOURS=$(uint_setting BUILD_CACHE_RECLAIM_RUN_TREE_MIN_AGE_HOURS \
+  "${BUILD_CACHE_RECLAIM_RUN_TREE_MIN_AGE_HOURS:-24}") || exit 2
+if [ "$((MIN_AGE_DAYS * 24))" -lt "$RUN_TREE_MIN_AGE_HOURS" ]; then
+  RUN_TREE_MIN_AGE_HOURS=$((MIN_AGE_DAYS * 24))
+fi
 # A browser test profile is live only while its browser runs, so it is aged in hours like a
 # Go work dir. The per-run limit bounds the time one sweep spends on a large backlog.
 BROWSER_PROFILE_MIN_AGE_HOURS=$(uint_setting BUILD_CACHE_RECLAIM_BROWSER_PROFILE_MIN_AGE_HOURS \
@@ -238,7 +258,7 @@ free_kb() {
 FREE_KB_BEFORE=$(free_kb) || FREE_KB_BEFORE=''
 
 printf '\n===== %s  build-cache-reclaim (%s) =====\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$MODE"
-log "temp root=${TMPDIR_ROOT} min_age_days=${MIN_AGE_DAYS} cache_budget_gb=${CACHE_BUDGET_GB}"
+log "temp root=${TMPDIR_ROOT} min_age_days=${MIN_AGE_DAYS} run_tree_min_age_hours=${RUN_TREE_MIN_AGE_HOURS} cache_budget_gb=${CACHE_BUDGET_GB}"
 log "go temp dir=${GO_TMP_ROOT} go_tmp_min_age_hours=${GO_TMP_MIN_AGE_HOURS} lint_budget_gb=${LINT_BUDGET_GB}"
 
 # ---------------------------------------------------------------------------
@@ -605,11 +625,24 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 2. Stale per-run agent trees under the temp root.
+# 2. Idle per-run trees under the temp root.
 #
-# Matched by name pattern AND age AND liveness. The patterns are the per-run prefixes
-# the lanes actually create; anything else in the temp root belongs to some other tool
-# and is never touched.
+# Until monorepo#4136 this matched four name prefixes (codex-*, war-*, dpc-*, ksail-*) and
+# aged them in whole days. Both halves let the host fill: of the trees one to three days
+# old on 2026-10-12, 7 GB carried none of those prefixes (platform-*, portfolio*, kata-*,
+# r49-* and dozens more) and so were never reaped at any age, and the day-based age kept
+# three to four days of a ~10 GB/day churn standing.
+#
+# So the rule is inverted. Every directory directly under the temp root that this user
+# owns is a candidate once NOTHING in it was written for RUN_TREE_MIN_AGE_HOURS, except:
+#   * a name on the keep-list below (session roots, system and socket dirs, and the trees
+#     another step here budgets under its own rule);
+#   * a marked cache, which (2b) judges by its entries;
+#   * a tree that holds a mount point, or a socket, FIFO or device anywhere inside it: a
+#     listener's files are not reported by lsof when another user's process holds them;
+#   * a tree with any entry modified within the threshold, however deep. The top-level
+#     mtime alone stays old while a run writes underneath it.
+# Every guard in sweep_candidate still applies on top.
 # ---------------------------------------------------------------------------
 
 holds_open() {
@@ -691,10 +724,12 @@ tree_in_use() {
 #   $3  optional: run-cache, which repeats the marked-cache hold check just before removal;
 #       or budget-cache, for a marked Go cache over its budget while still written to (2b). Its
 #       late check re-reads the marker but NOT the idle rule, which such a cache fails by
-#       definition, and it is emptied (empty_marked_cache) rather than removed
+#       definition, and it is emptied (empty_marked_cache) rather than removed;
+#       or run-tree / go-work, for a tree under a shared temp root, which repeats tree_guard
+#       against a mount table read just before removal (run-tree with the recency rule)
 #   $4  optional: the tree's size in MB, when the caller has already measured it
 sweep_candidate() {
-  local tree=$1 scope=$2 tree_mb=${4:-} late_hold late_kind
+  local tree=$1 scope=$2 tree_mb=${4:-} late_hold late_kind late_minutes late_points
   [ -n "$tree" ] || return 0
   [ -d "$tree" ] || return 0
   if own_session_tree "$tree"; then
@@ -719,6 +754,33 @@ sweep_candidate() {
       kept=$((kept + 1))
       log "KEEP  (in use, late)  $tree"
       return 0
+    fi
+    # The shared-root guards were read minutes ago too, and the open-file probe covers
+    # neither: a run can write a file and close it again, and a volume can be mounted,
+    # between the first look and this one. Both are asked again here, against a mount
+    # table read now, before anything is removed (monorepo#4136).
+    if [ "${3:-}" = run-tree ] || [ "${3:-}" = go-work ]; then
+      late_minutes=''
+      [ "$3" != run-tree ] || late_minutes=$((RUN_TREE_MIN_AGE_HOURS * 60))
+      if ! late_points=$(read_mount_points); then
+        unknown=$((unknown + 1))
+        log "UNKNOWN (mount table unreadable, late) $tree"
+        return 0
+      fi
+      tree_guard "$tree" "$late_points" "$late_minutes"
+      case "$?" in
+        0) ;;
+        1)
+          kept=$((kept + 1))
+          log "KEEP  (${TREE_GUARD_WHY}, late) $tree"
+          return 0
+          ;;
+        *)
+          unknown=$((unknown + 1))
+          log "UNKNOWN (${TREE_GUARD_WHY}, late) $tree"
+          return 0
+          ;;
+      esac
     fi
     # A marked cache can be written to without any file staying open across both lsof probes,
     # so its own recency (and, for a lint cache, a running linter) is asked again here too.
@@ -835,23 +897,323 @@ is_run_cache() {
   [ "$kind" != none ]
 }
 
-if [ -d "$TMPDIR_ROOT" ]; then
-  while IFS= read -r tree; do
-    # A marked cache is left to (2b), whose idle rule looks at its entries: the day-based
-    # mtime of the root alone can be old while the cache was written minutes ago.
-    [ -n "$tree" ] || continue
-    if is_run_cache "$tree"; then continue; else marker_rc=$?; fi
-    if [ "$marker_rc" -eq 2 ]; then
-      unknown=$((unknown + 1))
-      log "UNKNOWN (marker unreadable, cache not examined) $tree"
-      continue
+# Names never considered, as shell patterns:
+#   claude-*     Claude Code session roots; live scratchpads and task output sit below them,
+#                and (2b) reclaims the marked caches inside.
+#   .*           hidden system dirs (.X11-unix, .font-unix, ...).
+#   com.apple.*  launchd listener and system-service dirs.
+#   tmux-* ssh-* multiplexer and agent socket dirs.
+#   go-mod-*     per-lane fallback module caches, budgeted by (2c).
+# BUILD_CACHE_RECLAIM_RUN_TREE_KEEP adds more, colon-separated.
+RUN_TREE_KEEP_NAMES=('claude-*' '.*' 'com.apple.*' 'tmux-*' 'ssh-*' 'go-mod-*')
+if [ -n "${BUILD_CACHE_RECLAIM_RUN_TREE_KEEP:-}" ]; then
+  IFS=: read -r -a run_tree_keep_extra <<<"$BUILD_CACHE_RECLAIM_RUN_TREE_KEEP"
+  for keep_pattern in "${run_tree_keep_extra[@]}"; do
+    [ -z "$keep_pattern" ] || RUN_TREE_KEEP_NAMES+=("$keep_pattern")
+  done
+fi
+
+run_tree_kept_name() {
+  local name=$1 pattern suffix
+  # Go's own work dirs are left to (4), whose toolchain check knows a live build from an
+  # orphan. Only the exact shape the go command creates, as there.
+  case "$name" in
+    go-build*) suffix=${name#go-build} ;;
+    go-link-*) suffix=${name#go-link-} ;;
+    *) suffix=x ;;
+  esac
+  case "$suffix" in
+    '' | *[!0-9]*) ;;
+    *) return 0 ;;
+  esac
+  for pattern in "${RUN_TREE_KEEP_NAMES[@]}"; do
+    # shellcheck disable=SC2254 # the keep-list holds patterns; matching them as patterns is the point
+    case "$name" in
+      $pattern) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# SAFE_NAME_CHARS is every character a candidate's NAME may contain. A name with anything
+# else -- a space, a newline, a bracket, a quote -- is never considered, by any step that
+# lists a shared temp root. This is a whitelist on purpose: the listings below are read a
+# line at a time and the mount table is matched as text, and review kept finding one more
+# spelling that breaks one or the other (a newline that splits a name into two paths, a
+# name that looks like the end of a mount record). Admitting only names that cannot carry
+# such a spelling closes the class instead of the next instance. Every run directory the
+# lanes create fits; the letters are spelled out because a range such as a-z follows the
+# locale, and bash 3.2 under en_US.UTF-8 reads it as including capitals or not by collation.
+SAFE_NAME_CHARS='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._+@=-'
+
+# safe_path <resolved-path>: 0 when every character is a safe name character or a slash.
+safe_path() {
+  case "$1" in
+    '' | *[!/${SAFE_NAME_CHARS}]*) return 1 ;;
+  esac
+  return 0
+}
+
+# read_mount_points prints the host's mount table, one record per line, keeping only the
+# records that name an absolute mount point. Removing a tree that holds a mount point
+# would delete the mounted volume's contents, not temp files. It returns 1 when the table
+# cannot be read OR holds no such record: a host always has at least its root mounted, so
+# an empty result means the output was not understood, never "no mounts".
+#
+# The records are kept WHOLE. macOS prints `<dev> on <path> (<opts>)` and Linux
+# `<dev> on <path> type <fs> (<opts>)`, and neither can be split into fields reliably: a
+# device name may contain ` on `, and a path may contain ` (` or ` type `. mount_at_or_below
+# therefore asks a question that needs no split.
+read_mount_points() {
+  local table points
+  table=$(mount 2>/dev/null) || return 1
+  [ -n "$table" ] || return 1
+  points=$(printf '%s\n' "$table" | awk 'index($0, " on /") > 0') || return 1
+  [ -n "$points" ] || return 1
+  printf '%s\n' "$points"
+}
+
+# MOUNTS_OK is tracked apart from the contents, as LSOF_OK is: a failed read must keep
+# every tree. This is the up-front reading; sweep_candidate reads the table AGAIN just
+# before a removal, because a volume can be mounted while the sweep runs.
+MOUNTS_OK=0
+MOUNT_POINTS=''
+if MOUNT_POINTS=$(read_mount_points); then
+  MOUNTS_OK=1
+fi
+
+# mount_at_or_below <tree> <mount-records>: 0 when a record mounts something at the tree
+# or below it, 1 when none does, 2 when that cannot be told. It looks for the text
+# ` on <tree>/` anywhere in a record, or ` on <tree>` at its end or before a space. Because
+# the resolved tree is required to be a safe path, that text cannot be produced by anything
+# but a mount point at or below the tree, wherever the record's fields really divide; an
+# odd device name or mount path can only make it answer "mounted" for a tree that is not,
+# which keeps the tree. A tree that cannot be resolved, or whose resolved path is not a
+# safe path, is "not examined".
+mount_at_or_below() {
+  local canon
+  canon=$(cd -- "$1" 2>/dev/null && pwd -P) || return 2
+  safe_path "$canon" || return 2
+  printf '%s\n' "$2" |
+    awk -v p=" on $canon" '
+      { i = index($0, p)
+        while (i > 0) {
+          rest = substr($0, i + length(p))
+          if (rest == "" || substr(rest, 1, 1) == "/" || substr(rest, 1, 1) == " ") found = 1
+          $0 = substr($0, i + 1); i = index($0, p)
+        } }
+      END { exit !found }'
+}
+
+# path_at_or_below <tree> <list>: 0 when a path in the newline-separated list is the tree
+# or lies below it, 1 when none is, 2 when the tree cannot be resolved -- which is "not
+# examined", never either answer. Compared on the resolved path, for the reason holds_open
+# gives, and scanned to EOF for the reason it gives too.
+path_at_or_below() {
+  local canon
+  canon=$(cd -- "$1" 2>/dev/null && pwd -P) || return 2
+  [ -n "$canon" ] || return 2
+  printf '%s\n' "$2" |
+    awk -v p="$canon" 'index($0, p "/") == 1 || $0 == p { found = 1 } END { exit !found }'
+}
+
+# tree_guard <tree> <mount-points> <recent-minutes or empty> applies the guards a tree
+# under a SHARED temp root needs, in one place, so the first look and the look just before
+# removal cannot drift apart:
+#   * it holds no mount point;
+#   * it holds no socket, FIFO or device;
+#   * with <recent-minutes>, nothing in it was modified within that many minutes.
+# ONE walk answers the last two and stops at the first hit. A walk that could not read
+# part of the tree has not shown it idle, so its status is checked before its output.
+# Returns 0 clear, 1 keep, 2 not examined; TREE_GUARD_WHY says why for 1 and 2.
+#
+# The walk also stops at any entry ANOTHER user owns. The listing only shows that this user
+# owns the top directory, and owning a directory is enough to unlink what others put in it,
+# so without this a tree would take another account's files with it.
+TREE_GUARD_WHY=''
+OWN_UID=$(id -u 2>/dev/null) || OWN_UID=''
+tree_guard() {
+  local tree=$1 points=$2 minutes=$3 hit rc foreign
+  TREE_GUARD_WHY=''
+  if [ -z "$OWN_UID" ]; then
+    TREE_GUARD_WHY='own user id unreadable'
+    return 2
+  fi
+  mount_at_or_below "$tree" "$points"
+  rc=$?
+  case "$rc" in
+    0)
+      TREE_GUARD_WHY='mount point'
+      return 1
+      ;;
+    1) ;;
+    *)
+      TREE_GUARD_WHY='mount check failed'
+      return 2
+      ;;
+  esac
+  if [ -n "$minutes" ]; then
+    hit=$(find "$tree" \( -type s -o -type p -o -type b -o -type c \
+      -o ! -user "$OWN_UID" -o -mmin "-${minutes}" \) -print -quit 2>/dev/null) || rc=2
+  else
+    hit=$(find "$tree" \( -type s -o -type p -o -type b -o -type c \
+      -o ! -user "$OWN_UID" \) -print -quit 2>/dev/null) || rc=2
+  fi
+  if [ "$rc" -eq 2 ]; then
+    TREE_GUARD_WHY='scan failed'
+    return 2
+  fi
+  [ -n "$hit" ] || return 0
+  if [ -S "$hit" ] || [ -p "$hit" ] || [ -b "$hit" ] || [ -c "$hit" ]; then
+    TREE_GUARD_WHY='socket or device inside'
+  elif ! foreign=$(find "$hit" -maxdepth 0 ! -user "$OWN_UID" -print 2>/dev/null); then
+    TREE_GUARD_WHY='scan failed'
+    return 2
+  elif [ -n "$foreign" ]; then
+    TREE_GUARD_WHY="another user's file inside"
+  else
+    TREE_GUARD_WHY='written recently'
+  fi
+  return 1
+}
+
+# PROTECTED_DIRS is every directory another step here judges under its own rule, resolved:
+# the Go build and module caches, golangci-lint's cache when it is configured by path, and
+# the per-user temp dir (which holds Go's work dirs and the browser profiles). Any of them
+# can be configured to sit under the temp root, where this step would otherwise remove an
+# idle one -- or its parent -- before the step that knows what it is has looked. A go
+# command that cannot answer leaves the list unknown, and then no tree is examined.
+#
+# PROTECTED_CACHE_DIRS is the caches alone. A cache can also be configured AT or ABOVE the
+# temp root, and then its own entries are the directories listed here: a tree at or below
+# one of them is that cache's content, which only the step that budgets it may remove. The
+# per-user temp dir is left out of this second list on purpose, since it may equal the temp
+# root, where the trees below it are exactly what this step is for.
+PROTECTED_OK=1
+PROTECTED_DIRS=''
+PROTECTED_CACHE_DIRS=''
+protect_dir() {
+  local resolved kind=${2:-}
+  case "$1" in
+    /*) ;;
+    *) return 0 ;;
+  esac
+  # A path that does not exist cannot be inside a candidate.
+  resolved=$(cd -- "$1" 2>/dev/null && pwd -P) || return 0
+  PROTECTED_DIRS="${PROTECTED_DIRS}${resolved}"$'\n'
+  [ "$kind" != cache ] || PROTECTED_CACHE_DIRS="${PROTECTED_CACHE_DIRS}${resolved}"$'\n'
+}
+
+# below_protected_cache <tree>: 0 when the tree is one of the protected caches or lies
+# below one, 1 when it does not, 2 when the tree cannot be resolved.
+below_protected_cache() {
+  local canon
+  canon=$(cd -- "$1" 2>/dev/null && pwd -P) || return 2
+  [ -n "$canon" ] || return 2
+  printf '%s\n' "$PROTECTED_CACHE_DIRS" |
+    awk -v p="$canon" '$0 != "" && ($0 == p || index(p, ($0 == "/" ? "" : $0) "/") == 1) { found = 1 } END { exit !found }'
+}
+protect_dir "${GOCACHE:-}" cache
+protect_dir "${GOMODCACHE:-}" cache
+protect_dir "${GOLANGCI_LINT_CACHE:-}" cache
+protect_dir "$GO_TMP_ROOT"
+protect_dir "${GO_TMP_ROOT}/rod"
+if [ -n "${go_bin:-}" ]; then
+  for protected_var in GOCACHE GOMODCACHE; do
+    if protected_dir=$("$go_bin" env "$protected_var" 2>/dev/null); then
+      protect_dir "$protected_dir" cache
+    else
+      PROTECTED_OK=0
     fi
-    sweep_candidate "$tree" temp-root
-  done <<EOF
-$(find -H "$TMPDIR_ROOT" -maxdepth 1 -type d \
-  \( -name 'codex-*' -o -name 'war-*' -o -name 'dpc-*' -o -name 'ksail-*' \) \
-  -mtime "+${MIN_AGE_DAYS}" 2>/dev/null)
+  done
+fi
+
+run_trees_recent=0
+if [ -d "$TMPDIR_ROOT" ]; then
+  if ! run_tree_uid=$(id -u 2>/dev/null) || [ -z "$run_tree_uid" ]; then
+    unknown=$((unknown + 1))
+    log "UNKNOWN (own user id unreadable) $TMPDIR_ROOT: per-run trees not examined"
+  elif [ "$MOUNTS_OK" -ne 1 ]; then
+    unknown=$((unknown + 1))
+    log "UNKNOWN (mount table unreadable) $TMPDIR_ROOT: per-run trees not examined"
+  elif [ "$PROTECTED_OK" -ne 1 ]; then
+    unknown=$((unknown + 1))
+    log "UNKNOWN (go env failed) $TMPDIR_ROOT: per-run trees not examined"
+  elif ! run_trees=$(find -H "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d \
+    -user "$run_tree_uid" ! -name "*[!${SAFE_NAME_CHARS}]*" \
+    -mmin "+$((RUN_TREE_MIN_AGE_HOURS * 60))" 2>/dev/null); then
+    # A listing that failed part-way names only some of the trees; none is judged from it.
+    unknown=$((unknown + 1))
+    log "UNKNOWN (scan failed) $TMPDIR_ROOT: per-run trees not examined"
+  else
+    while IFS= read -r tree; do
+      [ -n "$tree" ] || continue
+      # The listing admits only safe names, so a line is one whole path. Asked again here,
+      # with the direct-child shape, so nothing but such a path is ever a candidate.
+      run_tree_name=${tree##*/}
+      case "$run_tree_name" in
+        '' | *[!${SAFE_NAME_CHARS}]*) continue ;;
+      esac
+      [ "$tree" = "${TMPDIR_ROOT%/}/${run_tree_name}" ] || continue
+      if run_tree_kept_name "${tree##*/}"; then continue; fi
+      # A marked cache is left to (2b), whose idle rule looks at its entries.
+      if is_run_cache "$tree"; then continue; else marker_rc=$?; fi
+      if [ "$marker_rc" -eq 2 ]; then
+        unknown=$((unknown + 1))
+        log "UNKNOWN (marker unreadable, cache not examined) $tree"
+        continue
+      fi
+      path_at_or_below "$tree" "$PROTECTED_DIRS"
+      case "$?" in
+        0) continue ;;
+        1) ;;
+        *)
+          unknown=$((unknown + 1))
+          log "UNKNOWN (unresolvable, tree not examined) $tree"
+          continue
+          ;;
+      esac
+      below_protected_cache "$tree"
+      case "$?" in
+        0) continue ;;
+        1) ;;
+        *)
+          unknown=$((unknown + 1))
+          log "UNKNOWN (unresolvable, tree not examined) $tree"
+          continue
+          ;;
+      esac
+      tree_guard "$tree" "$MOUNT_POINTS" "$((RUN_TREE_MIN_AGE_HOURS * 60))"
+      case "$?" in
+        0) ;;
+        1)
+          kept=$((kept + 1))
+          if [ "$TREE_GUARD_WHY" = 'written recently' ]; then
+            # Counted, not listed: most of the temp root is in this state on every sweep.
+            run_trees_recent=$((run_trees_recent + 1))
+          else
+            log "KEEP  (${TREE_GUARD_WHY}) $tree"
+          fi
+          continue
+          ;;
+        *)
+          unknown=$((unknown + 1))
+          log "UNKNOWN (${TREE_GUARD_WHY}, tree not examined) $tree"
+          continue
+          ;;
+      esac
+      sweep_candidate "$tree" temp-root run-tree
+    done <<EOF
+$run_trees
 EOF
+    log "per-run trees: ${run_trees_recent} kept for a write within ${RUN_TREE_MIN_AGE_HOURS} h"
+    # Said, so a directory that is never reaped for its name is not a silent leftover.
+    if run_trees_unsafe=$(find -H "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d \
+      -user "$run_tree_uid" -name "*[!${SAFE_NAME_CHARS}]*" -print0 2>/dev/null |
+      tr -dc '\000' | wc -c | tr -d ' ') && [ "${run_trees_unsafe:-0}" != 0 ]; then
+      log "per-run trees: ${run_trees_unsafe} never considered for a name outside the safe set"
+    fi
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -1385,7 +1747,44 @@ go_toolchain_could_own() {
   [ -n "$hit" ]
 }
 
-if [ -d "$GO_TMP_ROOT" ]; then
+# The work dirs are swept from the per-user temp dir AND from the temp root: a lane that
+# runs with TMPDIR=/private/tmp leaves its orphans there, where (2) deliberately leaves
+# them to this step's toolchain check (a 2.3 GB one sat there on 2026-10-12, monorepo#4136).
+# The second root is skipped when both spellings name one directory.
+go_work_roots=("$GO_TMP_ROOT")
+go_tmp_canon=$(cd -- "$GO_TMP_ROOT" 2>/dev/null && pwd -P) || go_tmp_canon=''
+run_tmp_canon=$(cd -- "$TMPDIR_ROOT" 2>/dev/null && pwd -P) || run_tmp_canon=''
+if [ -n "$run_tmp_canon" ] && [ "$run_tmp_canon" != "$go_tmp_canon" ]; then
+  go_work_roots+=("$TMPDIR_ROOT")
+fi
+
+# The temp root is shared with every user and every tool on the host, which the per-user
+# temp dir is not. So work dirs are taken only when this user owns them, and under either
+# root a tree that holds a mount point, or a socket, FIFO or device, is kept: tree_guard,
+# for the reasons given in (2). A read that fails examines nothing.
+go_work_uid=$(id -u 2>/dev/null) || go_work_uid=''
+# GO_TOOL_RUNNING: 0 only when the process table was read and shows none of the tools a go
+# command starts. The go command itself is left out: it is the parent, and the age rule
+# already covers a live one.
+GO_TOOL_RUNNING=1
+if go_tool_oldest=$(oldest_process_secs compile link asm cgo vet) && [ "$go_tool_oldest" = -1 ]; then
+  GO_TOOL_RUNNING=0
+fi
+for go_work_root in "${go_work_roots[@]}"; do
+  [ -d "$go_work_root" ] || continue
+  if [ -z "$go_work_uid" ]; then
+    unknown=$((unknown + 1))
+    log "UNKNOWN (own user id unreadable) $go_work_root: Go work dirs not examined"
+    continue
+  fi
+  if ! go_work_trees=$(find -H "$go_work_root" -mindepth 1 -maxdepth 1 -type d \
+    -user "$go_work_uid" ! -name "*[!${SAFE_NAME_CHARS}]*" \
+    \( -name 'go-build[0-9]*' -o -name 'go-link-[0-9]*' \) \
+    -mmin "+$((GO_TMP_MIN_AGE_HOURS * 60))" 2>/dev/null); then
+    unknown=$((unknown + 1))
+    log "UNKNOWN (scan failed) $go_work_root: Go work dirs not examined"
+    continue
+  fi
   while IFS= read -r tree; do
     [ -n "$tree" ] || continue
     # `find -name` cannot say "digits only", so check the suffix here. Only the exact shape
@@ -1404,13 +1803,41 @@ if [ -d "$GO_TMP_ROOT" ]; then
       log "KEEP  (go running)    $tree"
       continue
     fi
-    sweep_candidate "$tree" host
+    # Under the shared temp root one more case is closed. The age rule above assumes a
+    # process that started after the dir was last modified cannot own it, which is false for
+    # a go command that was KILLED: the compile, link and other tools it started are younger
+    # than the work dir they are still writing into. Which dir such a tool belongs to cannot
+    # be told from the process table, so while any of them runs -- or the table cannot say --
+    # every work dir under this root is kept. The per-user temp dir keeps its existing rule.
+    if [ "$go_work_root" != "$GO_TMP_ROOT" ] && [ "$GO_TOOL_RUNNING" -ne 0 ]; then
+      kept=$((kept + 1))
+      log "KEEP  (toolchain tool running) $tree"
+      continue
+    fi
+    if [ "$MOUNTS_OK" -ne 1 ]; then
+      unknown=$((unknown + 1))
+      log "UNKNOWN (mount table unreadable, tree not examined) $tree"
+      continue
+    fi
+    tree_guard "$tree" "$MOUNT_POINTS" ''
+    case "$?" in
+      0) ;;
+      1)
+        kept=$((kept + 1))
+        log "KEEP  (${TREE_GUARD_WHY}) $tree"
+        continue
+        ;;
+      *)
+        unknown=$((unknown + 1))
+        log "UNKNOWN (${TREE_GUARD_WHY}, tree not examined) $tree"
+        continue
+        ;;
+    esac
+    sweep_candidate "$tree" host go-work
   done <<EOF
-$(find "$GO_TMP_ROOT" -mindepth 1 -maxdepth 1 -type d \
-  \( -name 'go-build[0-9]*' -o -name 'go-link-[0-9]*' \) \
-  -mmin "+$((GO_TMP_MIN_AGE_HOURS * 60))" 2>/dev/null)
+$go_work_trees
 EOF
-fi
+done
 
 # ---------------------------------------------------------------------------
 # 4b. Abandoned browser test profiles under the per-user temp dir (monorepo#3883).

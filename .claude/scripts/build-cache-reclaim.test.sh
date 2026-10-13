@@ -62,6 +62,19 @@ export BUILD_CACHE_RECLAIM_CONTAINER_CLI=off
 # runs this suite is itself short of space. It is off for every case; case 24 names its own.
 export BUILD_CACHE_RECLAIM_CONSUMER_ROOTS=off
 
+# age_tree <stamp> <dir> sets the modification time of the directory AND of everything in
+# it. The per-run sweep keeps a tree with any entry written within its threshold, so a
+# fixture aged only at the top is kept for its fresh payload -- and every liveness case
+# below would then pass for that reason instead of the one it names (monorepo#4136).
+age_tree() {
+  find "$2" -exec touch -h -t "$1" {} + 2>/dev/null
+}
+
+# stamp_hours_ago <hours> prints a `touch -t` stamp. Local time, as touch reads it.
+stamp_hours_ago() {
+  date -v-"$1"H +%Y%m%d%H%M 2>/dev/null || date -d "$1 hours ago" +%Y%m%d%H%M 2>/dev/null
+}
+
 make_tree() {
   # make_tree <name> <age-days>
   local age=$2 dir="${fixture_root}/$1"
@@ -73,7 +86,7 @@ make_tree() {
     local stamp
     stamp=$(date -u -v-"${age}"d +%Y%m%d%H%M 2>/dev/null) ||
       stamp=$(date -u -d "${age} days ago" +%Y%m%d%H%M 2>/dev/null) || return 1
-    touch -t "$stamp" "$dir" || return 1
+    age_tree "$stamp" "$dir" || return 1
   fi
   printf '%s' "$dir"
 }
@@ -111,10 +124,272 @@ young=$(make_tree 'codex-young-run' 0) || fail 'fixture: codex-young-run'
 run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
 [ -e "$young" ] || fail "a young agent tree was reaped: $young"
 
-# --- 3. a stale NON-agent tree is kept (pattern ablation) -------------------------
-foreign=$(make_tree 'some-other-tool-cache' 10) || fail 'fixture: some-other-tool-cache'
+# --- 3. an idle tree is reaped WHATEVER it is named; the keep rules are ablated (monorepo#4136) ---
+# The sweep used to match four name prefixes, so half of the idle trees on the host were
+# never reaped at any age. Each fixture below differs from the reapable one in exactly one
+# keep rule and must survive the SAME apply run that reaps it.
+unlisted=$(make_tree 'platform-round16-proof' 10) || fail 'fixture: platform-round16-proof'
+# 3a. a tree whose top is old while a run is still writing underneath it.
+written=$(make_tree 'kata-being-written' 10) || fail 'fixture: kata-being-written'
+mkdir -p "${written}/deep/er" || fail 'fixture: nested dir'
+age_tree "$(stamp_hours_ago 240)" "$written" || fail 'fixture: age kata-being-written'
+printf 'fresh\n' > "${written}/deep/er/output.log"
+age_tree "$(stamp_hours_ago 240)" "${written}/deep/er" || fail 'fixture: re-age nested dir'
+touch "${written}/deep/er/output.log" || fail 'fixture: fresh nested file'
+# 3b. names on the built-in keep-list, and one added through the environment.
+session_root=$(make_tree 'claude-501' 10) || fail 'fixture: claude-501'
+socket_dir=$(make_tree 'com.apple.launchd.fixture' 10) || fail 'fixture: com.apple.launchd.fixture'
+hidden_dir=$(make_tree '.X11-unix' 10) || fail 'fixture: .X11-unix'
+extra_keep=$(make_tree 'operator-notes' 10) || fail 'fixture: operator-notes'
+# 3c. a tree with a FIFO inside: a listener's files are invisible to lsof when another
+# user's process holds them, so the special file itself keeps the tree.
+piped=$(make_tree 'portfolio-listener' 10) || fail 'fixture: portfolio-listener'
+mkfifo "${piped}/control" || fail 'fixture: mkfifo'
+age_tree "$(stamp_hours_ago 240)" "$piped" || fail 'fixture: age portfolio-listener'
+# 3d. hours, not whole days: two days idle is reaped under the launcher's own `apply 3`,
+# which `find -mtime +3` kept for four days; twelve hours idle is kept.
+two_days=$(make_tree 'r49-two-days-idle' 2) || fail 'fixture: r49-two-days-idle'
+half_day=$(make_tree 'r49-half-day-idle' 0) || fail 'fixture: r49-half-day-idle'
+age_tree "$(stamp_hours_ago 12)" "$half_day" || fail 'fixture: age r49-half-day-idle'
+out=$(BUILD_CACHE_RECLAIM_RUN_TREE_KEEP='nothing-here:operator-*' run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$unlisted" ] && fail "an idle tree under an unlisted name was not reaped: $unlisted"
+[ -e "$two_days" ] && fail "a tree idle for two days was not reaped under min_age_days=3: $two_days"
+[ -e "$written" ] || fail "a tree with a file written moments ago was reaped: $written"
+[ -e "$session_root" ] || fail "a Claude session root was reaped: $session_root"
+[ -e "$socket_dir" ] || fail "a com.apple.* system dir was reaped: $socket_dir"
+[ -e "$hidden_dir" ] || fail "a hidden system dir was reaped: $hidden_dir"
+[ -e "$extra_keep" ] || fail "a name kept through BUILD_CACHE_RECLAIM_RUN_TREE_KEEP was reaped: $extra_keep"
+[ -e "$piped" ] || fail "a tree with a FIFO inside was reaped: $piped"
+grep -qF "KEEP  (socket or device inside) $piped" <<<"$out" ||
+  fail 'a tree with a FIFO inside was not reported as kept for it'
+[ -e "$half_day" ] || fail "a tree idle for twelve hours was reaped under the 24-hour default: $half_day"
+grep -qE 'per-run trees: [1-9][0-9]* kept for a write within 24 h' <<<"$out" ||
+  fail 'the trees kept for a recent write were not counted in the output'
+# 3e. the environment keep-list is what kept operator-notes: without it the tree is reaped.
 run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
-[ -e "$foreign" ] || fail "a tree outside the agent name patterns was reaped: $foreign"
+[ -e "$extra_keep" ] && fail "the keep-list ablation did not reap: $extra_keep"
+# 3f. min_age_days can only SHORTEN the threshold: 0 reaps the twelve-hour tree, and a
+# larger hours setting cannot stretch past min_age_days * 24.
+out=$(BUILD_CACHE_RECLAIM_RUN_TREE_MIN_AGE_HOURS=9999 run dry-run 0 "$NEVER_CLEAN_BUDGET")
+grep -qE "WOULD REAP [0-9]+ MB  ${half_day}\$" <<<"$out" ||
+  fail 'min_age_days=0 did not select a twelve-hour-idle tree'
+grep -qF 'run_tree_min_age_hours=0' <<<"$out" ||
+  fail 'the effective per-run tree threshold was not reported'
+# 3g. a tree that holds a mount point is kept, and an unreadable mount table examines
+# nothing (UNKNOWN, exit 2) rather than reading as "no mounts".
+mounted=$(make_tree 'war-mounted-image' 10) || fail 'fixture: war-mounted-image'
+mount_stub="${fixture_root}/claude-mount-stub"
+mkdir -p "$mount_stub" || fail 'fixture: mount stub dir'
+mounted_canon=$(cd -- "$mounted" && pwd -P) || fail 'fixture: resolve mounted tree'
+printf '#!/bin/sh\nprintf "%%s\\n" "/dev/disk9s1 on %s/volume (apfs, local)"\n' "$mounted_canon" \
+  > "${mount_stub}/mount"
+chmod +x "${mount_stub}/mount" || fail 'fixture: chmod mount stub'
+out=$(PATH="${mount_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$mounted" ] || fail "a tree holding a mount point was reaped: $mounted"
+grep -qF "KEEP  (mount point) $mounted" <<<"$out" ||
+  fail 'a tree holding a mount point was not reported as kept for it'
+printf '#!/bin/sh\nexit 1\n' > "${mount_stub}/mount"
+out=$(PATH="${mount_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "an unreadable mount table exited ${rc}, not 2 (UNKNOWN)"
+grep -qF 'UNKNOWN (mount table unreadable)' <<<"$out" ||
+  fail 'an unreadable mount table was not reported UNKNOWN'
+[ -e "$mounted" ] || fail "a tree was reaped while the mount table was unreadable: $mounted"
+# ...and the same tree IS reaped once the real mount table is read again (ablation partner).
+run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$mounted" ] && fail "the mount ablation partner was not reaped: $mounted"
+# 3h. Go's orphaned work dirs under the per-run temp root (a lane with TMPDIR=/private/tmp)
+# are swept by the work-dir step, not the per-run one: twelve hours old is past its 6-hour
+# threshold and short of the 24-hour one, so only that step can have reaped it. A name
+# that merely starts the same way, with fresh content, is kept.
+# The process table is stubbed for every work-dir case here: a compiler running on the host
+# that runs this suite would otherwise keep each of them (3m).
+early_ps="${fixture_root}/claude-ps-quiet"
+mkdir -p "$early_ps" || fail 'fixture: early ps stub dir'
+printf '%s\n' '00:05 /bin/sh' '400-00:00:00 /sbin/launchd' > "${early_ps}/table"
+printf '#!/bin/sh\ncat "%s"\n' "${early_ps}/table" > "${early_ps}/ps"
+chmod +x "${early_ps}/ps" || fail 'fixture: chmod early ps stub'
+orphan=$(make_tree 'go-build4136001' 0) || fail 'fixture: go-build4136001'
+age_tree "$(stamp_hours_ago 12)" "$orphan" || fail 'fixture: age go-build4136001'
+lookalike=$(make_tree 'go-buildcache-x' 0) || fail 'fixture: go-buildcache-x'
+out=$(PATH="${early_ps}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$orphan" ] && fail "an orphaned Go work dir under the per-run temp root was not reaped: $orphan"
+[ -e "$lookalike" ] || fail "a fresh tree that only resembles a Go work dir was reaped: $lookalike"
+# 3i. the work-dir step applies the shared-root guards too: the temp root is shared with
+# every tool on the host, so a work dir with a FIFO inside, or one holding a mount point,
+# is kept there as well. Each is reaped once that one condition is gone.
+piped_work=$(make_tree 'go-build4136002' 0) || fail 'fixture: go-build4136002'
+mkfifo "${piped_work}/b001-control" || fail 'fixture: mkfifo in work dir'
+age_tree "$(stamp_hours_ago 12)" "$piped_work" || fail 'fixture: age go-build4136002'
+mounted_work=$(make_tree 'go-link-4136003' 0) || fail 'fixture: go-link-4136003'
+age_tree "$(stamp_hours_ago 12)" "$mounted_work" || fail 'fixture: age go-link-4136003'
+mounted_work_canon=$(cd -- "$mounted_work" && pwd -P) || fail 'fixture: resolve mounted work dir'
+printf '#!/bin/sh\nprintf "%%s\\n" "/dev/disk9s2 on %s (apfs, local)"\n' "$mounted_work_canon" \
+  > "${mount_stub}/mount"
+out=$(PATH="${mount_stub}:${early_ps}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$piped_work" ] || fail "a Go work dir with a FIFO inside was reaped: $piped_work"
+grep -qF "KEEP  (socket or device inside) $piped_work" <<<"$out" ||
+  fail 'a Go work dir with a FIFO inside was not reported as kept for it'
+[ -e "$mounted_work" ] || fail "a Go work dir holding a mount point was reaped: $mounted_work"
+grep -qF "KEEP  (mount point) $mounted_work" <<<"$out" ||
+  fail 'a Go work dir holding a mount point was not reported as kept for it'
+rm -f "${piped_work}/b001-control" || fail 'fixture: remove FIFO'
+age_tree "$(stamp_hours_ago 12)" "$piped_work" || fail 'fixture: re-age go-build4136002'
+PATH="${early_ps}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$piped_work" ] && fail "the FIFO ablation partner was not reaped: $piped_work"
+[ -e "$mounted_work" ] && fail "the work-dir mount ablation partner was not reaped: $mounted_work"
+# 3j. a mount table that parses to NO mount point was not understood (a host always has
+# its root mounted): nothing is examined, rather than every tree reading as unmounted.
+unparsed=$(make_tree 'r50-unparsed-mounts' 10) || fail 'fixture: r50-unparsed-mounts'
+printf '#!/bin/sh\necho "Filesystem listing unavailable in this locale"\n' > "${mount_stub}/mount"
+out=$(PATH="${mount_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "a mount table with no parsed mount point exited ${rc}, not 2 (UNKNOWN)"
+[ -e "$unparsed" ] || fail "a tree was reaped from a mount table with no parsed mount point: $unparsed"
+# ...and it is reaped once the table is readable (ablation partner). This also leaves the
+# next case with exactly one reapable tree, so its late read cannot be another tree's.
+run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$unparsed" ] && fail "the unparsed-table ablation partner was not reaped: $unparsed"
+# 3k. the guards are asked AGAIN just before removal. The stub answers the up-front read
+# with the root alone; from the second read on -- the one sweep_candidate makes before it
+# removes anything -- it first does what a concurrent run would have done in between.
+#   late write: a file is written and closed again, which no open-file probe can see.
+late_written=$(make_tree 'r50-late-write' 10) || fail 'fixture: r50-late-write'
+late_count="${mount_stub}/calls"
+cat > "${mount_stub}/mount" <<STUB
+#!/bin/sh
+n=\$(cat "$late_count" 2>/dev/null || echo 0)
+n=\$((n + 1))
+echo "\$n" > "$late_count"
+[ "\$n" -lt 2 ] || [ ! -d "$late_written" ] || echo fresh > "$late_written/resumed.log"
+echo "/dev/disk1s1 on / (apfs, local)"
+STUB
+out=$(PATH="${mount_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${late_written}/resumed.log" ] ||
+  fail 'fixture: the late-write stub never ran, so the late recency check was not exercised'
+[ -e "$late_written" ] || fail "a tree written to after the first look was reaped: $late_written"
+grep -qF "KEEP  (written recently, late) $late_written" <<<"$out" ||
+  fail 'a tree written to after the first look was not reported as kept late'
+#   late mount: a volume is mounted inside the tree after the up-front table was read.
+late_mounted=$(make_tree 'r50-late-mount' 10) || fail 'fixture: r50-late-mount'
+late_mounted_canon=$(cd -- "$late_mounted" && pwd -P) || fail 'fixture: resolve late-mount tree'
+rm -f "$late_count"
+cat > "${mount_stub}/mount" <<STUB
+#!/bin/sh
+n=\$(cat "$late_count" 2>/dev/null || echo 0)
+n=\$((n + 1))
+echo "\$n" > "$late_count"
+echo "/dev/disk1s1 on / (apfs, local)"
+[ "\$n" -lt 2 ] || echo "/dev/disk9s3 on $late_mounted_canon/volume (apfs, local)"
+STUB
+out=$(PATH="${mount_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$late_mounted" ] || fail "a tree with a volume mounted after the first look was reaped: $late_mounted"
+grep -qF "KEEP  (mount point, late) $late_mounted" <<<"$out" ||
+  fail 'a tree with a volume mounted after the first look was not reported as kept late'
+# 3l. a directory another step judges is never taken by this one, nor is its parent: an
+# idle golangci-lint cache configured under the temp root WITHOUT the marker is one the
+# lint step deliberately keeps. The same tree is reaped once it is no longer configured.
+lint_parent=$(make_tree 'r50-lint-parent' 0) || fail 'fixture: r50-lint-parent'
+mkdir -p "${lint_parent}/cache" || fail 'fixture: unmarked lint cache'
+printf 'payload\n' > "${lint_parent}/cache/entry"
+age_tree "$(stamp_hours_ago 240)" "$lint_parent" || fail 'fixture: age r50-lint-parent'
+out=$(GOLANGCI_LINT_CACHE="${lint_parent}/cache" run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${lint_parent}/cache/entry" ] ||
+  fail "the parent of a configured golangci-lint cache was reaped by the per-run step: $lint_parent"
+age_tree "$(stamp_hours_ago 240)" "$lint_parent" || fail 'fixture: re-age r50-lint-parent'
+run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$lint_parent" ] && fail "the protected-path ablation partner was not reaped: $lint_parent"
+# 3m. a cache configured AT the temp root: the trees listed there are that cache's own
+# entries, which only the step that budgets the cache may remove.
+cache_entry=$(make_tree 'r50-cache-shard' 10) || fail 'fixture: r50-cache-shard'
+GOLANGCI_LINT_CACHE="$fixture_root" run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$cache_entry" ] ||
+  fail "an entry of a cache configured at the temp root was reaped by the per-run step: $cache_entry"
+# 3n. under the shared temp root a Go work dir is kept while ANY compiler or linker runs:
+# a killed go command's tools are younger than the work dir they still write into, so the
+# age rule alone would call it orphaned. The partner is reaped under a quiet process table.
+tool_work=$(make_tree 'go-build4136004' 0) || fail 'fixture: go-build4136004'
+age_tree "$(stamp_hours_ago 12)" "$tool_work" || fail 'fixture: age go-build4136004'
+tool_ps="${fixture_root}/claude-ps-tool"
+mkdir -p "$tool_ps" || fail 'fixture: tool ps stub dir'
+printf '%s\n' '00:03 /usr/local/go/pkg/tool/darwin_arm64/compile' '400-00:00:00 /sbin/launchd' \
+  > "${tool_ps}/table"
+printf '#!/bin/sh\ncat "%s"\n' "${tool_ps}/table" > "${tool_ps}/ps"
+chmod +x "${tool_ps}/ps" || fail 'fixture: chmod tool ps stub'
+out=$(PATH="${tool_ps}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$tool_work" ] || fail "a Go work dir under the shared root was reaped while a compiler ran: $tool_work"
+grep -qF "KEEP  (toolchain tool running) $tool_work" <<<"$out" ||
+  fail 'a Go work dir kept for a running compiler did not say why'
+PATH="${early_ps}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$tool_work" ] && fail "the running-tool ablation partner was not reaped: $tool_work"
+# 3o. a tree holding ANOTHER user's file is kept. A fixture cannot create one without
+# root, so the stub answers the guard's own user-id read (the first of the run) with an id
+# that owns nothing, and the later reads truthfully: the listing still selects the tree,
+# and the guard then sees every entry in it as someone else's.
+foreign_tree=$(make_tree 'r50-foreign-file' 10) || fail 'fixture: r50-foreign-file'
+id_stub="${fixture_root}/claude-id-stub"
+mkdir -p "$id_stub" || fail 'fixture: id stub dir'
+real_id=$(command -v id) || fail 'fixture: locate id'
+cat > "${id_stub}/id" <<STUB
+#!/bin/sh
+n=\$(cat "${id_stub}/calls" 2>/dev/null || echo 0)
+n=\$((n + 1))
+echo "\$n" > "${id_stub}/calls"
+if [ "\$n" -eq 1 ]; then echo 54321; else exec "$real_id" "\$@"; fi
+STUB
+chmod +x "${id_stub}/id" || fail 'fixture: chmod id stub'
+out=$(PATH="${id_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$foreign_tree" ] || fail "a tree holding another user's file was reaped: $foreign_tree"
+grep -qF "KEEP  (another user's file inside) $foreign_tree" <<<"$out" ||
+  fail "a tree holding another user's file was not reported as kept for it; it said: $(grep -F "$foreign_tree" <<<"$out" | head -n 3)"
+run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$foreign_tree" ] && fail "the foreign-file ablation partner was not reaped: $foreign_tree"
+# 3p. only a name made of safe characters is ever a candidate. The listing is read a line
+# at a time, so a name with a newline would otherwise become two paths -- the second one
+# relative, resolved against the working directory, and removed from THERE. The run starts
+# in a directory that holds a tree by that second name, which must survive untouched.
+split_name=$'r50-old\nr50-victim'
+mkdir -p "${fixture_root}/${split_name}" || fail 'fixture: newline name'
+printf 'payload\n' > "${fixture_root}/${split_name}/file"
+age_tree "$(stamp_hours_ago 240)" "${fixture_root}/${split_name}" || fail 'fixture: age newline name'
+spaced=$(make_tree 'run type archive' 10) || fail 'fixture: spaced name'
+bracketed=$(make_tree 'cache (old)' 10) || fail 'fixture: bracketed name'
+victim_cwd="${fixture_root}/claude-victim-cwd"
+mkdir -p "${victim_cwd}/r50-victim" || fail 'fixture: victim cwd'
+printf 'not temp\n' > "${victim_cwd}/r50-victim/keep.txt"
+age_tree "$(stamp_hours_ago 240)" "${victim_cwd}/r50-victim" || fail 'fixture: age victim'
+out=$(cd "$victim_cwd" && run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${victim_cwd}/r50-victim/keep.txt" ] ||
+  fail 'a directory in the working directory was removed through a newline in a temp tree name'
+[ -e "${fixture_root}/${split_name}/file" ] || fail 'a tree with a newline in its name was reaped'
+[ -e "$spaced" ] || fail "a tree with a space in its name was reaped: $spaced"
+[ -e "$bracketed" ] || fail "a tree with a bracket in its name was reaped: $bracketed"
+grep -qF 'per-run trees: 3 never considered for a name outside the safe set' <<<"$out" ||
+  fail "the trees skipped for their name were not counted; it said: $(grep -F 'never considered' <<<"$out")"
+# 3q. the mount table is matched as whole records, so a record that cannot be split into
+# fields still keeps the tree it mounts into: a device name that itself contains ` on `,
+# the Linux form with ` type `, and a mount path with a bracket below the tree.
+record_tree=$(make_tree 'r50-odd-records' 10) || fail 'fixture: r50-odd-records'
+record_canon=$(cd -- "$record_tree" && pwd -P) || fail 'fixture: resolve r50-odd-records'
+for record in \
+  "//guest@nas/share on demand on ${record_canon}/volume (smbfs, nodev)" \
+  "/dev/loop7 on ${record_canon}/img type squashfs (ro,relatime)" \
+  "/dev/disk9s4 on ${record_canon}/a (b)/volume (apfs, local)" \
+  "/dev/disk9s5 on ${record_canon} (apfs, local)" \
+  "tmpfs on ${record_canon}"; do
+  printf '#!/bin/sh\nprintf "%%s\\n" "/dev/disk1s1 on / (apfs, local)" "%s"\n' "$record" \
+    > "${mount_stub}/mount"
+  out=$(PATH="${mount_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
+  [ -e "$record_tree" ] || fail "a tree was reaped under the mount record: $record"
+  grep -qF "KEEP  (mount point) $record_tree" <<<"$out" ||
+    fail "a tree was not kept for the mount record: $record"
+  [ -e "$record_tree" ] || break
+done
+# A record for a SIBLING whose name merely starts the same way does not keep it.
+printf '#!/bin/sh\nprintf "%%s\\n" "/dev/disk1s1 on / (apfs, local)" "/dev/disk9s6 on %s-sibling/volume (apfs, local)"\n' \
+  "$record_canon" > "${mount_stub}/mount"
+PATH="${mount_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$record_tree" ] && fail "a tree was kept for a mount under a sibling directory: $record_tree"
 
 # --- 4. dry-run deletes nothing (mode ablation) -----------------------------------
 dry=$(make_tree 'ksail-dry-run' 10) || fail 'fixture: ksail-dry-run'
@@ -210,7 +485,7 @@ printf 'payload\n' > "${readonly_tree}/pkg/mod/example.com/dep@v1.0.0/file.go"
 chmod -R a-w "${readonly_tree}/pkg/mod/example.com/dep@v1.0.0" || fail 'fixture: chmod'
 ro_stamp=$(date -u -v-10d +%Y%m%d%H%M 2>/dev/null) ||
   ro_stamp=$(date -u -d '10 days ago' +%Y%m%d%H%M 2>/dev/null)
-touch -t "$ro_stamp" "$readonly_tree" || fail 'fixture: touch readonly tree'
+age_tree "$ro_stamp" "$readonly_tree" || fail 'fixture: touch readonly tree'
 run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
 if [ -e "$readonly_tree" ]; then
   chmod -R u+w "$readonly_tree" 2>/dev/null
@@ -236,7 +511,7 @@ mkdir -p "${live_tree}/nested" || fail 'fixture: live-holder tree'
 printf 'payload\n' > "${live_tree}/nested/file"
 live_stamp=$(date -u -v-10d +%Y%m%d%H%M 2>/dev/null) ||
   live_stamp=$(date -u -d '10 days ago' +%Y%m%d%H%M 2>/dev/null)
-touch -t "$live_stamp" "$live_tree" || fail 'fixture: touch live-holder tree'
+age_tree "$live_stamp" "$live_tree" || fail 'fixture: touch live-holder tree'
 
 # Hold the NESTED file open, never the top directory, in a separate process.
 /bin/sh -c "exec 9<'${live_tree}/nested/file'; sleep 30" &
@@ -282,7 +557,7 @@ mkdir -p "$own_tree" || fail 'fixture: own-session tree'
 printf 'payload\n' > "${own_tree}/file"
 own_stamp=$(date -u -v-10d +%Y%m%d%H%M 2>/dev/null) ||
   own_stamp=$(date -u -d '10 days ago' +%Y%m%d%H%M 2>/dev/null)
-touch -t "$own_stamp" "$own_tree" || fail 'fixture: touch own-session tree'
+age_tree "$own_stamp" "$own_tree" || fail 'fixture: touch own-session tree'
 # Run over the PHYSICAL root while TMPDIR names the SAME tree through the symlink.
 TMPDIR="${fixture_root}/link/codex-own-session" \
   BUILD_CACHE_RECLAIM_TMPDIR="${fixture_root}/phys" \
@@ -312,7 +587,7 @@ mkdir -p "${late_tree}/nested" || fail 'fixture: late-holder tree'
 printf 'payload\n' > "${late_tree}/nested/file"
 late_stamp=$(date -u -v-10d +%Y%m%d%H%M 2>/dev/null) ||
   late_stamp=$(date -u -d '10 days ago' +%Y%m%d%H%M 2>/dev/null)
-touch -t "$late_stamp" "$late_tree" || fail 'fixture: touch late-holder tree'
+age_tree "$late_stamp" "$late_tree" || fail 'fixture: touch late-holder tree'
 late_canon=$(cd -- "$late_tree" && pwd -P) || fail 'fixture: resolve late-holder tree'
 late_canon_parent=$(cd -- "$late_root" && pwd -P) || fail 'fixture: resolve late-holder root'
 cat > "${stub_dir}/lsof" <<STUB
@@ -369,7 +644,7 @@ for d in "$blocked_tree" "$clean_tree"; do
   printf 'payload\n' > "${d}/nested/file"
   scan_stamp=$(date -u -v-10d +%Y%m%d%H%M 2>/dev/null) ||
     scan_stamp=$(date -u -d '10 days ago' +%Y%m%d%H%M 2>/dev/null)
-  touch -t "$scan_stamp" "$d" || fail "fixture: touch $d"
+  age_tree "$scan_stamp" "$d" || fail "fixture: touch $d"
 done
 blocked_canon=$(cd -- "$blocked_tree" && pwd -P) || fail 'fixture: resolve blocked tree'
 scan_stub="${fixture_root}/scan-stub-bin"
@@ -482,7 +757,7 @@ mkdir -p "${sigpipe_tree}/nested" || fail 'fixture: sigpipe tree'
 printf 'payload\n' > "${sigpipe_tree}/nested/file"
 sigpipe_stamp=$(date -u -v-10d +%Y%m%d%H%M 2>/dev/null) ||
   sigpipe_stamp=$(date -u -d '10 days ago' +%Y%m%d%H%M 2>/dev/null)
-touch -t "$sigpipe_stamp" "$sigpipe_tree" || fail 'fixture: touch sigpipe tree'
+age_tree "$sigpipe_stamp" "$sigpipe_tree" || fail 'fixture: touch sigpipe tree'
 sigpipe_canon=$(cd -- "$sigpipe_tree" && pwd -P) || fail 'fixture: resolve sigpipe tree'
 sigpipe_root_canon=$(cd -- "$sigpipe_root" && pwd -P) || fail 'fixture: resolve sigpipe root'
 sigpipe_stub="${fixture_root}/sigpipe-bin"
