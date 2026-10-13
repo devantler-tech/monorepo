@@ -202,10 +202,17 @@ run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
 # are swept by the work-dir step, not the per-run one: twelve hours old is past its 6-hour
 # threshold and short of the 24-hour one, so only that step can have reaped it. A name
 # that merely starts the same way, with fresh content, is kept.
+# The process table is stubbed for every work-dir case here: a compiler running on the host
+# that runs this suite would otherwise keep each of them (3m).
+early_ps="${fixture_root}/claude-ps-quiet"
+mkdir -p "$early_ps" || fail 'fixture: early ps stub dir'
+printf '%s\n' '00:05 /bin/sh' '400-00:00:00 /sbin/launchd' > "${early_ps}/table"
+printf '#!/bin/sh\ncat "%s"\n' "${early_ps}/table" > "${early_ps}/ps"
+chmod +x "${early_ps}/ps" || fail 'fixture: chmod early ps stub'
 orphan=$(make_tree 'go-build4136001' 0) || fail 'fixture: go-build4136001'
 age_tree "$(stamp_hours_ago 12)" "$orphan" || fail 'fixture: age go-build4136001'
 lookalike=$(make_tree 'go-buildcache-x' 0) || fail 'fixture: go-buildcache-x'
-out=$(run apply 3 "$NEVER_CLEAN_BUDGET")
+out=$(PATH="${early_ps}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$orphan" ] && fail "an orphaned Go work dir under the per-run temp root was not reaped: $orphan"
 [ -e "$lookalike" ] || fail "a fresh tree that only resembles a Go work dir was reaped: $lookalike"
 # 3i. the work-dir step applies the shared-root guards too: the temp root is shared with
@@ -219,7 +226,7 @@ age_tree "$(stamp_hours_ago 12)" "$mounted_work" || fail 'fixture: age go-link-4
 mounted_work_canon=$(cd -- "$mounted_work" && pwd -P) || fail 'fixture: resolve mounted work dir'
 printf '#!/bin/sh\nprintf "%%s\\n" "/dev/disk9s2 on %s (apfs, local)"\n' "$mounted_work_canon" \
   > "${mount_stub}/mount"
-out=$(PATH="${mount_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
+out=$(PATH="${mount_stub}:${early_ps}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$piped_work" ] || fail "a Go work dir with a FIFO inside was reaped: $piped_work"
 grep -qF "KEEP  (socket or device inside) $piped_work" <<<"$out" ||
   fail 'a Go work dir with a FIFO inside was not reported as kept for it'
@@ -228,7 +235,7 @@ grep -qF "KEEP  (mount point) $mounted_work" <<<"$out" ||
   fail 'a Go work dir holding a mount point was not reported as kept for it'
 rm -f "${piped_work}/b001-control" || fail 'fixture: remove FIFO'
 age_tree "$(stamp_hours_ago 12)" "$piped_work" || fail 'fixture: re-age go-build4136002'
-run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+PATH="${early_ps}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
 [ -e "$piped_work" ] && fail "the FIFO ablation partner was not reaped: $piped_work"
 [ -e "$mounted_work" ] && fail "the work-dir mount ablation partner was not reaped: $mounted_work"
 # 3j. a mount table that parses to NO mount point was not understood (a host always has
@@ -292,6 +299,51 @@ out=$(GOLANGCI_LINT_CACHE="${lint_parent}/cache" run apply 3 "$NEVER_CLEAN_BUDGE
 age_tree "$(stamp_hours_ago 240)" "$lint_parent" || fail 'fixture: re-age r50-lint-parent'
 run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
 [ -e "$lint_parent" ] && fail "the protected-path ablation partner was not reaped: $lint_parent"
+# 3m. a cache configured AT the temp root: the trees listed there are that cache's own
+# entries, which only the step that budgets the cache may remove.
+cache_entry=$(make_tree 'r50-cache-shard' 10) || fail 'fixture: r50-cache-shard'
+GOLANGCI_LINT_CACHE="$fixture_root" run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$cache_entry" ] ||
+  fail "an entry of a cache configured at the temp root was reaped by the per-run step: $cache_entry"
+# 3n. under the shared temp root a Go work dir is kept while ANY compiler or linker runs:
+# a killed go command's tools are younger than the work dir they still write into, so the
+# age rule alone would call it orphaned. The partner is reaped under a quiet process table.
+tool_work=$(make_tree 'go-build4136004' 0) || fail 'fixture: go-build4136004'
+age_tree "$(stamp_hours_ago 12)" "$tool_work" || fail 'fixture: age go-build4136004'
+tool_ps="${fixture_root}/claude-ps-tool"
+mkdir -p "$tool_ps" || fail 'fixture: tool ps stub dir'
+printf '%s\n' '00:03 /usr/local/go/pkg/tool/darwin_arm64/compile' '400-00:00:00 /sbin/launchd' \
+  > "${tool_ps}/table"
+printf '#!/bin/sh\ncat "%s"\n' "${tool_ps}/table" > "${tool_ps}/ps"
+chmod +x "${tool_ps}/ps" || fail 'fixture: chmod tool ps stub'
+out=$(PATH="${tool_ps}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$tool_work" ] || fail "a Go work dir under the shared root was reaped while a compiler ran: $tool_work"
+grep -qF "KEEP  (toolchain tool running) $tool_work" <<<"$out" ||
+  fail 'a Go work dir kept for a running compiler did not say why'
+PATH="${early_ps}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$tool_work" ] && fail "the running-tool ablation partner was not reaped: $tool_work"
+# 3o. a tree holding ANOTHER user's file is kept. A fixture cannot create one without
+# root, so the stub answers the guard's own user-id read (the first of the run) with an id
+# that owns nothing, and the later reads truthfully: the listing still selects the tree,
+# and the guard then sees every entry in it as someone else's.
+foreign_tree=$(make_tree 'r50-foreign-file' 10) || fail 'fixture: r50-foreign-file'
+id_stub="${fixture_root}/claude-id-stub"
+mkdir -p "$id_stub" || fail 'fixture: id stub dir'
+real_id=$(command -v id) || fail 'fixture: locate id'
+cat > "${id_stub}/id" <<STUB
+#!/bin/sh
+n=\$(cat "${id_stub}/calls" 2>/dev/null || echo 0)
+n=\$((n + 1))
+echo "\$n" > "${id_stub}/calls"
+if [ "\$n" -eq 1 ]; then echo 4294967294; else exec "$real_id" "\$@"; fi
+STUB
+chmod +x "${id_stub}/id" || fail 'fixture: chmod id stub'
+out=$(PATH="${id_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$foreign_tree" ] || fail "a tree holding another user's file was reaped: $foreign_tree"
+grep -qF "KEEP  (another user's file inside) $foreign_tree" <<<"$out" ||
+  fail "a tree holding another user's file was not reported as kept for it"
+run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$foreign_tree" ] && fail "the foreign-file ablation partner was not reaped: $foreign_tree"
 
 # --- 4. dry-run deletes nothing (mode ablation) -----------------------------------
 dry=$(make_tree 'ksail-dry-run' 10) || fail 'fixture: ksail-dry-run'

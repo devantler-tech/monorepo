@@ -981,10 +981,19 @@ path_at_or_below() {
 # ONE walk answers the last two and stops at the first hit. A walk that could not read
 # part of the tree has not shown it idle, so its status is checked before its output.
 # Returns 0 clear, 1 keep, 2 not examined; TREE_GUARD_WHY says why for 1 and 2.
+#
+# The walk also stops at any entry ANOTHER user owns. The listing only shows that this user
+# owns the top directory, and owning a directory is enough to unlink what others put in it,
+# so without this a tree would take another account's files with it.
 TREE_GUARD_WHY=''
+OWN_UID=$(id -u 2>/dev/null) || OWN_UID=''
 tree_guard() {
-  local tree=$1 points=$2 minutes=$3 hit rc
+  local tree=$1 points=$2 minutes=$3 hit rc foreign
   TREE_GUARD_WHY=''
+  if [ -z "$OWN_UID" ]; then
+    TREE_GUARD_WHY='own user id unreadable'
+    return 2
+  fi
   path_at_or_below "$tree" "$points"
   rc=$?
   case "$rc" in
@@ -1000,10 +1009,10 @@ tree_guard() {
   esac
   if [ -n "$minutes" ]; then
     hit=$(find "$tree" \( -type s -o -type p -o -type b -o -type c \
-      -o -mmin "-${minutes}" \) -print -quit 2>/dev/null) || rc=2
+      -o ! -user "$OWN_UID" -o -mmin "-${minutes}" \) -print -quit 2>/dev/null) || rc=2
   else
-    hit=$(find "$tree" \( -type s -o -type p -o -type b -o -type c \) \
-      -print -quit 2>/dev/null) || rc=2
+    hit=$(find "$tree" \( -type s -o -type p -o -type b -o -type c \
+      -o ! -user "$OWN_UID" \) -print -quit 2>/dev/null) || rc=2
   fi
   if [ "$rc" -eq 2 ]; then
     TREE_GUARD_WHY='scan failed'
@@ -1012,6 +1021,11 @@ tree_guard() {
   [ -n "$hit" ] || return 0
   if [ -S "$hit" ] || [ -p "$hit" ] || [ -b "$hit" ] || [ -c "$hit" ]; then
     TREE_GUARD_WHY='socket or device inside'
+  elif ! foreign=$(find "$hit" -maxdepth 0 ! -user "$OWN_UID" -print 2>/dev/null); then
+    TREE_GUARD_WHY='scan failed'
+    return 2
+  elif [ -n "$foreign" ]; then
+    TREE_GUARD_WHY="another user's file inside"
   else
     TREE_GUARD_WHY='written recently'
   fi
@@ -1024,10 +1038,17 @@ tree_guard() {
 # can be configured to sit under the temp root, where this step would otherwise remove an
 # idle one -- or its parent -- before the step that knows what it is has looked. A go
 # command that cannot answer leaves the list unknown, and then no tree is examined.
+#
+# PROTECTED_CACHE_DIRS is the caches alone. A cache can also be configured AT or ABOVE the
+# temp root, and then its own entries are the directories listed here: a tree at or below
+# one of them is that cache's content, which only the step that budgets it may remove. The
+# per-user temp dir is left out of this second list on purpose, since it may equal the temp
+# root, where the trees below it are exactly what this step is for.
 PROTECTED_OK=1
 PROTECTED_DIRS=''
+PROTECTED_CACHE_DIRS=''
 protect_dir() {
-  local resolved
+  local resolved kind=${2:-}
   case "$1" in
     /*) ;;
     *) return 0 ;;
@@ -1035,16 +1056,27 @@ protect_dir() {
   # A path that does not exist cannot be inside a candidate.
   resolved=$(cd -- "$1" 2>/dev/null && pwd -P) || return 0
   PROTECTED_DIRS="${PROTECTED_DIRS}${resolved}"$'\n'
+  [ "$kind" != cache ] || PROTECTED_CACHE_DIRS="${PROTECTED_CACHE_DIRS}${resolved}"$'\n'
 }
-protect_dir "${GOCACHE:-}"
-protect_dir "${GOMODCACHE:-}"
-protect_dir "${GOLANGCI_LINT_CACHE:-}"
+
+# below_protected_cache <tree>: 0 when the tree is one of the protected caches or lies
+# below one, 1 when it does not, 2 when the tree cannot be resolved.
+below_protected_cache() {
+  local canon
+  canon=$(cd -- "$1" 2>/dev/null && pwd -P) || return 2
+  [ -n "$canon" ] || return 2
+  printf '%s\n' "$PROTECTED_CACHE_DIRS" |
+    awk -v p="$canon" '$0 != "" && ($0 == p || index(p, ($0 == "/" ? "" : $0) "/") == 1) { found = 1 } END { exit !found }'
+}
+protect_dir "${GOCACHE:-}" cache
+protect_dir "${GOMODCACHE:-}" cache
+protect_dir "${GOLANGCI_LINT_CACHE:-}" cache
 protect_dir "$GO_TMP_ROOT"
 protect_dir "${GO_TMP_ROOT}/rod"
 if [ -n "${go_bin:-}" ]; then
   for protected_var in GOCACHE GOMODCACHE; do
     if protected_dir=$("$go_bin" env "$protected_var" 2>/dev/null); then
-      protect_dir "$protected_dir"
+      protect_dir "$protected_dir" cache
     else
       PROTECTED_OK=0
     fi
@@ -1079,6 +1111,16 @@ if [ -d "$TMPDIR_ROOT" ]; then
         continue
       fi
       path_at_or_below "$tree" "$PROTECTED_DIRS"
+      case "$?" in
+        0) continue ;;
+        1) ;;
+        *)
+          unknown=$((unknown + 1))
+          log "UNKNOWN (unresolvable, tree not examined) $tree"
+          continue
+          ;;
+      esac
+      below_protected_cache "$tree"
       case "$?" in
         0) continue ;;
         1) ;;
@@ -1662,6 +1704,13 @@ fi
 # root a tree that holds a mount point, or a socket, FIFO or device, is kept: tree_guard,
 # for the reasons given in (2). A read that fails examines nothing.
 go_work_uid=$(id -u 2>/dev/null) || go_work_uid=''
+# GO_TOOL_RUNNING: 0 only when the process table was read and shows none of the tools a go
+# command starts. The go command itself is left out: it is the parent, and the age rule
+# already covers a live one.
+GO_TOOL_RUNNING=1
+if go_tool_oldest=$(oldest_process_secs compile link asm cgo vet) && [ "$go_tool_oldest" = -1 ]; then
+  GO_TOOL_RUNNING=0
+fi
 for go_work_root in "${go_work_roots[@]}"; do
   [ -d "$go_work_root" ] || continue
   if [ -z "$go_work_uid" ]; then
@@ -1692,6 +1741,17 @@ for go_work_root in "${go_work_roots[@]}"; do
     if go_toolchain_could_own "$tree"; then
       kept=$((kept + 1))
       log "KEEP  (go running)    $tree"
+      continue
+    fi
+    # Under the shared temp root one more case is closed. The age rule above assumes a
+    # process that started after the dir was last modified cannot own it, which is false for
+    # a go command that was KILLED: the compile, link and other tools it started are younger
+    # than the work dir they are still writing into. Which dir such a tool belongs to cannot
+    # be told from the process table, so while any of them runs -- or the table cannot say --
+    # every work dir under this root is kept. The per-user temp dir keeps its existing rule.
+    if [ "$go_work_root" != "$GO_TMP_ROOT" ] && [ "$GO_TOOL_RUNNING" -ne 0 ]; then
+      kept=$((kept + 1))
+      log "KEEP  (toolchain tool running) $tree"
       continue
     fi
     if [ "$MOUNTS_OK" -ne 1 ]; then
