@@ -10204,6 +10204,60 @@ if [ "$rc" -eq 0 ]; then ok "worktree root: exit 0"; else bad "worktree root: ex
 cxgone_file subofgone "$FIX/cxgone/worktrees/gone9/monorepo/platform" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 31
 n=$(cxgone_sleeps); [ "$n" = 3 ] && ok "worktree root: a sub-folder of a removed worktree is read" \
   || bad "worktree root: a sub-folder of a removed worktree is read" "sleep count '$n', expected 3"
+# ── monorepo#4151: the portfolio-path form judges only a plainly written folder ──
+# A recorded folder that merely STARTS WITH a portfolio path was accepted, so
+# `<portfolio>/../../elsewhere/project` read as in scope although it names a
+# folder outside the portfolio. Each spelling below is left out.
+cxgone_file climbout  "/Users/x/git-personal/monorepo/../../elsewhere/project" '' 41
+cxgone_file climbend  "/Users/x/git-personal/monorepo/sub/.." '' 42
+cxgone_file dotpart   "/Users/x/git-personal/monorepo/./sub" '' 43
+cxgone_file dotend    "/Users/x/git-personal/monorepo/." '' 44
+cxgone_file doubled   "/Users/x/git-personal/monorepo//sub" '' 45
+cxgone_file slashend  "/Users/x/git-personal/monorepo/" '' 46
+n=$(cxgone_sleeps); OUT=$(cxgone_run a2a); rc=$?
+[ "$n" = 3 ] && ok "portfolio path: a climbing, dotted, doubled or slash-ended folder admits nothing" \
+  || bad "portfolio path: a climbing, dotted, doubled or slash-ended folder admits nothing" "sleep count '$n', expected 3"
+nocheck "portfolio path: none of them is an unknown" "$OUT" "UNKNOWN:"
+if [ "$rc" -eq 0 ]; then ok "portfolio path: exit 0"; else bad "portfolio path: exit 0" "exit $rc"; fi
+# The control: the same form written plainly IS read, so the zero above is the
+# spelling's doing and not a fixture in which this form never matches.
+cxgone_file plainsub "/Users/x/git-personal/monorepo/sub" '' 47
+n=$(cxgone_sleeps); [ "$n" = 4 ] && ok "portfolio path: a plainly written sub-folder is read" \
+  || bad "portfolio path: a plainly written sub-folder is read" "sleep count '$n', expected 4"
+# A working copy that still exists decides by ITS OWN remote, also when the
+# recorded sub-folder was deleted: the question is then put to its top folder.
+# One with a portfolio remote is read although its record names no address …
+mkdir -p "$FIX/cxgone/worktrees/live/monorepo" "$FIX/cxgone/worktrees/foreign/monorepo"
+git -C "$FIX/cxgone/worktrees/live/monorepo" init -q
+git -C "$FIX/cxgone/worktrees/live/monorepo" remote add origin git@github.com:devantler-tech/monorepo.git
+cxgone_file livesub "$FIX/cxgone/worktrees/live/monorepo/deleted-subfolder" '' 48
+n=$(cxgone_sleeps); [ "$n" = 5 ] && ok "worktree root: a deleted sub-folder of a live portfolio working copy is read" \
+  || bad "worktree root: a deleted sub-folder of a live portfolio working copy is read" "sleep count '$n', expected 5"
+# … and one with another owner's remote is left out although its record names a
+# portfolio address: the remote decides, not a failed read and not the record.
+git -C "$FIX/cxgone/worktrees/foreign/monorepo" init -q
+git -C "$FIX/cxgone/worktrees/foreign/monorepo" remote add origin git@github.com:someone-else/monorepo.git
+cxgone_file foreignsub "$FIX/cxgone/worktrees/foreign/monorepo/deleted-subfolder" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 49
+n=$(cxgone_sleeps); OUT=$(cxgone_run a2a); rc=$?
+[ "$n" = 5 ] && ok "worktree root: a deleted sub-folder of another owner's working copy admits nothing" \
+  || bad "worktree root: a deleted sub-folder of another owner's working copy admits nothing" "sleep count '$n', expected 5"
+nocheck "worktree root: another owner's working copy is not an unknown" "$OUT" "UNKNOWN:"
+# A Codex home given with a trailing slash reads the same transcripts: every
+# Codex worktree transcript used to be left out with no count and no unknown line.
+n_slash=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxgone/" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
+  PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section efficiency 2>&1 | grep -oE 'sleep/poll calls \.\. [0-9]+' | grep -oE '[0-9]+$')
+[ "$n_slash" = 5 ] && ok "Codex home: a trailing slash reads the same transcripts" \
+  || bad "Codex home: a trailing slash reads the same transcripts" "sleep count '$n_slash', expected 5"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxgone//" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
+  PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section a2a 2>&1)
+archive_line=$(cxgone_run a2a | grep -F "from archived_sessions/")
+case "$archive_line" in
+  *"from archived_sessions/ 0"*|"") bad "Codex home: the archive count was read before the case" "'$archive_line'" ;;
+  *) ok "Codex home: the archive count was read before the case" ;;
+esac
+check "Codex home: trailing slashes keep the archive count" "$OUT" "$archive_line"
 # A folder that EXISTS but cannot be read is not an empty folder (review of
 # monorepo#4147): the report must say unknown and exit 2, never print a clean
 # Codex count. Root reads through any mode, so the case cannot be built as root.
