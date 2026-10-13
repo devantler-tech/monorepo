@@ -361,6 +361,10 @@ fi
 
 CLAUDE_PROJECTS="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+# Given with a trailing slash, every `$CODEX_HOME/…` comparison below would hold a
+# doubled slash that no recorded folder has, and each Codex worktree transcript
+# would be left out with no count and no unknown line (monorepo#4151).
+while [ "${#CODEX_HOME}" -gt 1 ] && [ "${CODEX_HOME%/}" != "$CODEX_HOME" ]; do CODEX_HOME="${CODEX_HOME%/}"; done
 MONOREPO="${MONOREPO_DIR:-$HOME/git-personal/monorepo}"
 if [ -z "${AGENT_TELEMETRY_RUNTIME:-}" ]; then
   if [ -n "${CODEX_THREAD_ID:-}" ]; then
@@ -2359,6 +2363,15 @@ portfolio_remote_url() {
 in_scope_cwd() {
   local cwd="$1" recorded="${2-}" p url gone=0 unchecked=0 presence base rest id root where
   [ -n "$cwd" ] || return 1
+  # Both forms compare the recorded folder as TEXT, so it must be written plainly
+  # (monorepo#4151). `<portfolio path>/../../elsewhere` starts with a portfolio
+  # path and names a folder outside it; a `.`, a doubled or a trailing slash can
+  # hide what sits on the path. The runtimes record plain absolute paths, so
+  # anything else is out of scope rather than resolved: resolving would ask the
+  # file system about a folder that may be gone.
+  case "$cwd" in
+    */|*//*|*/./*|*/.|*/../*|*/..) return 1 ;;
+  esac
   while IFS= read -r p; do
     # Form 1: literally under an allowlisted path, at a component boundary.
     case "$cwd" in "$p" | "$p"/*) return 0 ;; esac
@@ -2371,15 +2384,11 @@ in_scope_cwd() {
     #
     # The WORKTREE ROOT is what gets judged, never the recorded folder itself
     # (second review of monorepo#4149). The recorded folder may be a sub-folder
-    # that was deleted while the worktree lives on with another remote, and a
-    # path written with `..`, `.`, a doubled or a trailing slash can walk away
-    # from the worktree or hide what sits on it. So the path must be in plain
-    # form and name exactly `worktrees/<one id>/<name>[/…]`; anything else is
-    # not a Codex worktree by its path and is left to the other forms.
+    # that was deleted while the worktree lives on with another remote. So the
+    # path (already known to be plainly written, see above) must name exactly
+    # `worktrees/<one id>/<name>[/…]`; anything else is not a Codex worktree by
+    # its path.
     base=$(basename "$p")
-    case "$cwd" in
-      */|*//*|*/./*|*/.|*/../*|*/..) continue ;;
-    esac
     case "$cwd" in
       "$CODEX_HOME"/worktrees/*/"$base"|"$CODEX_HOME"/worktrees/*/"$base"/*)
         rest="${cwd#"$CODEX_HOME"/worktrees/}"
