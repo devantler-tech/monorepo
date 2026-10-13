@@ -2306,8 +2306,35 @@ session_files() {
 # overrules it — and a gone folder with no acceptable record returns 3, so the
 # caller can count what was left out for this reason instead of losing it among
 # ordinary out-of-scope transcripts.
+#
+# "Gone" must be CONFIRMED, not inferred from a failed test (review of
+# monorepo#4149): `[ -d ]` is also false for a worktree that exists under a
+# folder this user may not search. Taking the recorded address then would admit
+# a transcript whose real worktree has a different remote. Such a worktree
+# returns 4 and the report says unknown.
 #   0 in scope · 1 out of scope · 3 a portfolio-shaped worktree that is gone and
-#   has no acceptable recorded address
+#   has no acceptable recorded address · 4 a portfolio-shaped worktree whose
+#   presence could not be determined
+# Prints nothing. 0 = the folder exists · 1 = confirmed absent: its nearest
+# existing ancestor is a folder this user can search, and the next component is
+# not in it · 2 = cannot tell (an ancestor cannot be searched, or something that
+# is not a folder sits on the path).
+worktree_presence() {
+  local p="$1" parent
+  [ -d "$p" ] && return 0
+  while :; do
+    # Something is there but it is not a folder (or it is a dangling link).
+    if [ -e "$p" ] || [ -L "$p" ]; then return 2; fi
+    parent=$(dirname "$p")
+    if [ -d "$parent" ]; then
+      if [ -x "$parent" ]; then return 1; fi
+      return 2
+    fi
+    [ "$parent" != "$p" ] || return 2
+    p="$parent"
+  done
+}
+
 portfolio_remote_url() {
   # Anchor the HOST, not a substring: `*github.com/org/*` also matches
   # `https://notgithub.com/org/…` and internal mirrors that merely
@@ -2321,7 +2348,7 @@ portfolio_remote_url() {
 }
 
 in_scope_cwd() {
-  local cwd="$1" recorded="${2-}" p url gone=0
+  local cwd="$1" recorded="${2-}" p url gone=0 unchecked=0 presence
   [ -n "$cwd" ] || return 1
   while IFS= read -r p; do
     # Form 1: literally under an allowlisted path, at a component boundary.
@@ -2334,7 +2361,9 @@ in_scope_cwd() {
     # no remote, not a repo): an unverifiable worktree is excluded.
     case "$cwd" in
       "$CODEX_HOME"/worktrees/*/"$(basename "$p")"|"$CODEX_HOME"/worktrees/*/"$(basename "$p")"/*)
-        if [ ! -d "$cwd" ]; then
+        worktree_presence "$cwd" && presence=0 || presence=$?
+        if [ "$presence" -eq 2 ]; then unchecked=1; continue; fi
+        if [ "$presence" -eq 1 ]; then
           if portfolio_remote_url "$recorded"; then return 0; fi
           gone=1
           continue
@@ -2343,14 +2372,16 @@ in_scope_cwd() {
         if portfolio_remote_url "$url"; then return 0; fi ;;
     esac
   done < <(printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$')
+  [ "$unchecked" -eq 0 ] || return 4
   [ "$gone" -eq 0 ] || return 3
   return 1
 }
 
 # Prints one line per judged transcript: `F <path>` for one in scope, and a bare
 # `X` for one left out because its worktree is gone and it records no acceptable
-# address. The caller applies the file cap, so the X count covers the whole
-# window while the F list is capped.
+# address, and a bare `U` for one whose worktree could not be checked at all. The
+# caller applies the file cap, so the X and U counts cover the whole window
+# while the F list is capped.
 codex_session_walk() {
   # Codex sessions are flat files, not path-namespaced, so scope comes from the
   # transcript's own recorded cwd. A file whose cwd cannot be determined is
@@ -2386,6 +2417,7 @@ codex_session_walk() {
         case "$rc" in
           0) printf 'F %s\n' "$f" ;;
           3) printf 'X\n' ;;
+          4) printf 'U\n' ;;
         esac
       done
 }
@@ -2423,6 +2455,7 @@ CX_COUNT=0
 CX_LIVE=0
 CX_ARCHIVED=0
 CX_GONE=0
+CX_UNCHECKED=0
 CX_UNREADABLE=''
 ALL_CACHE=''
 
@@ -2461,6 +2494,7 @@ populate_session_cache() {
   [ "$SAFETY_SCOPE" = claude ] || cx_walk="$(codex_session_walk)"
   CX_CACHE=$(printf '%s\n' "$cx_walk" | awk -v m="$MAX_FILES" '/^F / { if (n < m) print substr($0, 3); n++ }')
   CX_GONE=$(printf '%s\n' "$cx_walk" | grep -c '^X$' || true)
+  CX_UNCHECKED=$(printf '%s\n' "$cx_walk" | grep -c '^U$' || true)
   [ "$SAFETY_SCOPE" = claude ] || CX_UNREADABLE="$(codex_unreadable_folders)"
   CX_COUNT=$(printf '%s' "$CX_CACHE" | grep -c . || true)
   # How many listed transcripts came from each folder, so a folder the walk never
@@ -2508,6 +2542,13 @@ if [ -n "$CX_UNREADABLE" ]; then
     echo " UNKNOWN: the Codex folder ${cx_dir}/ exists but could not be read in full —"
     echo "          every Codex figure in this report is incomplete, not zero."
   done <<<"$CX_UNREADABLE"
+  main_rc=2
+fi
+# The same for a transcript whose worktree could be neither found nor confirmed
+# absent: it is left out, and the reading is incomplete rather than clean.
+if [ "$CX_UNCHECKED" -gt 0 ]; then
+  echo " UNKNOWN: ${CX_UNCHECKED} Codex transcript(s) left out — the worktree could be neither read"
+  echo "          nor confirmed absent, so every Codex figure in this report is incomplete."
   main_rc=2
 fi
 if [ "$SAFETY_WORKER" = 0 ] || { [ "$SAFETY_STANDALONE" = 1 ] && [ "$SAFETY_SCOPE" != codex ]; }; then

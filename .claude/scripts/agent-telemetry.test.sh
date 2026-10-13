@@ -9794,6 +9794,37 @@ n=$(cxgone_sleeps); [ "$n" = 2 ] && ok "gone worktree: a folder value with a lin
 cxgone_file twolineurl "$FIX/cxgone/worktrees/gone7/monorepo" '{"repository_url":"git@github.com:devantler-tech/monorepo.git\nx"}' 24
 n=$(cxgone_sleeps); [ "$n" = 2 ] && ok "gone worktree: an address value with a line break admits nothing" \
   || bad "gone worktree: an address value with a line break admits nothing" "sleep count '$n', expected 2"
+# "Gone" has to be confirmed (review of monorepo#4149). A worktree under a folder
+# this user may not search fails the folder test exactly like a removed one, and
+# its real remote may differ from the recorded address: it is left out and the
+# report says unknown. Root searches through any mode, so not built as root.
+if [ "$(id -u)" -ne 0 ]; then
+  mkdir -p "$FIX/cxgone/worktrees/locked/monorepo"
+  cxgone_file locked "$FIX/cxgone/worktrees/locked/monorepo" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 25
+  chmod 000 "$FIX/cxgone/worktrees/locked"
+  n=$(cxgone_sleeps); OUT=$(cxgone_run a2a); rc=$?
+  chmod 700 "$FIX/cxgone/worktrees/locked"
+  [ "$n" = 2 ] && ok "unsearchable worktree: the recorded address does not admit it" \
+    || bad "unsearchable worktree: the recorded address does not admit it" "sleep count '$n', expected 2"
+  check "unsearchable worktree: the report says unknown" "$OUT" "UNKNOWN: 1 Codex transcript(s) left out"
+  check "unsearchable worktree: it is not counted as a gone one" "$OUT" "left out, worktree gone and no portfolio address recorded: 3"
+  if [ "$rc" -eq 2 ]; then ok "unsearchable worktree: exit 2"; else bad "unsearchable worktree: exit 2" "exit $rc"; fi
+  # Searchable again: the folder exists and has no remote, so the folder is the
+  # judge — out of scope, a known reading.
+  OUT=$(cxgone_run a2a); rc=$?
+  nocheck "searchable worktree: no unknown line" "$OUT" "UNKNOWN: 1 Codex transcript(s) left out"
+  if [ "$rc" -eq 0 ]; then ok "searchable worktree: exit 0"; else bad "searchable worktree: exit 0" "exit $rc"; fi
+  rm -f "$FIX/cxgone/archived_sessions/locked.jsonl"
+fi
+# A file sitting where the worktree folder should be is not a removed worktree either.
+mkdir -p "$FIX/cxgone/worktrees/afile"; : > "$FIX/cxgone/worktrees/afile/monorepo"
+cxgone_file afile "$FIX/cxgone/worktrees/afile/monorepo" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 26
+n=$(cxgone_sleeps); OUT=$(cxgone_run a2a); rc=$?
+[ "$n" = 2 ] && ok "not a folder: the recorded address does not admit it" \
+  || bad "not a folder: the recorded address does not admit it" "sleep count '$n', expected 2"
+check "not a folder: the report says unknown" "$OUT" "UNKNOWN: 1 Codex transcript(s) left out"
+if [ "$rc" -eq 2 ]; then ok "not a folder: exit 2"; else bad "not a folder: exit 2" "exit $rc"; fi
+rm -f "$FIX/cxgone/archived_sessions/afile.jsonl" "$FIX/cxgone/worktrees/afile/monorepo"
 # A folder that EXISTS but cannot be read is not an empty folder (review of
 # monorepo#4147): the report must say unknown and exit 2, never print a clean
 # Codex count. Root reads through any mode, so the case cannot be built as root.
