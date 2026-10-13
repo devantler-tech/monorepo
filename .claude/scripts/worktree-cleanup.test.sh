@@ -3228,8 +3228,8 @@ t_plain_reap_keeps_a_desktop_marker_that_is_not_empty() {
   local mark_row none_row problems=""
   mark_row=$(grep '/mark	' "$root/manifest.tsv" 2>/dev/null || true)
   none_row=$(grep '/none	' "$root/manifest.tsv" 2>/dev/null || true)
-  grep -q 'KEEP .*full .*marker cannot be read or is not the empty file' <<<"$dry" || problems="$problems dry-run-did-not-keep"
-  grep -q 'KEEP .*full .*marker cannot be read or is not the empty file' <<<"$out" || problems="$problems apply-did-not-keep"
+  grep -q 'KEEP .*full .*marker is not the empty file it writes' <<<"$dry" || problems="$problems dry-run-did-not-keep"
+  grep -q 'KEEP .*full .*marker is not the empty file it writes' <<<"$out" || problems="$problems apply-did-not-keep"
   [ -d "$wts/full" ] || problems="$problems removed-a-marker-with-content"
   [ -e "$wts/mark" ] && problems="$problems empty-marker-not-reaped"
   [ -e "$wts/none" ] && problems="$problems control-not-reaped"
@@ -3267,6 +3267,33 @@ SHIM
     ok "$name"
   else
     bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+
+t_unreadable_desktop_marker_state_ends_unknown() {
+  # A git state directory that cannot be listed is no verdict on the marker: the worktree is
+  # kept, and the sweep must not end as a clean one. The ls shim fails for that directory only.
+  local name="dry-run ends UNKNOWN when a worktree's git state cannot be listed for the marker"
+  local root; root=$(make_repo)
+  add_wt "$root" dark pushed && add_wt "$root" lit pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local admin; admin=$(git -C "$root/repo/.claude/worktrees/dark" rev-parse --absolute-git-dir)
+  local real_ls; real_ls=$(command -v ls)
+  local shim="$root/shim"; mkdir -p "$shim"
+  cat > "$shim/ls" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do [ "\$a" = "$admin" ] && exit 1; done
+exec "$real_ls" "\$@"
+SHIM
+  chmod +x "$shim/ls"
+  local out rc; out=$(PATH="$shim:$PATH" run_salvage "$root" dry-run 1); rc=$?
+  if [ "$rc" -eq 2 ] && grep -q 'KEEP .*dark .*cannot read the worktree.s git state for the desktop app' <<<"$out" \
+     && grep -q 'UNKNOWN — could not read a worktree.s git state for the desktop app' <<<"$out" \
+     && grep -q '^REAP .*lit ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc $out"
   fi
   rm -rf "$root"
 }
@@ -6540,6 +6567,7 @@ t_salvage_carries_the_empty_desktop_marker
 t_salvage_keeps_a_desktop_marker_that_is_not_empty
 t_plain_reap_keeps_a_desktop_marker_that_is_not_empty
 t_keeps_a_desktop_marker_written_after_the_manifest_row
+t_unreadable_desktop_marker_state_ends_unknown
 t_salvage_keeps_a_filtered_path
 t_salvage_keeps_a_submodule_mid_bisect
 t_salvage_keeps_when_file_modes_are_ignored
