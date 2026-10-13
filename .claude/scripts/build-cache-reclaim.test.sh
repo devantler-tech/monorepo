@@ -335,15 +335,61 @@ cat > "${id_stub}/id" <<STUB
 n=\$(cat "${id_stub}/calls" 2>/dev/null || echo 0)
 n=\$((n + 1))
 echo "\$n" > "${id_stub}/calls"
-if [ "\$n" -eq 1 ]; then echo 4294967294; else exec "$real_id" "\$@"; fi
+if [ "\$n" -eq 1 ]; then echo 54321; else exec "$real_id" "\$@"; fi
 STUB
 chmod +x "${id_stub}/id" || fail 'fixture: chmod id stub'
 out=$(PATH="${id_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$foreign_tree" ] || fail "a tree holding another user's file was reaped: $foreign_tree"
 grep -qF "KEEP  (another user's file inside) $foreign_tree" <<<"$out" ||
-  fail "a tree holding another user's file was not reported as kept for it"
+  fail "a tree holding another user's file was not reported as kept for it; it said: $(grep -F "$foreign_tree" <<<"$out" | head -n 3)"
 run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
 [ -e "$foreign_tree" ] && fail "the foreign-file ablation partner was not reaped: $foreign_tree"
+# 3p. only a name made of safe characters is ever a candidate. The listing is read a line
+# at a time, so a name with a newline would otherwise become two paths -- the second one
+# relative, resolved against the working directory, and removed from THERE. The run starts
+# in a directory that holds a tree by that second name, which must survive untouched.
+split_name=$'r50-old\nr50-victim'
+mkdir -p "${fixture_root}/${split_name}" || fail 'fixture: newline name'
+printf 'payload\n' > "${fixture_root}/${split_name}/file"
+age_tree "$(stamp_hours_ago 240)" "${fixture_root}/${split_name}" || fail 'fixture: age newline name'
+spaced=$(make_tree 'run type archive' 10) || fail 'fixture: spaced name'
+bracketed=$(make_tree 'cache (old)' 10) || fail 'fixture: bracketed name'
+victim_cwd="${fixture_root}/claude-victim-cwd"
+mkdir -p "${victim_cwd}/r50-victim" || fail 'fixture: victim cwd'
+printf 'not temp\n' > "${victim_cwd}/r50-victim/keep.txt"
+age_tree "$(stamp_hours_ago 240)" "${victim_cwd}/r50-victim" || fail 'fixture: age victim'
+out=$(cd "$victim_cwd" && run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${victim_cwd}/r50-victim/keep.txt" ] ||
+  fail 'a directory in the working directory was removed through a newline in a temp tree name'
+[ -e "${fixture_root}/${split_name}/file" ] || fail 'a tree with a newline in its name was reaped'
+[ -e "$spaced" ] || fail "a tree with a space in its name was reaped: $spaced"
+[ -e "$bracketed" ] || fail "a tree with a bracket in its name was reaped: $bracketed"
+grep -qF 'per-run trees: 3 never considered for a name outside the safe set' <<<"$out" ||
+  fail "the trees skipped for their name were not counted; it said: $(grep -F 'never considered' <<<"$out")"
+# 3q. the mount table is matched as whole records, so a record that cannot be split into
+# fields still keeps the tree it mounts into: a device name that itself contains ` on `,
+# the Linux form with ` type `, and a mount path with a bracket below the tree.
+record_tree=$(make_tree 'r50-odd-records' 10) || fail 'fixture: r50-odd-records'
+record_canon=$(cd -- "$record_tree" && pwd -P) || fail 'fixture: resolve r50-odd-records'
+for record in \
+  "//guest@nas/share on demand on ${record_canon}/volume (smbfs, nodev)" \
+  "/dev/loop7 on ${record_canon}/img type squashfs (ro,relatime)" \
+  "/dev/disk9s4 on ${record_canon}/a (b)/volume (apfs, local)" \
+  "/dev/disk9s5 on ${record_canon} (apfs, local)" \
+  "tmpfs on ${record_canon}"; do
+  printf '#!/bin/sh\nprintf "%%s\\n" "/dev/disk1s1 on / (apfs, local)" "%s"\n' "$record" \
+    > "${mount_stub}/mount"
+  out=$(PATH="${mount_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
+  [ -e "$record_tree" ] || fail "a tree was reaped under the mount record: $record"
+  grep -qF "KEEP  (mount point) $record_tree" <<<"$out" ||
+    fail "a tree was not kept for the mount record: $record"
+  [ -e "$record_tree" ] || break
+done
+# A record for a SIBLING whose name merely starts the same way does not keep it.
+printf '#!/bin/sh\nprintf "%%s\\n" "/dev/disk1s1 on / (apfs, local)" "/dev/disk9s6 on %s-sibling/volume (apfs, local)"\n' \
+  "$record_canon" > "${mount_stub}/mount"
+PATH="${mount_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$record_tree" ] && fail "a tree was kept for a mount under a sibling directory: $record_tree"
 
 # --- 4. dry-run deletes nothing (mode ablation) -----------------------------------
 dry=$(make_tree 'ksail-dry-run' 10) || fail 'fixture: ksail-dry-run'

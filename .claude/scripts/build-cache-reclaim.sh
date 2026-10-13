@@ -935,18 +935,40 @@ run_tree_kept_name() {
   return 1
 }
 
-# read_mount_points prints every mount point on the host, one per line. Removing a tree
-# that holds one would delete the mounted volume's contents, not temp files. It returns 1
-# when the table cannot be read OR yields no mount point: a host always has at least its
-# root mounted, so an empty parse means the output was not understood, never "no mounts".
+# SAFE_NAME_CHARS is every character a candidate's NAME may contain. A name with anything
+# else -- a space, a newline, a bracket, a quote -- is never considered, by any step that
+# lists a shared temp root. This is a whitelist on purpose: the listings below are read a
+# line at a time and the mount table is matched as text, and review kept finding one more
+# spelling that breaks one or the other (a newline that splits a name into two paths, a
+# name that looks like the end of a mount record). Admitting only names that cannot carry
+# such a spelling closes the class instead of the next instance. Every run directory the
+# lanes create fits; the letters are spelled out because a range such as a-z follows the
+# locale, and bash 3.2 under en_US.UTF-8 reads it as including capitals or not by collation.
+SAFE_NAME_CHARS='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._+@=-'
+
+# safe_path <resolved-path>: 0 when every character is a safe name character or a slash.
+safe_path() {
+  case "$1" in
+    '' | *[!/${SAFE_NAME_CHARS}]*) return 1 ;;
+  esac
+  return 0
+}
+
+# read_mount_points prints the host's mount table, one record per line, keeping only the
+# records that name an absolute mount point. Removing a tree that holds a mount point
+# would delete the mounted volume's contents, not temp files. It returns 1 when the table
+# cannot be read OR holds no such record: a host always has at least its root mounted, so
+# an empty result means the output was not understood, never "no mounts".
+#
+# The records are kept WHOLE. macOS prints `<dev> on <path> (<opts>)` and Linux
+# `<dev> on <path> type <fs> (<opts>)`, and neither can be split into fields reliably: a
+# device name may contain ` on `, and a path may contain ` (` or ` type `. mount_at_or_below
+# therefore asks a question that needs no split.
 read_mount_points() {
   local table points
   table=$(mount 2>/dev/null) || return 1
   [ -n "$table" ] || return 1
-  # macOS prints `<dev> on <path> (<opts>)`, Linux `<dev> on <path> type <fs> (<opts>)`.
-  points=$(printf '%s\n' "$table" | awk '
-    { i = index($0, " on "); if (!i) next
-      p = substr($0, i + 4); sub(/ \(.*$/, "", p); sub(/ type .*$/, "", p); print p }') || return 1
+  points=$(printf '%s\n' "$table" | awk 'index($0, " on /") > 0') || return 1
   [ -n "$points" ] || return 1
   printf '%s\n' "$points"
 }
@@ -959,6 +981,29 @@ MOUNT_POINTS=''
 if MOUNT_POINTS=$(read_mount_points); then
   MOUNTS_OK=1
 fi
+
+# mount_at_or_below <tree> <mount-records>: 0 when a record mounts something at the tree
+# or below it, 1 when none does, 2 when that cannot be told. It looks for the text
+# ` on <tree>/` anywhere in a record, or ` on <tree>` at its end or before a space. Because
+# the resolved tree is required to be a safe path, that text cannot be produced by anything
+# but a mount point at or below the tree, wherever the record's fields really divide; an
+# odd device name or mount path can only make it answer "mounted" for a tree that is not,
+# which keeps the tree. A tree that cannot be resolved, or whose resolved path is not a
+# safe path, is "not examined".
+mount_at_or_below() {
+  local canon
+  canon=$(cd -- "$1" 2>/dev/null && pwd -P) || return 2
+  safe_path "$canon" || return 2
+  printf '%s\n' "$2" |
+    awk -v p=" on $canon" '
+      { i = index($0, p)
+        while (i > 0) {
+          rest = substr($0, i + length(p))
+          if (rest == "" || substr(rest, 1, 1) == "/" || substr(rest, 1, 1) == " ") found = 1
+          $0 = substr($0, i + 1); i = index($0, p)
+        } }
+      END { exit !found }'
+}
 
 # path_at_or_below <tree> <list>: 0 when a path in the newline-separated list is the tree
 # or lies below it, 1 when none is, 2 when the tree cannot be resolved -- which is "not
@@ -994,7 +1039,7 @@ tree_guard() {
     TREE_GUARD_WHY='own user id unreadable'
     return 2
   fi
-  path_at_or_below "$tree" "$points"
+  mount_at_or_below "$tree" "$points"
   rc=$?
   case "$rc" in
     0)
@@ -1095,13 +1140,21 @@ if [ -d "$TMPDIR_ROOT" ]; then
     unknown=$((unknown + 1))
     log "UNKNOWN (go env failed) $TMPDIR_ROOT: per-run trees not examined"
   elif ! run_trees=$(find -H "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d \
-    -user "$run_tree_uid" -mmin "+$((RUN_TREE_MIN_AGE_HOURS * 60))" 2>/dev/null); then
+    -user "$run_tree_uid" ! -name "*[!${SAFE_NAME_CHARS}]*" \
+    -mmin "+$((RUN_TREE_MIN_AGE_HOURS * 60))" 2>/dev/null); then
     # A listing that failed part-way names only some of the trees; none is judged from it.
     unknown=$((unknown + 1))
     log "UNKNOWN (scan failed) $TMPDIR_ROOT: per-run trees not examined"
   else
     while IFS= read -r tree; do
       [ -n "$tree" ] || continue
+      # The listing admits only safe names, so a line is one whole path. Asked again here,
+      # with the direct-child shape, so nothing but such a path is ever a candidate.
+      run_tree_name=${tree##*/}
+      case "$run_tree_name" in
+        '' | *[!${SAFE_NAME_CHARS}]*) continue ;;
+      esac
+      [ "$tree" = "${TMPDIR_ROOT%/}/${run_tree_name}" ] || continue
       if run_tree_kept_name "${tree##*/}"; then continue; fi
       # A marked cache is left to (2b), whose idle rule looks at its entries.
       if is_run_cache "$tree"; then continue; else marker_rc=$?; fi
@@ -1154,6 +1207,12 @@ if [ -d "$TMPDIR_ROOT" ]; then
 $run_trees
 EOF
     log "per-run trees: ${run_trees_recent} kept for a write within ${RUN_TREE_MIN_AGE_HOURS} h"
+    # Said, so a directory that is never reaped for its name is not a silent leftover.
+    if run_trees_unsafe=$(find -H "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d \
+      -user "$run_tree_uid" -name "*[!${SAFE_NAME_CHARS}]*" -print0 2>/dev/null |
+      tr -dc '\000' | wc -c | tr -d ' ') && [ "${run_trees_unsafe:-0}" != 0 ]; then
+      log "per-run trees: ${run_trees_unsafe} never considered for a name outside the safe set"
+    fi
   fi
 fi
 
@@ -1719,7 +1778,8 @@ for go_work_root in "${go_work_roots[@]}"; do
     continue
   fi
   if ! go_work_trees=$(find -H "$go_work_root" -mindepth 1 -maxdepth 1 -type d \
-    -user "$go_work_uid" \( -name 'go-build[0-9]*' -o -name 'go-link-[0-9]*' \) \
+    -user "$go_work_uid" ! -name "*[!${SAFE_NAME_CHARS}]*" \
+    \( -name 'go-build[0-9]*' -o -name 'go-link-[0-9]*' \) \
     -mmin "+$((GO_TMP_MIN_AGE_HOURS * 60))" 2>/dev/null); then
     unknown=$((unknown + 1))
     log "UNKNOWN (scan failed) $go_work_root: Go work dirs not examined"
