@@ -5244,11 +5244,14 @@ if want drift; then
     root="${CLAUDE_SCHEDULE_STORE_ROOT:-$HOME/Library/Application Support/Claude/claude-code-sessions}"
     for candidate in "$root"/*/*/scheduled-tasks.json; do
       [ -f "$candidate" ] || continue
-      # The store is the one that holds EVERY entry asked for above, each enabled
-      # and pointing at its own loader, beside the improver (monorepo#4117).
+      # The store is the one that holds EVERY entry asked for above, each pointing
+      # at its own loader, beside the improver (monorepo#4117). An entry may be
+      # switched on or off: the runtime holds an entry switched off between its
+      # creation and its first run, and asking for it switched on left the store
+      # unfound and the whole lane, the improver included, unread (monorepo#4158).
+      # Whether an entry is on is read per entry below, never here.
       jq -e --argjson engineers "$CLAUDE_ENGINEER_STORE_ENTRIES" --arg improver "$CLAUDE_IMPROVER_LOADER" '
         [.scheduledTasks[]? |
-          select(.enabled == true) |
           select(
             ((.id | type) == "string" and (.id as $id | $engineers | has($id))
               and .filePath == (.id as $id | $engineers[$id])) or
@@ -5814,9 +5817,25 @@ if want drift; then
     [ ! -e "$2" ] && [ "$(codex_store_held "$1")" = 0 ]
   }
 
+  # An entry whose one record, with its own pointer, is switched off
+  # (monorepo#4158). The runtime does not dispatch it, so it has no schedule to
+  # read, and that is said by name rather than as an unreadable record.
+  claude_entry_switched_off() { # $1 = entry id, $2 = its pointer
+    [ -n "$CLAUDE_SCHEDULE_STORE" ] && [ -f "$CLAUDE_SCHEDULE_STORE" ] \
+      && jq -e --arg id "$1" --arg pointer "$2" '
+           [.scheduledTasks[]? | select(type == "object" and .id == $id)] |
+           length == 1 and .[0].filePath == $pointer and .[0].enabled == false
+         ' "$CLAUDE_SCHEDULE_STORE" >/dev/null 2>&1
+  }
+
   CLAUDE_ENGINEER_ACTUAL=""
   CLAUDE_ENGINEER_MARKER=""
   CLAUDE_ENGINEER_UNREADABLE=""
+  # Set only when the lane is readable except for entries that are switched off:
+  # their ids, and the schedule of the entries that are switched on.
+  CLAUDE_ENGINEER_SWITCHED_OFF=""
+  CLAUDE_ENGINEER_ON=""
+  CLAUDE_ENGINEER_ON_SCHEDULES=""
   # One " id=schedule" word per readable entry; the refusal count below reads it.
   CLAUDE_ENGINEER_ENTRY_SCHEDULES=""
   # Set only when the lane is readable except for entries that are not created
@@ -5826,6 +5845,11 @@ if want drift; then
   CLAUDE_ENGINEER_CREATED_SCHEDULES=""
   if [ "$CLAUDE_ENGINEER_ENTRY_COUNT" -eq 0 ]; then
     CLAUDE_ENGINEER_UNREADABLE="entry list is unreadable (CLAUDE_ENGINEER_ENTRIES: ids of lowercase letters, digits and hyphens, at most four, none twice)"
+  elif [ "$CLAUDE_ENGINEER_ENTRY_COUNT" -eq 1 ] \
+       && [ -f "$(claude_engineer_entry_loader "$CLAUDE_ENGINEER_ENTRY_IDS")" ] \
+       && claude_entry_switched_off "$CLAUDE_ENGINEER_ENTRY_IDS" \
+            "$(claude_engineer_entry_loader "$CLAUDE_ENGINEER_ENTRY_IDS")"; then
+    CLAUDE_ENGINEER_UNREADABLE="entry $CLAUDE_ENGINEER_ENTRY_IDS is switched off in the scheduler store"
   elif [ "$CLAUDE_ENGINEER_ENTRY_COUNT" -eq 1 ]; then
     CLAUDE_ENGINEER_ACTUAL=$(claude_store_schedule "$CLAUDE_SCHEDULE_STORE" \
       "$CLAUDE_ENGINEER_ENTRY_IDS" "$(claude_engineer_entry_loader "$CLAUDE_ENGINEER_ENTRY_IDS")")
@@ -5835,10 +5859,15 @@ if want drift; then
       && CLAUDE_ENGINEER_ENTRY_SCHEDULES=" $CLAUDE_ENGINEER_ENTRY_IDS=$CLAUDE_ENGINEER_ACTUAL"
   else
     lane_reset
+    lane_switched_off=""
     while IFS= read -r entry_id; do
       entry_loader=$(claude_engineer_entry_loader "$entry_id")
       if claude_entry_not_created "$entry_id" "$entry_loader"; then
         lane_not_created="${lane_not_created:+$lane_not_created, }$entry_id"
+        continue
+      fi
+      if [ -f "$entry_loader" ] && claude_entry_switched_off "$entry_id" "$entry_loader"; then
+        lane_switched_off="${lane_switched_off:+$lane_switched_off, }$entry_id"
         continue
       fi
       lane_marker_add "$(claude_store_marker "$CLAUDE_SCHEDULE_STORE" "$entry_id" "$entry_loader")"
@@ -5857,6 +5886,12 @@ if want drift; then
     [ "$lane_marker_unread" -ne 0 ] || CLAUDE_ENGINEER_MARKER="$lane_marker"
     if [ -n "$CLAUDE_ENGINEER_UNREADABLE" ]; then
       :
+    elif [ -n "$lane_switched_off" ]; then
+      CLAUDE_ENGINEER_SWITCHED_OFF="$lane_switched_off"
+      CLAUDE_ENGINEER_NOT_CREATED="$lane_not_created"
+      CLAUDE_ENGINEER_ON_SCHEDULES="$lane_entry_schedules"
+      [ -z "$lane_minutes" ] \
+        || CLAUDE_ENGINEER_ON=$(schedule_from_parts "$lane_hours" "$lane_minutes")
     elif [ -n "$lane_not_created" ]; then
       CLAUDE_ENGINEER_NOT_CREATED="$lane_not_created"
       CLAUDE_ENGINEER_CREATED_SCHEDULES="$lane_entry_schedules"
@@ -5995,6 +6030,19 @@ if want drift; then
 
   if [ -n "$CLAUDE_ENGINEER_UNREADABLE" ]; then
     echo "    UNKNOWN: claude engineer $CLAUDE_ENGINEER_UNREADABLE"
+  elif [ -n "$CLAUDE_ENGINEER_SWITCHED_OFF" ]; then
+    # A lane with a switched-off entry is not compared as a whole: it cannot match
+    # a table that names that entry's start, and its reading is the entry's state,
+    # not a drifted schedule. The entries that are switched on are still held to
+    # the table, as they are beside an entry that is not created yet.
+    echo "    UNKNOWN: claude engineer entry $CLAUDE_ENGINEER_SWITCHED_OFF is switched off in the scheduler store"
+    echo "      entries:$CLAUDE_ENGINEER_ON_SCHEDULES$(printf ' %s' "$CLAUDE_ENGINEER_SWITCHED_OFF" \
+      | sed 's/,//g; s/\([^ ][^ ]*\)/\1=switched-off/g')$([ -z "$CLAUDE_ENGINEER_NOT_CREATED" ] \
+      || printf ' %s' "$CLAUDE_ENGINEER_NOT_CREATED" | sed 's/,//g; s/\([^ ][^ ]*\)/\1=not-created/g')"
+    if [ -n "$CLAUDE_ENGINEER_EXPECTED" ] && [ -n "$CLAUDE_ENGINEER_ON" ] \
+       && ! schedule_within "$CLAUDE_ENGINEER_ON" "$CLAUDE_ENGINEER_EXPECTED"; then
+      echo "    ⚠️  DRIFT: claude engineer entries that are switched on start outside the cadence table: expected=$CLAUDE_ENGINEER_EXPECTED running=$CLAUDE_ENGINEER_ON"
+    fi
   elif [ -n "$CLAUDE_ENGINEER_NOT_CREATED" ]; then
     report_not_created "claude engineer" "$CLAUDE_ENGINEER_NOT_CREATED" "$CLAUDE_ENGINEER_CREATED_SCHEDULES" \
       "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_CREATED"
