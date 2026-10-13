@@ -1416,6 +1416,75 @@ check "a Claude pointer without its record is an unreadable record" "$OUT" \
   "UNKNOWN: claude engineer entry $NC2 has no readable scheduler record"
 nocheck "a Claude pointer without its record is not 'not created yet'" "$OUT" \
   "claude engineer has an entry that is not created yet"
+# A SWITCHED-OFF ENTRY (monorepo#4158): its pointer and its record both exist and
+# the record is off, which is how the runtime holds an entry between its creation
+# and its first run. It is named as that, the way the Codex side names an
+# automation that is not ACTIVE, and it never costs the lane its store: the
+# improver and the stagger figures are still read from it.
+nc2_claude_record false
+OUT=$(DEPLOYED --section drift)
+check "a switched-off Claude entry is named as switched off" "$OUT" \
+  "UNKNOWN: claude engineer entry $NC2 is switched off in the scheduler store"
+nocheck "a switched-off Claude entry never reads MATCH" "$OUT" "claude engineer: expected="
+nocheck "a switched-off Claude entry is not 'not created yet'" "$OUT" \
+  "claude engineer has an entry that is not created yet"
+nocheck "a switched-off Claude entry is not an unreadable record" "$OUT" \
+  "claude engineer entry $NC2 has no readable scheduler record"
+check "the improver is compared beside a switched-off entry" "$OUT" \
+  "claude improver: expected=0,12@0 actual=0,12@0 MATCH"
+check "the entry that is switched on is shown beside it" "$OUT" \
+  "entries: daily-ai-assistant=*@50 $NC2=switched-off"
+nocheck "a running entry on its own minute is not drift beside a switched-off one" "$OUT" \
+  "DRIFT: claude engineer"
+# The figures wait for the whole lane, as they do for a Codex automation that is
+# not ACTIVE: a switched-off entry is a state to resolve, not a start to leave out.
+check "a switched-off entry suppresses the slot count" "$OUT" \
+  "local engineer slots scheduled/day: UNKNOWN"
+mkdir -p "$FIX/claude-root/a/b"
+cp "$FIX/claude-store/scheduled-tasks.json" "$FIX/claude-root/a/b/scheduled-tasks.json"
+DISCOVERED() { (unset CLAUDE_ENGINEER_ENTRIES CODEX_ENGINEER_ENTRIES
+                CLAUDE_SCHEDULE_STORE_PATH='' CLAUDE_SCHEDULE_STORE_ROOT="$FIX/claude-root" NOBASE "$@"); }
+OUT=$(DISCOVERED --section drift)
+nocheck "a store is discovered while an entry is switched off" "$OUT" \
+  "MISSING: authoritative Claude scheduled-tasks store"
+check "a discovered store names the switched-off entry" "$OUT" \
+  "UNKNOWN: claude engineer entry $NC2 is switched off in the scheduler store"
+check "a discovered store reads the improver beside a switched-off entry" "$OUT" \
+  "claude improver: expected=0,12@0 actual=0,12@0 MATCH"
+# The live shape: the runtime writes no last run for an entry that never ran.
+jq --arg id "$NC2" '(.scheduledTasks[] | select(.id == $id) | .lastRunAt) = null' \
+  "$FIX/claude-store/scheduled-tasks.json" > "$FIX/claude-root/a/b/scheduled-tasks.json"
+OUT=$(DISCOVERED --section drift)
+check "a switched-off entry that never ran is named the same way" "$OUT" \
+  "UNKNOWN: claude engineer entry $NC2 is switched off in the scheduler store"
+# NEGATIVE CONTROLS: a store that does not hold an asked-for entry at all is
+# still not the store, and neither is one whose record points somewhere else.
+cp "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-root/a/b/scheduled-tasks.json"
+OUT=$(DISCOVERED --section drift)
+check "a store without the asked-for entry is still not selected" "$OUT" \
+  "MISSING: authoritative Claude scheduled-tasks store"
+jq --arg id "$NC2" '(.scheduledTasks[] | select(.id == $id) | .filePath) = "/nonexistent/SKILL.md"' \
+  "$FIX/claude-store/scheduled-tasks.json" > "$FIX/claude-root/a/b/scheduled-tasks.json"
+OUT=$(DISCOVERED --section drift)
+check "a store whose switched-off record points elsewhere is still not selected" "$OUT" \
+  "MISSING: authoritative Claude scheduled-tasks store"
+# Two stores that both hold every entry are still ambiguous, on or off.
+cp "$FIX/claude-store/scheduled-tasks.json" "$FIX/claude-root/a/b/scheduled-tasks.json"
+mkdir -p "$FIX/claude-root/a/c"
+cp "$FIX/claude-store/scheduled-tasks.json" "$FIX/claude-root/a/c/scheduled-tasks.json"
+OUT=$(DISCOVERED --section drift)
+check "two stores holding every entry are still ambiguous" "$OUT" \
+  "MISSING: authoritative Claude scheduled-tasks store"
+rm -r "$FIX/claude-root"
+# A running first entry is still held to the table beside a switched-off one.
+jq '(.scheduledTasks[] | select(.id == "daily-ai-assistant") | .cronExpression) = "35 * * * *"' \
+  "$FIX/claude-store/scheduled-tasks.json" > "$FIX/claude-store/scheduled-tasks.json.off"
+cp "$FIX/claude-store/scheduled-tasks.json.off" "$FIX/claude-store/scheduled-tasks.json"
+OUT=$(DEPLOYED --section drift)
+check "a drifted running entry is drift although the other is switched off" "$OUT" \
+  "DRIFT: claude engineer entries that are switched on start outside the cadence table: expected=*@20,50 running=*@35"
+rm "$FIX/claude-store/scheduled-tasks.json.off"
+cp "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
 mkdir -p "$FIX/codex/automations/$NC2"
 printf 'rrule = "%s"\nupdated_at = 1785238559676\n' "$R40" > "$FIX/codex/automations/$NC2/automation.toml"
 OUT=$(DEPLOYED --section drift)
