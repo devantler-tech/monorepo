@@ -2857,7 +2857,14 @@ worktree_state_blocker() {
       # directory (#4152). An empty regular file carries nothing to lose, and the manifest
       # row notes it; with content, or as a link or directory, it is unlisted state.
       claude-desktop-worktree)
-        desktop_marker_empty "$entry" || { SALVAGE_NOTE="the worktree's ${entry##*/} is not the empty marker the desktop app writes (salvage cannot carry it)"; return 0; } ;;
+        # Through the one reader, so a look that failed is not taken for a marker with content.
+        desktop_marker_lookup "$admin" >/dev/null
+        case $? in
+          0) ;;
+          1) SALVAGE_NOTE="the worktree's ${entry##*/} is not the empty marker the desktop app writes (salvage cannot carry it)"; return 0 ;;
+          *) DESKTOP_MARKER_UNREAD=1
+             SALVAGE_NOTE="cannot read the worktree's git state for the desktop app's marker"; return 0 ;;
+        esac ;;
       *) SALVAGE_NOTE="the worktree's git state holds ${entry##*/} (salvage cannot carry it)"; return 0 ;;
     esac
   done
@@ -2919,24 +2926,27 @@ worktree_state_blocker() {
   return 1
 }
 
-# desktop_marker_empty <path> -> 0 only for an empty regular file that is not a symlink: the
-# one form of the desktop app's marker the removal can delete without losing anything.
-desktop_marker_empty() { [ -f "$1" ] && [ ! -L "$1" ] && [ ! -s "$1" ]; }
+# desktop_marker_lookup <admin directory> -> prints `empty` or `absent`. 1 when the name
+# holds anything but the empty file (a verdict: keep). 2 when the look itself failed (no
+# verdict). This is the one reader of the marker (#4155): every caller decides from it, so
+# a failed look is never read as "no marker", as "not empty" or as examined. Both answers
+# come from a status-checked `find`, which reports an entry it cannot stat by failing; a
+# link is not followed, so only an empty regular file matches the second look.
+desktop_marker_lookup() {
+  local found
+  found=$(find "$1" -maxdepth 1 -name claude-desktop-worktree 2>/dev/null) || return 2
+  [ -n "$found" ] || { printf 'absent\n'; return 0; }
+  found=$(find "$1" -maxdepth 1 -name claude-desktop-worktree -type f -size 0 2>/dev/null) || return 2
+  [ -n "$found" ] || return 1
+  printf 'empty\n'
+}
 
-# desktop_marker_state <worktree> -> prints `empty` or `absent`. 1 when the name holds
-# anything but the empty file (a verdict: keep). 2 when the admin directory cannot be located
-# or listed (no verdict), so a caller never reads a failed look as "no marker" or as examined.
+# desktop_marker_state <worktree> -> desktop_marker_lookup on the worktree's admin
+# directory; 2 as well when that directory cannot be located.
 desktop_marker_state() {
-  local admin names
+  local admin
   admin=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] || return 2
-  # Decided from a status-checked listing: a directory that cannot be read is not "no marker".
-  names=$(ls -A "$admin" 2>/dev/null) || return 2
-  case $'\n'"$names"$'\n' in
-    *$'\n'claude-desktop-worktree$'\n'*)
-      desktop_marker_empty "$admin/claude-desktop-worktree" || return 1
-      printf 'empty\n' ;;
-    *) printf 'absent\n' ;;
-  esac
+  desktop_marker_lookup "$admin"
 }
 
 # desktop_marker_read <worktree> -> 0 with DESKTOP_MARKER_NOW (empty|absent); 1 with
@@ -3946,7 +3956,7 @@ while IFS= read -r wt <&3; do
   [ -n "$RESOLVE_UNDO_REF" ] && reach_evidence="$reach_evidence;resolve-undo=$RESOLVE_UNDO_REF"
   # The desktop app's empty marker dies with the admin directory; the row keeps the fact,
   # so a restore can tell the folder was a desktop-app session (#4152). Read again under
-  # the mutex, and once more after the last recheck below: the row must say what is deleted.
+  # the mutex; the shared final recheck compares it with the row: the row must say what is deleted.
   if ! desktop_marker_read "$wt"; then
     worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
     keep_stuck "$wt" "not reaped: $DESKTOP_MARKER_NOTE"; continue

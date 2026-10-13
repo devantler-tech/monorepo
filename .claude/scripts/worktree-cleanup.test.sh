@@ -3273,29 +3273,51 @@ SHIM
 
 
 t_unreadable_desktop_marker_state_ends_unknown() {
-  # A git state directory that cannot be listed is no verdict on the marker: the worktree is
-  # kept, and the sweep must not end as a clean one. The ls shim fails for that directory only.
-  local name="dry-run ends UNKNOWN when a worktree's git state cannot be listed for the marker"
-  local root; root=$(make_repo)
-  add_wt "$root" dark pushed && add_wt "$root" lit pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
-  local admin; admin=$(git -C "$root/repo/.claude/worktrees/dark" rev-parse --absolute-git-dir)
-  local real_ls; real_ls=$(command -v ls)
-  local shim="$root/shim"; mkdir -p "$shim"
-  cat > "$shim/ls" <<SHIM
+  # A look at the marker that fails is no verdict: the worktree is kept, and the sweep must
+  # not end as a clean one. The find shim fails for the marker look in that directory only:
+  # `any` fails the first look (is the name there), `kind` only the second (is it the empty
+  # file), which is a marker that is listed but cannot be examined. On the salvage path the
+  # state check meets the marker first, so it must report the failed look too (#4155).
+  local look path
+  for look in any kind; do
+    for path in plain salvage; do
+      local name="dry-run ends UNKNOWN when the marker look ($look) fails on the $path path"
+      local root; root=$(make_repo)
+      if [ "$path" = salvage ]; then
+        abandoned_wt "$root" dark && add_wt "$root" lit pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; continue; }
+      else
+        add_wt "$root" dark pushed && add_wt "$root" lit pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; continue; }
+      fi
+      local admin; admin=$(git -C "$root/repo/.claude/worktrees/dark" rev-parse --absolute-git-dir)
+      : > "$admin/claude-desktop-worktree"
+      local real_find; real_find=$(command -v find)
+      local shim="$root/shim"; mkdir -p "$shim"
+      cat > "$shim/find" <<SHIM
 #!/usr/bin/env bash
-for a in "\$@"; do [ "\$a" = "$admin" ] && exit 1; done
-exec "$real_ls" "\$@"
+marker=0; sized=0
+for a in "\$@"; do
+  [ "\$a" = claude-desktop-worktree ] && marker=1
+  [ "\$a" = -size ] && sized=1
+done
+if [ "\$1" = "$admin" ] && [ "\$marker" -eq 1 ]; then
+  [ "$look" = any ] && exit 1
+  [ "\$sized" -eq 1 ] && exit 1
+fi
+exec "$real_find" "\$@"
 SHIM
-  chmod +x "$shim/ls"
-  local out rc; out=$(PATH="$shim:$PATH" run_salvage "$root" dry-run 1); rc=$?
-  if [ "$rc" -eq 2 ] && grep -q 'KEEP .*dark .*cannot read the worktree.s git state for the desktop app' <<<"$out" \
-     && grep -q 'UNKNOWN — could not read a worktree.s git state for the desktop app' <<<"$out" \
-     && grep -q '^REAP .*lit ' <<<"$out"; then
-    ok "$name"
-  else
-    bad "$name" "rc=$rc $out"
-  fi
-  rm -rf "$root"
+      chmod +x "$shim/find"
+      local out rc; out=$(PATH="$shim:$PATH" run_salvage "$root" dry-run 1); rc=$?
+      if [ "$rc" -eq 2 ] && grep -q 'KEEP .*dark .*cannot read the worktree.s git state for the desktop app' <<<"$out" \
+         && grep -q 'UNKNOWN — could not read a worktree.s git state for the desktop app' <<<"$out" \
+         && ! grep -q '^SALVAGE .*dark \|^REAP .*dark ' <<<"$out" \
+         && grep -q '^REAP .*lit ' <<<"$out"; then
+        ok "$name"
+      else
+        bad "$name" "rc=$rc $out"
+      fi
+      rm -rf "$root"
+    done
+  done
 }
 
 t_salvage_keeps_a_filtered_path() {
