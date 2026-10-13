@@ -9739,6 +9739,117 @@ check "archived Codex run: each folder has its own count"      "$OUT" "from sess
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxonly" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1)
 check "archived Codex run: a missing archive folder reads zero, not an error" "$OUT" "from sessions/ 1, from archived_sessions/ 0"
+
+# ── monorepo#4148: a finished Codex run whose worktree was cleaned up ─────────
+# A Codex worktree is removed after its run, so the folder check could not
+# confirm most finished runs: 336 of 388 archived transcripts in 14 days. The
+# transcript's own first record names the repository it was started in; that
+# address is accepted in the same exact forms as the folder's remote, and only
+# when the folder is gone.
+mkdir -p "$FIX/cxgone/archived_sessions" "$FIX/cxgone/worktrees/kept/monorepo" "$FIX/empty"
+cxgone_file() { # $1 = name, $2 = recorded cwd, $3 = git record (JSON object or empty), $4 = sleep seconds
+  local meta
+  if [ -n "$3" ]; then meta="{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$2\",\"git\":$3}}"
+  else meta="{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$2\"}}"; fi
+  printf '%s\n' "$meta" > "$FIX/cxgone/archived_sessions/$1.jsonl"
+  printf '%s\n' "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"arguments\":\"{\\\"command\\\":\\\"sleep $4\\\"}\"}}" \
+    >> "$FIX/cxgone/archived_sessions/$1.jsonl"
+}
+cxgone_run() { # $1 = section
+  CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxgone" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
+    PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+    bash "$TARGET" --since-days 3650 --section "$1" 2>&1
+}
+cxgone_sleeps() { cxgone_run efficiency | grep -oE 'sleep/poll calls \.\. [0-9]+' | grep -oE '[0-9]+$'; }
+GONE="$FIX/cxgone/worktrees/gone1/monorepo"
+# Nothing acceptable yet: three transcripts whose worktree is gone, none readable.
+cxgone_file lookalike "$FIX/cxgone/worktrees/gone2/monorepo" '{"repository_url":"https://notgithub.com/devantler-tech/monorepo.git"}' 11
+cxgone_file otherorg  "$FIX/cxgone/worktrees/gone3/monorepo" '{"repository_url":"git@github.com:someone-else/monorepo.git"}' 12
+cxgone_file noaddress "$FIX/cxgone/worktrees/gone4/monorepo" '' 13
+# The folder exists but has no remote: the folder is the judge, the record cannot overrule it.
+cxgone_file keptfolder "$FIX/cxgone/worktrees/kept/monorepo" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 14
+# Not a Codex worktree of a portfolio repository by its path: the record alone admits nothing.
+cxgone_file otherpath "$FIX/cxgone/elsewhere/monorepo" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 15
+OUT=$(cxgone_run efficiency)
+if grep -qE 'sleep/poll calls \.\. 0|no sessions in window' <<<"$OUT"; then ok "gone worktree: a look-alike host, another owner, no address, a kept folder and another path are all left out"
+else bad "gone worktree: a look-alike host, another owner, no address, a kept folder and another path are all left out" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
+OUT=$(cxgone_run a2a)
+check "gone worktree: the number left out for a missing folder is printed" "$OUT" "left out, worktree gone and no portfolio address recorded: 3"
+# Now one whose first record names a portfolio repository, in each accepted form.
+cxgone_file ssh "$GONE" '{"commit_hash":"0","repository_url":"git@github.com:devantler-tech/monorepo.git"}' 21
+n=$(cxgone_sleeps); [ "$n" = 1 ] && ok "gone worktree: a recorded portfolio address (ssh form) is read" \
+  || bad "gone worktree: a recorded portfolio address (ssh form) is read" "sleep count '$n', expected 1"
+cxgone_file https "$FIX/cxgone/worktrees/gone5/monorepo" '{"repository_url":"https://github.com/devantler-tech/ksail"}' 22
+n=$(cxgone_sleeps); [ "$n" = 2 ] && ok "gone worktree: a recorded portfolio address (https form) is read" \
+  || bad "gone worktree: a recorded portfolio address (https form) is read" "sleep count '$n', expected 2"
+OUT=$(cxgone_run a2a)
+check "gone worktree: read transcripts are counted"                    "$OUT" "codex sessions in window ... 2  (scope-filtered)"
+check "gone worktree: the left-out count does not include read ones"   "$OUT" "left out, worktree gone and no portfolio address recorded: 3"
+# A recorded folder holding a line break must not supply its own address: its
+# second line reads like a portfolio address, and the record carries none.
+cxgone_file twoline "$FIX/cxgone/worktrees/gone6/monorepo/x\\ngit@github.com:devantler-tech/monorepo.git" '' 23
+n=$(cxgone_sleeps); [ "$n" = 2 ] && ok "gone worktree: a folder value with a line break admits nothing" \
+  || bad "gone worktree: a folder value with a line break admits nothing" "sleep count '$n', expected 2"
+# The same for an address value: only its first line would be compared.
+cxgone_file twolineurl "$FIX/cxgone/worktrees/gone7/monorepo" '{"repository_url":"git@github.com:devantler-tech/monorepo.git\nx"}' 24
+n=$(cxgone_sleeps); [ "$n" = 2 ] && ok "gone worktree: an address value with a line break admits nothing" \
+  || bad "gone worktree: an address value with a line break admits nothing" "sleep count '$n', expected 2"
+# "Gone" has to be confirmed (review of monorepo#4149). A worktree under a folder
+# this user may not search fails the folder test exactly like a removed one, and
+# its real remote may differ from the recorded address: it is left out and the
+# report says unknown. Root searches through any mode, so not built as root.
+if [ "$(id -u)" -ne 0 ]; then
+  gone_before=$(cxgone_run a2a | grep -F "left out, worktree gone")
+  [ -n "$gone_before" ] && ok "unsearchable worktree: the gone count was read before the case" \
+    || bad "unsearchable worktree: the gone count was read before the case" "no such line"
+  mkdir -p "$FIX/cxgone/worktrees/locked/monorepo"
+  cxgone_file locked "$FIX/cxgone/worktrees/locked/monorepo" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 25
+  chmod 000 "$FIX/cxgone/worktrees/locked"
+  n=$(cxgone_sleeps); OUT=$(cxgone_run a2a); rc=$?
+  chmod 700 "$FIX/cxgone/worktrees/locked"
+  [ "$n" = 2 ] && ok "unsearchable worktree: the recorded address does not admit it" \
+    || bad "unsearchable worktree: the recorded address does not admit it" "sleep count '$n', expected 2"
+  check "unsearchable worktree: the report says unknown" "$OUT" "UNKNOWN: 1 Codex transcript(s) left out"
+  check "unsearchable worktree: it is not counted as a gone one" "$OUT" "$gone_before"
+  if [ "$rc" -eq 2 ]; then ok "unsearchable worktree: exit 2"; else bad "unsearchable worktree: exit 2" "exit $rc"; fi
+  # Searchable again: the folder exists and has no remote, so the folder is the
+  # judge — out of scope, a known reading.
+  OUT=$(cxgone_run a2a); rc=$?
+  nocheck "searchable worktree: no unknown line" "$OUT" "UNKNOWN: 1 Codex transcript(s) left out"
+  if [ "$rc" -eq 0 ]; then ok "searchable worktree: exit 0"; else bad "searchable worktree: exit 0" "exit $rc"; fi
+  rm -f "$FIX/cxgone/archived_sessions/locked.jsonl"
+fi
+# A file sitting where the worktree folder should be is not a removed worktree either.
+mkdir -p "$FIX/cxgone/worktrees/afile"; : > "$FIX/cxgone/worktrees/afile/monorepo"
+cxgone_file afile "$FIX/cxgone/worktrees/afile/monorepo" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 26
+n=$(cxgone_sleeps); OUT=$(cxgone_run a2a); rc=$?
+[ "$n" = 2 ] && ok "not a folder: the recorded address does not admit it" \
+  || bad "not a folder: the recorded address does not admit it" "sleep count '$n', expected 2"
+check "not a folder: the report says unknown" "$OUT" "UNKNOWN: 1 Codex transcript(s) left out"
+if [ "$rc" -eq 2 ]; then ok "not a folder: exit 2"; else bad "not a folder: exit 2" "exit $rc"; fi
+# The same path written with a trailing slash must not read as a removed worktree
+# (second review of monorepo#4149): the slash hides the file from an existence test.
+cxgone_file afileslash "$FIX/cxgone/worktrees/afile/monorepo/" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 27
+n=$(cxgone_sleeps); [ "$n" = 2 ] && ok "trailing slash: the recorded address does not admit it" \
+  || bad "trailing slash: the recorded address does not admit it" "sleep count '$n', expected 2"
+rm -f "$FIX/cxgone/archived_sessions/afileslash.jsonl"
+rm -f "$FIX/cxgone/archived_sessions/afile.jsonl" "$FIX/cxgone/worktrees/afile/monorepo"
+# A deleted sub-folder of a worktree that still exists: the worktree is the judge,
+# and this one has no portfolio remote, so the record admits nothing.
+cxgone_file subgone "$FIX/cxgone/worktrees/kept/monorepo/deleted-subfolder" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 28
+# Paths that only look like a worktree: one that climbs out with `..`, and one
+# with an extra folder between the id and the repository name.
+cxgone_file dotdot "$FIX/cxgone/worktrees/x/../../../nowhere/monorepo" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 29
+cxgone_file deep   "$FIX/cxgone/worktrees/gone8/other/deep/monorepo" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 30
+n=$(cxgone_sleeps); OUT=$(cxgone_run a2a); rc=$?
+[ "$n" = 2 ] && ok "worktree root: a deleted sub-folder, a climbing path and a deep path admit nothing" \
+  || bad "worktree root: a deleted sub-folder, a climbing path and a deep path admit nothing" "sleep count '$n', expected 2"
+nocheck "worktree root: none of them is an unknown" "$OUT" "UNKNOWN:"
+if [ "$rc" -eq 0 ]; then ok "worktree root: exit 0"; else bad "worktree root: exit 0" "exit $rc"; fi
+# A sub-folder of a worktree that is gone as a whole is still read from its record.
+cxgone_file subofgone "$FIX/cxgone/worktrees/gone9/monorepo/platform" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 31
+n=$(cxgone_sleeps); [ "$n" = 3 ] && ok "worktree root: a sub-folder of a removed worktree is read" \
+  || bad "worktree root: a sub-folder of a removed worktree is read" "sleep count '$n', expected 3"
 # A folder that EXISTS but cannot be read is not an empty folder (review of
 # monorepo#4147): the report must say unknown and exit 2, never print a clean
 # Codex count. Root reads through any mode, so the case cannot be built as root.

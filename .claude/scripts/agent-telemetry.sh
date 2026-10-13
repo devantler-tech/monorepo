@@ -2296,8 +2296,59 @@ session_files() {
 # The loop is fed by a redirect, not a pipe — see store_root_in_scope: piping
 # into `grep -q` under `pipefail` reports the SIGPIPE'd writer, so an in-scope
 # cwd was classified out of scope and that instance silently dropped.
+#
+# A worktree that NO LONGER EXISTS (monorepo#4148). Codex removes a worktree
+# after its run, so the folder check above could not confirm most finished
+# runs: 336 of 388 archived transcripts in 14 days were left out. For that case
+# only, identity comes from the repository address the runtime wrote into the
+# transcript's own first record ($2), accepted in the same exact forms. A folder
+# that still exists is always judged by its own remote — the record never
+# overrules it — and a gone folder with no acceptable record returns 3, so the
+# caller can count what was left out for this reason instead of losing it among
+# ordinary out-of-scope transcripts.
+#
+# "Gone" must be CONFIRMED, not inferred from a failed test (review of
+# monorepo#4149): `[ -d ]` is also false for a worktree that exists under a
+# folder this user may not search. Taking the recorded address then would admit
+# a transcript whose real worktree has a different remote. Such a worktree
+# returns 4 and the report says unknown.
+#   0 in scope · 1 out of scope · 3 a portfolio-shaped worktree that is gone and
+#   has no acceptable recorded address · 4 a portfolio-shaped worktree whose
+#   presence could not be determined
+# Prints nothing. 0 = the folder exists · 1 = confirmed absent: its nearest
+# existing ancestor is a folder this user can search, and the next component is
+# not in it · 2 = cannot tell (an ancestor cannot be searched, or something that
+# is not a folder sits on the path).
+worktree_presence() {
+  local p="$1" parent
+  [ -d "$p" ] && return 0
+  while :; do
+    # Something is there but it is not a folder (or it is a dangling link).
+    if [ -e "$p" ] || [ -L "$p" ]; then return 2; fi
+    parent=$(dirname "$p")
+    if [ -d "$parent" ]; then
+      if [ -x "$parent" ]; then return 1; fi
+      return 2
+    fi
+    [ "$parent" != "$p" ] || return 2
+    p="$parent"
+  done
+}
+
+portfolio_remote_url() {
+  # Anchor the HOST, not a substring: `*github.com/org/*` also matches
+  # `https://notgithub.com/org/…` and internal mirrors that merely
+  # contain the string. Only these exact remote forms count.
+  case "$1" in
+    "git@github.com:$PORTFOLIO_ORG/"*|\
+    "https://github.com/$PORTFOLIO_ORG/"*|\
+    "ssh://git@github.com/$PORTFOLIO_ORG/"*) return 0 ;;
+  esac
+  return 1
+}
+
 in_scope_cwd() {
-  local cwd="$1" p url
+  local cwd="$1" recorded="${2-}" p url gone=0 unchecked=0 presence base rest id root where
   [ -n "$cwd" ] || return 1
   while IFS= read -r p; do
     # Form 1: literally under an allowlisted path, at a component boundary.
@@ -2308,24 +2359,50 @@ in_scope_cwd() {
     # categorically out of scope. Confirm identity by the worktree's actual
     # ORIGIN REMOTE, and fail closed when it cannot be read (missing dir,
     # no remote, not a repo): an unverifiable worktree is excluded.
+    #
+    # The WORKTREE ROOT is what gets judged, never the recorded folder itself
+    # (second review of monorepo#4149). The recorded folder may be a sub-folder
+    # that was deleted while the worktree lives on with another remote, and a
+    # path written with `..`, `.`, a doubled or a trailing slash can walk away
+    # from the worktree or hide what sits on it. So the path must be in plain
+    # form and name exactly `worktrees/<one id>/<name>[/…]`; anything else is
+    # not a Codex worktree by its path and is left to the other forms.
+    base=$(basename "$p")
     case "$cwd" in
-      "$CODEX_HOME"/worktrees/*/"$(basename "$p")"|"$CODEX_HOME"/worktrees/*/"$(basename "$p")"/*)
-        [ -d "$cwd" ] || continue
-        url=$(git -C "$cwd" remote get-url origin 2>/dev/null) || continue
-        # Anchor the HOST, not a substring: `*github.com/org/*` also matches
-        # `https://notgithub.com/org/…` and internal mirrors that merely
-        # contain the string. Only these exact remote forms count.
-        case "$url" in
-          "git@github.com:$PORTFOLIO_ORG/"*|\
-          "https://github.com/$PORTFOLIO_ORG/"*|\
-          "ssh://git@github.com/$PORTFOLIO_ORG/"*) return 0 ;;
-        esac ;;
+      */|*//*|*/./*|*/.|*/../*|*/..) continue ;;
+    esac
+    case "$cwd" in
+      "$CODEX_HOME"/worktrees/*/"$base"|"$CODEX_HOME"/worktrees/*/"$base"/*)
+        rest="${cwd#"$CODEX_HOME"/worktrees/}"
+        id="${rest%%/*}"
+        [ -n "$id" ] || continue
+        root="$CODEX_HOME/worktrees/$id/$base"
+        # The `*` above also spans slashes: `worktrees/a/b/<name>` is not a worktree root.
+        case "$cwd" in "$root"|"$root"/*) ;; *) continue ;; esac
+        worktree_presence "$root" && presence=0 || presence=$?
+        if [ "$presence" -eq 2 ]; then unchecked=1; continue; fi
+        if [ "$presence" -eq 1 ]; then
+          if portfolio_remote_url "$recorded"; then return 0; fi
+          gone=1
+          continue
+        fi
+        # The root exists: its own remote decides, whatever the record says.
+        where="$cwd"; [ -d "$where" ] || where="$root"
+        url=$(git -C "$where" remote get-url origin 2>/dev/null) || continue
+        if portfolio_remote_url "$url"; then return 0; fi ;;
     esac
   done < <(printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$')
+  [ "$unchecked" -eq 0 ] || return 4
+  [ "$gone" -eq 0 ] || return 3
   return 1
 }
 
-codex_session_files() {
+# Prints one line per judged transcript: `F <path>` for one in scope, and a bare
+# `X` for one left out because its worktree is gone and it records no acceptable
+# address, and a bare `U` for one whose worktree could not be checked at all. The
+# caller applies the file cap, so the X and U counts cover the whole window
+# while the F list is capped.
+codex_session_walk() {
   # Codex sessions are flat files, not path-namespaced, so scope comes from the
   # transcript's own recorded cwd. A file whose cwd cannot be determined is
   # EXCLUDED (fail closed) rather than assumed in-scope. Only the head of the
@@ -2345,10 +2422,24 @@ codex_session_files() {
         # out-of-scope transcript would be partially read before the scope check
         # that exists to prevent reading it. Two lines covers meta + a sibling
         # header without touching conversation records.
-        cwd=$(head -n 1 "$f" 2>/dev/null \
-              | jq -r 'select(.type=="session_meta")|(.payload.cwd? // .cwd? // empty)' 2>/dev/null | head -1)
-        if in_scope_cwd "$cwd"; then printf '%s\n' "$f"; fi
-      done | head -n "$MAX_FILES"
+        # Two values, one per line: the recorded cwd, then the recorded
+        # repository address (empty when the record has none or it is not text).
+        # A value holding a line break is read as EMPTY: printed raw it would
+        # span two lines, and a folder value's second line would then be taken
+        # as the address — a transcript with no recorded address admitting itself.
+        cwd=''; rurl=''
+        { IFS= read -r cwd; IFS= read -r rurl; } < <(head -n 1 "$f" 2>/dev/null \
+              | jq -r 'def oneline: if type == "string" and (test("[\n\r]") | not) then . else "" end;
+                       select(.type=="session_meta")
+                       | ((.payload.cwd? // .cwd? // "") | oneline),
+                         (((.payload.git? | objects | .repository_url? | strings) // "") | oneline)' 2>/dev/null) || true
+        in_scope_cwd "$cwd" "$rurl" && rc=0 || rc=$?
+        case "$rc" in
+          0) printf 'F %s\n' "$f" ;;
+          3) printf 'X\n' ;;
+          4) printf 'U\n' ;;
+        esac
+      done
 }
 
 # Names every Codex transcript folder that EXISTS but could not be read in full,
@@ -2383,6 +2474,8 @@ CX_CACHE=''
 CX_COUNT=0
 CX_LIVE=0
 CX_ARCHIVED=0
+CX_GONE=0
+CX_UNCHECKED=0
 CX_UNREADABLE=''
 ALL_CACHE=''
 
@@ -2415,7 +2508,13 @@ populate_session_cache() {
   SF_COUNT=$(printf '%s' "$SF_CACHE" | grep -c . || true)
   WINDOW_SINCE=$(date -u -v-"${SINCE_DAYS}"d '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null \
                  || date -u -d "${SINCE_DAYS} days ago" '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null)
-  [ "$SAFETY_SCOPE" = claude ] || CX_CACHE="$(codex_session_files)"
+  # awk applies the cap instead of `head`: it reads the whole walk, so no writer is
+  # cut off mid-stream under pipefail.
+  local cx_walk=''
+  [ "$SAFETY_SCOPE" = claude ] || cx_walk="$(codex_session_walk)"
+  CX_CACHE=$(printf '%s\n' "$cx_walk" | awk -v m="$MAX_FILES" '/^F / { if (n < m) print substr($0, 3); n++ }')
+  CX_GONE=$(printf '%s\n' "$cx_walk" | grep -c '^X$' || true)
+  CX_UNCHECKED=$(printf '%s\n' "$cx_walk" | grep -c '^U$' || true)
   [ "$SAFETY_SCOPE" = claude ] || CX_UNREADABLE="$(codex_unreadable_folders)"
   CX_COUNT=$(printf '%s' "$CX_CACHE" | grep -c . || true)
   # How many listed transcripts came from each folder, so a folder the walk never
@@ -2463,6 +2562,13 @@ if [ -n "$CX_UNREADABLE" ]; then
     echo " UNKNOWN: the Codex folder ${cx_dir}/ exists but could not be read in full —"
     echo "          every Codex figure in this report is incomplete, not zero."
   done <<<"$CX_UNREADABLE"
+  main_rc=2
+fi
+# The same for a transcript whose worktree could be neither found nor confirmed
+# absent: it is left out, and the reading is incomplete rather than clean.
+if [ "$CX_UNCHECKED" -gt 0 ]; then
+  echo " UNKNOWN: ${CX_UNCHECKED} Codex transcript(s) left out — the worktree could be neither read"
+  echo "          nor confirmed absent, so every Codex figure in this report is incomplete."
   main_rc=2
 fi
 if [ "$SAFETY_WORKER" = 0 ] || { [ "$SAFETY_STANDALONE" = 1 ] && [ "$SAFETY_SCOPE" != codex ]; }; then
@@ -4974,12 +5080,14 @@ if want a2a; then
   echo
   echo "── CROSS-INSTANCE / A2A ─────────────────────────────────────────"
   # SCOPED count. A raw find here counted every file under sessions/, including
-  # the ones codex_session_files() deliberately excluded as out of scope — so the
+  # the ones codex_session_walk() deliberately excluded as out of scope — so the
   # cross-instance scorecard reported professional sessions it must not see.
   echo "  codex sessions in window ... ${CX_COUNT}  (scope-filtered)"
   # A settled scheduled Codex run is in the archive folder (monorepo#4146): an
   # archive count of 0 on a day with scheduled runs means they were not read.
   echo "    from sessions/ ${CX_LIVE}, from archived_sessions/ ${CX_ARCHIVED}"
+  # Counted over the whole window, before the file cap (monorepo#4148).
+  echo "    left out, worktree gone and no portfolio address recorded: ${CX_GONE}"
   echo "  claude sessions in window .. ${SF_COUNT}"
   # Collisions are inherently a CROSS-instance metric, so reading only the Claude
   # corpus was self-defeating: a race the Codex instance hit — the sibling half of
