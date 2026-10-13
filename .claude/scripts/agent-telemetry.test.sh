@@ -9800,6 +9800,8 @@ n=$(cxgone_sleeps); [ "$n" = 2 ] && ok "gone worktree: an address value with a l
 # report says unknown. Root searches through any mode, so not built as root.
 if [ "$(id -u)" -ne 0 ]; then
   gone_before=$(cxgone_run a2a | grep -F "left out, worktree gone")
+  [ -n "$gone_before" ] && ok "unsearchable worktree: the gone count was read before the case" \
+    || bad "unsearchable worktree: the gone count was read before the case" "no such line"
   mkdir -p "$FIX/cxgone/worktrees/locked/monorepo"
   cxgone_file locked "$FIX/cxgone/worktrees/locked/monorepo" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 25
   chmod 000 "$FIX/cxgone/worktrees/locked"
@@ -9825,7 +9827,29 @@ n=$(cxgone_sleeps); OUT=$(cxgone_run a2a); rc=$?
   || bad "not a folder: the recorded address does not admit it" "sleep count '$n', expected 2"
 check "not a folder: the report says unknown" "$OUT" "UNKNOWN: 1 Codex transcript(s) left out"
 if [ "$rc" -eq 2 ]; then ok "not a folder: exit 2"; else bad "not a folder: exit 2" "exit $rc"; fi
+# The same path written with a trailing slash must not read as a removed worktree
+# (second review of monorepo#4149): the slash hides the file from an existence test.
+cxgone_file afileslash "$FIX/cxgone/worktrees/afile/monorepo/" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 27
+n=$(cxgone_sleeps); [ "$n" = 2 ] && ok "trailing slash: the recorded address does not admit it" \
+  || bad "trailing slash: the recorded address does not admit it" "sleep count '$n', expected 2"
+rm -f "$FIX/cxgone/archived_sessions/afileslash.jsonl"
 rm -f "$FIX/cxgone/archived_sessions/afile.jsonl" "$FIX/cxgone/worktrees/afile/monorepo"
+# A deleted sub-folder of a worktree that still exists: the worktree is the judge,
+# and this one has no portfolio remote, so the record admits nothing.
+cxgone_file subgone "$FIX/cxgone/worktrees/kept/monorepo/deleted-subfolder" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 28
+# Paths that only look like a worktree: one that climbs out with `..`, and one
+# with an extra folder between the id and the repository name.
+cxgone_file dotdot "$FIX/cxgone/worktrees/x/../../../nowhere/monorepo" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 29
+cxgone_file deep   "$FIX/cxgone/worktrees/gone8/other/deep/monorepo" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 30
+n=$(cxgone_sleeps); OUT=$(cxgone_run a2a); rc=$?
+[ "$n" = 2 ] && ok "worktree root: a deleted sub-folder, a climbing path and a deep path admit nothing" \
+  || bad "worktree root: a deleted sub-folder, a climbing path and a deep path admit nothing" "sleep count '$n', expected 2"
+nocheck "worktree root: none of them is an unknown" "$OUT" "UNKNOWN:"
+if [ "$rc" -eq 0 ]; then ok "worktree root: exit 0"; else bad "worktree root: exit 0" "exit $rc"; fi
+# A sub-folder of a worktree that is gone as a whole is still read from its record.
+cxgone_file subofgone "$FIX/cxgone/worktrees/gone9/monorepo/platform" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 31
+n=$(cxgone_sleeps); [ "$n" = 3 ] && ok "worktree root: a sub-folder of a removed worktree is read" \
+  || bad "worktree root: a sub-folder of a removed worktree is read" "sleep count '$n', expected 3"
 # A folder that EXISTS but cannot be read is not an empty folder (review of
 # monorepo#4147): the report must say unknown and exit 2, never print a clean
 # Codex count. Root reads through any mode, so the case cannot be built as root.

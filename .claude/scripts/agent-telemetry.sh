@@ -2348,7 +2348,7 @@ portfolio_remote_url() {
 }
 
 in_scope_cwd() {
-  local cwd="$1" recorded="${2-}" p url gone=0 unchecked=0 presence
+  local cwd="$1" recorded="${2-}" p url gone=0 unchecked=0 presence base rest id root where
   [ -n "$cwd" ] || return 1
   while IFS= read -r p; do
     # Form 1: literally under an allowlisted path, at a component boundary.
@@ -2359,16 +2359,36 @@ in_scope_cwd() {
     # categorically out of scope. Confirm identity by the worktree's actual
     # ORIGIN REMOTE, and fail closed when it cannot be read (missing dir,
     # no remote, not a repo): an unverifiable worktree is excluded.
+    #
+    # The WORKTREE ROOT is what gets judged, never the recorded folder itself
+    # (second review of monorepo#4149). The recorded folder may be a sub-folder
+    # that was deleted while the worktree lives on with another remote, and a
+    # path written with `..`, `.`, a doubled or a trailing slash can walk away
+    # from the worktree or hide what sits on it. So the path must be in plain
+    # form and name exactly `worktrees/<one id>/<name>[/…]`; anything else is
+    # not a Codex worktree by its path and is left to the other forms.
+    base=$(basename "$p")
     case "$cwd" in
-      "$CODEX_HOME"/worktrees/*/"$(basename "$p")"|"$CODEX_HOME"/worktrees/*/"$(basename "$p")"/*)
-        worktree_presence "$cwd" && presence=0 || presence=$?
+      */|*//*|*/./*|*/.|*/../*|*/..) continue ;;
+    esac
+    case "$cwd" in
+      "$CODEX_HOME"/worktrees/*/"$base"|"$CODEX_HOME"/worktrees/*/"$base"/*)
+        rest="${cwd#"$CODEX_HOME"/worktrees/}"
+        id="${rest%%/*}"
+        [ -n "$id" ] || continue
+        root="$CODEX_HOME/worktrees/$id/$base"
+        # The `*` above also spans slashes: `worktrees/a/b/<name>` is not a worktree root.
+        case "$cwd" in "$root"|"$root"/*) ;; *) continue ;; esac
+        worktree_presence "$root" && presence=0 || presence=$?
         if [ "$presence" -eq 2 ]; then unchecked=1; continue; fi
         if [ "$presence" -eq 1 ]; then
           if portfolio_remote_url "$recorded"; then return 0; fi
           gone=1
           continue
         fi
-        url=$(git -C "$cwd" remote get-url origin 2>/dev/null) || continue
+        # The root exists: its own remote decides, whatever the record says.
+        where="$cwd"; [ -d "$where" ] || where="$root"
+        url=$(git -C "$where" remote get-url origin 2>/dev/null) || continue
         if portfolio_remote_url "$url"; then return 0; fi ;;
     esac
   done < <(printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$')
