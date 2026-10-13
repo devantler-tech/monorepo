@@ -186,7 +186,7 @@ printf '#!/bin/sh\nprintf "%%s\\n" "/dev/disk9s1 on %s/volume (apfs, local)"\n' 
 chmod +x "${mount_stub}/mount" || fail 'fixture: chmod mount stub'
 out=$(PATH="${mount_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$mounted" ] || fail "a tree holding a mount point was reaped: $mounted"
-grep -qF "KEEP  (mount point)   $mounted" <<<"$out" ||
+grep -qF "KEEP  (mount point) $mounted" <<<"$out" ||
   fail 'a tree holding a mount point was not reported as kept for it'
 printf '#!/bin/sh\nexit 1\n' > "${mount_stub}/mount"
 out=$(PATH="${mount_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
@@ -224,13 +224,74 @@ out=$(PATH="${mount_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
 grep -qF "KEEP  (socket or device inside) $piped_work" <<<"$out" ||
   fail 'a Go work dir with a FIFO inside was not reported as kept for it'
 [ -e "$mounted_work" ] || fail "a Go work dir holding a mount point was reaped: $mounted_work"
-grep -qF "KEEP  (mount point)   $mounted_work" <<<"$out" ||
+grep -qF "KEEP  (mount point) $mounted_work" <<<"$out" ||
   fail 'a Go work dir holding a mount point was not reported as kept for it'
 rm -f "${piped_work}/b001-control" || fail 'fixture: remove FIFO'
 age_tree "$(stamp_hours_ago 12)" "$piped_work" || fail 'fixture: re-age go-build4136002'
 run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
 [ -e "$piped_work" ] && fail "the FIFO ablation partner was not reaped: $piped_work"
 [ -e "$mounted_work" ] && fail "the work-dir mount ablation partner was not reaped: $mounted_work"
+# 3j. a mount table that parses to NO mount point was not understood (a host always has
+# its root mounted): nothing is examined, rather than every tree reading as unmounted.
+unparsed=$(make_tree 'r50-unparsed-mounts' 10) || fail 'fixture: r50-unparsed-mounts'
+printf '#!/bin/sh\necho "Filesystem listing unavailable in this locale"\n' > "${mount_stub}/mount"
+out=$(PATH="${mount_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "a mount table with no parsed mount point exited ${rc}, not 2 (UNKNOWN)"
+[ -e "$unparsed" ] || fail "a tree was reaped from a mount table with no parsed mount point: $unparsed"
+# ...and it is reaped once the table is readable (ablation partner). This also leaves the
+# next case with exactly one reapable tree, so its late read cannot be another tree's.
+run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$unparsed" ] && fail "the unparsed-table ablation partner was not reaped: $unparsed"
+# 3k. the guards are asked AGAIN just before removal. The stub answers the up-front read
+# with the root alone; from the second read on -- the one sweep_candidate makes before it
+# removes anything -- it first does what a concurrent run would have done in between.
+#   late write: a file is written and closed again, which no open-file probe can see.
+late_written=$(make_tree 'r50-late-write' 10) || fail 'fixture: r50-late-write'
+late_count="${mount_stub}/calls"
+cat > "${mount_stub}/mount" <<STUB
+#!/bin/sh
+n=\$(cat "$late_count" 2>/dev/null || echo 0)
+n=\$((n + 1))
+echo "\$n" > "$late_count"
+[ "\$n" -lt 2 ] || [ ! -d "$late_written" ] || echo fresh > "$late_written/resumed.log"
+echo "/dev/disk1s1 on / (apfs, local)"
+STUB
+out=$(PATH="${mount_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${late_written}/resumed.log" ] ||
+  fail 'fixture: the late-write stub never ran, so the late recency check was not exercised'
+[ -e "$late_written" ] || fail "a tree written to after the first look was reaped: $late_written"
+grep -qF "KEEP  (written recently, late) $late_written" <<<"$out" ||
+  fail 'a tree written to after the first look was not reported as kept late'
+#   late mount: a volume is mounted inside the tree after the up-front table was read.
+late_mounted=$(make_tree 'r50-late-mount' 10) || fail 'fixture: r50-late-mount'
+late_mounted_canon=$(cd -- "$late_mounted" && pwd -P) || fail 'fixture: resolve late-mount tree'
+rm -f "$late_count"
+cat > "${mount_stub}/mount" <<STUB
+#!/bin/sh
+n=\$(cat "$late_count" 2>/dev/null || echo 0)
+n=\$((n + 1))
+echo "\$n" > "$late_count"
+echo "/dev/disk1s1 on / (apfs, local)"
+[ "\$n" -lt 2 ] || echo "/dev/disk9s3 on $late_mounted_canon/volume (apfs, local)"
+STUB
+out=$(PATH="${mount_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$late_mounted" ] || fail "a tree with a volume mounted after the first look was reaped: $late_mounted"
+grep -qF "KEEP  (mount point, late) $late_mounted" <<<"$out" ||
+  fail 'a tree with a volume mounted after the first look was not reported as kept late'
+# 3l. a directory another step judges is never taken by this one, nor is its parent: an
+# idle golangci-lint cache configured under the temp root WITHOUT the marker is one the
+# lint step deliberately keeps. The same tree is reaped once it is no longer configured.
+lint_parent=$(make_tree 'r50-lint-parent' 0) || fail 'fixture: r50-lint-parent'
+mkdir -p "${lint_parent}/cache" || fail 'fixture: unmarked lint cache'
+printf 'payload\n' > "${lint_parent}/cache/entry"
+age_tree "$(stamp_hours_ago 240)" "$lint_parent" || fail 'fixture: age r50-lint-parent'
+out=$(GOLANGCI_LINT_CACHE="${lint_parent}/cache" run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${lint_parent}/cache/entry" ] ||
+  fail "the parent of a configured golangci-lint cache was reaped by the per-run step: $lint_parent"
+age_tree "$(stamp_hours_ago 240)" "$lint_parent" || fail 'fixture: re-age r50-lint-parent'
+run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$lint_parent" ] && fail "the protected-path ablation partner was not reaped: $lint_parent"
 
 # --- 4. dry-run deletes nothing (mode ablation) -----------------------------------
 dry=$(make_tree 'ksail-dry-run' 10) || fail 'fixture: ksail-dry-run'

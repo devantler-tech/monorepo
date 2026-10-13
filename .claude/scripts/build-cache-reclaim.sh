@@ -724,10 +724,12 @@ tree_in_use() {
 #   $3  optional: run-cache, which repeats the marked-cache hold check just before removal;
 #       or budget-cache, for a marked Go cache over its budget while still written to (2b). Its
 #       late check re-reads the marker but NOT the idle rule, which such a cache fails by
-#       definition, and it is emptied (empty_marked_cache) rather than removed
+#       definition, and it is emptied (empty_marked_cache) rather than removed;
+#       or run-tree / go-work, for a tree under a shared temp root, which repeats tree_guard
+#       against a mount table read just before removal (run-tree with the recency rule)
 #   $4  optional: the tree's size in MB, when the caller has already measured it
 sweep_candidate() {
-  local tree=$1 scope=$2 tree_mb=${4:-} late_hold late_kind
+  local tree=$1 scope=$2 tree_mb=${4:-} late_hold late_kind late_minutes late_points
   [ -n "$tree" ] || return 0
   [ -d "$tree" ] || return 0
   if own_session_tree "$tree"; then
@@ -752,6 +754,33 @@ sweep_candidate() {
       kept=$((kept + 1))
       log "KEEP  (in use, late)  $tree"
       return 0
+    fi
+    # The shared-root guards were read minutes ago too, and the open-file probe covers
+    # neither: a run can write a file and close it again, and a volume can be mounted,
+    # between the first look and this one. Both are asked again here, against a mount
+    # table read now, before anything is removed (monorepo#4136).
+    if [ "${3:-}" = run-tree ] || [ "${3:-}" = go-work ]; then
+      late_minutes=''
+      [ "$3" != run-tree ] || late_minutes=$((RUN_TREE_MIN_AGE_HOURS * 60))
+      if ! late_points=$(read_mount_points); then
+        unknown=$((unknown + 1))
+        log "UNKNOWN (mount table unreadable, late) $tree"
+        return 0
+      fi
+      tree_guard "$tree" "$late_points" "$late_minutes"
+      case "$?" in
+        0) ;;
+        1)
+          kept=$((kept + 1))
+          log "KEEP  (${TREE_GUARD_WHY}, late) $tree"
+          return 0
+          ;;
+        *)
+          unknown=$((unknown + 1))
+          log "UNKNOWN (${TREE_GUARD_WHY}, late) $tree"
+          return 0
+          ;;
+      esac
     fi
     # A marked cache can be written to without any file staying open across both lsof probes,
     # so its own recency (and, for a lint cache, a running linter) is asked again here too.
@@ -906,31 +935,121 @@ run_tree_kept_name() {
   return 1
 }
 
-# MOUNT_POINTS is every mount point on the host, one per line, read ONCE. Removing a tree
-# that holds one would delete the mounted volume's contents, not temp files. MOUNTS_OK is
-# tracked apart from the contents, as LSOF_OK is: a failed read must keep every tree.
+# read_mount_points prints every mount point on the host, one per line. Removing a tree
+# that holds one would delete the mounted volume's contents, not temp files. It returns 1
+# when the table cannot be read OR yields no mount point: a host always has at least its
+# root mounted, so an empty parse means the output was not understood, never "no mounts".
+read_mount_points() {
+  local table points
+  table=$(mount 2>/dev/null) || return 1
+  [ -n "$table" ] || return 1
+  # macOS prints `<dev> on <path> (<opts>)`, Linux `<dev> on <path> type <fs> (<opts>)`.
+  points=$(printf '%s\n' "$table" | awk '
+    { i = index($0, " on "); if (!i) next
+      p = substr($0, i + 4); sub(/ \(.*$/, "", p); sub(/ type .*$/, "", p); print p }') || return 1
+  [ -n "$points" ] || return 1
+  printf '%s\n' "$points"
+}
+
+# MOUNTS_OK is tracked apart from the contents, as LSOF_OK is: a failed read must keep
+# every tree. This is the up-front reading; sweep_candidate reads the table AGAIN just
+# before a removal, because a volume can be mounted while the sweep runs.
 MOUNTS_OK=0
 MOUNT_POINTS=''
-if mount_table=$(mount 2>/dev/null) && [ -n "$mount_table" ]; then
-  # macOS prints `<dev> on <path> (<opts>)`, Linux `<dev> on <path> type <fs> (<opts>)`.
-  if MOUNT_POINTS=$(printf '%s\n' "$mount_table" | awk '
-    { i = index($0, " on "); if (!i) next
-      p = substr($0, i + 4); sub(/ \(.*$/, "", p); sub(/ type .*$/, "", p); print p }'); then
-    MOUNTS_OK=1
-  fi
+if MOUNT_POINTS=$(read_mount_points); then
+  MOUNTS_OK=1
 fi
 
-# holds_mount <tree>: 0 when a mount point is at or below the tree, or when that cannot be
-# told. Compared on the resolved path, for the reason holds_open gives, and scanned to EOF
-# for the reason it gives too.
-holds_mount() {
+# path_at_or_below <tree> <list>: 0 when a path in the newline-separated list is the tree
+# or lies below it, 1 when none is, 2 when the tree cannot be resolved -- which is "not
+# examined", never either answer. Compared on the resolved path, for the reason holds_open
+# gives, and scanned to EOF for the reason it gives too.
+path_at_or_below() {
   local canon
-  [ "$MOUNTS_OK" -eq 1 ] || return 0
-  canon=$(cd -- "$1" 2>/dev/null && pwd -P) || return 0
-  [ -n "$canon" ] || return 0
-  printf '%s\n' "$MOUNT_POINTS" |
+  canon=$(cd -- "$1" 2>/dev/null && pwd -P) || return 2
+  [ -n "$canon" ] || return 2
+  printf '%s\n' "$2" |
     awk -v p="$canon" 'index($0, p "/") == 1 || $0 == p { found = 1 } END { exit !found }'
 }
+
+# tree_guard <tree> <mount-points> <recent-minutes or empty> applies the guards a tree
+# under a SHARED temp root needs, in one place, so the first look and the look just before
+# removal cannot drift apart:
+#   * it holds no mount point;
+#   * it holds no socket, FIFO or device;
+#   * with <recent-minutes>, nothing in it was modified within that many minutes.
+# ONE walk answers the last two and stops at the first hit. A walk that could not read
+# part of the tree has not shown it idle, so its status is checked before its output.
+# Returns 0 clear, 1 keep, 2 not examined; TREE_GUARD_WHY says why for 1 and 2.
+TREE_GUARD_WHY=''
+tree_guard() {
+  local tree=$1 points=$2 minutes=$3 hit rc
+  TREE_GUARD_WHY=''
+  path_at_or_below "$tree" "$points"
+  rc=$?
+  case "$rc" in
+    0)
+      TREE_GUARD_WHY='mount point'
+      return 1
+      ;;
+    1) ;;
+    *)
+      TREE_GUARD_WHY='mount check failed'
+      return 2
+      ;;
+  esac
+  if [ -n "$minutes" ]; then
+    hit=$(find "$tree" \( -type s -o -type p -o -type b -o -type c \
+      -o -mmin "-${minutes}" \) -print -quit 2>/dev/null) || rc=2
+  else
+    hit=$(find "$tree" \( -type s -o -type p -o -type b -o -type c \) \
+      -print -quit 2>/dev/null) || rc=2
+  fi
+  if [ "$rc" -eq 2 ]; then
+    TREE_GUARD_WHY='scan failed'
+    return 2
+  fi
+  [ -n "$hit" ] || return 0
+  if [ -S "$hit" ] || [ -p "$hit" ] || [ -b "$hit" ] || [ -c "$hit" ]; then
+    TREE_GUARD_WHY='socket or device inside'
+  else
+    TREE_GUARD_WHY='written recently'
+  fi
+  return 1
+}
+
+# PROTECTED_DIRS is every directory another step here judges under its own rule, resolved:
+# the Go build and module caches, golangci-lint's cache when it is configured by path, and
+# the per-user temp dir (which holds Go's work dirs and the browser profiles). Any of them
+# can be configured to sit under the temp root, where this step would otherwise remove an
+# idle one -- or its parent -- before the step that knows what it is has looked. A go
+# command that cannot answer leaves the list unknown, and then no tree is examined.
+PROTECTED_OK=1
+PROTECTED_DIRS=''
+protect_dir() {
+  local resolved
+  case "$1" in
+    /*) ;;
+    *) return 0 ;;
+  esac
+  # A path that does not exist cannot be inside a candidate.
+  resolved=$(cd -- "$1" 2>/dev/null && pwd -P) || return 0
+  PROTECTED_DIRS="${PROTECTED_DIRS}${resolved}"$'\n'
+}
+protect_dir "${GOCACHE:-}"
+protect_dir "${GOMODCACHE:-}"
+protect_dir "${GOLANGCI_LINT_CACHE:-}"
+protect_dir "$GO_TMP_ROOT"
+protect_dir "${GO_TMP_ROOT}/rod"
+if [ -n "${go_bin:-}" ]; then
+  for protected_var in GOCACHE GOMODCACHE; do
+    if protected_dir=$("$go_bin" env "$protected_var" 2>/dev/null); then
+      protect_dir "$protected_dir"
+    else
+      PROTECTED_OK=0
+    fi
+  done
+fi
 
 run_trees_recent=0
 if [ -d "$TMPDIR_ROOT" ]; then
@@ -940,6 +1059,9 @@ if [ -d "$TMPDIR_ROOT" ]; then
   elif [ "$MOUNTS_OK" -ne 1 ]; then
     unknown=$((unknown + 1))
     log "UNKNOWN (mount table unreadable) $TMPDIR_ROOT: per-run trees not examined"
+  elif [ "$PROTECTED_OK" -ne 1 ]; then
+    unknown=$((unknown + 1))
+    log "UNKNOWN (go env failed) $TMPDIR_ROOT: per-run trees not examined"
   elif ! run_trees=$(find -H "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d \
     -user "$run_tree_uid" -mmin "+$((RUN_TREE_MIN_AGE_HOURS * 60))" 2>/dev/null); then
     # A listing that failed part-way names only some of the trees; none is judged from it.
@@ -956,32 +1078,36 @@ if [ -d "$TMPDIR_ROOT" ]; then
         log "UNKNOWN (marker unreadable, cache not examined) $tree"
         continue
       fi
-      if holds_mount "$tree"; then
-        kept=$((kept + 1))
-        log "KEEP  (mount point)   $tree"
-        continue
-      fi
-      # ONE walk answers both questions, and stops at the first hit. A walk that could not
-      # read part of the tree has not shown it idle, so its status is checked before its
-      # output: an empty answer from a failed walk is not "nothing recent".
-      if ! run_tree_hit=$(find "$tree" \( -type s -o -type p -o -type b -o -type c \
-        -o -mmin "-$((RUN_TREE_MIN_AGE_HOURS * 60))" \) -print -quit 2>/dev/null); then
-        unknown=$((unknown + 1))
-        log "UNKNOWN (scan failed, tree not examined) $tree"
-        continue
-      fi
-      if [ -n "$run_tree_hit" ]; then
-        kept=$((kept + 1))
-        if [ -S "$run_tree_hit" ] || [ -p "$run_tree_hit" ] || [ -b "$run_tree_hit" ] ||
-          [ -c "$run_tree_hit" ]; then
-          log "KEEP  (socket or device inside) $tree"
-        else
-          # Counted, not listed: most of the temp root is in this state on every sweep.
-          run_trees_recent=$((run_trees_recent + 1))
-        fi
-        continue
-      fi
-      sweep_candidate "$tree" temp-root
+      path_at_or_below "$tree" "$PROTECTED_DIRS"
+      case "$?" in
+        0) continue ;;
+        1) ;;
+        *)
+          unknown=$((unknown + 1))
+          log "UNKNOWN (unresolvable, tree not examined) $tree"
+          continue
+          ;;
+      esac
+      tree_guard "$tree" "$MOUNT_POINTS" "$((RUN_TREE_MIN_AGE_HOURS * 60))"
+      case "$?" in
+        0) ;;
+        1)
+          kept=$((kept + 1))
+          if [ "$TREE_GUARD_WHY" = 'written recently' ]; then
+            # Counted, not listed: most of the temp root is in this state on every sweep.
+            run_trees_recent=$((run_trees_recent + 1))
+          else
+            log "KEEP  (${TREE_GUARD_WHY}) $tree"
+          fi
+          continue
+          ;;
+        *)
+          unknown=$((unknown + 1))
+          log "UNKNOWN (${TREE_GUARD_WHY}, tree not examined) $tree"
+          continue
+          ;;
+      esac
+      sweep_candidate "$tree" temp-root run-tree
     done <<EOF
 $run_trees
 EOF
@@ -1533,8 +1659,8 @@ fi
 
 # The temp root is shared with every user and every tool on the host, which the per-user
 # temp dir is not. So work dirs are taken only when this user owns them, and under either
-# root a tree that holds a mount point, or a socket, FIFO or device, is kept: the guards
-# (2) applies, for the reasons given there. A read that fails examines nothing.
+# root a tree that holds a mount point, or a socket, FIFO or device, is kept: tree_guard,
+# for the reasons given in (2). A read that fails examines nothing.
 go_work_uid=$(id -u 2>/dev/null) || go_work_uid=''
 for go_work_root in "${go_work_roots[@]}"; do
   [ -d "$go_work_root" ] || continue
@@ -1573,23 +1699,21 @@ for go_work_root in "${go_work_roots[@]}"; do
       log "UNKNOWN (mount table unreadable, tree not examined) $tree"
       continue
     fi
-    if holds_mount "$tree"; then
-      kept=$((kept + 1))
-      log "KEEP  (mount point)   $tree"
-      continue
-    fi
-    if ! go_work_hit=$(find "$tree" \( -type s -o -type p -o -type b -o -type c \) \
-      -print -quit 2>/dev/null); then
-      unknown=$((unknown + 1))
-      log "UNKNOWN (scan failed, tree not examined) $tree"
-      continue
-    fi
-    if [ -n "$go_work_hit" ]; then
-      kept=$((kept + 1))
-      log "KEEP  (socket or device inside) $tree"
-      continue
-    fi
-    sweep_candidate "$tree" host
+    tree_guard "$tree" "$MOUNT_POINTS" ''
+    case "$?" in
+      0) ;;
+      1)
+        kept=$((kept + 1))
+        log "KEEP  (${TREE_GUARD_WHY}) $tree"
+        continue
+        ;;
+      *)
+        unknown=$((unknown + 1))
+        log "UNKNOWN (${TREE_GUARD_WHY}, tree not examined) $tree"
+        continue
+        ;;
+    esac
+    sweep_candidate "$tree" host go-work
   done <<EOF
 $go_work_trees
 EOF
