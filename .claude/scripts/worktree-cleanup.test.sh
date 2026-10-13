@@ -3240,6 +3240,37 @@ t_plain_reap_keeps_a_desktop_marker_that_is_not_empty() {
   rm -rf "$root"
 }
 
+
+t_keeps_a_desktop_marker_written_after_the_manifest_row() {
+  # The row is written before the last recheck. The lsof shim writes the marker on its
+  # third call — the recheck after the row — so the row says "no marker" of a worktree that
+  # now holds one: it must be kept, not deleted with an unrecorded marker.
+  local name="apply KEEPs a worktree whose desktop marker appears after its manifest row"
+  local root; root=$(make_repo)
+  abandoned_wt "$root" aband || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/aband" admin
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  local real_lsof; real_lsof=$(command -v lsof) || real_lsof=
+  [ -n "$real_lsof" ] || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
+  local shim="$root/shim" count="$root/lsof-calls"; mkdir -p "$shim"
+  cat > "$shim/lsof" <<SHIM
+#!/usr/bin/env bash
+n=\$(( \$(cat "$count" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "$count"
+[ "\$n" -eq 3 ] && : > "$admin/claude-desktop-worktree"
+exec "$real_lsof" "\$@"
+SHIM
+  chmod +x "$shim/lsof"
+  local out; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
+  if [ ! -e "$admin/claude-desktop-worktree" ]; then
+    bad "$name" "marker missing (never written, or deleted): $out"
+  elif grep -q 'KEEP .*aband .*marker changed after the manifest row' <<<"$out" && [ -d "$wt" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_salvage_keeps_a_filtered_path() {
   local name="salvage dry-run KEEPs a changed path with a clean filter"
   local root; root=$(make_repo)
@@ -6508,6 +6539,7 @@ t_salvage_keeps_unlisted_git_state
 t_salvage_carries_the_empty_desktop_marker
 t_salvage_keeps_a_desktop_marker_that_is_not_empty
 t_plain_reap_keeps_a_desktop_marker_that_is_not_empty
+t_keeps_a_desktop_marker_written_after_the_manifest_row
 t_salvage_keeps_a_filtered_path
 t_salvage_keeps_a_submodule_mid_bisect
 t_salvage_keeps_when_file_modes_are_ignored

@@ -119,7 +119,8 @@
 # The Claude desktop app writes an empty `claude-desktop-worktree` file into the admin
 # directory of each session worktree it creates (#4152). That empty regular file is the one
 # entry git did not write that the removal may delete: the manifest row of any reaped
-# worktree that held it gains a `desktop-marker=empty` field, and restoring the marker is
+# worktree that held it gains a `desktop-marker=empty` field. To restore the marker, recreate
+# the worktree first (the restore steps above), then run, against that existing directory,
 # `: > "$(git -C <dir> rev-parse --absolute-git-dir)/claude-desktop-worktree"`. With
 # content, or as a link or directory, it keeps the worktree like any unlisted entry.
 # Restore a submodule's work from the manifest row alone, with D=<git directory>/<label>
@@ -787,6 +788,8 @@ esac
 
 now=$(date +%s)
 reaped=0; kept=0; stuck=0; salvaged=0; freed_kb=0; unmeasured=0
+# What the pending manifest row says of the desktop app's marker (empty|absent); "" before a row.
+DESKTOP_MARKER_RECORDED=""
 
 # record <path> <branch> <sha> <evidence> <outcome>
 # The outcome column is what stops a row claiming a removal that never happened. The
@@ -917,6 +920,14 @@ recheck_mutable_gates() {
     0) keep "$wt" "live process CWD (started during the sweep)"; return 1 ;;
     2) die "lsof re-check failed for $target — refusing to continue on an unverifiable live set" ;;
   esac
+
+  # The desktop app's marker (#4152) must still be what the manifest row says: written, or
+  # given content, after the row, it would be deleted unrecorded. Checked here so every
+  # caller, the recursive-delete fallback included, makes the same comparison.
+  if [ -n "$DESKTOP_MARKER_RECORDED" ] \
+     && [ "$(desktop_marker_state "$wt" || echo unreadable)" != "$DESKTOP_MARKER_RECORDED" ]; then
+    keep "$wt" "the desktop app's marker changed after the manifest row was written"; return 1
+  fi
 
   if [ -n "$SALVAGE_TREE" ]; then
     # Everything that waits on the network comes first: each submodule's remote is asked again
@@ -2909,15 +2920,16 @@ desktop_marker_empty() { [ -f "$1" ] && [ ! -L "$1" ] && [ ! -s "$1" ]; }
 # cannot be located or the name holds anything else, so a caller never reads a failed look
 # as "no marker".
 desktop_marker_state() {
-  local admin
+  local admin names
   admin=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] || return 1
-  if [ ! -e "$admin/claude-desktop-worktree" ] && [ ! -L "$admin/claude-desktop-worktree" ]; then
-    printf 'absent\n'
-  elif desktop_marker_empty "$admin/claude-desktop-worktree"; then
-    printf 'empty\n'
-  else
-    return 1
-  fi
+  # Decided from a status-checked listing: a directory that cannot be read is not "no marker".
+  names=$(ls -A "$admin" 2>/dev/null) || return 1
+  case $'\n'"$names"$'\n' in
+    *$'\n'claude-desktop-worktree$'\n'*)
+      desktop_marker_empty "$admin/claude-desktop-worktree" || return 1
+      printf 'empty\n' ;;
+    *) printf 'absent\n' ;;
+  esac
 }
 
 # entry_type_ok <path> -> 0 when a whitelisted git-directory entry has the type git gives it:
@@ -3830,6 +3842,7 @@ while IFS= read -r wt <&3; do
   fi
   # The desktop app's marker (#4152) dies with the admin directory on either path, so a
   # plain reap reads it too: anything but the empty file, or no file, keeps the worktree.
+  DESKTOP_MARKER_RECORDED=""
   if ! desktop_marker=$(desktop_marker_state "$wt"); then
     keep_stuck "$wt" "not reaped: the desktop app's marker cannot be read or is not the empty file it writes"; continue
   fi
@@ -3916,6 +3929,7 @@ while IFS= read -r wt <&3; do
     keep_stuck "$wt" "not reaped: the desktop app's marker cannot be read or is not the empty file it writes"; continue
   fi
   [ "$desktop_marker" = empty ] && reach_evidence="$reach_evidence;desktop-marker=empty"
+  DESKTOP_MARKER_RECORDED=$desktop_marker
   if ! record "$wt_real" "$branch" "$sha" "$reach_evidence;no-live-process;age=${age_h}h;ignored=${ign:-0}" pending; then
     die "cannot write the restore manifest ($MANIFEST) — aborting before any removal"
   fi
@@ -3934,10 +3948,6 @@ while IFS= read -r wt <&3; do
   if ! recheck_mutable_gates "$wt" "$wt_real"; then
     worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
     continue
-  fi
-  if [ "$(desktop_marker_state "$wt" || echo unreadable)" != "$desktop_marker" ]; then
-    worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
-    keep "$wt" "the desktop app's marker changed after the manifest row was written"; continue
   fi
 
   # Keep the reaped commit reachable so the manifest's SHA stays restorable. Without
