@@ -9739,6 +9739,52 @@ check "archived Codex run: each folder has its own count"      "$OUT" "from sess
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxonly" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1)
 check "archived Codex run: a missing archive folder reads zero, not an error" "$OUT" "from sessions/ 1, from archived_sessions/ 0"
+
+# ── monorepo#4148: a finished Codex run whose worktree was cleaned up ─────────
+# A Codex worktree is removed after its run, so the folder check could not
+# confirm most finished runs: 336 of 388 archived transcripts in 14 days. The
+# transcript's own first record names the repository it was started in; that
+# address is accepted in the same exact forms as the folder's remote, and only
+# when the folder is gone.
+mkdir -p "$FIX/cxgone/archived_sessions" "$FIX/cxgone/worktrees/kept/monorepo" "$FIX/empty"
+cxgone_file() { # $1 = name, $2 = recorded cwd, $3 = git record (JSON object or empty), $4 = sleep seconds
+  local meta
+  if [ -n "$3" ]; then meta="{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$2\",\"git\":$3}}"
+  else meta="{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$2\"}}"; fi
+  printf '%s\n' "$meta" > "$FIX/cxgone/archived_sessions/$1.jsonl"
+  printf '%s\n' "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"arguments\":\"{\\\"command\\\":\\\"sleep $4\\\"}\"}}" \
+    >> "$FIX/cxgone/archived_sessions/$1.jsonl"
+}
+cxgone_run() { # $1 = section
+  CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxgone" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
+    PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+    bash "$TARGET" --since-days 3650 --section "$1" 2>&1
+}
+cxgone_sleeps() { cxgone_run efficiency | grep -oE 'sleep/poll calls \.\. [0-9]+' | grep -oE '[0-9]+$'; }
+GONE="$FIX/cxgone/worktrees/gone1/monorepo"
+# Nothing acceptable yet: three transcripts whose worktree is gone, none readable.
+cxgone_file lookalike "$FIX/cxgone/worktrees/gone2/monorepo" '{"repository_url":"https://notgithub.com/devantler-tech/monorepo.git"}' 11
+cxgone_file otherorg  "$FIX/cxgone/worktrees/gone3/monorepo" '{"repository_url":"git@github.com:someone-else/monorepo.git"}' 12
+cxgone_file noaddress "$FIX/cxgone/worktrees/gone4/monorepo" '' 13
+# The folder exists but has no remote: the folder is the judge, the record cannot overrule it.
+cxgone_file keptfolder "$FIX/cxgone/worktrees/kept/monorepo" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 14
+# Not a Codex worktree of a portfolio repository by its path: the record alone admits nothing.
+cxgone_file otherpath "$FIX/cxgone/elsewhere/monorepo" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 15
+OUT=$(cxgone_run efficiency)
+if grep -qE 'sleep/poll calls \.\. 0|no sessions in window' <<<"$OUT"; then ok "gone worktree: a look-alike host, another owner, no address, a kept folder and another path are all left out"
+else bad "gone worktree: a look-alike host, another owner, no address, a kept folder and another path are all left out" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
+OUT=$(cxgone_run a2a)
+check "gone worktree: the number left out for a missing folder is printed" "$OUT" "left out, worktree gone and no portfolio address recorded: 3"
+# Now one whose first record names a portfolio repository, in each accepted form.
+cxgone_file ssh "$GONE" '{"commit_hash":"0","repository_url":"git@github.com:devantler-tech/monorepo.git"}' 21
+n=$(cxgone_sleeps); [ "$n" = 1 ] && ok "gone worktree: a recorded portfolio address (ssh form) is read" \
+  || bad "gone worktree: a recorded portfolio address (ssh form) is read" "sleep count '$n', expected 1"
+cxgone_file https "$FIX/cxgone/worktrees/gone5/monorepo" '{"repository_url":"https://github.com/devantler-tech/ksail"}' 22
+n=$(cxgone_sleeps); [ "$n" = 2 ] && ok "gone worktree: a recorded portfolio address (https form) is read" \
+  || bad "gone worktree: a recorded portfolio address (https form) is read" "sleep count '$n', expected 2"
+OUT=$(cxgone_run a2a)
+check "gone worktree: read transcripts are counted"                    "$OUT" "codex sessions in window ... 2  (scope-filtered)"
+check "gone worktree: the left-out count does not include read ones"   "$OUT" "left out, worktree gone and no portfolio address recorded: 3"
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
