@@ -47,6 +47,8 @@
 #      images no container uses, unpacked longer ago than a threshold counted in HOURS,
 #      removed only while the store exceeds its own budget (2026-10-05: 57 GB unused,
 #      monorepo#3848). Long-running containers are named in the output and never stopped.
+#   5b. Codex's saved transcripts older than the retention the maintainer approved on
+#      2026-10-15 (monorepo#4136), through codex-transcript-retention.sh, which owns the rules.
 #   6. A report, removing nothing: the free space the volume itself shows before and after,
 #      and, while that is still below the low-space threshold, the largest entries under
 #      the temp and cache dirs (monorepo#3883).
@@ -73,6 +75,8 @@
 #   BUILD_CACHE_RECLAIM_BROWSER_PROFILE_MIN_AGE_HOURS  age threshold for (4b); default 6
 #   BUILD_CACHE_RECLAIM_BROWSER_PROFILE_MAX   most profiles (4b) examines in one run; default
 #                                             500, the rest are counted as deferred
+#   BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPTS     `off` skips (5b); default on
+#   BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPT_DAYS retention for (5b); default 14, at least 7
 #   BUILD_CACHE_RECLAIM_LOW_FREE_GB           free space below which (6) names the largest
 #                                             entries; default $DISK_PREFLIGHT_MIN_FREE_GB, else 20
 #   BUILD_CACHE_RECLAIM_CONSUMER_ROOTS        colon-separated dirs (6) measures; default the
@@ -2278,6 +2282,37 @@ reclaim_container_images() {
 }
 
 reclaim_container_images
+
+# ---------------------------------------------------------------------------
+# 5b. Codex's saved transcripts past the agreed retention (monorepo#4136).
+#
+# The maintainer chose, on 2026-10-15, to let this helper apply a retention to Codex's
+# transcripts, which held ~26 GB with none. codex-transcript-retention.sh owns the rules
+# (14 days by default, open and non-transcript files kept, refuses below 7 days); this step
+# only runs it in the same mode and carries an UNKNOWN from it into this sweep's exit.
+# BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPTS=off skips it; ..._DAYS sets the age.
+# ---------------------------------------------------------------------------
+reclaim_codex_transcripts() {
+  local helper rc line
+  if [ "${BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPTS:-on}" = off ]; then
+    log 'codex transcripts: skipped (disabled)'
+    return 0
+  fi
+  helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex-transcript-retention.sh"
+  if [ ! -f "$helper" ]; then
+    log "UNKNOWN: codex transcripts: ${helper} is missing"
+    unknown=$((unknown + 1))
+    return 0
+  fi
+  line=$(bash "$helper" "$MODE" "${BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPT_DAYS:-14}" 2>&1)
+  rc=$?
+  printf '%s\n' "$line" | sed 's/^codex-transcript-retention: /build-cache-reclaim: codex transcripts: /'
+  if [ "$rc" -ne 0 ]; then
+    unknown=$((unknown + 1))
+  fi
+}
+
+reclaim_codex_transcripts
 
 # Report in the mode's own vocabulary. The counters are shared between the two modes, so
 # a dry-run summary phrased as apply ("reaped=N, reclaimed=~N MB") states that trees were

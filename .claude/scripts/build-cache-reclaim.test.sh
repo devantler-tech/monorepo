@@ -13,6 +13,9 @@ set -uo pipefail
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 impl="${script_dir}/build-cache-reclaim.sh"
 NEVER_CLEAN_BUDGET=1000000
+# Every case but 25 keeps the Codex transcript step off, so the suite never reads or removes
+# the real ~/.codex of the machine running it.
+export BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPTS=off
 
 failures=0
 fail() {
@@ -2288,6 +2291,35 @@ took=$(($(date +%s) - started))
 grep -qF '(partial: stopped after 1s, so the largest entry may be missing, no entry sized)' <<<"$out" ||
   fail '24e: a measurement past its deadline was not reported as stopped'
 [ "$took" -lt 60 ] || fail "24e: the sweep waited ${took}s for a measurement with a 1s deadline"
+
+# 25. Codex transcripts past the retention are reclaimed through their own helper, in the
+# sweep's mode, and an UNKNOWN from it reaches this sweep's exit (monorepo#4136). Every
+# other case runs with the step off (exported at the top), so no case reads the real
+# ~/.codex of the machine running the suite.
+c_home="${fixture_root}/codex-home-fixture"
+c_bin="${fixture_root}/codex-lsof-bin"
+mkdir -p "${c_home}/archived_sessions" "$c_bin" || fail 'fixture: codex home'
+c_old="${c_home}/archived_sessions/rollout-2026-09-01T00-00-00-old.jsonl.zst"
+printf 'x\n' > "$c_old"
+touch -t "$(date -v-30d +%Y%m%d%H%M 2>/dev/null || date -d '30 days ago' +%Y%m%d%H%M)" "$c_old"
+printf '#!/bin/sh\nprintf "p1\\nn/dev/null\\n"\n' > "${c_bin}/lsof"
+chmod +x "${c_bin}/lsof"
+out=$(BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPTS=on CODEX_TRANSCRIPT_RETENTION_HOME="$c_home" \
+  CODEX_TRANSCRIPT_RETENTION_LSOF="${c_bin}/lsof" run dry-run 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$c_old" ] || fail '25: a dry-run removed a Codex transcript'
+grep -qF 'codex transcripts: summary: age>14d candidates=1 would remove=1' <<<"$out" ||
+  fail "25: the dry-run did not report the old transcript: $out"
+out=$(BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPTS=on CODEX_TRANSCRIPT_RETENTION_HOME="$c_home" \
+  CODEX_TRANSCRIPT_RETENTION_LSOF="${c_bin}/lsof" run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$c_old" ] && fail "25: apply kept a 30-day-old closed Codex transcript: $out"
+printf '#!/bin/sh\nexit 3\n' > "${c_bin}/lsof"
+printf 'x\n' > "$c_old"
+touch -t "$(date -v-30d +%Y%m%d%H%M 2>/dev/null || date -d '30 days ago' +%Y%m%d%H%M)" "$c_old"
+BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPTS=on CODEX_TRANSCRIPT_RETENTION_HOME="$c_home" \
+  CODEX_TRANSCRIPT_RETENTION_LSOF="${c_bin}/lsof" run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+rc=$?
+[ "$rc" -eq 2 ] || fail "25: an unreadable open-file list in the transcript step exited ${rc}, not 2"
+[ -e "$c_old" ] || fail '25: a transcript was removed although the open-file list failed'
 
 reclaim_test_finished=1
 if [ "$failures" -eq 0 ]; then

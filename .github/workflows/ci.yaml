@@ -297,6 +297,8 @@ jobs:
               - '.claude/scripts/plugin-definition-refresh.test.sh'
               - '.claude/scripts/surveyor-vocabulary-coverage.test.sh'
               - '.claude/scripts/build-cache-reclaim.test.sh'
+              - '.claude/scripts/codex-transcript-retention.sh'
+              - '.claude/scripts/codex-transcript-retention.test.sh'
               - '.claude/scripts/worktree-cleanup.test.sh'
               - '.claude/scripts/agent-role-delivery-contract.test.sh'
               - '.claude/scripts/worktree-submodule-inventory.test.sh'
@@ -322,6 +324,8 @@ jobs:
             build-cache-reclaim:
               - '.claude/scripts/build-cache-reclaim.sh'
               - '.claude/scripts/build-cache-reclaim.test.sh'
+              - '.claude/scripts/codex-transcript-retention.sh'
+              - '.claude/scripts/codex-transcript-retention.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -1391,6 +1395,11 @@ jobs:
       # probes actually run in production.
       - name: Self-test build-cache-reclaim safety gates
         run: bash .claude/scripts/build-cache-reclaim.test.sh
+      # The Codex transcript step (monorepo#4136) runs through its own helper; its
+      # fail-closed cases (open, young, symlinked, unreadable open-file list) are proved
+      # here on the same two platforms.
+      - name: Self-test Codex transcript retention
+        run: bash .claude/scripts/codex-transcript-retention.test.sh
 
   test-disk-preflight:
     name: Test disk pre-flight
