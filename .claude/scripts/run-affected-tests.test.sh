@@ -233,6 +233,21 @@ if [ "$rc" -eq 0 ] && grep -q '^PASS .*scripts/alpha.test.sh' <<<"$out"; then
   ok "an explicit --timeout overrides a suite declaration"
 else bad "explicit deadline override: $out (rc=$rc)"; fi
 
+# A long opening license/comment block is still one complete header.
+{
+  printf '#!/usr/bin/env bash\n'
+  padding=0
+  while [ "$padding" -lt 45 ]; do
+    printf '# Header line %s\n' "$padding"
+    padding=$((padding + 1))
+  done
+  printf '# test-timeout-seconds: 1\nsleep 3\n'
+} > scripts/alpha.test.sh
+out="$(run)"; rc=$?
+if [ "$rc" -eq 1 ] && grep -q '^TIMEOUT .*scripts/alpha.test.sh' <<<"$out"; then
+  ok "a deadline after a long opening comment is still observed"
+else bad "complete opening header: $out (rc=$rc)"; fi
+
 for declaration in '0' 'soon' '3601' '01' $'2\n# test-timeout-seconds: 3'; do
   printf '#!/usr/bin/env bash\n# test-timeout-seconds: %s\necho started > "%s"\n' \
     "$declaration" "$tmp/deadline-started" > scripts/alpha.test.sh

@@ -179,7 +179,6 @@ selected="$(jq -r --argjson hits "${hits_json}" '
 script_timeout() {
   local file="$1" declaration value
   declaration="$(awk '
-    NR > 40 { exit }
     /^# test-timeout-seconds/ { print; next }
     /^[[:space:]]*(#|$)/ { next }
     { exit }
