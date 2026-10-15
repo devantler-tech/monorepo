@@ -706,8 +706,8 @@ else bad "drift must not require transcript scratch" "rc=$drift_no_scratch_rc"; 
 SAFETY_SCRATCH_FAILURE=$(DRIFT_MKTEMP_TRACE="$FIX/drift-mktemp-calls" \
   PATH="$FIX/drift-no-scratch:$PATH" run --section safety)
 safety_scratch_failure_rc=$?
-if [ "$safety_scratch_failure_rc" -eq 3 ] && [ -e "$FIX/drift-mktemp-calls" ] \
-   && grep -qF 'cannot create temp file' <<<"$SAFETY_SCRATCH_FAILURE"; then
+if [ "$safety_scratch_failure_rc" -eq 2 ] && [ -e "$FIX/drift-mktemp-calls" ] \
+   && grep -qF 'The entire selected safety scope is UNMEASURED; no clean verdict follows.' <<<"$SAFETY_SCRATCH_FAILURE"; then
   ok "a required safety scratch failure still stops the scan"
 else bad "safety scratch refusal" "rc=$safety_scratch_failure_rc"; fi
 
