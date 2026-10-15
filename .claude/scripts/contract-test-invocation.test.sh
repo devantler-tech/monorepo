@@ -375,6 +375,29 @@ case_ no-tests 2 "refusing an empty pass" "jobs:
     steps:
 $self_step"
 
+# Unicode is retained in source while ASCII shell punctuation selects invocations (#4106).
+unicode_run="printf x |…
+bash \"\$here/child.test.sh\""
+unicode_data="printf x |…
+echo \"\$here/child.test.sh\""
+for scan_locale in C C.UTF-8; do
+  LC_ALL="$scan_locale" case_ "$scan_locale-unicode-call" 0 "all 2 contract tests" "jobs:
+  parent:
+    steps:
+      - run: bash .claude/scripts/parent.test.sh
+$self_step" "parent.test.sh=$unicode_run" 'child.test.sh=true'
+  LC_ALL="$scan_locale" case_ "$scan_locale-unicode-data" 1 "NOT-INVOKED child.test.sh" "jobs:
+  parent:
+    steps:
+      - run: bash .claude/scripts/parent.test.sh
+$self_step" "parent.test.sh=$unicode_data" 'child.test.sh=true'
+  LC_ALL="$scan_locale" case_ "$scan_locale-unicode-empty" 2 "refusing an empty pass" "jobs:
+  empty:
+    steps:
+      - run: echo …
+$self_step"
+done
+
 # The real repository: every contract test here is executed by ci.yaml.
 repo_root="$(cd "$here/../.." && pwd)"
 if out="$(cd "$repo_root" && bash "$sut" 2>&1)"; then
