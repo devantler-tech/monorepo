@@ -40,14 +40,17 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
-mkdir -p "$fx/scripts" "$fx/home" "$fx/pids"
-cp "$impl" "$fx/scripts/worktree-lane-sweep.sh"
-chmod +x "$fx/scripts/worktree-lane-sweep.sh"
-sut="$fx/scripts/worktree-lane-sweep.sh"
+mkdir -p "$fx/source/.claude/scripts" "$fx/home" "$fx/pids"
+git init -q "$fx/source"
+printf 'fixture portfolio contract\n' >"$fx/source/AGENTS.md"
+printf 'CLAIM_FIXTURE_LOADED=1\n' >"$fx/source/.claude/scripts/worktree-claim-lib.sh"
+cp "$impl" "$fx/source/.claude/scripts/worktree-lane-sweep.sh"
+chmod +x "$fx/source/.claude/scripts/worktree-lane-sweep.sh"
+sut="$fx/source/.claude/scripts/worktree-lane-sweep.sh"
 records="$fx/home/.claude/worktree-cleanup-manifests"
 
 # The fake sweep: echoes its arguments, then does what $fx/mode says.
-cat >"$fx/scripts/worktree-cleanup-all.sh" <<EOF
+cat >"$fx/source/.claude/scripts/worktree-cleanup-all.sh" <<EOF
 #!/usr/bin/env bash
 printf 'fake sweep args: %s\n' "\$*"
 printf '%s\n' "\$\$" > "$fx/pids/sweep-\$\$"
@@ -63,21 +66,21 @@ case "\$(cat "$fx/mode")" in
         [ "\$(cat "$fx/mode")" != detached-fail ] || exit 2
         exit 0 ;;
   cleanup) # as the real sweep does: one repository's cleanup, writing the lane's manifest
-        "$fx/scripts/worktree-cleanup.sh" "$fx/repo" \\
+        "\$(dirname "\${BASH_SOURCE[0]}")/worktree-cleanup.sh" "$fx/repo" \\
           "\$HOME/.claude/worktree-cleanup-manifests/monorepo-20261002T000000Z.tsv" apply 24 336
         exit 0 ;;
 esac
 exit 3
 EOF
 # The fake per-repository cleanup: hangs until released, as one busy with a large repository does.
-cat >"$fx/scripts/worktree-cleanup.sh" <<EOF
+cat >"$fx/source/.claude/scripts/worktree-cleanup.sh" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$\$" > "$fx/pids/cleanup-\$\$"
 touch "$fx/hanging"
 while [ ! -e "$fx/release" ]; do sleep 0.1; done
 exit 0
 EOF
-chmod +x "$fx/scripts/worktree-cleanup-all.sh" "$fx/scripts/worktree-cleanup.sh"
+chmod +x "$fx/source/.claude/scripts/worktree-cleanup-all.sh" "$fx/source/.claude/scripts/worktree-cleanup.sh"
 mode() { printf '%s\n' "$1" >"$fx/mode"; }
 
 run() { # [args...] -> sets out, rc
@@ -261,7 +264,7 @@ else bad "start does not stack a second sweep on a running one" "rc=$rc $out"; f
 # second sweep would be stacked on the running one.
 mkdir -p "$fx/other/scripts"
 cp "$impl" "$fx/other/scripts/worktree-lane-sweep.sh"
-cp "$fx/scripts/worktree-cleanup-all.sh" "$fx/other/scripts/worktree-cleanup-all.sh"
+cp "$fx/source/.claude/scripts/worktree-cleanup-all.sh" "$fx/other/scripts/worktree-cleanup-all.sh"
 chmod +x "$fx/other/scripts/worktree-lane-sweep.sh" "$fx/other/scripts/worktree-cleanup-all.sh"
 out=$(HOME="$fx/home" bash "$fx/other/scripts/worktree-lane-sweep.sh" status --lane claude 2>&1); rc=$?
 if [ "$rc" -eq 1 ] && grep -q "($hang_id, pid $hang_pid) has been running since" <<<"$out"; then
@@ -1099,8 +1102,8 @@ table_start() {
     printf 'printf "%%s 00:00:01 bash %%s start --lane %s\\n" "$FAKE_PS_SELF_PID" "$SUT_PATH"\n' "$table_lane"
     for line in "$@"; do
       line=${line//@SUT@/$sut}
-      line=${line//@ALL@/$fx/scripts/worktree-cleanup-all.sh}
-      line=${line//@ONE@/$fx/scripts/worktree-cleanup.sh}
+      line=${line//@ALL@/$fx/source/.claude/scripts/worktree-cleanup-all.sh}
+      line=${line//@ONE@/$fx/source/.claude/scripts/worktree-cleanup.sh}
       line=${line//@DIR@/$home/.claude/worktree-cleanup-manifests}
       printf 'printf "%%s\\n" %q\n' "$line"
     done
@@ -1190,6 +1193,133 @@ for spell_lane in codex claude; do
     [ "$(sed -nE 's/^id=([^ ]+) .*/\1/p' "$spell_home/.claude/worktree-cleanup-manifests/cleanup-$spell_lane.finished" 2>/dev/null)" != "$spell_id" ]; do
     sleep 0.1; i=$((i + 1))
   done
+done
+
+# --- incomplete captures never launch cleanup (#4203) -----------------------------
+capture_source="$fx/source/.claude/scripts"
+mode ok
+for capture_case in missing changed; do
+  capture_home="$fx/capture-$capture_case-home"
+  before=$(started_sweeps)
+  if [ "$capture_case" = missing ]; then
+    mv "$capture_source/worktree-claim-lib.sh" "$fx/claim-saved"
+    out=$(HOME="$capture_home" bash "$sut" start --lane codex 2>&1); rc=$?
+    mv "$fx/claim-saved" "$capture_source/worktree-claim-lib.sh"
+  else
+    mkdir -p "$fx/changed-bin"
+    real_cp=$(command -v cp)
+    cat >"$fx/changed-bin/cp" <<EOF
+#!/usr/bin/env bash
+"$real_cp" "\$@" || exit 1
+case "\$*" in
+  *worktree-claim-lib.sh*) printf '# changed copy\n' >>"\${@: -1}" ;;
+esac
+EOF
+    chmod +x "$fx/changed-bin/cp"
+    out=$(HOME="$capture_home" PATH="$fx/changed-bin:$PATH" bash "$sut" start --lane codex 2>&1); rc=$?
+  fi
+  if [ "$rc" = 2 ] && grep -q 'cannot capture helper worktree-claim-lib.sh unchanged' <<<"$out" \
+    && [ "$(started_sweeps)" = "$before" ] \
+    && [ ! -e "$capture_home/.claude/worktree-cleanup-manifests/cleanup-codex.started" ] \
+    && ! find "$capture_home" -type d -name 'runtime-*' | grep -q .; then
+    ok "a $capture_case helper capture is UNKNOWN, starts nothing and releases its files"
+  else bad "a $capture_case helper capture is UNKNOWN, starts nothing and releases its files" "$out"; fi
+done
+
+# Only expired copies of this lane may be reaped after no sweep of the lane remains.
+gc_home="$fx/runtime-gc-home"
+gc_records="$gc_home/.claude/worktree-cleanup-manifests"
+old_runtime="$gc_records/runtime-codex-20261001T000000Z-1"
+fresh_runtime="$gc_records/runtime-codex-20261001T000000Z-2"
+other_runtime="$gc_records/runtime-claude-20261001T000000Z-1"
+mkdir -p "$old_runtime" "$fresh_runtime" "$other_runtime" "$fx/link-target"
+touch "$old_runtime/old" "$other_runtime/other" "$fx/link-target/preserved"
+touch -t 202001010000 "$old_runtime" "$other_runtime"
+ln -s "$fx/link-target" "$gc_records/runtime-codex-20261001T000000Z-3"
+out=$(HOME="$gc_home" bash "$sut" start --lane codex 2>&1); rc=$?
+if [ "$rc" = 1 ] && [ ! -e "$old_runtime" ] && [ -d "$fresh_runtime" ] \
+  && [ -f "$other_runtime/other" ] && [ -f "$fx/link-target/preserved" ] \
+  && [ -L "$gc_records/runtime-codex-20261001T000000Z-3" ]; then
+  ok "runtime cleanup retains fresh copies, the other lane and symlink targets"
+else bad "runtime cleanup retains fresh copies, the other lane and symlink targets" "$out"; fi
+quiet_lane codex || bad "the runtime cleanup fixture finishes" ""
+
+# --- detached helpers outlive their source worktree (#4203) ------------------------
+# These are throwaway linked worktrees, never host worktrees. The sweeper loads its
+# per-repository helper only after the launcher has returned and its source is removed.
+for lifetime_case in success failure interrupted aliased-home; do
+  life="$fx/lifetime-$lifetime_case"
+  mkdir -p "$life/main" "$life/home"
+  git init -q "$life/main"
+  git -C "$life/main" -c user.name=Fixture -c user.email=fixture@example.test \
+    -c commit.gpgsign=false commit --allow-empty -qm fixture
+  git -C "$life/main" worktree add -q --detach "$life/source"
+  mkdir -p "$life/source/.claude/scripts"
+  cp "$impl" "$life/source/.claude/scripts/worktree-lane-sweep.sh"
+  printf 'fixture portfolio contract\n' >"$life/source/AGENTS.md"
+  printf 'CLAIM_FIXTURE_LOADED=1\n' >"$life/source/.claude/scripts/worktree-claim-lib.sh"
+  cat >"$life/source/.claude/scripts/worktree-cleanup-all.sh" <<EOF
+#!/usr/bin/env bash
+touch "$life/ready"
+while [ ! -e "$life/release" ]; do sleep 0.05; done
+printf '%s\n' "\${WORKTREE_CLEANUP_ROOT:-unset}" > "$life/root"
+exec bash "\$(dirname "\${BASH_SOURCE[0]}")/worktree-cleanup.sh"
+EOF
+  cat >"$life/source/.claude/scripts/worktree-cleanup.sh" <<EOF
+#!/usr/bin/env bash
+. "\$(dirname "\${BASH_SOURCE[0]}")/worktree-claim-lib.sh" || exit 2
+[ "\${CLAIM_FIXTURE_LOADED:-}" = 1 ] || exit 3
+touch "$life/helper-ran"
+[ "$lifetime_case" != failure ] || exit 7
+exit 0
+EOF
+  chmod +x "$life/source/.claude/scripts/"*.sh
+  life_records="$life/home/.claude/worktree-cleanup-manifests"
+  life_home="$life/home"
+  if [ "$lifetime_case" = aliased-home ]; then
+    ln -s "$life/home" "$life/home-link"
+    life_home="$life/home-link"
+  fi
+  out=$(HOME="$life_home" bash "$life/source/.claude/scripts/worktree-lane-sweep.sh" \
+    start --lane codex 2>&1); rc=$?
+  life_id=$(sed -nE 's/^id=([^ ]+) .*/\1/p' "$life_records/cleanup-codex.started" 2>/dev/null)
+  life_pid=$(sed -nE 's/.* pid=([0-9]+) .*/\1/p' "$life_records/cleanup-codex.started" 2>/dev/null)
+  if [ "$rc" != 1 ] || [ -z "$life_pid" ] || ! wait_for "$life/ready"; then
+    bad "source-lifetime fixture launches: $lifetime_case" "$out"
+    continue
+  fi
+  printf '%s\n' "$life_pid" >"$fx/pids/lifetime-$lifetime_case"
+  rm -rf -- "$life/source"
+  expected=0
+  case "$lifetime_case" in
+    failure) expected=7; touch "$life/release" ;;
+    interrupted) expected=143; kill -TERM "$life_pid" ;;
+    *) touch "$life/release" ;;
+  esac
+  i=0
+  while [ ! -f "$life_records/cleanup-codex.finished" ] && [ "$i" -lt 200 ]; do
+    sleep 0.05; i=$((i + 1))
+  done
+  life_finished=$(cat "$life_records/cleanup-codex.finished" 2>/dev/null)
+  if [[ "$life_finished" = "id=$life_id rc=$expected at="* ]]; then
+    ok "source removal preserves the matching $lifetime_case completion record"
+  else
+    bad "source removal preserves the matching $lifetime_case completion record" \
+      "$life_finished $(cat "$life_records/cleanup-codex.log" 2>/dev/null)"
+  fi
+  wait_gone "$life_pid" || bad "the $lifetime_case supervisor exits" ""
+  if [ ! -e "$life_records/runtime-codex-$life_id" ]; then
+    ok "the $lifetime_case supervisor releases its captured helpers"
+  else bad "the $lifetime_case supervisor releases its captured helpers" ""; fi
+  if [ "$lifetime_case" != interrupted ]; then
+    if [ -f "$life/helper-ran" ] && [ "$(cat "$life/root" 2>/dev/null)" = "$life/main" ]; then
+      ok "the detached $lifetime_case helper uses the original main checkout after source removal"
+    else
+      bad "the detached $lifetime_case helper uses the original main checkout after source removal" \
+        "$(cat "$life/root" 2>/dev/null)"
+    fi
+  fi
+  quiet_lane codex || bad "source-lifetime fixture stops: $lifetime_case" ""
 done
 
 # --- the run's pre-flight uses the supervised start -------------------------------
