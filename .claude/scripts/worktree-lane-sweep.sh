@@ -16,6 +16,8 @@
 #
 # The launcher writes .started and the supervisor writes .finished, so neither can overwrite the
 # other's record, whichever finishes first. A sweep has finished only when both name the same id.
+# Each sweep runs a byte-checked copy of its helpers and portfolio map under the records
+# directory (#4203). It targets the original main checkout, and releases the copy after it ends.
 # A supervisor that dies before recording (killed, host restarted) leaves .started alone, and
 # its pid then no longer runs this script with that id: that is a sweep that never finished.
 #
@@ -52,6 +54,8 @@ lane_sweep_finished=0
 launch_lock=""
 launch_lock_owner=""
 lock_held=0
+runtime_dir=""
+runtime_cleanup=0
 # A reporter that exits 0 without having looked is worse than one that errors. Bash 3.2 reports
 # $? as 0 to an EXIT trap after a `set -u` abort, so completion is recorded explicitly: reaching
 # a deliberate exit is the only way a verdict leaves this script (the ci-job-wiring.sh pattern).
@@ -70,6 +74,9 @@ on_exit() {
       rc=2
     fi
     lock_held=0
+  fi
+  if [ "$runtime_cleanup" = 1 ] && [ -n "$runtime_dir" ]; then
+    rm -rf -- "$runtime_dir" || rc=2
   fi
   if [ "$lane_sweep_finished" != 1 ] && [ "$rc" -ne 2 ]; then
     printf '%s: aborted before finishing — UNKNOWN\n' "$prog" >&2
@@ -109,6 +116,10 @@ sweeper_name=${sweeper##*/}
 # The per-repository cleanup the sweeper runs for each repository of the lane.
 cleanup_name=worktree-cleanup.sh
 dir="$HOME/.claude/worktree-cleanup-manifests"
+# Match the supervisor's physical script path even when HOME uses a symlink.
+if [ -d "$dir" ]; then
+  dir=$(CDPATH='' cd -- "$dir" && pwd -P) || unknown "cannot resolve the records directory"
+fi
 log="$dir/cleanup-$lane.log"
 started="$dir/cleanup-$lane.started"
 finished="$dir/cleanup-$lane.finished"
@@ -518,12 +529,17 @@ stop_supervised_sweep() {
   printf '=== lane sweep %s stopped %s: exit 143 ===\n' "$id" "$(now)"
   write_record "$finished" "id=$id rc=143 at=$(now)" \
     || unknown "cannot record the stopped sweep $id in $finished"
+  runtime_cleanup=1
   finish 143
 }
 
 if [ "$cmd" = __supervise ]; then
   # Detached, with stdout and stderr appended to the lane's log by the launcher.
   [[ "$id" =~ ^$id_re$ ]] || unknown "--id is malformed: '$id'"
+  # Only a supervisor running from its own capture may release it.
+  if [ "$script_dir" = "$dir/runtime-$lane-$id/.claude/scripts" ]; then
+    runtime_dir="$dir/runtime-$lane-$id"
+  fi
   await_start_record || unknown "start record handshake for sweep $id was not completed"
   touch -- "$launch_lock/supervisor.$id" 2>/dev/null \
     || unknown "the launcher that started sweep $id no longer holds $launch_lock, so nothing was swept"
@@ -535,6 +551,7 @@ if [ "$cmd" = __supervise ]; then
   set +m
   if wait "$sweep_pid"; then rc=0; else rc=$?; fi
   trap - TERM INT HUP
+  runtime_cleanup=1
   printf '=== lane sweep %s finished %s: exit %s ===\n' "$id" "$(now)" "$rc"
   write_record "$finished" "id=$id rc=$rc at=$(now)" \
     || unknown "cannot record the end of sweep $id in $finished"
@@ -687,11 +704,59 @@ fi
 # replaces it: refusing would leave the lane unswept on every run until someone repaired one file,
 # and the disk would fill again.
 [ -x "$sweeper" ] || unknown "missing $sweeper"
+# No process of this lane is still using a runtime. Reap only this launcher's
+# named copies older than a day, left by an untrappable supervisor crash.
+for stale in "$dir/runtime-$lane-"*; do
+  stale_name=${stale##*/}
+  [[ "$stale_name" =~ ^runtime-$lane-$id_re$ ]] || continue
+  [ -d "$stale" ] && [ ! -L "$stale" ] || continue
+  expired=$(find "$stale" -prune -mtime +0 -print) || unknown "cannot age a previous runtime copy"
+  [ -z "$expired" ] || rm -rf -- "$stale" || unknown "cannot release a previous runtime copy"
+done
 new_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+# Resolve the target before detaching: this linked checkout may disappear (#4203).
+sweep_root=$(git -C "${WORKTREE_CLEANUP_ROOT:-$script_dir/../..}" rev-parse --show-toplevel 2>/dev/null) \
+  || unknown "cannot resolve the sweep's repository root"
+sweep_root=$(cd "$sweep_root" && pwd -P) || unknown "cannot resolve the sweep's physical root"
+if ! common=$(git -C "$sweep_root" rev-parse --git-common-dir 2>/dev/null) \
+  || ! common=$(cd "$sweep_root" && cd "$common" && pwd -P); then
+  unknown "cannot resolve the sweep's common git directory"
+fi
+case "$common" in
+  */.git)
+    main_root=${common%/.git}
+    if [ "$(git -C "$main_root" rev-parse --show-toplevel 2>/dev/null)" = "$main_root" ]; then
+      sweep_root=$main_root
+    fi
+    ;;
+esac
+# Capture only this sweep's executable dependencies and reviewed portfolio map.
+# Keep their relative layout, so no later helper read reaches back into the source.
+capture="$dir/runtime-$lane-$new_id"
+mkdir -m 700 -- "$capture" || unknown "cannot reserve the sweep's runtime directory"
+runtime_dir=$capture
+runtime_cleanup=1
+mkdir -p -- "$capture/.claude/scripts" || unknown "cannot create the runtime scripts directory"
+for helper in worktree-lane-sweep.sh worktree-cleanup-all.sh worktree-cleanup.sh worktree-claim-lib.sh; do
+  source_file="$script_dir/$helper"
+  target_file="$capture/.claude/scripts/$helper"
+  if [ ! -f "$source_file" ] || [ -L "$source_file" ] \
+    || ! cp -- "$source_file" "$target_file" || ! cmp -s -- "$source_file" "$target_file" \
+    || ! chmod 700 "$target_file"; then
+    unknown "cannot capture helper $helper unchanged"
+  fi
+done
+source_file="$script_dir/../../AGENTS.md"
+if [ ! -f "$source_file" ] || [ -L "$source_file" ] \
+  || ! cp -- "$source_file" "$capture/AGENTS.md" || ! cmp -s -- "$source_file" "$capture/AGENTS.md" \
+  || ! chmod 600 "$capture/AGENTS.md"; then
+  unknown "cannot capture the reviewed portfolio map unchanged"
+fi
+self="$capture/.claude/scripts/worktree-lane-sweep.sh"
 # nohup ignores HUP but still inherits the caller's process group. Give the supervisor its
 # own group so a scheduled command's teardown cannot kill it before it records the result.
 set -m
-nohup bash "$self" __supervise --lane "$lane" --id "$new_id" >>"$log" 2>&1 </dev/null &
+WORKTREE_CLEANUP_ROOT="$sweep_root" nohup bash "$self" __supervise --lane "$lane" --id "$new_id" >>"$log" 2>&1 </dev/null &
 pid=$!
 set +m
 if ! write_record "$started" "id=$new_id pid=$pid at=$(now)"; then
@@ -701,7 +766,7 @@ if ! write_record "$started" "id=$new_id pid=$pid at=$(now)"; then
 fi
 if await_supervisor "$pid" "$new_id"; then supervisor_said=0; else supervisor_said=$?; fi
 case "$supervisor_said" in
-  0) ;;
+  0) runtime_cleanup=0 ;; # the supervisor now owns its runtime copy
   1) unknown "supervisor $new_id (pid $pid) ended before it began the sweep — see the end of $log" ;;
   *)
     kill "$pid" 2>/dev/null || true
