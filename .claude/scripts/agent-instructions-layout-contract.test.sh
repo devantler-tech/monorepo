@@ -45,6 +45,7 @@ contract_text="${repo_root}/.claude/scripts/contract-text.sh"
 
 ROOT_BUDGET_BYTES=29696   # 29 KiB: leaves room under Codex's 32 KiB for a nested AGENTS.md
 CODEX_DOC_MAX_BYTES=32768 # Codex `project_doc_max_bytes` default
+REQUIRED_HEADROOM_BYTES=500 # Keep a usable editing margin below both limits (#3986).
 
 fail() {
   echo "agent-instructions layout contract: FAIL — $*" >&2
@@ -107,6 +108,8 @@ check_layout() {
   size="$(wc -c <"${agents}" | tr -d ' ')"
   [ "${size}" -le "${ROOT_BUDGET_BYTES}" ] ||
     { echo "root AGENTS.md is ${size} B, over its ${ROOT_BUDGET_BYTES} B budget — move procedures, evidence and edge cases into a guide"; return 1; }
+  [ "${size}" -le "$((ROOT_BUDGET_BYTES - REQUIRED_HEADROOM_BYTES))" ] ||
+    { echo "root AGENTS.md leaves less than 500 B headroom below its ${ROOT_BUDGET_BYTES} B budget — move topic detail into .claude/guides/definition-surfaces.md or its owning guide in the AGENTS.md index"; return 1; }
   while IFS= read -r nested; do
     [ -n "${nested}" ] || continue
     # Codex concatenates every AGENTS.md from the root down to the working directory, so the budget
@@ -121,6 +124,8 @@ check_layout() {
     done
     [ "${chain_size}" -le "${CODEX_DOC_MAX_BYTES}" ] ||
       { echo "the AGENTS.md chain down to ${nested} is ${chain_size} B, over Codex's ${CODEX_DOC_MAX_BYTES} B default — Codex would truncate it"; return 1; }
+    [ "${chain_size}" -le "$((CODEX_DOC_MAX_BYTES - REQUIRED_HEADROOM_BYTES))" ] ||
+      { echo "the AGENTS.md chain down to ${nested} leaves less than 500 B headroom below Codex's ${CODEX_DOC_MAX_BYTES} B limit — move topic detail into .claude/guides/tool-call-discipline.md or its owning guide in the AGENTS.md index"; return 1; }
     # 2. Claude shim beside every nested AGENTS.md
     if [ -e "${root}/CLAUDE.md" ]; then
       [ "$(cat "${root}/$(dirname "${nested}")/CLAUDE.md" 2>/dev/null)" = '@AGENTS.md' ] ||
@@ -233,6 +238,40 @@ expect_failure() { # <label> <expected substring>
 
 fixture
 check_layout "${scratch}/repo" >/dev/null || fail "the unmutated fixture does not pass — the controls below would prove nothing"
+
+# Leave a working margin before either hard ceiling (#3986). A root already past a
+# target is left intact so this control also catches the original near-limit layout.
+pad_fixture_to() {
+  local file="$1" target="$2" bytes
+  bytes="$(wc -c <"$file" | tr -d ' ')"
+  if [ "$bytes" -lt "$target" ]; then
+    head -c "$((target - bytes))" /dev/zero | tr '\0' 'x' >>"$file"
+  fi
+}
+
+fixture
+pad_fixture_to "${scratch}/repo/AGENTS.md" "$((ROOT_BUDGET_BYTES - 499))"
+expect_failure "root with only 499 bytes spare" "less than 500 B headroom"
+
+fixture
+fixture_root_size="$(wc -c <"${scratch}/repo/AGENTS.md" | tr -d ' ')"
+pad_fixture_to "${scratch}/repo/.claude/scripts/AGENTS.md" "$((CODEX_DOC_MAX_BYTES - 499 - fixture_root_size))"
+expect_failure "nested chain with only 499 bytes spare" "less than 500 B headroom"
+
+fixture
+fixture_root_size="$(wc -c <"${scratch}/repo/AGENTS.md" | tr -d ' ')"
+pad_fixture_to "${scratch}/repo/.claude/scripts/AGENTS.md" "$((CODEX_DOC_MAX_BYTES - 500 - fixture_root_size))"
+check_layout "${scratch}/repo" >/dev/null ||
+  fail "a chain retaining exactly 500 bytes of headroom was rejected"
+echo "ok   positive control: exactly 500 bytes of chain headroom"
+
+fixture
+mkdir -p "${scratch}/repo/.claude/scripts/deep"
+printf '# Deep instructions\n' >"${scratch}/repo/.claude/scripts/deep/AGENTS.md"
+printf '@AGENTS.md\n' >"${scratch}/repo/.claude/scripts/deep/CLAUDE.md"
+fixture_parent_size="$(( $(wc -c <"${scratch}/repo/AGENTS.md") + $(wc -c <"${scratch}/repo/.claude/scripts/AGENTS.md") ))"
+pad_fixture_to "${scratch}/repo/.claude/scripts/deep/AGENTS.md" "$((CODEX_DOC_MAX_BYTES - 499 - fixture_parent_size))"
+expect_failure "three-level chain with only 499 bytes spare" "less than 500 B headroom"
 
 fixture
 head -c "$((ROOT_BUDGET_BYTES + 1))" /dev/zero | tr '\0' 'x' >>"${scratch}/repo/AGENTS.md"
