@@ -254,6 +254,18 @@ pad_fixture_to "${scratch}/repo/AGENTS.md" "$((ROOT_BUDGET_BYTES - 499))"
 expect_failure "root with only 499 bytes spare" "less than 500 B headroom"
 
 fixture
+pad_fixture_to "${scratch}/repo/AGENTS.md" "$((ROOT_BUDGET_BYTES - 500))"
+# Isolate the root boundary from the separate nested-chain ceiling, retaining
+# every nested heading so the fixture's instruction links still resolve.
+for nested in .claude/scripts/AGENTS.md docs/AGENTS.md; do
+  sed -n '/^#/p' "${scratch}/repo/${nested}" >"${scratch}/headings"
+  mv "${scratch}/headings" "${scratch}/repo/${nested}"
+done
+check_layout "${scratch}/repo" >/dev/null ||
+  fail "a root retaining exactly 500 bytes of headroom was rejected"
+echo "ok   positive control: root exactly 500 bytes of headroom"
+
+fixture
 fixture_root_size="$(wc -c <"${scratch}/repo/AGENTS.md" | tr -d ' ')"
 pad_fixture_to "${scratch}/repo/.claude/scripts/AGENTS.md" "$((CODEX_DOC_MAX_BYTES - 499 - fixture_root_size))"
 expect_failure "nested chain with only 499 bytes spare" "less than 500 B headroom"
