@@ -1218,10 +1218,14 @@ EOF
     chmod +x "$fx/changed-bin/cp"
     out=$(HOME="$capture_home" PATH="$fx/changed-bin:$PATH" bash "$sut" start --lane codex 2>&1); rc=$?
   fi
+  if ! remaining_captures=$(find "$capture_home" -type d -name 'runtime-*'); then
+    bad "the $capture_case capture inventory is readable" "$remaining_captures"
+    continue
+  fi
   if [ "$rc" = 2 ] && grep -q 'cannot capture helper worktree-claim-lib.sh unchanged' <<<"$out" \
     && [ "$(started_sweeps)" = "$before" ] \
     && [ ! -e "$capture_home/.claude/worktree-cleanup-manifests/cleanup-codex.started" ] \
-    && ! find "$capture_home" -type d -name 'runtime-*' | grep -q .; then
+    && [ -z "$remaining_captures" ]; then
     ok "a $capture_case helper capture is UNKNOWN, starts nothing and releases its files"
   else bad "a $capture_case helper capture is UNKNOWN, starts nothing and releases its files" "$out"; fi
 done
