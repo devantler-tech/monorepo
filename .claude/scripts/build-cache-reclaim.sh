@@ -2304,7 +2304,9 @@ reclaim_codex_transcripts() {
     unknown=$((unknown + 1))
     return 0
   fi
-  line=$(bash "$helper" "$MODE" "${BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPT_DAYS:-14}" 2>&1)
+  # Hand over the lsof this sweep already resolved, unless the caller named one.
+  line=$(CODEX_TRANSCRIPT_RETENTION_LSOF="${CODEX_TRANSCRIPT_RETENTION_LSOF:-${LSOF_BIN:-}}" \
+    bash "$helper" "$MODE" "${BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPT_DAYS:-14}" 2>&1)
   rc=$?
   printf '%s\n' "$line" | sed 's/^codex-transcript-retention: /build-cache-reclaim: codex transcripts: /'
   if [ "$rc" -ne 0 ]; then

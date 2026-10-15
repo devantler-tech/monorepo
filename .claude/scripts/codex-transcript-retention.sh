@@ -23,16 +23,22 @@
 #
 # Environment (all optional):
 #   CODEX_TRANSCRIPT_RETENTION_HOME   the Codex home; default ${CODEX_HOME:-$HOME/.codex}
-#   CODEX_TRANSCRIPT_RETENTION_LSOF   the open-file lister; default `lsof`
+#   CODEX_TRANSCRIPT_RETENTION_LSOF   the open-file lister; default lsof from PATH, then
+#                                     /usr/sbin, /usr/bin, /bin
+#   CODEX_TRANSCRIPT_RETENTION_BATCH  files removed per re-checked batch; default 200
 #
 # SAFETY -- this deletes, so every rule below fails closed:
 #   * Only regular files named rollout-*.jsonl or rollout-*.jsonl.zst directly or below
 #     <home>/sessions and <home>/archived_sessions are considered. Symbolic links are never
 #     followed or removed, and a root that is itself a symbolic link is refused.
 #   * Only files this user owns, last written longer ago than min_age_days.
-#   * A file any process holds open is KEPT. When the open-file list cannot be read, nothing
-#     is removed at all.
-#   * The age is checked again immediately before each removal.
+#   * A file any process holds open is KEPT. The open-file list counts only when lsof exits 0
+#     with a non-empty list (a partial enumeration can print paths and still fail); otherwise
+#     nothing is removed at all.
+#   * Removal runs in small batches, and immediately before each one the open-file list is
+#     taken again and every file's age read again; only what is still closed and old goes.
+#   * A root that is a symbolic link (dangling or not), or that holds a path with a line
+#     break, or whose listing fails at any stage, is reported UNKNOWN and left untouched.
 #   * Nothing else in the Codex home is touched: not the thread database, not the logs, not
 #     the worktrees (those carry work in progress and are swept by the Codex lane's own
 #     worktree clean-up, which keeps anything uncommitted or unpushed).
@@ -71,10 +77,9 @@ fi
 MIN_AGE_MINUTES=$((MIN_AGE_DAYS * 1440))
 
 CODEX_HOME_DIR=${CODEX_TRANSCRIPT_RETENTION_HOME:-${CODEX_HOME:-${HOME:-}/.codex}}
-LSOF=${CODEX_TRANSCRIPT_RETENTION_LSOF:-lsof}
 ME=$(id -u) || { log 'UNKNOWN: cannot read the current user id' >&2; exit 2; }
 
-if [ ! -e "$CODEX_HOME_DIR" ]; then
+if [ ! -e "$CODEX_HOME_DIR" ] && [ ! -L "$CODEX_HOME_DIR" ]; then
   log "no Codex home at ${CODEX_HOME_DIR}; nothing to do"
   exit 0
 fi
@@ -89,16 +94,58 @@ CODEX_HOME_DIR=$(cd -P -- "$CODEX_HOME_DIR" && pwd -P) || {
   exit 2
 }
 
+BATCH=${CODEX_TRANSCRIPT_RETENTION_BATCH:-200}
+case "$BATCH" in '' | *[!0-9]* | 0*) log 'UNKNOWN: CODEX_TRANSCRIPT_RETENTION_BATCH must be a positive whole number'; exit 2 ;; esac
+
+# resolve_lsof prints a usable lsof: the override, then PATH, then the places it lives on
+# macOS and Linux, so a scheduled run with a short PATH does not turn this into a no-op.
+resolve_lsof() {
+  local candidate
+  if [ -n "${CODEX_TRANSCRIPT_RETENTION_LSOF:-}" ]; then
+    [ -x "$CODEX_TRANSCRIPT_RETENTION_LSOF" ] && { printf '%s' "$CODEX_TRANSCRIPT_RETENTION_LSOF"; return 0; }
+    return 1
+  fi
+  candidate=$(command -v lsof 2>/dev/null) && [ -x "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+  for candidate in /usr/sbin/lsof /usr/bin/lsof /bin/lsof; do
+    [ -x "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+  done
+  return 1
+}
+
+# open_snapshot <out> writes every path a process holds open, sorted. lsof's own status is
+# checked on its own: a partial enumeration can print plenty of paths and still exit
+# non-zero, and a path missing from a partial list would read as closed. So only a zero
+# exit with a non-empty list counts.
+open_snapshot() {
+  local rc
+  [ -n "$LSOF" ] || return 1
+  "$LSOF" -n -F n > "$1.raw" 2>/dev/null
+  rc=$?
+  [ "$rc" -eq 0 ] && [ -s "$1.raw" ] || return 1
+  sed -n 's/^n//p' "$1.raw" | LC_ALL=C sort -u > "$1" || return 1
+  [ -s "$1" ]
+}
+
 # list_old <root> <out> writes every transcript under <root> past the age line, one per line,
-# sorted. Transcript names never hold a newline; a path that does is left out of <out> and
-# counted in <out>.odd, so it is kept and the root reported UNKNOWN rather than mis-split.
+# sorted, and the number of paths holding a line break to <out>.odd. Every stage's status is
+# checked: a list cut short (a full disk is exactly when this runs) must never be acted on.
 list_old() {
   find "$1" -type f -user "$ME" \( -name 'rollout-*.jsonl' -o -name 'rollout-*.jsonl.zst' \) \
     -mmin +"$MIN_AGE_MINUTES" -print0 > "$2.nul" 2>/dev/null || return 1
   tr '\0\n' '\n\001' < "$2.nul" > "$2.raw" || return 1
-  grep -c $'\001' "$2.raw" > "$2.odd"
-  grep -v $'\001' "$2.raw" | LC_ALL=C sort -u > "$2"
+  awk 'index($0, "\001") > 0 { n++ } END { print n + 0 }' "$2.raw" > "$2.odd" || return 1
+  awk 'index($0, "\001") == 0' "$2.raw" | LC_ALL=C sort -u > "$2" || return 1
   return 0
+}
+
+# still_old <list> <out> writes the files of <list> that are still past the age line now.
+still_old() {
+  : > "$2" || return 1
+  [ -s "$1" ] || return 0
+  # shellcheck disable=SC2016 # The program is for the inner sh, which expands it.
+  tr '\n' '\0' < "$1" |
+    xargs -0 sh -c 'find "$@" -prune -type f -mmin +"$0" -print' "$MIN_AGE_MINUTES" 2>/dev/null |
+    LC_ALL=C sort -u > "$2"
 }
 
 # total_bytes <list> prints the summed size of the files a newline list names (BSD stat on
@@ -111,6 +158,8 @@ total_bytes() {
     tr '\n' '\0' < "$1" | xargs -0 stat -c %s -- 2>/dev/null | awk '{ s += $1 } END { printf "%d", s }'
   fi
 }
+
+count() { if [ -s "$1" ]; then wc -l < "$1" | tr -d ' '; else printf '0'; fi; }
 
 work=$(mktemp -d) || { log 'UNKNOWN: cannot create a work directory' >&2; exit 2; }
 retention_finished=0
@@ -126,23 +175,9 @@ on_exit() {
 }
 trap on_exit EXIT
 
-# One list of every path any process holds open, taken once. Field output (-F n) prints one
-# `n<path>` line per open file, which keeps paths with spaces whole.
-open_list="$work/open"
+LSOF=$(resolve_lsof) || LSOF=''
 lsof_ok=1
-if ! command -v "$LSOF" >/dev/null 2>&1; then
-  lsof_ok=0
-else
-  "$LSOF" -n -F n > "$work/lsof.raw" 2>/dev/null
-  lsof_rc=$?
-  # lsof exits 1 when it could not inspect some processes; a non-empty list is still usable.
-  if [ "$lsof_rc" -gt 1 ] || [ ! -s "$work/lsof.raw" ]; then
-    lsof_ok=0
-  else
-    sed -n "s/^n//p" "$work/lsof.raw" | LC_ALL=C sort -u > "$open_list"
-  fi
-fi
-
+open_snapshot "$work/open" || lsof_ok=0
 
 unknown=0
 candidates=0
@@ -152,13 +187,18 @@ kept_young=0
 failed=0
 bytes=0
 
-count() { if [ -s "$1" ]; then wc -l < "$1" | tr -d ' '; else printf '0'; fi; }
-
 for name in sessions archived_sessions; do
   root="$CODEX_HOME_DIR/$name"
+  # A link is refused before the existence test: a dangling one reads as absent otherwise,
+  # and a root nobody examined would let the run report clean.
+  if [ -L "$root" ]; then
+    log "UNKNOWN: ${root} is a symbolic link; nothing removed from it"
+    unknown=$((unknown + 1))
+    continue
+  fi
   [ -e "$root" ] || continue
-  if [ -L "$root" ] || [ ! -d "$root" ]; then
-    log "UNKNOWN: ${root} is not a plain directory; nothing removed from it"
+  if [ ! -d "$root" ]; then
+    log "UNKNOWN: ${root} is not a directory; nothing removed from it"
     unknown=$((unknown + 1))
     continue
   fi
@@ -169,10 +209,11 @@ for name in sessions archived_sessions; do
     continue
   fi
   odd=$(cat "$old.odd" 2>/dev/null)
-  case "$odd" in '' | *[!0-9]*) odd=0 ;; esac
+  case "$odd" in '' | *[!0-9]*) odd=1 ;; esac
   if [ "$odd" -gt 0 ]; then
-    log "UNKNOWN: ${odd} path(s) under ${root} hold a line break; kept"
+    log "UNKNOWN: ${odd} path(s) under ${root} hold a line break; nothing removed from it"
     unknown=$((unknown + 1))
+    continue
   fi
   n=$(count "$old")
   candidates=$((candidates + n))
@@ -180,7 +221,11 @@ for name in sessions archived_sessions; do
 
   # Drop every path a process holds open (both lists sorted the same way).
   closed="$work/$name.closed"
-  LC_ALL=C comm -23 "$old" "$open_list" > "$closed"
+  LC_ALL=C comm -23 "$old" "$work/open" > "$closed" || {
+    log "UNKNOWN: ${root} could not be compared with the open-file list; nothing removed from it"
+    unknown=$((unknown + 1))
+    continue
+  }
   c=$(count "$closed")
   kept_open=$((kept_open + n - c))
 
@@ -191,28 +236,46 @@ for name in sessions archived_sessions; do
     continue
   fi
 
-  # Ask again, immediately before removal, which of them are still past the age line, and
-  # remove only those: a transcript written to since the first read is kept.
-  again="$work/$name.again"
-  if ! list_old "$root" "$again"; then
-    log "UNKNOWN: ${root} could not be read again before removal; nothing removed from it"
+  # Remove in small batches. Immediately before each one, take a fresh open-file list and
+  # read each file's age again, and remove only what is still closed and still old: a
+  # transcript a session opened or wrote since the first read is kept. The gap left is the
+  # one between that re-check and the unlink, well under a second for a batch.
+  split -l "$BATCH" "$closed" "$work/$name.batch." 2>/dev/null || {
+    log "UNKNOWN: ${root} could not be split into batches; nothing removed from it"
     unknown=$((unknown + 1))
     continue
-  fi
-  doomed="$work/$name.doomed"
-  LC_ALL=C comm -12 "$closed" "$again" > "$doomed"
-  d=$(count "$doomed")
-  kept_young=$((kept_young + c - d))
-  b=$(total_bytes "$doomed")
-  [ "$d" -eq 0 ] || tr '\n' '\0' < "$doomed" | xargs -0 rm -f -- 2>/dev/null
-  # Count what is really gone rather than trusting rm's status for a whole batch.
-  left=0
-  while IFS= read -r f; do
-    if [ -e "$f" ] || [ -L "$f" ]; then left=$((left + 1)); fi
-  done < "$doomed"
-  removed=$((removed + d - left))
-  failed=$((failed + left))
-  if [ "$left" -eq 0 ]; then bytes=$((bytes + b)); fi
+  }
+  for batch in "$work/$name".batch.*; do
+    [ -s "$batch" ] || continue
+    bn=$(count "$batch")
+    if ! open_snapshot "$work/open.now"; then
+      log "UNKNOWN: the open-file list could not be read again; the rest of ${root} is kept"
+      unknown=$((unknown + 1))
+      break
+    fi
+    if ! still_old "$batch" "$batch.old"; then
+      log "UNKNOWN: ages under ${root} could not be read again; the rest of it is kept"
+      unknown=$((unknown + 1))
+      break
+    fi
+    LC_ALL=C comm -23 "$batch.old" "$work/open.now" > "$batch.doomed" || {
+      log "UNKNOWN: a batch under ${root} could not be compared; the rest of it is kept"
+      unknown=$((unknown + 1))
+      break
+    }
+    d=$(count "$batch.doomed")
+    kept_young=$((kept_young + bn - d))
+    b=$(total_bytes "$batch.doomed")
+    [ "$d" -eq 0 ] || tr '\n' '\0' < "$batch.doomed" | xargs -0 rm -f -- 2>/dev/null
+    # Count what is really gone rather than trusting rm's status for a whole batch.
+    left=0
+    while IFS= read -r f; do
+      if [ -e "$f" ] || [ -L "$f" ]; then left=$((left + 1)); fi
+    done < "$batch.doomed"
+    removed=$((removed + d - left))
+    failed=$((failed + left))
+    if [ "$left" -eq 0 ]; then bytes=$((bytes + b)); fi
+  done
 done
 
 if [ "$lsof_ok" != 1 ]; then

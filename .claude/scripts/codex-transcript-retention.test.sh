@@ -49,6 +49,7 @@ fake_lsof() {
   {
     printf '#!/usr/bin/env bash\n'
     printf 'printf "p1\\n"\n'
+    printf 'printf "n/dev/null\\n"\n'
     for p in "$@"; do printf 'printf "n%%s\\n" %q\n' "$p"; done
   } > "$bin/lsof"
   chmod +x "$bin/lsof"
@@ -148,6 +149,116 @@ else
 fi
 rm -f "$home/archived_sessions"
 rm -rf "$fixture/elsewhere"
+
+# --- a partial lsof enumeration (non-zero exit WITH output) removes nothing -----------
+seed
+{
+  printf '#!/usr/bin/env bash\nprintf "p1\\nn/dev/null\\n"\nexit 1\n'
+} > "$bin/lsof"
+chmod +x "$bin/lsof"
+run apply 14
+if [ "$rc" = 2 ] && [ -e "$old_live" ] && [ -e "$old_arch" ]; then
+  ok 'lsof exiting 1 with a non-empty list is treated as partial: exit 2, nothing removed'
+else
+  bad 'partial lsof fails closed' "rc=$rc out=$out"
+fi
+
+# --- a transcript opened after the first snapshot is kept ---------------------------
+seed
+calls="$fixture/lsof-calls"
+: > "$calls"
+cat > "$bin/lsof" <<LSOF
+#!/usr/bin/env bash
+printf 'x\n' >> '$calls'
+printf 'p1\nn/dev/null\n'
+if [ "\$(wc -l < '$calls')" -gt 1 ]; then printf 'n%s\n' '$old_arch'; fi
+LSOF
+chmod +x "$bin/lsof"
+run apply 14
+if [ "$rc" = 0 ] && [ -e "$old_arch" ] && [ ! -e "$old_live" ]; then
+  ok 'a transcript a session opens after the first open-file read is kept'
+else
+  bad 'late open kept' "rc=$rc out=$out"
+fi
+
+# --- a transcript written after the first scan is kept ------------------------------
+# Call 1 is the first open-file read, 2 the sessions/ batch, 3 the archived_sessions/ batch:
+# the write lands after archived_sessions/ was listed and before its batch is re-checked.
+seed
+: > "$calls"
+cat > "$bin/lsof" <<LSOF
+#!/usr/bin/env bash
+printf 'x\n' >> '$calls'
+printf 'p1\nn/dev/null\n'
+if [ "\$(wc -l < '$calls')" -gt 2 ]; then touch '$old_arch'; fi
+LSOF
+chmod +x "$bin/lsof"
+run apply 14
+if [ "$rc" = 0 ] && [ -e "$old_arch" ] && grep -q 'kept_written=1' <<<"$out"; then
+  ok 'a transcript written after the first scan is kept and reported as kept_written'
+else
+  bad 'late write kept' "rc=$rc out=$out"
+fi
+
+# --- a failing list stage removes nothing -------------------------------------------
+seed
+fake_lsof
+printf '#!/bin/sh\ncat > /dev/null\nexit 1\n' > "$bin/sort"
+chmod +x "$bin/sort"
+out=$(PATH="$bin:$PATH" CODEX_TRANSCRIPT_RETENTION_HOME="$home" CODEX_TRANSCRIPT_RETENTION_LSOF="$bin/lsof" \
+  bash "$impl" apply 14 2>&1)
+rc=$?
+rm -f "$bin/sort"
+if [ "$rc" = 2 ] && [ -e "$old_live" ] && [ -e "$old_arch" ]; then
+  ok 'a failing sort while building the lists exits 2 and removes nothing'
+else
+  bad 'failed list stage fails closed' "rc=$rc out=$out"
+fi
+
+# --- a path holding a line break keeps its whole root -------------------------------
+seed
+fake_lsof
+nl_dir="$home/sessions/2026/09/a
+b"
+mkdir -p "$nl_dir"
+printf 'x\n' > "$nl_dir/rollout-2026-09-05T00-00-00-nl.jsonl"
+age "$nl_dir/rollout-2026-09-05T00-00-00-nl.jsonl" 30
+run apply 14
+if [ "$rc" = 2 ] && [ -e "$old_live" ] && [ -e "$nl_dir/rollout-2026-09-05T00-00-00-nl.jsonl" ] && [ ! -e "$old_arch" ]; then
+  ok 'a line break in one path keeps that whole root (exit 2); the other root is still swept'
+else
+  bad 'line-break root kept' "rc=$rc out=$out"
+fi
+
+# --- a dangling root link is UNKNOWN, never absent ----------------------------------
+seed
+fake_lsof
+rm -rf "$home/sessions"
+ln -s "$fixture/does-not-exist" "$home/sessions"
+run apply 14
+rm -f "$home/sessions"
+if [ "$rc" = 2 ] && grep -q 'symbolic link' <<<"$out"; then
+  ok 'a dangling sessions link is reported UNKNOWN (exit 2), not skipped as absent'
+else
+  bad 'dangling root link' "rc=$rc out=$out"
+fi
+
+# --- lsof outside PATH is still found -----------------------------------------------
+fallback=''
+for c in /usr/sbin/lsof /usr/bin/lsof /bin/lsof; do [ -x "$c" ] && { fallback=$c; break; }; done
+if [ -n "$fallback" ]; then
+  seed
+  out=$(env -u CODEX_TRANSCRIPT_RETENTION_LSOF PATH="$fixture/emptybin:/usr/bin:/bin" \
+    CODEX_TRANSCRIPT_RETENTION_HOME="$home" /bin/bash "$impl" dry-run 14 2>&1)
+  rc=$?
+  if ! grep -q 'open-file list could not be read' <<<"$out" && grep -q 'would remove=' <<<"$out"; then
+    ok "lsof is resolved from ${fallback} when PATH does not hold it"
+  else
+    bad 'lsof fallback' "rc=$rc out=$out"
+  fi
+else
+  ok 'lsof fallback: no lsof on this host, case not applicable'
+fi
 
 # --- usage errors ------------------------------------------------------------------
 for args in 'apply 6' 'apply 0' 'apply 08x' 'apply 123456' 'delete 14'; do
