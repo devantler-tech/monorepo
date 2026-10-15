@@ -68,7 +68,9 @@ trap cleanup EXIT
 # does not count, so a spelling this parser does not understand fails closed as NOT-INVOKED rather
 # than being read as coverage.
 targets() {
-  awk '
+  # Only this ASCII shell lexer needs byte indexing; preserve the caller's locale
+  # for the other tools and keep Unicode source bytes intact (#4106).
+  LC_ALL=C awk '
     BEGIN { SEP = sprintf("%c", 1); STEP = "#contract-test-invocation:step-boundary#" }
     # Each workflow run step is its own shell: a trailing continuation or an unclosed heredoc in one
     # step never reaches the next, so the boundary between steps ends the pending command and resets
