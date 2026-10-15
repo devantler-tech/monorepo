@@ -49,7 +49,9 @@ accrete here, and a ratchet firing on every definition PR (safety fixes included
 raise into a reflex and destroy the signal. The always-on root `AGENTS.md` is different, because every
 session and every subagent dispatch pays for all of it: its budget, and Codex's 32 KiB read limit,
 are enforced by `agent-instructions-layout-contract.test.sh`. Growth that pushes against that budget
-belongs in a guide, not in a raised limit.
+belongs in its owning guide. The layout contract reserves at least **500 bytes of headroom** below
+both the root budget and every complete root-to-directory instruction chain's read limit, so a
+small edit does not consume the last readable bytes.
 
 ## Latency discipline — overlap the waiting, never block on it
 Token discipline above spends context well; this spends **wall-clock** well. The dominant cost of a

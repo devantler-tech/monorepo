@@ -236,20 +236,14 @@ personalised investment advice, and never puts private financial data in a publi
 
 ### Agent definition locations
 
-The Agent Improver may change only these surfaces; an installed or cached plugin copy is never one.
+The Agent Improver may change only the surfaces named in the
+[definition surfaces guide](.claude/guides/definition-surfaces.md#agent-definition-locations). Read it
+before editing a definition, schedule or permission; installed and cached plugin copies are never
+authoring targets.
 
-- **Version-controlled** (draft PR → merge): `AGENTS.md`, [agent guides](#agent-guides),
-  `.claude/scripts/*.test.sh`, `.github/workflows/ci.yaml`; observation surface:
-  `.claude/scripts/agent-telemetry.sh`; deployment surfaces under `.claude/` (the
-  `daily-maintainer` alias, the surveyor and procedure overlays, the `finops` skill and floor, the
-  plugin-consumption files, the instance registry and the portable loader); and, upstream, only the
-  `agentic-engineer` and `agent-improver` definitions and plugin manifest in
-  `devantler-tech/agent-plugins` plus the `agent-improvement/` skill in `devantler-tech/agent-skills`.
-  No other bundled skill is a surface; resolve a file's owner with `.claude/scripts/skill-owner.sh`.
-- **Runtime-local** (back up first, verify after a dispatch, record before and after): the Claude and
-  Codex schedule pointers and their permission and hook settings.
-
-Details: [definition surfaces guide](.claude/guides/definition-surfaces.md).
+- **Version-controlled**: `AGENTS.md`, guides, `.claude/scripts/*.test.sh`, `.github/workflows/ci.yaml`; observation surface:
+  `.claude/scripts/agent-telemetry.sh`; deployment surfaces under `.claude/`.
+- **Runtime-local**: schedules, permissions and hooks.
 
 ### Authority model
 
