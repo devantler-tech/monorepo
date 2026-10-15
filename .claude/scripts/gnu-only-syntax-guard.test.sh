@@ -317,6 +317,20 @@ if [[ "$(id -u)" != 0 ]]; then
   ok
 fi
 
+# Valid Unicode must not change the byte indices used for ASCII shell syntax (#4106).
+for scan_locale in C C.UTF-8; do
+  f="$(fixture unicode-clean 'case "$value" in …) : ;; esac')"
+  LC_ALL="$scan_locale" expect_clean "$scan_locale Unicode source" "$f"
+  f="$(fixture unicode-finding 'case "$value" in …) : ;; esac' 'date -d yesterday')"
+  LC_ALL="$scan_locale" expect_finding "$scan_locale Unicode source retains findings" date-d-without-bsd 3 "$f"
+  f="$(fixture unicode-unclosed 'case "$value" in …) : ;; esac' 'echo "…')"
+  LC_ALL="$scan_locale" run "$f"
+  [[ "$rc" -eq 2 ]] || fail "$scan_locale Unicode source with an open quote was not UNKNOWN"
+  grep -qF 'still open at the end of the file' "$tmp/err" ||
+    fail "$scan_locale open quote failed for the wrong reason: $err"
+  ok
+done
+
 # --- The real helper suite is clean ---------------------------------------------------------------
 run
 [[ $rc -eq 0 ]] || fail "the repository's bash scripts have GNU-only findings: $out"
