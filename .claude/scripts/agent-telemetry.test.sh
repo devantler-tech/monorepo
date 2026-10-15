@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# test-timeout-seconds: 1800
+# Full synthetic security and failure fixtures took 1508 seconds on the busy Mac (#4160).
 # agent-telemetry.test.sh — behavioural tests for agent-telemetry.sh
 #
 # Runs against synthetic fixtures in an isolated temp HOME, so the tests neither
@@ -685,6 +687,29 @@ check "reports Codex engineer dispatch advance" "$OUT" "MATCH persistence=CONFIR
 check "reports Codex improver dispatch advance" "$OUT" "MATCH persistence=CONFIRMED marker=1785222864850 baseline=1785222863000"
 check "proves staggered local starts"      "$OUT" "local simultaneous starts/day: 0"
 check "proves hourly engineer slots"       "$OUT" "local engineer slots scheduled/day: 48"
+
+# Schedule-only observations must not depend on unused transcript scratch.
+mkdir -p "$FIX/drift-no-scratch"
+cat > "$FIX/drift-no-scratch/mktemp" <<'EOF'
+#!/usr/bin/env bash
+echo called >> "$DRIFT_MKTEMP_TRACE"
+exit 1
+EOF
+chmod +x "$FIX/drift-no-scratch/mktemp"
+DRIFT_NO_SCRATCH=$(DRIFT_MKTEMP_TRACE="$FIX/drift-mktemp-calls" \
+  PATH="$FIX/drift-no-scratch:$PATH" run --section drift)
+drift_no_scratch_rc=$?
+if [ "$drift_no_scratch_rc" -eq 0 ] && [ ! -e "$FIX/drift-mktemp-calls" ] \
+   && grep -qF 'local engineer slots scheduled/day: 48' <<<"$DRIFT_NO_SCRATCH"; then
+  ok "drift retains its schedule observations without transcript scratch"
+else bad "drift must not require transcript scratch" "rc=$drift_no_scratch_rc"; fi
+SAFETY_SCRATCH_FAILURE=$(DRIFT_MKTEMP_TRACE="$FIX/drift-mktemp-calls" \
+  PATH="$FIX/drift-no-scratch:$PATH" run --section safety)
+safety_scratch_failure_rc=$?
+if [ "$safety_scratch_failure_rc" -eq 3 ] && [ -e "$FIX/drift-mktemp-calls" ] \
+   && grep -qF 'cannot create temp file' <<<"$SAFETY_SCRATCH_FAILURE"; then
+  ok "a required safety scratch failure still stops the scan"
+else bad "safety scratch refusal" "rc=$safety_scratch_failure_rc"; fi
 
 # ── steady state: no marker baseline, every pointer readable (#2621) ──────────
 # THE LIVE CASE, and the one no fixture covered: a *_MARKER_BASELINE exists only

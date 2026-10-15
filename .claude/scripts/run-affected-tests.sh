@@ -28,8 +28,10 @@
 #
 #   --list      print the selected scripts, run nothing
 #   --all       select every script any gated job runs. Slow: run it in the background.
-#   --timeout   per-script deadline in seconds (default 300). A script past it is sent TERM,
-#               then KILL five seconds later, and reported TIMEOUT.
+#   --timeout   override every per-script deadline in seconds. The default is 300 unless a
+#               suite declares "# test-timeout-seconds: N" in its opening comment header
+#               (1–3600 seconds). A script past its deadline receives TERM, then KILL five
+#               seconds later, and is reported TIMEOUT.
 #
 # Some scripts need setup their CI job performs first, such as an initialised submodule.
 # Such a script fails here the same way it would in a job missing that step; the log tail
@@ -48,6 +50,7 @@ base="origin/main"
 list_only=0
 select_all=0
 timeout_s=300
+timeout_explicit=0
 kill_grace_s=5
 ci_file=".github/workflows/ci.yaml"
 root=""
@@ -60,7 +63,7 @@ while [ "$#" -gt 0 ]; do
     --timeout)
       [ "$#" -ge 2 ] || die "--timeout needs seconds"
       case "$2" in ''|*[!0-9]*|0) die "--timeout must be a positive integer: '$2'" ;; esac
-      timeout_s="$2"; shift 2 ;;
+      timeout_s="$2"; timeout_explicit=1; shift 2 ;;
     --ci-file) [ "$#" -ge 2 ] || die "--ci-file needs a path"; ci_file="$2"; shift 2 ;;
     --root) [ "$#" -ge 2 ] || die "--root needs a directory"; root="$2"; shift 2 ;;
     -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
@@ -170,6 +173,33 @@ selected="$(jq -r --argjson hits "${hits_json}" '
   | sort_by(if .[2] == "mention" then 1 else 0 end)[]
   | @tsv' <<<"${jobs_json}")" || die "cannot read the gated jobs in ${ci_file}"
 
+# A measured slow suite may declare "# test-timeout-seconds: N" in its opening
+# comment header (#4160). Validate every declaration before any selected test runs;
+# no header retains 300 seconds, and an explicit --timeout remains the operator override.
+script_timeout() {
+  local file="$1" declaration value
+  declaration="$(awk '
+    NR > 40 { exit }
+    /^# test-timeout-seconds/ { print; next }
+    /^[[:space:]]*(#|$)/ { next }
+    { exit }
+  ' "$file")" || return 2
+  if [ -z "$declaration" ]; then
+    printf '%s\n' "$timeout_s"
+    return 0
+  fi
+  case "$declaration" in
+    '# test-timeout-seconds: '*) value=${declaration#'# test-timeout-seconds: '} ;;
+    *) echo "$file: invalid test-timeout-seconds header" >&2; return 2 ;;
+  esac
+  if ! [[ "$value" =~ ^[1-9][0-9]{0,3}$ ]] || [ "$value" -gt 3600 ]; then
+    echo "$file: invalid test-timeout-seconds header (one integer from 1 to 3600 required)" >&2
+    return 2
+  fi
+  if [ "$timeout_explicit" -eq 1 ]; then value="$timeout_s"; fi
+  printf '%s\n' "$value"
+}
+
 scripts=""
 runs=""
 missing=""
@@ -196,8 +226,9 @@ while IFS=$'\t' read -r wd s how; do
     unrunnable+="${p}"$'\n'
     continue
   fi
+  deadline="$(script_timeout "${p}")" || die "invalid test-timeout-seconds in ${p}"
   scripts+="${p}"$'\n'
-  runs+="${run_wd}"$'\t'"${s}"$'\t'"${p}"$'\t'"${how}"$'\n'
+  runs+="${run_wd}"$'\t'"${s}"$'\t'"${p}"$'\t'"${how}"$'\t'"${deadline}"$'\n'
 done <<<"${selected}"
 
 if [ -n "${missing}" ]; then
@@ -228,7 +259,7 @@ trap 'rm -rf "${logdir}"' EXIT
 set -m   # each background script gets its own process group, so a timeout kills its children too
 failed=0
 i=0
-while IFS=$'\t' read -r run_wd rel s how; do
+while IFS=$'\t' read -r run_wd rel s how test_timeout; do
   [ -n "${s}" ] || continue
   i=$((i + 1))
   log="${logdir}/${i}.log"
@@ -243,7 +274,7 @@ while IFS=$'\t' read -r run_wd rel s how; do
   # TERM first, then KILL after a short grace, so a script that ignores TERM cannot outlive
   # its deadline.
   # The marker records that the deadline fired, so a script that exits 0 on TERM is still a TIMEOUT.
-  ( sleep "${timeout_s}"; : >"${log}.timeout"; kill -TERM -- "-${pid}" 2>/dev/null; sleep "${kill_grace_s}"; kill -KILL -- "-${pid}" 2>/dev/null ) &
+  ( sleep "${test_timeout}"; : >"${log}.timeout"; kill -TERM -- "-${pid}" 2>/dev/null; sleep "${kill_grace_s}"; kill -KILL -- "-${pid}" 2>/dev/null ) &
   watchdog=$!
   wait "${pid}"
   rc=$?

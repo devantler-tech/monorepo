@@ -218,6 +218,33 @@ if [ "${rc}" -eq 0 ] && grep -q '^PASS .*scripts/alpha.test.sh' <<<"${out}"; the
 else bad "passing run: ${out} (rc=${rc})"; fi
 git checkout -q -- scripts/alpha.test.sh
 
+# A suite may declare a measured deadline in its initial comment header.
+cat > scripts/alpha.test.sh <<'EOF'
+#!/usr/bin/env bash
+# test-timeout-seconds: 1
+sleep 3
+EOF
+out="$(run)"; rc=$?
+if [ "$rc" -eq 1 ] && grep -q '^TIMEOUT .*scripts/alpha.test.sh' <<<"$out"; then
+  ok "a suite header sets its deadline without extra flags"
+else bad "declared deadline: $out (rc=$rc)"; fi
+out="$(run --timeout 5)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -q '^PASS .*scripts/alpha.test.sh' <<<"$out"; then
+  ok "an explicit --timeout overrides a suite declaration"
+else bad "explicit deadline override: $out (rc=$rc)"; fi
+
+for declaration in '0' 'soon' '3601' '01' $'2\n# test-timeout-seconds: 3'; do
+  printf '#!/usr/bin/env bash\n# test-timeout-seconds: %s\necho started > "%s"\n' \
+    "$declaration" "$tmp/deadline-started" > scripts/alpha.test.sh
+  rm -f "$tmp/deadline-started"
+  out="$(run 2>&1)"; rc=$?
+  if [ "$rc" -eq 2 ] && [ ! -e "$tmp/deadline-started" ] \
+     && grep -q 'invalid test-timeout-seconds' <<<"$out"; then
+    ok "invalid or repeated deadline is UNKNOWN before execution: $declaration"
+  else bad "invalid declaration: $out (rc=$rc)"; fi
+done
+git checkout -q -- scripts/alpha.test.sh
+
 : > stubborn/x
 start="$(date +%s)"
 out="$(run --ci-file .github/workflows/extra.yaml --timeout 2 2>&1)"; rc=$?

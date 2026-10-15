@@ -562,6 +562,11 @@ if want outcomes; then
   }
 fi
 
+# Drift reads definitions and schedules, so it needs none of the transcript
+# scratch files below. Avoid fifteen unused mktemp processes on each drift run (#4160).
+ERRTMP='' RAWTMP='' INJTMP='' PROVTMP='' CONCTMP='' INJSNAP='' CREDCONC='' CREDPROV=''
+SIGTMP='' XFTMP='' XFREL='' XFDENY='' XFINJ='' XFBUILD='' XFA2A=''
+if [ "$SECTION" != drift ]; then
 # Scratch file for the error-signature pass. `mktemp` (0600, unpredictable name)
 # rather than a guessable `/tmp/.name.$$`, and removed on ANY exit including a
 # signal — a predictable world-readable path holding raw error text is a leak
@@ -621,6 +626,8 @@ cred_blob_set=''
 # Its OWN scratch, never $CONCTMP. The injection-concentration pass owns that
 # one, and sharing it would make two sections' results depend on which ran last.
 SIGTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_sig.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+fi
+# Keep the same signal termination even when drift has no scratch to remove.
 # Remove on normal exit; on a SIGNAL also terminate, since a trap that only
 # cleans up leaves the script running after the scheduler asked it to stop.
 trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP" "$XFREL" "$XFDENY" "$XFINJ" "$XFBUILD" "$XFA2A"' EXIT
