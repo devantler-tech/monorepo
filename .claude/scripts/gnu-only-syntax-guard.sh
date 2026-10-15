@@ -104,7 +104,9 @@ for f in "${files[@]}"; do
 done
 
 scan="$(
-  awk -v q="'" '
+  # The shell lexer indexes ASCII syntax one byte at a time. Keep multibyte
+  # source text intact without mixing byte indices and locale decoding (#4106).
+  LC_ALL=C awk -v q="'" '
     BEGIN {
       # The `@` of `-newer?t @…` may be bare, quoted (`Q@` in the code view) or inside a payload.
       newer_epoch = "-newer[A-Za-z]t[ \t]+(Q|[\"" q "])?@"
