@@ -241,6 +241,10 @@ The Agent Improver may change only the surfaces named in the
 before editing a definition, schedule or permission; installed and cached plugin copies are never
 authoring targets.
 
+- **Version-controlled**: `AGENTS.md`, guides, `.claude/scripts/*.test.sh`, `.github/workflows/ci.yaml`; observation surface:
+  `.claude/scripts/agent-telemetry.sh`; deployment surfaces under `.claude/`.
+- **Runtime-local**: schedules, permissions and hooks.
+
 ### Authority model
 
 The Agent Improver's **full symmetric authority** covers prose and enforcement on named surfaces,
