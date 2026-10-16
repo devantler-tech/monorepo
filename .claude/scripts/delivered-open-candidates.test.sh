@@ -196,6 +196,26 @@ gql 212 0 "" ""
 mention 212 '2120:merged:https://github.com/o/r/issues/212#issuecomment-123'
 check "a local comment fragment retains its issue reference" 1 "merged=1 open=0" "" --issue o/r#212
 
+gql 213 0 "" ""
+mention 213 '2130:merged:https://other.example/path/https://github.com/o/r/issues/213'
+check "a local-looking substring inside a foreign URL stays foreign" 0 "merged=0 open=0" "CANDIDATE-SINGLE" --issue o/r#213
+
+gql 214 0 "" ""
+mention 214 '2140:merged:https://other.example/?next=https://github.com/o/r/issues/214'
+check "a redirect query cannot impersonate a local issue URL" 0 "merged=0 open=0" "CANDIDATE-SINGLE" --issue o/r#214
+
+gql 215 0 "" ""
+mention 215 '2150:merged:https://github.com/o/r/issues/215.md'
+check "a filename suffix is not an issue route" 0 "merged=0 open=0" "CANDIDATE-SINGLE" --issue o/r#215
+
+gql 216 0 "" ""
+mention 216 '2160:merged:Delivered [#216] without a link.'
+check "plain bracketed references retain their meaning" 1 "merged=1 open=0" "" --issue o/r#216
+
+gql 217 0 "" ""
+mention 217 '2170:merged:https://github.com/o/r/issues/217!'
+check "sentence punctuation does not hide a canonical issue URL" 1 "merged=1 open=0" "" --issue o/r#217
+
 # 7 — two pages accumulate
 gql 7 2 "c2" "" "$(pr xref 70 MERGED)"
 gql 7 2 "" "-c2" "$(pr xref 71 MERGED)"

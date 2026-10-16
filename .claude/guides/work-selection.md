@@ -206,6 +206,7 @@ governs the issue work that follows.) Two rules enforce that:
      (or `--oldest <N> --type <Type>` for the head of a rung) counts them, open PRs and closing
      references included (monorepo#2967). `CANDIDATE-SINGLE` is the delivered-but-open shape to
      verify first. `CANDIDATE-MULTI` is often an umbrella, so read its sub-issues before judging.
+     Go parses link destinations locally; the helper needs Go and uses its normal build cache.
      Exit `2` is UNKNOWN, never "no PR". A `DEFERRED` diagnostic at that same exit code means the
      search allowance left issues unchecked: keep completed verdicts and use the printed continuation
      once the allowance recovers. Each invocation uses at most one quarter of the available allowance;

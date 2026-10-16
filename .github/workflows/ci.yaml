@@ -809,6 +809,8 @@ jobs:
             delivered-open-candidates:
               - '.claude/scripts/delivered-open-candidates.sh'
               - '.claude/scripts/delivered-open-candidates.test.sh'
+              - '.claude/scripts/issue-body-references-go/**'
+              - '.github/workflows/ci.yaml'
             lane-draft-count:
               # AGENTS.md carries the cap the suite compares the script's default against, so a
               # threshold change must run this test.
@@ -2655,6 +2657,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up Go for body-reference parsing
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/issue-body-references-go/go.mod
+          cache: false
+      - name: Test the body-reference parser
+        run: go -C .claude/scripts/issue-body-references-go test ./...
       - name: Verify the delivered-open candidate listing
         run: bash .claude/scripts/delivered-open-candidates.test.sh
 
