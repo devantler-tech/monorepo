@@ -40,6 +40,130 @@ export PORTFOLIO_PATHS="$FIX"
 export CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant
 export CODEX_ENGINEER_ENTRIES=daily-ai-engineer
 
+# #4089: the raw phrase counter is historical evidence, not a writer-collision verdict.
+# Removing the tool-id join would make the failed-search control count as an edit.
+mkdir -p "$FIX/stale-edit" "$FIX/nocodex"
+stale_edit_report() {
+  CLAUDE_PROJECTS_DIR="$FIX/stale-edit" CODEX_HOME="$FIX/nocodex" \
+    MONOREPO_DIR="$SCRIPT_DIR/../.." HOME="$FIX" \
+    bash "$TARGET" --since-days 3650 --section a2a 2>&1
+}
+for tool in Bash Edit Write MultiEdit; do
+  jq -cn --arg tool "$tool" \
+    '{type:"assistant",message:{content:[{type:"tool_use",id:"edit-1",name:$tool,input:{}}]}}' \
+    > "$FIX/stale-edit/s.jsonl"
+  printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"edit-1","is_error":true,"content":"File has been modified since read"}]}}' \
+    >> "$FIX/stale-edit/s.jsonl"
+  OUT=$(stale_edit_report)
+  stale_status=$?
+  if [ "$stale_status" -eq 0 ]; then ok "$tool returns a measured result"
+  else bad "$tool returns a measured result" "exit=$stale_status"; fi
+  check "$tool preserves the historical raw signal" "$OUT" "file two-writer races ...... 1"
+  if [ "$tool" = Bash ]; then expected=0; else expected=1; fi
+  check "$tool is classified by its actual invocation" "$OUT" "stale-edit candidates v1 ... $expected"
+  check "$tool leaves unmeasured coverage outside the checked series" "$OUT" "remain UNKNOWN; v1 does not evaluate either"
+done
+nocheck "unmeasured provenance is not presented as a checked count" "$OUT" "confirmed writer collisions ."
+# An unresolved invocation is unknown attribution, not an empty candidate set.
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"missing","is_error":true,"content":"File has been modified since read"}]}}' \
+  > "$FIX/stale-edit/s.jsonl"
+OUT=$(stale_edit_report)
+stale_status=$?
+check "an unmatched error is not a clean zero" "$OUT" "stale-edit candidates v1 ... UNKNOWN"
+check "unmatched errors retain their observed count" "$OUT" "unattributed stale-edit errors: 1"
+if [ "$stale_status" -eq 2 ]; then ok "unmatched attribution exits UNKNOWN"
+else bad "unmatched attribution exits UNKNOWN" "exit=$stale_status"; fi
+# A tool-result-shaped object inside a returned example is data, not another result.
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","is_error":false,"content":[{"type":"tool_result","tool_use_id":"missing","is_error":true,"content":"File has been modified since read"}]}]}}' \
+  > "$FIX/stale-edit/s.jsonl"
+OUT=$(stale_edit_report)
+check "nested examples do not become candidates" "$OUT" "stale-edit candidates v1 ... 0"
+check "unsupported runtime coverage stays explicit" "$OUT" "Coverage note: distinct-writer provenance and Codex error attribution"
+# A duplicate call id cannot identify a unique invocation, even if the first was an edit.
+printf '%s\n' \
+  '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"ambiguous","name":"Edit"},{"type":"tool_use","id":"ambiguous","name":"Bash"}]}}' \
+  '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"ambiguous","is_error":true,"content":"File has been modified since read"}]}}' \
+  > "$FIX/stale-edit/s.jsonl"
+OUT=$(stale_edit_report)
+check "duplicate call ids cannot certify a non-edit" "$OUT" "stale-edit candidates v1 ... UNKNOWN"
+printf '%s\n' \
+  '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"later","is_error":true,"content":"File has been modified since read"}]}}' \
+  '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"later","name":"Edit"}]}}' \
+  > "$FIX/stale-edit/s.jsonl"
+OUT=$(stale_edit_report)
+check "a later call cannot explain an earlier result" "$OUT" "stale-edit candidates v1 ... UNKNOWN"
+printf '%s\n' \
+  '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"ok","name":"Edit"}]}}' \
+  '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"ok","is_error":false,"content":[{"type":"text","text":"File has been modified since read"}]}]}}' \
+  > "$FIX/stale-edit/s.jsonl"
+OUT=$(stale_edit_report)
+check "successful edits quoting the phrase are not candidates" "$OUT" "stale-edit candidates v1 ... 0"
+# jq can read plausible earlier records before it encounters an invalid tail.
+printf '%s\n' '{"type":' >> "$FIX/stale-edit/s.jsonl"
+OUT=$(stale_edit_report)
+stale_status=$?
+check "a partial file cannot publish earlier clean counts" "$OUT" "stale-edit candidates v1 ... UNKNOWN (incomplete extraction)"
+nocheck "a partial file publishes no clean candidate aggregate" "$OUT" "stale-edit candidates v1 ... 0"
+if [ "$stale_status" -eq 2 ]; then ok "partial extraction exits UNKNOWN"
+else bad "partial extraction exits UNKNOWN" "exit=$stale_status"; fi
+: > "$FIX/stale-edit/s.jsonl"
+OUT=$(stale_edit_report)
+stale_status=$?
+check "an empty selected file is unproven" "$OUT" "stale-edit candidates v1 ... UNKNOWN (incomplete extraction)"
+if [ "$stale_status" -eq 2 ]; then ok "an empty selected file exits UNKNOWN"
+else bad "an empty selected file exits UNKNOWN" "exit=$stale_status"; fi
+# An observed Codex session cannot provide evidence for the Claude-only series.
+mkdir -p "$FIX/stale-no-claude" "$FIX/stale-codex/sessions"
+jq -cn --arg cwd "$FIX/stale-codex" '{type:"session_meta",payload:{cwd:$cwd}}' \
+  > "$FIX/stale-codex/sessions/s.jsonl"
+printf '%s\n' '{"type":"response_item","payload":{"type":"function_call_output","output":"has been modified since read"}}' \
+  >> "$FIX/stale-codex/sessions/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/stale-no-claude" CODEX_HOME="$FIX/stale-codex" \
+  MONOREPO_DIR="$SCRIPT_DIR/../.." HOME="$FIX" bash "$TARGET" --since-days 3650 --section a2a 2>&1)
+stale_status=$?
+check "the unsupported-runtime control actually admits its session" "$OUT" "codex sessions in window ... 1"
+check "no Claude observation cannot certify zero candidates" "$OUT" "stale-edit candidates v1 ... UNKNOWN"
+nocheck "no Claude observation publishes no clean candidate count" "$OUT" "stale-edit candidates v1 ... 0"
+if [ "$stale_status" -eq 2 ]; then ok "an unsupported-only cohort exits UNKNOWN"
+else bad "an unsupported-only cohort exits UNKNOWN" "exit=$stale_status"; fi
+printf '%s\n' \
+  '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"mixed","name":"Bash"}]}}' \
+  '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"mixed","is_error":true,"content":"File has been modified since read"}]}}' \
+  > "$FIX/stale-edit/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/stale-edit" CODEX_HOME="$FIX/stale-codex" \
+  MONOREPO_DIR="$SCRIPT_DIR/../.." HOME="$FIX" bash "$TARGET" --since-days 3650 --section a2a 2>&1)
+stale_status=$?
+check "a mixed cohort can measure its supported subset" "$OUT" "stale-edit candidates v1 ... 0"
+if [ "$stale_status" -eq 0 ]; then ok "a completely observed supported subset exits zero"
+else bad "a completely observed supported subset exits zero" "exit=$stale_status"; fi
+for first_tool in Edit Bash; do
+  if [ "$first_tool" = Edit ]; then later_tool=Bash; else later_tool=Edit; fi
+  jq -cn --arg tool "$first_tool" \
+    '{type:"assistant",message:{content:[{type:"tool_use",id:"replayed",name:$tool}]}}' \
+    > "$FIX/stale-edit/s.jsonl"
+  printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"replayed","is_error":true,"content":"File has been modified since read"}]}}' \
+    >> "$FIX/stale-edit/s.jsonl"
+  jq -cn --arg tool "$later_tool" \
+    '{type:"assistant",message:{content:[{type:"tool_use",id:"replayed",name:$tool}]}}' \
+    >> "$FIX/stale-edit/s.jsonl"
+  OUT=$(stale_edit_report)
+  stale_status=$?
+  check "a later duplicate invalidates the earlier $first_tool attribution" "$OUT" "stale-edit candidates v1 ... UNKNOWN"
+  if [ "$stale_status" -eq 2 ]; then ok "a later duplicate after $first_tool exits UNKNOWN"
+  else bad "a later duplicate after $first_tool exits UNKNOWN" "exit=$stale_status"; fi
+done
+for shape in '{}' '{"type":"unrecognized","payload":{}}' '{"type":"assistant"}' \
+  '{"type":"user","message":{"content":[{"type":"tool_result","is_error":"true","content":"File has been modified since read"}]}}' \
+  '{"type":"user","message":{"content":[{"type":"tool_result","is_error":true,"content":{}}]}}'; do
+  printf '%s\n' "$shape" > "$FIX/stale-edit/s.jsonl"
+  OUT=$(stale_edit_report)
+  stale_status=$?
+  check "unrecognized input is not a native observation: $shape" "$OUT" "stale-edit candidates v1 ... UNKNOWN"
+  if [ "$stale_status" -eq 2 ]; then ok "unrecognized native input exits UNKNOWN: $shape"
+  else bad "unrecognized native input exits UNKNOWN: $shape" "exit=$stale_status"; fi
+done
+# End stale-edit classification regression.
+
 # #3830: no runtime phrase means no runtime normalisation work. Instrument the
 # real redactor, retaining its output, rather than relying on wall-clock timing.
 mkdir -p "$FIX/injempty"
@@ -4144,12 +4268,17 @@ esac
 exec "$SAFETY_TEST_RMDIR" "$@"
 EOF
 chmod +x "$FIX/safety-controller-cleanup-shim/rmdir"
+# A zero-exit cleanup control needs a complete corpus. Malformed candidate-scan
+# fixtures deliberately make the independent A2A observation UNKNOWN.
+mkdir -p "$FIX/safety-controller-clean-corpus"
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"text","text":"ordinary controller cleanup record"}]}}' \
+  > "$FIX/safety-controller-clean-corpus/s.jsonl"
 rm -f "$FIX/safety-controller-cleanup-started"
 controller_cleanup_start=$(date +%s)
 CONTROLLER_CLEANUP_BOUNDED=$(PATH="$FIX/safety-controller-cleanup-shim:$PATH" \
   SAFETY_TEST_RMDIR="$(command -v rmdir)" \
   SAFETY_CONTROLLER_CLEANUP_STARTED="$FIX/safety-controller-cleanup-started" \
-  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  CLAUDE_PROJECTS_DIR="$FIX/safety-controller-clean-corpus" CODEX_HOME="$FIX/nocodex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
   bash "$TARGET" --since-days 3650 --safety-timeout-seconds 30 2>&1)
 controller_cleanup_bounded_rc=$?
@@ -10204,6 +10333,11 @@ check "archived Codex run: a missing archive folder reads zero, not an error" "$
 # address is accepted in the same exact forms as the folder's remote, and only
 # when the folder is gone.
 mkdir -p "$FIX/cxgone/archived_sessions" "$FIX/cxgone/worktrees/kept/monorepo" "$FIX/empty"
+# Scope tests require a complete supported-runtime control when judging an A2A
+# exit status. The separate Codex-only regression above still requires UNKNOWN.
+mkdir -p "$FIX/cx-scope-control/-Users-x-git-personal-monorepo"
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"text","text":"ordinary scope control"}]}}' \
+  > "$FIX/cx-scope-control/-Users-x-git-personal-monorepo/s.jsonl"
 cxgone_file() { # $1 = name, $2 = recorded cwd, $3 = git record (JSON object or empty), $4 = sleep seconds
   local meta
   if [ -n "$3" ]; then meta="{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$2\",\"git\":$3}}"
@@ -10213,7 +10347,7 @@ cxgone_file() { # $1 = name, $2 = recorded cwd, $3 = git record (JSON object or 
     >> "$FIX/cxgone/archived_sessions/$1.jsonl"
 }
 cxgone_run() { # $1 = section
-  CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxgone" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
+  CLAUDE_PROJECTS_DIR="$FIX/cx-scope-control" CODEX_HOME="$FIX/cxgone" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
     PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
     bash "$TARGET" --since-days 3650 --section "$1" 2>&1
 }
@@ -10368,19 +10502,19 @@ if [ "$(id -u)" -ne 0 ]; then
   mkdir -p "$FIX/cxlocked/sessions" "$FIX/cxlocked/archived_sessions"
   cxarch_file "$FIX/cxlocked/sessions/rollout-live.jsonl" "$FIX/cxlocked" "ok"
   chmod 000 "$FIX/cxlocked/archived_sessions"
-  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxlocked" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/cx-scope-control" CODEX_HOME="$FIX/cxlocked" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
         bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
   chmod 700 "$FIX/cxlocked/archived_sessions"
   check "unreadable Codex folder: the report names it as unknown" "$OUT" "UNKNOWN: the Codex folder archived_sessions/ exists but could not be read in full"
   if [ "$rc" -eq 2 ]; then ok "unreadable Codex folder: exit 2"; else bad "unreadable Codex folder: exit 2" "exit $rc"; fi
   # The same corpus once readable is a known reading again.
-  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxlocked" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/cx-scope-control" CODEX_HOME="$FIX/cxlocked" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
         bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
   nocheck "readable Codex folders: no unknown line" "$OUT" "UNKNOWN: the Codex folder"
   if [ "$rc" -eq 0 ]; then ok "readable Codex folders: exit 0"; else bad "readable Codex folders: exit 0" "exit $rc"; fi
   # One transcript that cannot be opened is the same unknown, not a transcript out of scope.
   chmod 000 "$FIX/cxlocked/sessions/rollout-live.jsonl"
-  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxlocked" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/cx-scope-control" CODEX_HOME="$FIX/cxlocked" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
         bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
   chmod 600 "$FIX/cxlocked/sessions/rollout-live.jsonl"
   check "unreadable Codex transcript: the report names its folder as unknown" "$OUT" "UNKNOWN: the Codex folder sessions/ exists but could not be read in full"
