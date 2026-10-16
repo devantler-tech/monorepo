@@ -323,7 +323,9 @@ the account and that **an admin must raise the limit in the Cursor dashboard**. 
   need what the lanes published since then (#3973). It prints one `LANE-HEALTH` line per lane: `OK`, `LIMITED` (a rate limit
   that clears on its own), `DOWN` (`MAINTAINER-ONLY` for a usage limit), or `NO-EVIDENCE`. A
   `LIMITED` line ends with `until=<UTC>` when the refusal stated its retry window, and adds `elapsed`
-  once that time has passed. Do not request that lane before `until`: go to the next lane or a
+  once that time has passed. That time includes a one-minute margin when the wait states no
+  seconds; waits with explicit seconds need no margin (#4101). Do not request that lane before
+  `until`: go to the next lane or a
   *Local review round* instead (#3007). A `LIMITED` line without `until` says only when the lane
   refused, not when it frees up. It exits
   `1` when any lane is `DOWN` and `2` when it could not read everything. First verify current applicable unavailability, then stop requesting a `DOWN` lane

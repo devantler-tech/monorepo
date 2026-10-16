@@ -158,12 +158,15 @@ window() { # <label> <refusal text appended to the stub's rate-limit comment> <e
   RL_WINDOW="$2" PATH="$bin:$PATH" run --org o --since 2026-09-14
   expect "$1" 1 "cr=LIMITED rate-limit at 2026-09-21T12:00:00Z last-review 2026-09-21T09:00:00Z $3"
 }
-window "included-review wording" '\\n> **Next included review available in 51 minutes.**' "until=2026-09-21T12:51:00Z elapsed"
-window "colon wording" '\\n> Next review available in: 16 minutes' "until=2026-09-21T12:16:00Z elapsed"
-window "bold hours wording" '\\n> Next review available in:** **3 hours and 5 minutes**' "until=2026-09-21T15:05:00Z"
+window "included-review wording" '\\n> **Next included review available in 51 minutes.**' "until=2026-09-21T12:52:00Z elapsed"
+window "colon wording" '\\n> Next review available in: 16 minutes' "until=2026-09-21T12:17:00Z elapsed"
+window "bold hours wording" '\\n> Next review available in:** **3 hours and 5 minutes**' "until=2026-09-21T15:06:00Z"
 grep -qF "elapsed" "$tmp/out" && fail "a window ending after now must not say elapsed"
-window "hours only" '\\n> available in 1 hour.' "until=2026-09-21T13:00:00Z elapsed"
+window "hours only" '\\n> available in 1 hour.' "until=2026-09-21T13:01:00Z elapsed"
 window "seconds wording" '\\n> **Next included review available in 40 seconds.**' "until=2026-09-21T12:00:40Z elapsed"
+window "explicit zero seconds" '\\n> available in 2 minutes and 0 seconds.' "until=2026-09-21T12:02:00Z elapsed"
+window "hours minutes and seconds" '\\n> available in 1 hour, 5 minutes and 7 seconds.' "until=2026-09-21T13:05:07Z elapsed"
+window "zero whole minutes" '\\n> available in 0 minutes.' "until=2026-09-21T12:01:00Z elapsed"
 
 CAUTION_REVIEW=1 PATH="$bin:$PATH" run --org o --since 2026-09-14
 expect "outside-diff review" 1 "cr=LIMITED rate-limit at 2026-09-21T12:00:00Z last-review 2026-09-21T11:50:00Z"
@@ -182,8 +185,8 @@ sweep() { # [checker arguments] — one cached-mode run against the stub, counti
   PATH="$bin:$PATH" run --org o --since 2026-09-14 --cache-seconds 900 "$@"
   n="$(calls)"
 }
-cached="$tmp/cache/o.2026-09-14.60.events"
-head_line="# review-lane-health sweep org=o since=2026-09-14 limit=60 at="
+cached="$tmp/cache/o.2026-09-14.60.v2.events"
+head_line="# review-lane-health sweep-v2 org=o since=2026-09-14 limit=60 at="
 
 sweep
 if [ "$rc" -ne 1 ] || [ "$n" -lt 5 ]; then fail "the first call must sweep (rc=$rc, $n gh calls)"; fi
@@ -202,6 +205,19 @@ cmp -s "$tmp/out" "$tmp/live-out" ||
   { diff "$tmp/live-out" "$tmp/out" >&2; fail "a reused sweep must print the live sweep's verdicts"; }
 grep -qF "reusing the sweep" "$tmp/err" || fail "a reused sweep must be announced"
 
+# An older concurrent collector writes its original cache key. It must not evict
+# the current result and make both collectors repeat the expensive sweep.
+sed '1s/review-lane-health sweep[^ ]*/review-lane-health sweep/' "$cached" >"$tmp/older-writer"
+mv "$tmp/older-writer" "$tmp/cache/o.2026-09-14.60.events"
+sweep
+[ "$n" -eq 0 ] || fail "an older collector's cache write must not evict the current sweep"
+
+# Older sweeps contain rounded-down retry times (#4101), so collect them again.
+sed '1s/review-lane-health sweep[^ ]*/review-lane-health sweep/' "$cached" >"$tmp/legacy-cache"
+mv "$tmp/legacy-cache" "$cached"
+sweep
+[ "$n" -gt 0 ] || fail "a sweep without the retry-margin version must not be reused"
+
 # Never past its lifetime, never from the future, never for other arguments, never when --refresh asks.
 at=$((now + 900)) sweep
 [ "$n" -eq 0 ] || fail "a sweep exactly at its lifetime is still usable, got $n gh calls"
@@ -217,7 +233,7 @@ sweep
 [ "$n" -eq 0 ] || fail "the sweep just stored must be reused, got $n gh calls"
 sweep --limit 5
 [ "$n" -gt 0 ] || fail "a sweep for another --limit must not be reused"
-cp "$cached" "$tmp/cache/o.2026-09-14.7.events"
+cp "$cached" "$tmp/cache/o.2026-09-14.7.v2.events"
 sweep --limit 7
 [ "$n" -gt 0 ] || fail "a stored sweep whose first line names other arguments must not be reused"
 sweep --refresh
