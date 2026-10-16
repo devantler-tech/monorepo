@@ -32,14 +32,19 @@
 # It never edits the plugin cache. The cache is read-only evidence; every mutation here goes through
 # the runtime's own control plane, which is what AGENTS.md authorises.
 #
-# Usage: plugin-definition-refresh.sh [--repo-root DIR] [--plugins-root DIR] [--gitlink SHA]
+# Usage: plugin-definition-refresh.sh [--repo-root DIR] [--plugins-root DIR]
+#                                     [--adopted-ref COMMIT | --gitlink SHA]
 #                                     [--marketplace NAME]
 #                                     [--plugin-id ID] [--submodule-path PATH]
 #                                     [--cli PATH] [--verify-cmd PATH] [--dry-run] [--quiet]
 #
 # --verify-cmd names the post-apply check (default: .claude/scripts/plugin-definition-currency.sh).
-# It is invoked with --repo-root, --plugins-root, --plugin-id, --plugin-name, --gitlink and
-# --submodule-path, all bound to the values this run gated on, and its exit status IS the verdict:
+# --adopted-ref takes the full consumer commit printed by the currency check. Its pin and runtime
+# file list stay bound to that commit through verification (monorepo#3977); an unreadable commit
+# is UNKNOWN before any runtime change. Without it, --gitlink or the working tree's HEAD supplies
+# only the plugin pin, and verification uses the working tree's runtime file list.
+# The verifier receives --repo-root, --plugins-root, --plugin-id, --plugin-name, --submodule-path,
+# and either --adopted-ref or --gitlink, bound to this run's target. Its exit status IS the verdict:
 # 0 verified, 2 UNKNOWN (preserved, never folded into 1), anything else NOT-ON-PIN.
 #
 # Exit 0  the runtime install is now pinned, and that was VERIFIED after the apply — the WHOLE installed
@@ -69,6 +74,10 @@ set -euo pipefail
 REPO_ROOT=""
 PLUGINS_ROOT=""
 GITLINK=""
+GITLINK_SET=0
+ADOPTED_REF=""
+ADOPTED_REF_SET=0
+ADOPTED_COMMIT=""
 MARKETPLACE="devantler-plugins"
 PLUGIN_ID="agentic-engineering@devantler-plugins"
 SUBMODULE_PATH="libraries/agent-plugins"
@@ -90,7 +99,8 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --repo-root) need $# "$1"; REPO_ROOT="$2"; shift 2 ;;
     --plugins-root) need $# "$1"; PLUGINS_ROOT="$2"; shift 2 ;;
-    --gitlink) need $# "$1"; GITLINK="$2"; shift 2 ;;
+    --gitlink) need $# "$1"; GITLINK="$2"; GITLINK_SET=1; shift 2 ;;
+    --adopted-ref) need $# "$1"; ADOPTED_REF="$2"; ADOPTED_REF_SET=1; shift 2 ;;
     --marketplace) need $# "$1"; MARKETPLACE="$2"; shift 2 ;;
     --plugin-id) need $# "$1"; PLUGIN_ID="$2"; shift 2 ;;
     --submodule-path) need $# "$1"; SUBMODULE_PATH="$2"; shift 2 ;;
@@ -194,6 +204,18 @@ if [ -z "$REPO_ROOT" ]; then
 fi
 [ -d "$REPO_ROOT" ] || die "repo root does not exist: $REPO_ROOT"
 
+pin_revision=HEAD
+if [ "$ADOPTED_REF_SET" -eq 1 ]; then
+  [ "$GITLINK_SET" -eq 0 ] || die "--adopted-ref and --gitlink are mutually exclusive"
+  [[ "$ADOPTED_REF" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] \
+    || die "--adopted-ref requires a full consumer commit ID printed by the currency check"
+  adopted_type="$(git -C "$REPO_ROOT" --no-replace-objects cat-file -t "$ADOPTED_REF" 2>/dev/null)" \
+    || die "cannot read the adopted consumer revision $ADOPTED_REF"
+  [ "$adopted_type" = commit ] || die "the adopted consumer revision is not a commit: $ADOPTED_REF"
+  ADOPTED_COMMIT="$ADOPTED_REF"
+  pin_revision="$ADOPTED_COMMIT"
+fi
+
 if [ -z "$GITLINK" ]; then
   # `--no-replace-objects` is load-bearing, exactly as in AGENTS.md *Git safety*: a refs/replace
   # entry for HEAD makes `HEAD:<path>` resolve THROUGH the replacement while `git rev-parse HEAD`
@@ -207,11 +229,11 @@ if [ -z "$GITLINK" ]; then
   # a configuration error (a mistyped --submodule-path), and the header contract puts that class at
   # exit 2. Requiring mode 160000 is what keeps "I could not check" from being answered as "not on
   # the pin".
-  pin_entry="$(git --no-replace-objects -C "$REPO_ROOT" ls-tree HEAD -- "$SUBMODULE_PATH" 2>/dev/null)" \
-    || die "cannot read the tree entry for '$SUBMODULE_PATH' at HEAD in $REPO_ROOT"
-  [ -n "$pin_entry" ] || die "no entry for '$SUBMODULE_PATH' at HEAD — cannot establish the pinned revision"
+  pin_entry="$(git --no-replace-objects -C "$REPO_ROOT" ls-tree "$pin_revision" -- "$SUBMODULE_PATH" 2>/dev/null)" \
+    || die "cannot read the tree entry for '$SUBMODULE_PATH' at $pin_revision in $REPO_ROOT"
+  [ -n "$pin_entry" ] || die "no entry for '$SUBMODULE_PATH' at $pin_revision — cannot establish the pinned revision"
   pin_mode="${pin_entry%% *}"
-  [ "$pin_mode" = "160000" ] || die "'$SUBMODULE_PATH' is not a submodule at HEAD (tree entry mode $pin_mode, expected 160000) — cannot establish a pinned revision"
+  [ "$pin_mode" = "160000" ] || die "'$SUBMODULE_PATH' is not a submodule at $pin_revision (tree entry mode $pin_mode, expected 160000) — cannot establish a pinned revision"
   pin_rest="${pin_entry#* }"
   pin_rest="${pin_rest#* }"
   GITLINK="${pin_rest%%$'\t'*}"
@@ -739,8 +761,10 @@ fi
 # under a `--plugin-id` override the verifier would otherwise locate the selected plugin's install
 # but compare it against the DEFAULT plugin's pinned subtree — a false verdict either way, and one
 # that could even validate coincidentally matching files. PLUGIN_NAME is derived above, at the gate.
+verify_pin=(--gitlink "$GITLINK")
+if [ -n "$ADOPTED_COMMIT" ]; then verify_pin=(--adopted-ref "$ADOPTED_COMMIT"); fi
 "$VERIFY_CMD" --repo-root "$REPO_ROOT" --plugins-root "$PLUGINS_ROOT" --plugin-id "$PLUGIN_ID" \
-  --plugin-name "$PLUGIN_NAME" --gitlink "$GITLINK" --submodule-path "$SUBMODULE_PATH" >/dev/null 2>&1 && vrc=0 || vrc=$?
+  --plugin-name "$PLUGIN_NAME" "${verify_pin[@]}" --submodule-path "$SUBMODULE_PATH" >/dev/null 2>&1 && vrc=0 || vrc=$?
 # `if ! cmd` would collapse the verifier's own UNKNOWN into the drift branch, turning "I could not
 # check" into "the install is not on the pin" — the exact conflation this script's own exit contract
 # forbids, and it would point the caller at the wrong remedy.

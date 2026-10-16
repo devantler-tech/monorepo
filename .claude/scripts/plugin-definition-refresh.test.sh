@@ -177,6 +177,58 @@ trap on_test_exit EXIT
 
 printf '\nplugin-definition-refresh contract\n'
 
+# The real currency verifier must read the same consumer revision as the refresh (monorepo#3977).
+# This rollout declares an additional executable absent from the adopted plugin revision.
+make_fixture
+g git -C "$MK" checkout -q "$MK_NEW"
+g mkdir -p "$MK/plugins/agentic-engineering/scripts"
+printf '#!/bin/sh\nexit 0\n' > "$MK/plugins/agentic-engineering/scripts/check.sh"
+g chmod +x "$MK/plugins/agentic-engineering/scripts/check.sh"
+MK_NEW="$(commit_on "$MK" runtime-asset)" || exit 9
+set_gitlink "$MK_NEW"
+g mkdir -p "$CONSUMER/.claude/plugin-consumption" "$CONSUMER/libraries"
+asset_sha="$(shasum -a 256 "$MK/plugins/agentic-engineering/scripts/check.sh" | awk '{print $1}')"
+declaration="$CONSUMER/.claude/plugin-consumption/agentic-engineering.desired-state.json"
+printf '{"spec":{"source":{"requiredRuntimeAssets":[{"path":"scripts/check.sh","sha256":"%s","executable":true}]}}}\n' "$asset_sha" > "$declaration"
+g git -C "$CONSUMER" add .claude/plugin-consumption/agentic-engineering.desired-state.json
+g git -C "$CONSUMER" commit -qm adopted-declaration
+adopted="$(git -C "$CONSUMER" rev-parse HEAD)"
+jq '.spec.source.requiredRuntimeAssets += [{path:"scripts/future.sh",sha256:("0" * 64),executable:true}]' "$declaration" > "$ROOT/rollout.json" || exit 9
+g mv "$ROOT/rollout.json" "$declaration"
+g git -C "$CONSUMER" add .claude/plugin-consumption/agentic-engineering.desired-state.json
+g git -C "$CONSUMER" update-index --cacheinfo "160000,$MK_OLD,libraries/agent-plugins"
+g git -C "$CONSUMER" commit -qm rollout-declaration
+g git clone -q --local "$MK" "$CONSUMER/libraries/agent-plugins"
+VERIFY="$HERE/plugin-definition-currency.sh"
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run --gitlink "$MK_NEW" 2>&1)"; rc=$?
+control_out="$("$VERIFY" --repo-root "$CONSUMER" --plugins-root "$PLUGINS" --gitlink "$MK_NEW" 2>&1)"; control_rc=$?
+if [ "$rc" -eq 2 ] && [ -e "$ROOT/APPLIED" ] && grep -q 'VERIFICATION IS UNKNOWN' <<<"$out" \
+  && [ "$control_rc" -eq 2 ] && grep -q "required runtime asset 'scripts/future.sh' is absent" <<<"$control_out"; then
+  ok "C1 control: a pin without consumer context reads the incompatible rollout declaration"
+else bad "C1 control: a pin without consumer context reads the incompatible rollout declaration" "exit $rc, out: $out"; fi
+g rm "$ROOT/APPLIED"
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run --adopted-ref "$adopted" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -e "$ROOT/APPLIED" ] && grep -q '^APPLIED —' <<<"$out"; then
+  ok "C2 refresh verifies the adopted declaration through the real currency check"
+else bad "C2 refresh verifies the adopted declaration through the real currency check" "exit $rc, out: $out"; fi
+g rm -f "$ROOT/APPLIED"
+for adopted_arg in 0000000000000000000000000000000000000000 HEAD; do
+  : > "$CLI_LOG"
+  case "$adopted_arg" in
+    HEAD) expected_reason='requires a full consumer commit ID' ;;
+    *) expected_reason='cannot read the adopted consumer revision' ;;
+  esac
+  out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run --adopted-ref "$adopted_arg" 2>&1)"; rc=$?
+  if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && [ ! -s "$CLI_LOG" ] && grep -q "$expected_reason" <<<"$out"; then
+    ok "C3 unreadable or symbolic adopted revision is UNKNOWN before any runtime change"
+  else bad "C3 unreadable or symbolic adopted revision is UNKNOWN before any runtime change" "exit $rc, out: $out"; fi
+done
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run --adopted-ref "$adopted" --gitlink "$MK_NEW" 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'mutually exclusive' <<<"$out"; then
+  ok "C4 independent pin and consumer revision overrides are refused"
+else bad "C4 independent pin and consumer revision overrides are refused" "exit $rc, out: $out"; fi
+cleanup
+
 # ── A1 — the measured defect: marketplace latest != pin ⇒ REFUSE, and never apply ─────────────
 make_fixture
 set_gitlink "$MK_OLD"                      # pin = OLD; marketplace will refresh to NEW
