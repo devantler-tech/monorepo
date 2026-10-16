@@ -60,17 +60,21 @@ func exposed(source []byte) (bool, error) {
 		switch name {
 		case "set":
 			for i := 1; i < len(args); i++ {
-				arg, _ := literal(args[i])
-				if arg == "--" || !strings.HasPrefix(arg, "-") {
+				arg, known := literal(args[i])
+				if !known {
+					errexit = true // An expanded option may enable errexit.
+					continue
+				}
+				if arg == "--" || (!strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "+")) {
 					break
 				}
-				if arg == "-o" {
+				if arg == "-o" || arg == "+o" {
 					if i+1 < len(args) {
 						i++
-						option, _ := literal(args[i])
-						errexit = errexit || option == "errexit"
+						option, known := literal(args[i])
+						errexit = errexit || arg == "-o" && (!known || option == "errexit")
 					}
-				} else if strings.Contains(arg[1:], "e") {
+				} else if strings.HasPrefix(arg, "-") && strings.Contains(arg[1:], "e") {
 					errexit = true
 				}
 			}
@@ -92,8 +96,8 @@ func exposed(source []byte) (bool, error) {
 				break
 			}
 			for _, arg := range args[2:] {
-				signal, _ := literal(arg)
-				exitTrap = exitTrap || signal == "EXIT" || signal == "0"
+				signal, known := literal(arg)
+				exitTrap = exitTrap || !known || signal == "EXIT" || signal == "0"
 			}
 		}
 		return true
