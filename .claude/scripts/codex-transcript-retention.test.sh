@@ -293,7 +293,9 @@ fi
 
 # --- a transcript held open through another letter case is kept ---------------------
 seed
-fake_lsof "${old_arch/\/codex\//\/Codex\/}"
+# sed rather than ${var/…/…}: bash 3.2 (the macOS runner) keeps the backslashes an escaped
+# slash needs in the replacement, so the spelling would never match.
+fake_lsof "$(printf '%s' "$old_arch" | sed 's#/codex/#/Codex/#')"
 run apply 14
 if [ "$rc" = 0 ] && [ -e "$old_arch" ] && [ ! -e "$old_live" ] && grep -q 'kept_open=1' <<<"$out"; then
   ok 'an open path spelled in another case still reads as open and is kept'
@@ -317,6 +319,25 @@ for mode in apply dry-run; do
     bad "$mode: size read fails closed" "rc=$rc out=$out"
   fi
 done
+
+# --- a batch that removes only some files still counts the bytes it freed -----------
+seed
+fake_lsof
+ro_dir="$home/sessions/2026/09/ro"
+mkdir -p "$ro_dir"
+dd if=/dev/zero of="$old_live" bs=1048576 count=3 2>/dev/null
+age "$old_live" 30
+printf 'x\n' > "$ro_dir/rollout-2026-09-06T00-00-00-stuck.jsonl"
+age "$ro_dir/rollout-2026-09-06T00-00-00-stuck.jsonl" 30
+chmod a-w "$ro_dir"
+run apply 14
+chmod u+w "$ro_dir"
+if [ "$rc" = 2 ] && [ ! -e "$old_live" ] && [ -e "$ro_dir/rollout-2026-09-06T00-00-00-stuck.jsonl" ] &&
+  grep -q 'failed=1 reclaimed=~3 MB' <<<"$out"; then
+  ok 'a partly failed batch exits 2 and still reports the ~3 MB it freed'
+else
+  bad 'partial batch bytes' "rc=$rc out=$out"
+fi
 
 # --- no Codex home is a clean no-op -------------------------------------------------
 out=$(CODEX_TRANSCRIPT_RETENTION_HOME="$fixture/absent" CODEX_TRANSCRIPT_RETENTION_LSOF="$bin/lsof" \

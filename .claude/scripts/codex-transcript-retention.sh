@@ -79,13 +79,16 @@ MIN_AGE_MINUTES=$((MIN_AGE_DAYS * 1440))
 work=$(mktemp -d) || { log 'UNKNOWN: cannot create a work directory' >&2; exit 2; }
 retention_finished=0
 # bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# Every deliberate early exit is a 2 that logged its own reason; any other unfinished exit is
+# an abort, reported as one whatever status it carries (a 0 becomes 2).
 # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
 on_exit() {
   local status=$?
   rm -rf -- "$work"
-  if [ "$retention_finished" != 1 ] && [ "$status" = 0 ]; then
+  if [ "$retention_finished" != 1 ] && [ "$status" != 2 ]; then
     log "UNKNOWN: aborted before finishing" >&2
-    exit 2
+    [ "$status" != 0 ] || status=2
+    exit "$status"
   fi
 }
 trap on_exit EXIT
@@ -339,14 +342,26 @@ for name in sessions archived_sessions; do
       fi
       xargs -0 rm -f -- < "$batch.nul" 2>/dev/null
     fi
-    # Count what is really gone rather than trusting rm's status for a whole batch.
+    # Count what is really gone rather than trusting rm's status for a whole batch. A path
+    # whose directory can no longer be searched reads as absent to -e and -L alike, so it is
+    # counted gone only when that directory is still searchable; otherwise it is a failure.
     left=0
+    : > "$batch.left" || { log "UNKNOWN: a batch under ${root} could not be checked"; unknown=$((unknown + 1)); break; }
     while IFS= read -r f; do
-      if [ -e "$f" ] || [ -L "$f" ]; then left=$((left + 1)); fi
+      if [ -e "$f" ] || [ -L "$f" ] || [ ! -d "${f%/*}" ] || [ ! -x "${f%/*}" ]; then
+        left=$((left + 1))
+        printf '%s\n' "$f" >> "$batch.left"
+      fi
     done < "$batch.doomed"
     removed=$((removed + d - left))
     failed=$((failed + left))
-    if [ "$left" -eq 0 ]; then bytes=$((bytes + b)); fi
+    # Reclaimed bytes are the batch's minus what is still there; when the survivors cannot be
+    # measured nothing is added, and the failed removals already make the run UNKNOWN.
+    if [ "$left" -eq 0 ]; then
+      bytes=$((bytes + b))
+    elif kept_b=$(total_bytes "$batch.left"); then
+      bytes=$((bytes + b - kept_b))
+    fi
   done
 done
 
