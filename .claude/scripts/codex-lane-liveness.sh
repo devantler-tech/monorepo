@@ -30,7 +30,7 @@
 #
 # Exit 0  every ACTIVE automation checked has a healthy run among its newest settled runs
 #      1  NOT PRODUCING — some automation's scheduled run is overdue, its newest runs are ALL stubs,
-#         or its newest runs ALL ended inside the pre-flight window
+#         or an account-scoped runtime refusal has not been cleared by a producing run
 #      2  UNKNOWN — could not determine (no sqlite3, unreadable/absent store, unexpected schema,
 #         an unusable automation id, or too little settled history to judge). A named automation
 #         the scheduler does not hold ACTIVE is UNKNOWN too, and is named on a `NOT-SCHEDULED`
@@ -47,19 +47,19 @@
 # PRE-FLIGHT STOPS (monorepo#3929). An inbox item is NOT proof of work: a run that stops at its
 # start-up checks writes one saying so. From 2026-10-01 about 145 consecutive hourly runs each ended
 # in 145-458 s with such a notice, and this check read every one as producing for six days. The
-# notice is content the run chooses, so it is not the signal. The duration is: of the 1,046 producing
-# `daily-ai-engineer` runs recorded before that date none ended inside 900 s (shortest 1,384 s). So a
-# run that ended inside `--preflight-seconds` (default 600) did no work, WITH OR WITHOUT an inbox
-# item, and a window made only of such runs is exit 1. A GitHub write in the run's time window was
-# considered and rejected as the signal: hand-started Codex threads write under the same account and
-# branch namespace, so it cannot be attributed to the scheduled run.
-# Requiring it of every run in the window is what keeps a real verdict rare enough to act on.
+# notice is content the run chooses, so it is not the signal. The historical duration series had
+# 1,046 producing `daily-ai-engineer` runs, none inside 900 s (shortest 1,384 s). That series remains
+# comparable through `--preflight-seconds` (default 600) and the reported short-window count, but it
+# cannot establish that a later short audit did no work (monorepo#4208). Without a runtime refusal,
+# an all-short window is UNKNOWN, never healthy or a known outage. A normal completion or inbox
+# notice alone does not establish useful delivery either. GitHub writes under the shared account
+# cannot be attributed to one scheduled run, so they cannot clear this unknown.
 #
 # But a window that is not all short is NOT thereby healthy, and reading it so was a fail-open: a run
 # that wrote no inbox item yet outlasted the pre-flight window died PART WAY, and this store cannot tell that
 # apart from a long run that never wrote one. That third class is exit 2, never exit 0
-# (monorepo#3287). So the window has three outcomes, not two: every run a stub or a pre-flight
-# stop is exit 1, any run unproven is exit 2, and only a run that outlasted the pre-flight window AND wrote an inbox item
+# (monorepo#3287). So the window has three outcomes, not two: every run a stub or an uncleared
+# account-scoped refusal is exit 1, an unproven window is exit 2, and a run that outlasted the pre-flight window AND wrote an inbox item
 # makes the window exit 0.
 #
 # CAUSE CLASS (monorepo#2908). A NOT-PRODUCING verdict names a bounded cause class taken from the
@@ -433,8 +433,8 @@ while IFS= read -r id; do
     # under `set -e`, so the assignment is written as a full conditional.
     if [ "$n" -eq 1 ]; then newest_tid=$tid; fi
     if [ "$dur_ms" -gt "$maxdur_ms" ]; then maxdur_ms=$dur_ms; fi
-    # Counted whatever the inbox flag says: a run that ended inside the pre-flight window did no work,
-    # and the notice it may have written is content, not evidence (monorepo#3929).
+    # Preserve the duration count independently of the verdict. Neither a short duration nor an
+    # inbox notice establishes whether useful work happened (#3929, #4208).
     if [ "$dur_ms" -le "$preflight_ms" ]; then short=$(( short + 1 )); fi
     # A run that wrote no inbox item produced no recorded output. The DURATION only says how it got
     # there: inside the stub window it died at dispatch, which is the diagnosable signature the
@@ -448,9 +448,8 @@ while IFS= read -r id; do
       if [ "$dur_ms" -le "$stub_ms" ]; then
         stubs=$(( stubs + 1 ))
       elif [ "$dur_ms" -gt "$preflight_ms" ]; then
-        # Only a run that OUTLASTED the pre-flight window is unproven. One that ended inside it is a
-        # known pre-flight stop, already counted in `short`, and must not turn a window that also
-        # holds a working run into UNKNOWN.
+        # The all-short case is judged separately. Keep the existing mixed-window rule: an older
+        # short run does not erase a producing run, unless an uncleared runtime refusal proves it.
         indeterminate=$(( indeterminate + 1 ))
         if [ "$dur_ms" -gt "$indet_ms" ]; then indet_ms=$dur_ms; fi
       fi
@@ -484,19 +483,18 @@ EOF
     report="${report}  NOT-PRODUCING  ${id} — newest ${n} settled runs all ended within ${STUB_SECONDS}s with no inbox item (cause=$(cause_class "$newest_tid"))
 "
     any_dead=1
-  elif [ "$short" -eq "$n" ]; then
-    # Every run in the window stopped before it could do work. Ordered after the all-stubs branch so
-    # a dispatch-time death keeps its own, more specific wording, and before every other branch
-    # because an inbox item on such a run is exactly what must not certify the lane.
-    report="${report}  NOT-PRODUCING  ${id} — newest ${n} settled runs all ended within the ${PREFLIGHT_SECONDS}s pre-flight window, so none did work; an inbox item does not count (cause=$(cause_class "$newest_tid"))
-"
-    any_dead=1
   elif [ "$acct_ms" -gt 0 ] && [ "$own_prod" -lt "$acct_ms" ]; then
     # Ordered BEFORE the unproven and OK branches: a live account-scoped refusal is proof, and a healthy
     # older run in the window is exactly the evidence that refusal has already superseded.
     report="${report}  NOT-PRODUCING  ${id} — no run has produced output since an account-scoped refusal (cause=quota/billing) on ${acct_src}
 "
     any_dead=1
+  elif [ "$short" -eq "$n" ]; then
+    # A real stub and an uncleared runtime refusal still outrank missing evidence. Duration alone
+    # cannot distinguish a successful short audit from a pre-flight stop, so certify neither.
+    report="${report}  UNKNOWN  ${id} — short-window=${short}/${n} within ${PREFLIGHT_SECONDS}s; duration and inbox notices do not establish work or a pre-flight stop
+"
+    any_unknown=1
   elif [ "$indeterminate" -gt 0 ]; then
     # Ordered AFTER the all-stubs branch on purpose: a proven dead lane is actionable now, so it
     # outranks an unjudgeable one — the same precedence the Claude-side check applies between its

@@ -183,31 +183,31 @@ run_check "$db"
 expect_rc 0 "an IN_PROGRESS row must not be classified after its updated_at ages past grace"
 expect_out "OK" "terminal history containing a healthy run must remain OK"
 
-# --- 4. an inbox item on a run that stopped at start-up is not proof of work (monorepo#3929) ------
-# This case used to assert exit 0, and that was the defect: about 145 consecutive hourly runs each
-# stopped at their start-up checks, wrote a notice saying so, and were read as producing for six
-# days. The notice is content the run chooses; the duration is not.
+# --- 4. a short inbox notice proves neither work nor an outage (#3929, #4208) --------------------
+# The historical 145-run duration series stays comparable, but neither that duration nor the
+# notice is an authoritative runtime refusal. The missing corroboration must remain UNKNOWN.
 db=$TMP/fastnotice.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
 add_run "$db" lane-a $(( GRACE_MS + 60000 ))  4 yes           # fast, and wrote an inbox item
 add_run "$db" lane-a $(( GRACE_MS + 900000 )) 5 yes
 run_check "$db"
-expect_rc 1 "fast runs that wrote an inbox item did no work"
-expect_out "pre-flight window" "the verdict must name the pre-flight window"
+expect_rc 2 "fast runs with inbox items need corroboration, not a duration-only outage"
+expect_out "short-window=2/2" "the historical short-run count must remain visible"
 expect_out_not "OK  lane-a" "an inbox item must not certify a run that ended at start-up"
 
-# --- 4b. THE LIVE SHAPE: every newest run short, every one carrying a notice ---------------------
+# --- 4b. the historical short-duration shape, without corroborating runtime refusals -------------
 # Durations are the measured ones from 2026-10-03..07 (145-458 s).
 db=$TMP/preflight-live.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
 add_run "$db" lane-a $(( GRACE_MS + 60000 ))   284 yes
 add_run "$db" lane-a $(( GRACE_MS + 3660000 )) 458 yes
 add_run "$db" lane-a $(( GRACE_MS + 7260000 )) 145 yes
 run_check "$db" --consecutive 3
-expect_rc 1 "runs that all stopped at pre-flight with a notice are NOT-PRODUCING"
-expect_out "NOT-PRODUCING  lane-a" "the pre-flight verdict must name the lane"
-expect_out "an inbox item does not count" "the verdict must say why the notices were not counted"
+expect_rc 2 "the historical short-duration shape alone cannot prove a pre-flight stop"
+expect_out "UNKNOWN  lane-a" "an uncorroborated short window must name the lane"
+expect_out "short-window=3/3" "keep the historical duration count separate from the verdict"
+expect_out_not "NOT-PRODUCING" "a notice and duration do not establish an outage"
 
 # --- 4c. one long working run in the window is still OK ------------------------------------------
-# 6,437 s is the one working run measured on 2026-10-07, beside two pre-flight stops.
+# 6,437 s is the one working run measured on 2026-10-07, beside two short runs.
 db=$TMP/preflight-oneworked.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
 add_run "$db" lane-a $(( GRACE_MS + 60000 ))   284  yes
 add_run "$db" lane-a $(( GRACE_MS + 3660000 )) 6437 yes
@@ -222,7 +222,7 @@ db=$TMP/preflight-at.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
 add_run_ms "$db" lane-a $(( GRACE_MS + 60000 ))   600000 yes
 add_run_ms "$db" lane-a $(( GRACE_MS + 3660000 )) 600000 yes
 run_check "$db"
-expect_rc 1 "a run that ended exactly at the pre-flight window is inside it"
+expect_rc 2 "a run exactly at the pre-flight window is short, without proving a stop"
 db=$TMP/preflight-over.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
 add_run_ms "$db" lane-a $(( GRACE_MS + 60000 ))   600001 yes
 add_run_ms "$db" lane-a $(( GRACE_MS + 3660000 )) 600001 yes
@@ -232,15 +232,14 @@ expect_rc 0 "a run 1 ms past the pre-flight window with an inbox item is produci
 run_check "$TMP/preflight-live.db" --consecutive 3 --preflight-seconds 100
 expect_rc 0 "a narrower pre-flight window must stop counting longer runs as pre-flight stops"
 
-# --- 4d2. a known pre-flight stop beside a working run is not "unproven" --------------------------
-# A run that ended inside the pre-flight window with no inbox item is a known stop, not an unjudged
-# long run, so it must not turn a window that also holds a working run into UNKNOWN.
+# --- 4d2. a short run beside a producing run retains the existing mixed-window rule ---------------
+# Without an explicit refusal, a short run does not erase the producing run in the same window.
 db=$TMP/preflight-mixed.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
 add_run "$db" lane-a $(( GRACE_MS + 60000 ))   200 no
 add_run "$db" lane-a $(( GRACE_MS + 3660000 )) 900 yes
 run_check "$db"
-expect_rc 0 "a pre-flight stop beside a working run must not read as unproven"
-expect_out_not "production is unproven" "a known pre-flight stop is not an unjudged long run"
+expect_rc 0 "a short run beside a producing run retains the mixed-window baseline"
+expect_out_not "production is unproven" "the short run does not erase an observed producing run"
 
 # --- 4e. the knob is validated like the others ---------------------------------------------------
 run_check "$TMP/preflight-live.db" --preflight-seconds abc
@@ -537,14 +536,13 @@ expect_rc 2 "a run 999ms over the pre-flight window must not be counted a pre-fl
 expect_out "600999ms" "the verdict must report the millisecond duration it actually compared"
 expect_out_not "NOT-PRODUCING" "999ms over the window must not reach the dead-lane verdict"
 
-# Just over the STUB window but inside the pre-flight one: no longer unproven. The run ended before
-# any run has ever done work, so it is a pre-flight stop, worded as one rather than as a stub.
+# Just over the STUB window but inside the pre-flight one: duration alone is unproven.
 db=$TMP/overstub.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
 add_run_ms "$db" lane-a $(( GRACE_MS + 60000 ))  60999 no
 add_run_ms "$db" lane-a $(( GRACE_MS + 900000 )) 60999 no
 run_check "$db"
-expect_rc 1 "a run past the stub window but inside the pre-flight window did no work"
-expect_out "pre-flight window" "it must be worded as a pre-flight stop"
+expect_rc 2 "a run past the stub window needs evidence beyond duration to establish a stop"
+expect_out "short-window=2/2" "the duration classification must remain observable"
 expect_out_not "with no inbox item" "a run past the stub window must not be worded as a stub"
 
 # --- a NEGATIVE duration is corrupt timing data, not a long run ----------------------------------
@@ -631,6 +629,48 @@ add_rollout() {
     "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"t\",\"error\":{\"message\":\"PRIVATE-ROLLOUT-MESSAGE\",\"codex_error_info\":\"$3\"}}}" \
     > "$SESS/2026/09/15/rollout-2026-09-15T00-00-00-$tid.jsonl"
 }
+
+# Successful tool work and a normal runtime completion do not prove useful delivery,
+# but neither does their short duration prove a pre-flight stop (#4208).
+for duration in 540 660; do
+  db=$TMP/completed-$duration.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+  add_run "$db" lane-a $(( GRACE_MS + 900000 )) "$duration" yes
+  add_run "$db" lane-a $(( GRACE_MS + 60000 )) "$duration" yes
+  mkdir -p "$SESS/completed"
+  while IFS= read -r tid; do
+    printf '%s\n' \
+      '{"type":"response_item","payload":{"type":"function_call","name":"verify","call_id":"check"}}' \
+      '{"type":"response_item","payload":{"type":"function_call_output","call_id":"check","output":"PRIVATE-SUCCESS-NOTICE"}}' \
+      '{"type":"event_msg","payload":{"type":"task_complete","turn_id":"fixture","error":null}}' \
+      > "$SESS/completed/rollout-fixture-$tid.jsonl"
+  done < <(sqlite3 "$db" "SELECT thread_id FROM automation_runs;")
+  run_check "$db"
+  if [ "$duration" = 540 ]; then
+    expect_rc 2 "a completed short audit is unknown without attributable outcome evidence"
+    expect_out "UNKNOWN  lane-a" "normal completion cannot become a short-run outage"
+    expect_out_not "NOT-PRODUCING" "successful short runtime records cannot prove a stop"
+  else
+    expect_rc 0 "the existing long completed-run baseline must remain healthy"
+  fi
+  expect_out_not "PRIVATE-SUCCESS-NOTICE" "a completion notice must remain private and non-authoritative"
+done
+
+# A short window with an explicit refusal remains actionable, even with inbox items.
+db=$TMP/short-refusal.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 540 yes
+add_run "$db" lane-a $(( GRACE_MS + 60000 )) 540 yes
+add_rollout "$db" lane-a usage_limit_exceeded
+run_check "$db"
+expect_rc 1 "a corroborated short quota refusal must remain NOT-PRODUCING"
+expect_out "cause=quota/billing" "the runtime classifier, rather than duration, establishes the refusal"
+
+# A partial runtime record cannot resolve a duration-only unknown.
+add_rollout "$db" lane-a unknown
+tid=$(sqlite3 "$db" "SELECT thread_id FROM automation_runs ORDER BY updated_at DESC LIMIT 1;")
+printf '{"type":"event_msg","payload":' >> "$SESS/2026/09/15/rollout-2026-09-15T00-00-00-$tid.jsonl"
+run_check "$db"
+expect_rc 2 "an incomplete outcome record keeps a short window UNKNOWN"
+expect_out_not "NOT-PRODUCING" "a partial read cannot establish an outage"
 
 # An all-stub lane names its cause class.
 db=$TMP/cause-quota.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE

@@ -733,6 +733,60 @@ for triple in "claude:daily-ai-assistant,agentic-engineer-2:20:50" "codex:daily-
   fi
 done
 
+# Exercise both real Codex entries with short completed audits (#4208). Nothing in this
+# fixture reads the host's scheduler, transcripts, watch state or notification channels.
+command -v sqlite3 >/dev/null || { echo "FAIL: sqlite3 is required" >&2; exit 1; }
+CODEX_REAL="$FIX/codex-real"
+mkdir -p "$CODEX_REAL/sessions"
+cp "$SCRIPT" "$CODEX_REAL/sibling-lane-watch.sh"
+cat > "$CODEX_REAL/codex-lane-liveness.sh" <<EOF
+#!/usr/bin/env bash
+exec bash "$SCRIPT_DIR/codex-lane-liveness.sh" --store "$CODEX_REAL/store.db" --sessions "$CODEX_REAL/sessions" "\$@"
+EOF
+chmod +x "$CODEX_REAL/codex-lane-liveness.sh"
+sqlite3 "$CODEX_REAL/store.db" "
+  CREATE TABLE automations(id TEXT, status TEXT, next_run_at INTEGER);
+  CREATE TABLE automation_runs(thread_id TEXT, automation_id TEXT, status TEXT,
+    inbox_title TEXT, created_at INTEGER, updated_at INTEGER);
+"
+for automation in daily-ai-engineer agentic-engineer-2; do
+  sqlite3 "$CODEX_REAL/store.db" "INSERT INTO automations VALUES('$automation','ACTIVE',$(( (T0 + 14400) * 1000 )));"
+  for age in 600 1200; do
+    ended=$(( (T0 - age) * 1000 ))
+    sqlite3 "$CODEX_REAL/store.db" "INSERT INTO automation_runs VALUES(
+      '$automation-$age','$automation','ARCHIVED','completed audit',$((ended - 540000)),$ended);"
+    printf '%s\n' '{"type":"event_msg","payload":{"type":"task_complete","error":null}}' \
+      > "$CODEX_REAL/sessions/rollout-fixture-$automation-$age.jsonl"
+  done
+done
+rc=0
+out=$(bash "$CODEX_REAL/codex-lane-liveness.sh" --automation daily-ai-engineer --now-ms "${T0}000" 2>&1) || rc=$?
+if [ "$rc" -eq 2 ] && grep -qF 'short-window=2/2' <<<"$out"; then ok
+else bad "the completed-short fixture must reach the real duration classifier: rc=$rc $out"; fi
+for offset in 0 "$SLOT" "$((2 * SLOT))"; do
+  rc=0
+  out=$(bash "$CODEX_REAL/sibling-lane-watch.sh" --lane codex \
+    --entries daily-ai-engineer,agentic-engineer-2 --state-file "$CODEX_REAL/state.json" \
+    --now-epoch "$((T0 + offset))" 2>/dev/null) || rc=$?
+  if [ "$rc" -eq 2 ] && grep -qF 'verdict=UNKNOWN' <<<"$out"; then ok
+  else bad "real completed-short Codex entries must remain UNKNOWN, not an outage: rc=$rc $out"; fi
+done
+if [ ! -e "$CODEX_REAL/state.json" ]; then ok
+else bad "short completed audits must not accumulate outage observations"; fi
+
+# A true outputless stub still enters the existing three-slot escalation path.
+sqlite3 "$CODEX_REAL/store.db" "UPDATE automation_runs SET inbox_title=NULL, created_at=updated_at-4000;"
+for offset in 0 "$SLOT" "$((2 * SLOT))"; do
+  want_rc=0; want_verdict=WATCHING
+  if [ "$offset" -eq "$((2 * SLOT))" ]; then want_rc=1; want_verdict=ESCALATE; fi
+  rc=0
+  out=$(bash "$CODEX_REAL/sibling-lane-watch.sh" --lane codex \
+    --entries daily-ai-engineer,agentic-engineer-2 --state-file "$CODEX_REAL/state.json" \
+    --now-epoch "$((T0 + offset))" 2>/dev/null) || rc=$?
+  if [ "$rc" -eq "$want_rc" ] && grep -qF "verdict=$want_verdict" <<<"$out"; then ok
+  else bad "real Codex stubs must retain escalation: rc=$rc $out"; fi
+done
+
 echo "sibling-lane-watch.test: $pass passed, $fail failed"
 test_run_completed=1
 [ "$fail" -eq 0 ]
