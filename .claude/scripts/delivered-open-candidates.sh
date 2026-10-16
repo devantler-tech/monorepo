@@ -53,12 +53,15 @@ original_args=("$@")
 completed=0
 listed_issues=0
 
+# Report how many selected issues have a complete verdict and how many remain unchecked.
 progress() {
   if [ "$listed_issues" = 1 ]; then
     printf 'completed=%s remaining=%s\n' "$completed" "$((${#issues[@]} - completed))" >&2
   fi
 }
+# Preserve completed verdicts while rejecting an incomplete or unreadable observation.
 unknown() { echo "delivered-open-candidates: UNKNOWN — $*" >&2; progress; exit 2; }
+# Stop before overspending and print a shell-quoted command for the remaining selection.
 defer() {
   echo "delivered-open-candidates: DEFERRED — $*; retry after the search allowance recovers" >&2
   progress
@@ -73,6 +76,7 @@ defer() {
   printf '\n' >&2
   exit 3
 }
+# Reject unsupported arguments before any forge request is made.
 usage() { unknown "usage: --issue <owner/repo>#<n> ... | --oldest <N> [--type <IssueType>]"; }
 
 while [ $# -gt 0 ]; do
@@ -100,6 +104,7 @@ else
   listed_issues=1
 fi
 
+# Route every forge request through the same optional fixture command.
 gh_() { if [ -n "${DELIVERED_OPEN_GH:-}" ]; then "$DELIVERED_OPEN_GH" "$@"; else gh "$@"; fi; }
 
 allowance=$(gh_ api rate_limit) || unknown "search allowance read failed"

@@ -90,6 +90,7 @@ mention() {
       body: ($p[2:] | join(":"))}' | jq -s '{total_count: length, incomplete_results: false, items: .}' >"$FIX/mention-$n.json"
 }
 
+# Invoke the actual checker with the fixture forge and retain its diagnostics for assertions.
 run() { DELIVERED_OPEN_GH="$FIX/gh" "${TEST_BASH:-bash}" "$SCRIPT" "$@" 2>&1; }
 
 # check <name> <want-rc> <want-substring|""> <reject-substring|""> args...
