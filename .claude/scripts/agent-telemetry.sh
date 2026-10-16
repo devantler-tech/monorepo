@@ -2247,6 +2247,35 @@ tool_result_failure_text() {
   ' "$f" 2>/dev/null
 }
 
+# #4089: a failed search can quote an edit error. Join native Claude results to
+# their preceding invocations; count edit refusals as candidates, never proof of
+# distinct writers. Keep the historical phrase-only series separately below.
+# Read the whole file before publishing counts: a partial JSON read is UNKNOWN.
+stale_edit_counts() {
+  jq -n "$JQ_SHAPE_DEFS"'
+    reduce inputs as $record ({tools:{}, candidates:0, unattributed:0};
+      if ($record | type) != "object" then error("invalid record")
+      elif $record.type == "assistant" then
+        reduce ($record | content_blocks | select(.type == "tool_use")) as $call (. ;
+          if ($call.id | type) == "string" and ($call.id | length) > 0 then
+            if .tools | has($call.id) then .tools[$call.id] = null
+            else .tools[$call.id] = $call.name end
+          else . end)
+      elif $record.type == "user" then
+        reduce ($record | content_blocks
+          | select(.type == "tool_result" and .is_error == true)
+          | select(block_text | contains("has been modified since read"))) as $result (. ;
+          (if ($result.tool_use_id | type) == "string"
+            then .tools[$result.tool_use_id] else null end) as $tool
+          | if $tool == "Edit" or $tool == "Write" or $tool == "MultiEdit" then
+              .candidates += 1
+            elif $tool == "Bash" or $tool == "Grep" or $tool == "Read" or $tool == "Glob" then .
+            else .unattributed += 1 end)
+      else . end)
+    | {candidates, unattributed}
+  ' "$1" 2>/dev/null
+}
+
 # Session files touched within the window, NEWEST FIRST, then capped.
 # The sort is load-bearing: `find | head` returns directory order, so on a busy
 # day the cap would silently drop the newest failures and skew the scorecard the
@@ -5114,10 +5143,8 @@ if want a2a; then
   # Counted over the whole window, before the file cap (monorepo#4148).
   echo "    left out, worktree gone and no portfolio address recorded: ${CX_GONE}"
   echo "  claude sessions in window .. ${SF_COUNT}"
-  # Collisions are inherently a CROSS-instance metric, so reading only the Claude
-  # corpus was self-defeating: a race the Codex instance hit — the sibling half of
-  # the very interaction being measured — was invisible. Structural (tool results),
-  # so quoted prose cannot inflate it, and across both corpora.
+  # Preserve the old phrase-only counts and denominator for historical comparison.
+  # Even errored search output can quote the phrase: neither raw count proves a race.
   if [ $((SF_COUNT + CX_COUNT)) -gt 0 ]; then
     # Both walks read every file, so the canary counts reads, not files.
     RACES=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
@@ -5128,6 +5155,31 @@ if want a2a; then
             | grep -ciE '(non-fast-forward|rejected.*fetch first|would be overwritten by merge)' || true)
     extraction_canary "$XFA2A" "$(( 2 * $(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -cv '^$' || true) ))" "collision"
     echo "  file two-writer races ...... ${RACES}   (CLAUDE ONLY — see note)"
+    echo "    historical raw phrase signal; not a confirmed writer collision"
+    # Evaluate only the observed native schema. No errored-result flag or writer
+    # attribution is invented for Codex or other runtimes. A failed file read
+    # invalidates the aggregate, including any plausible earlier output.
+    if stale_rows=$(printf '%s\n' "$SF_CACHE" | while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        stale_edit_counts "$f" || exit 1
+      done) && stale_totals=$(printf '%s\n' "$stale_rows" | jq -s -e '
+        if all(.[]; (.candidates | type) == "number" and (.unattributed | type) == "number")
+        then {candidates:([.[].candidates] | add // 0),
+              unattributed:([.[].unattributed] | add // 0)}
+        else error("invalid counts") end'); then
+      stale_candidates=$(jq -r .candidates <<<"$stale_totals")
+      stale_unattributed=$(jq -r .unattributed <<<"$stale_totals")
+      if [ "$stale_unattributed" -eq 0 ]; then
+        echo "  stale-edit candidates v1 ... ${stale_candidates}   (CLAUDE ONLY)"
+      else
+        echo "  stale-edit candidates v1 ... UNKNOWN (attributed candidates: ${stale_candidates})"
+        echo "    unattributed stale-edit errors: ${stale_unattributed}"
+      fi
+    else
+      echo "  stale-edit candidates v1 ... UNKNOWN (incomplete extraction)"
+    fi
+    echo "  confirmed writer collisions . UNKNOWN (distinct-writer provenance unmeasured)"
+    echo "  Codex stale-edit coverage ... UNKNOWN (native error attribution unmeasured)"
     echo "  push/merge collisions ...... ${NONFF}   (CLAUDE ONLY — see note)"
     echo "    NOTE: collisions read errored tool results, and Codex records carry no"
     echo "          error flag (verified). Its side of a two-writer race is therefore"

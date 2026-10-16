@@ -40,6 +40,64 @@ export PORTFOLIO_PATHS="$FIX"
 export CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant
 export CODEX_ENGINEER_ENTRIES=daily-ai-engineer
 
+# #4089: the raw phrase counter is historical evidence, not a writer-collision verdict.
+# Removing the tool-id join would make the failed-search control count as an edit.
+mkdir -p "$FIX/stale-edit" "$FIX/nocodex"
+stale_edit_report() {
+  CLAUDE_PROJECTS_DIR="$FIX/stale-edit" CODEX_HOME="$FIX/nocodex" \
+    MONOREPO_DIR="$SCRIPT_DIR/../.." HOME="$FIX" \
+    bash "$TARGET" --since-days 3650 --section a2a 2>&1
+}
+for tool in Bash Edit Write MultiEdit; do
+  jq -cn --arg tool "$tool" \
+    '{type:"assistant",message:{content:[{type:"tool_use",id:"edit-1",name:$tool,input:{}}]}}' \
+    > "$FIX/stale-edit/s.jsonl"
+  printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"edit-1","is_error":true,"content":"File has been modified since read"}]}}' \
+    >> "$FIX/stale-edit/s.jsonl"
+  OUT=$(stale_edit_report)
+  check "$tool preserves the historical raw signal" "$OUT" "file two-writer races ...... 1"
+  if [ "$tool" = Bash ]; then expected=0; else expected=1; fi
+  check "$tool is classified by its actual invocation" "$OUT" "stale-edit candidates v1 ... $expected"
+  check "$tool never establishes distinct writers" "$OUT" "confirmed writer collisions . UNKNOWN"
+done
+# An unresolved invocation is unknown attribution, not an empty candidate set.
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"missing","is_error":true,"content":"File has been modified since read"}]}}' \
+  > "$FIX/stale-edit/s.jsonl"
+OUT=$(stale_edit_report)
+check "an unmatched error is not a clean zero" "$OUT" "stale-edit candidates v1 ... UNKNOWN"
+check "unmatched errors retain their observed count" "$OUT" "unattributed stale-edit errors: 1"
+# A tool-result-shaped object inside a returned example is data, not another result.
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","is_error":false,"content":[{"type":"tool_result","tool_use_id":"missing","is_error":true,"content":"File has been modified since read"}]}]}}' \
+  > "$FIX/stale-edit/s.jsonl"
+OUT=$(stale_edit_report)
+check "nested examples do not become candidates" "$OUT" "stale-edit candidates v1 ... 0"
+check "unsupported runtime coverage stays explicit" "$OUT" "Codex stale-edit coverage ... UNKNOWN"
+# A duplicate call id cannot identify a unique invocation, even if the first was an edit.
+printf '%s\n' \
+  '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"ambiguous","name":"Edit"},{"type":"tool_use","id":"ambiguous","name":"Bash"}]}}' \
+  '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"ambiguous","is_error":true,"content":"File has been modified since read"}]}}' \
+  > "$FIX/stale-edit/s.jsonl"
+OUT=$(stale_edit_report)
+check "duplicate call ids cannot certify a non-edit" "$OUT" "stale-edit candidates v1 ... UNKNOWN"
+printf '%s\n' \
+  '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"later","is_error":true,"content":"File has been modified since read"}]}}' \
+  '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"later","name":"Edit"}]}}' \
+  > "$FIX/stale-edit/s.jsonl"
+OUT=$(stale_edit_report)
+check "a later call cannot explain an earlier result" "$OUT" "stale-edit candidates v1 ... UNKNOWN"
+printf '%s\n' \
+  '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"ok","name":"Edit"}]}}' \
+  '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"ok","is_error":false,"content":[{"type":"text","text":"File has been modified since read"}]}]}}' \
+  > "$FIX/stale-edit/s.jsonl"
+OUT=$(stale_edit_report)
+check "successful edits quoting the phrase are not candidates" "$OUT" "stale-edit candidates v1 ... 0"
+# jq can read plausible earlier records before it encounters an invalid tail.
+printf '%s\n' '{"type":' >> "$FIX/stale-edit/s.jsonl"
+OUT=$(stale_edit_report)
+check "a partial file cannot publish earlier clean counts" "$OUT" "stale-edit candidates v1 ... UNKNOWN (incomplete extraction)"
+nocheck "a partial file publishes no clean candidate aggregate" "$OUT" "stale-edit candidates v1 ... 0"
+# End stale-edit classification regression.
+
 # #3830: no runtime phrase means no runtime normalisation work. Instrument the
 # real redactor, retaining its output, rather than relying on wall-clock timing.
 mkdir -p "$FIX/injempty"
