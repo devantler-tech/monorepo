@@ -829,7 +829,9 @@ and confirm both states. Draft state is the durable fence: repository automation
 auto-merge after a push. Push the adaptation with
 `.claude/scripts/bot-pr-adaptation-push.sh`, never with a bare `git push` to the bot branch: it
 applies that fence, reads both states back and only then pushes, and it refuses when either cannot
-be confirmed or the head moved (monorepo#3885). Promote from draft and re-arm only after the adapted head satisfies that
+be confirmed or the head moved (monorepo#3885). A retained merge-queue entry also stops the push:
+dequeue normally, then retry so the helper confirms the queue is empty at the same head (#4205).
+An unreadable queue is UNKNOWN. Promote from draft and re-arm only after the adapted head satisfies that
 review gate. Major-version
 bumps are included; difficulty changes the work, not ownership. If a merged dependency bump breaks
 `main`, repair that resulting breakage normally as well.
