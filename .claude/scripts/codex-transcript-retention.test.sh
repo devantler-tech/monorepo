@@ -291,6 +291,33 @@ else
   bad 'leading zero decimal' "rc=$rc out=$out"
 fi
 
+# --- a transcript held open through another letter case is kept ---------------------
+seed
+fake_lsof "${old_arch/\/codex\//\/Codex\/}"
+run apply 14
+if [ "$rc" = 0 ] && [ -e "$old_arch" ] && [ ! -e "$old_live" ] && grep -q 'kept_open=1' <<<"$out"; then
+  ok 'an open path spelled in another case still reads as open and is kept'
+else
+  bad 'case-folded open path kept' "rc=$rc out=$out"
+fi
+
+# --- a size that cannot be read keeps the batch -------------------------------------
+for mode in apply dry-run; do
+  seed
+  fake_lsof
+  printf '#!/bin/sh\nexit 1\n' > "$bin/stat"
+  chmod +x "$bin/stat"
+  out=$(PATH="$bin:$PATH" CODEX_TRANSCRIPT_RETENTION_HOME="$home" CODEX_TRANSCRIPT_RETENTION_LSOF="$bin/lsof" \
+    bash "$impl" "$mode" 14 2>&1)
+  rc=$?
+  rm -f "$bin/stat"
+  if [ "$rc" = 2 ] && [ -e "$old_live" ] && [ -e "$old_arch" ] && grep -q 'sizes under' <<<"$out"; then
+    ok "$mode: a failing size read exits 2 and removes nothing"
+  else
+    bad "$mode: size read fails closed" "rc=$rc out=$out"
+  fi
+done
+
 # --- no Codex home is a clean no-op -------------------------------------------------
 out=$(CODEX_TRANSCRIPT_RETENTION_HOME="$fixture/absent" CODEX_TRANSCRIPT_RETENTION_LSOF="$bin/lsof" \
   bash "$impl" apply 14 2>&1)

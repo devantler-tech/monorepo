@@ -163,15 +163,33 @@ still_old() {
     LC_ALL=C sort -u > "$2"
 }
 
+# drop_open <list> <open> <out> writes the paths of <list> that <open> does not name. Both
+# sides are compared lower-cased: on a case-insensitive volume a session can hold a
+# transcript open through another spelling (`.Codex` for `.codex`), and a missed match here
+# would unlink an open file. A spurious match only ever keeps one (worktree-cleanup.sh's
+# fold_case, #3676).
+drop_open() {
+  LC_ALL=C awk -v open="$2" '
+    FILENAME == open { held[tolower($0)] = 1; next }
+    !(tolower($0) in held)' "$2" "$1" > "$3"
+}
+
 # total_bytes <list> prints the summed size of the files a newline list names (BSD stat on
-# the agent host, GNU stat elsewhere). A file gone in the meantime adds nothing.
+# the agent host, GNU stat elsewhere), or fails when any size cannot be read: a short or
+# failed read would otherwise report a reclaimed size nobody measured.
 total_bytes() {
-  if [ ! -s "$1" ]; then printf '0'; return; fi
+  local n sizes
+  if [ ! -s "$1" ]; then printf '0'; return 0; fi
+  n=$(count "$1") || return 1
   if [ "$(uname -s)" = Darwin ]; then
-    tr '\n' '\0' < "$1" | xargs -0 stat -f %z -- 2>/dev/null | awk '{ s += $1 } END { printf "%d", s }'
+    sizes=$(tr '\n' '\0' < "$1" | xargs -0 stat -f %z -- 2>/dev/null) || return 1
   else
-    tr '\n' '\0' < "$1" | xargs -0 stat -c %s -- 2>/dev/null | awk '{ s += $1 } END { printf "%d", s }'
+    sizes=$(tr '\n' '\0' < "$1" | xargs -0 stat -c %s -- 2>/dev/null) || return 1
   fi
+  printf '%s\n' "$sizes" | awk -v want="$n" '
+    $0 !~ /^[0-9]+$/ { bad = 1 }
+    { s += $1; k++ }
+    END { if (bad || k != want) exit 1; printf "%d", s }'
 }
 
 # count prints the number of lines in a list, or fails: a list it cannot read completely must
@@ -237,9 +255,9 @@ for name in sessions archived_sessions; do
   candidates=$((candidates + n))
   [ "$lsof_ok" = 1 ] || continue
 
-  # Drop every path a process holds open (both lists sorted the same way).
+  # Drop every path a process holds open.
   closed="$work/$name.closed"
-  LC_ALL=C comm -23 "$old" "$work/open" > "$closed" || {
+  drop_open "$old" "$work/open" "$closed" || {
     log "UNKNOWN: ${root} could not be compared with the open-file list; nothing removed from it"
     unknown=$((unknown + 1))
     continue
@@ -252,8 +270,12 @@ for name in sessions archived_sessions; do
   kept_open=$((kept_open + n - c))
 
   if [ "$MODE" != apply ]; then
+    b=$(total_bytes "$closed") || {
+      log "UNKNOWN: sizes under ${root} could not be read completely"
+      unknown=$((unknown + 1))
+      continue
+    }
     removed=$((removed + c))
-    b=$(total_bytes "$closed")
     bytes=$((bytes + b))
     continue
   fi
@@ -284,7 +306,7 @@ for name in sessions archived_sessions; do
       unknown=$((unknown + 1))
       break
     fi
-    LC_ALL=C comm -23 "$batch.old" "$work/open.now" > "$batch.doomed" || {
+    drop_open "$batch.old" "$work/open.now" "$batch.doomed" || {
       log "UNKNOWN: a batch under ${root} could not be compared; the rest of it is kept"
       unknown=$((unknown + 1))
       break
@@ -296,9 +318,14 @@ for name in sessions archived_sessions; do
       unknown=$((unknown + 1))
       break
     fi
+    # Sizes are read before anything is unlinked, so a failed read keeps the batch.
+    if ! b=$(total_bytes "$batch.doomed"); then
+      log "UNKNOWN: sizes under ${root} could not be read completely; the rest of it is kept"
+      unknown=$((unknown + 1))
+      break
+    fi
     kept_young=$((kept_young + bn - o))
     kept_open=$((kept_open + o - d))
-    b=$(total_bytes "$batch.doomed")
     [ "$d" -eq 0 ] || tr '\n' '\0' < "$batch.doomed" | xargs -0 rm -f -- 2>/dev/null
     # Count what is really gone rather than trusting rm's status for a whole batch.
     left=0
