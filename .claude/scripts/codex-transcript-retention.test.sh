@@ -175,8 +175,9 @@ if [ "\$(wc -l < '$calls')" -gt 1 ]; then printf 'n%s\n' '$old_arch'; fi
 LSOF
 chmod +x "$bin/lsof"
 run apply 14
-if [ "$rc" = 0 ] && [ -e "$old_arch" ] && [ ! -e "$old_live" ]; then
-  ok 'a transcript a session opens after the first open-file read is kept'
+if [ "$rc" = 0 ] && [ -e "$old_arch" ] && [ ! -e "$old_live" ] \
+  && grep -q 'kept_open=1 ' <<<"$out" && grep -q 'kept_written=0 ' <<<"$out"; then
+  ok 'a transcript a session opens after the first open-file read is kept and reported as kept_open'
 else
   bad 'late open kept' "rc=$rc out=$out"
 fi
@@ -198,6 +199,21 @@ if [ "$rc" = 0 ] && [ -e "$old_arch" ] && grep -q 'kept_written=1' <<<"$out"; th
   ok 'a transcript written after the first scan is kept and reported as kept_written'
 else
   bad 'late write kept' "rc=$rc out=$out"
+fi
+
+# --- a list that cannot be counted removes nothing ---------------------------------
+seed
+fake_lsof
+printf '#!/bin/sh\ncat > /dev/null\nexit 1\n' > "$bin/wc"
+chmod +x "$bin/wc"
+out=$(PATH="$bin:$PATH" CODEX_TRANSCRIPT_RETENTION_HOME="$home" CODEX_TRANSCRIPT_RETENTION_LSOF="$bin/lsof" \
+  bash "$impl" apply 14 2>&1)
+rc=$?
+rm -f "$bin/wc"
+if [ "$rc" = 2 ] && [ -e "$old_live" ] && [ -e "$old_arch" ] && grep -q 'could not be counted' <<<"$out"; then
+  ok 'a failing line count exits 2 and removes nothing'
+else
+  bad 'uncountable list fails closed' "rc=$rc out=$out"
 fi
 
 # --- a failing list stage removes nothing -------------------------------------------

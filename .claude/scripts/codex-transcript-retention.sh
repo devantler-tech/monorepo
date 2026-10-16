@@ -76,11 +76,26 @@ if [ "$MIN_AGE_DAYS" -lt "$MIN_ALLOWED_DAYS" ]; then
 fi
 MIN_AGE_MINUTES=$((MIN_AGE_DAYS * 1440))
 
+work=$(mktemp -d) || { log 'UNKNOWN: cannot create a work directory' >&2; exit 2; }
+retention_finished=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf -- "$work"
+  if [ "$retention_finished" != 1 ] && [ "$status" = 0 ]; then
+    log "UNKNOWN: aborted before finishing" >&2
+    exit 2
+  fi
+}
+trap on_exit EXIT
+
 CODEX_HOME_DIR=${CODEX_TRANSCRIPT_RETENTION_HOME:-${CODEX_HOME:-${HOME:-}/.codex}}
 ME=$(id -u) || { log 'UNKNOWN: cannot read the current user id' >&2; exit 2; }
 
 if [ ! -e "$CODEX_HOME_DIR" ] && [ ! -L "$CODEX_HOME_DIR" ]; then
   log "no Codex home at ${CODEX_HOME_DIR}; nothing to do"
+  retention_finished=1
   exit 0
 fi
 if [ -L "$CODEX_HOME_DIR" ] || [ ! -d "$CODEX_HOME_DIR" ]; then
@@ -159,21 +174,20 @@ total_bytes() {
   fi
 }
 
-count() { if [ -s "$1" ]; then wc -l < "$1" | tr -d ' '; else printf '0'; fi; }
-
-work=$(mktemp -d) || { log 'UNKNOWN: cannot create a work directory' >&2; exit 2; }
-retention_finished=0
-# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
-# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
-on_exit() {
-  local status=$?
-  rm -rf -- "$work"
-  if [ "$retention_finished" != 1 ] && [ "$status" = 0 ]; then
-    log "UNKNOWN: aborted before finishing" >&2
-    exit 2
+# count prints the number of lines in a list, or fails: a list it cannot read completely must
+# never be acted on, because a short count would let a removal run on a partly read list.
+count() {
+  local lines
+  if [ ! -s "$1" ]; then
+    [ -e "$1" ] || return 1
+    printf '0'
+    return 0
   fi
+  lines=$(wc -l < "$1") || return 1
+  lines=$(printf '%s' "$lines" | tr -d ' ') || return 1
+  case "$lines" in '' | *[!0-9]*) return 1 ;; esac
+  printf '%s' "$lines"
 }
-trap on_exit EXIT
 
 LSOF=$(resolve_lsof) || LSOF=''
 lsof_ok=1
@@ -215,7 +229,11 @@ for name in sessions archived_sessions; do
     unknown=$((unknown + 1))
     continue
   fi
-  n=$(count "$old")
+  n=$(count "$old") || {
+    log "UNKNOWN: the candidate list for ${root} could not be counted; nothing removed from it"
+    unknown=$((unknown + 1))
+    continue
+  }
   candidates=$((candidates + n))
   [ "$lsof_ok" = 1 ] || continue
 
@@ -226,7 +244,11 @@ for name in sessions archived_sessions; do
     unknown=$((unknown + 1))
     continue
   }
-  c=$(count "$closed")
+  c=$(count "$closed") || {
+    log "UNKNOWN: the closed-file list for ${root} could not be counted; nothing removed from it"
+    unknown=$((unknown + 1))
+    continue
+  }
   kept_open=$((kept_open + n - c))
 
   if [ "$MODE" != apply ]; then
@@ -247,7 +269,11 @@ for name in sessions archived_sessions; do
   }
   for batch in "$work/$name".batch.*; do
     [ -s "$batch" ] || continue
-    bn=$(count "$batch")
+    bn=$(count "$batch") || {
+      log "UNKNOWN: a batch under ${root} could not be counted; the rest of it is kept"
+      unknown=$((unknown + 1))
+      break
+    }
     if ! open_snapshot "$work/open.now"; then
       log "UNKNOWN: the open-file list could not be read again; the rest of ${root} is kept"
       unknown=$((unknown + 1))
@@ -263,8 +289,15 @@ for name in sessions archived_sessions; do
       unknown=$((unknown + 1))
       break
     }
-    d=$(count "$batch.doomed")
-    kept_young=$((kept_young + bn - d))
+    # Two separate counts, so the summary names why each survivor was kept: written to
+    # since the first read (no longer old), or opened since then (still old, now open).
+    if ! o=$(count "$batch.old") || ! d=$(count "$batch.doomed"); then
+      log "UNKNOWN: a batch under ${root} could not be counted; the rest of it is kept"
+      unknown=$((unknown + 1))
+      break
+    fi
+    kept_young=$((kept_young + bn - o))
+    kept_open=$((kept_open + o - d))
     b=$(total_bytes "$batch.doomed")
     [ "$d" -eq 0 ] || tr '\n' '\0' < "$batch.doomed" | xargs -0 rm -f -- 2>/dev/null
     # Count what is really gone rather than trusting rm's status for a whole batch.
