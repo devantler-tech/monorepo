@@ -313,7 +313,10 @@ for mode in apply dry-run; do
     bash "$impl" "$mode" 14 2>&1)
   rc=$?
   rm -f "$bin/stat"
-  if [ "$rc" = 2 ] && [ -e "$old_live" ] && [ -e "$old_arch" ] && grep -q 'sizes under' <<<"$out"; then
+  # dry-run sums the sizes of its whole list; apply reads each file's size before removing it,
+  # so there each unmeasured file is kept and counted as a failed removal.
+  if [ "$rc" = 2 ] && [ -e "$old_live" ] && [ -e "$old_arch" ] &&
+    grep -qE 'sizes under|removed=0 .*failed=4 reclaimed=~0 MB' <<<"$out"; then
     ok "$mode: a failing size read exits 2 and removes nothing"
   else
     bad "$mode: size read fails closed" "rc=$rc out=$out"
@@ -337,6 +340,30 @@ if [ "$rc" = 2 ] && [ ! -e "$old_live" ] && [ -e "$ro_dir/rollout-2026-09-06T00-
   ok 'a partly failed batch exits 2 and still reports the ~3 MB it freed'
 else
   bad 'partial batch bytes' "rc=$rc out=$out"
+fi
+
+# --- an unset home is UNKNOWN, never `/.codex` ---------------------------------------
+out=$(env -u HOME -u CODEX_HOME -u CODEX_TRANSCRIPT_RETENTION_HOME \
+  CODEX_TRANSCRIPT_RETENTION_LSOF="$bin/lsof" bash "$impl" dry-run 14 2>&1)
+rc=$?
+if [ "$rc" = 2 ] && grep -q 'no Codex home is set' <<<"$out"; then
+  ok 'no HOME, CODEX_HOME or override exits 2 instead of reading /.codex'
+else
+  bad 'unset home' "rc=$rc out=$out"
+fi
+
+# --- a home below a directory that cannot be searched is UNKNOWN, not absent ----------
+locked="$fixture/locked"
+mkdir -p "$locked/codex/archived_sessions"
+chmod 000 "$locked"
+out=$(CODEX_TRANSCRIPT_RETENTION_HOME="$locked/codex" CODEX_TRANSCRIPT_RETENTION_LSOF="$bin/lsof" \
+  bash "$impl" apply 14 2>&1)
+rc=$?
+chmod 700 "$locked"
+if [ "$rc" = 2 ] && grep -q 'cannot be examined' <<<"$out"; then
+  ok 'a home under an unsearchable directory exits 2 rather than "nothing to do"'
+else
+  bad 'unsearchable home' "rc=$rc out=$out"
 fi
 
 # --- no Codex home is a clean no-op -------------------------------------------------

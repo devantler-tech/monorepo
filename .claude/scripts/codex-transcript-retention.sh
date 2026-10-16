@@ -86,20 +86,36 @@ on_exit() {
   local status=$?
   rm -rf -- "$work"
   if [ "$retention_finished" != 1 ] && [ "$status" != 2 ]; then
-    log "UNKNOWN: aborted before finishing" >&2
-    [ "$status" != 0 ] || status=2
-    exit "$status"
+    log "UNKNOWN: aborted before finishing (status ${status})" >&2
+    exit 2
   fi
 }
 trap on_exit EXIT
 
-CODEX_HOME_DIR=${CODEX_TRANSCRIPT_RETENTION_HOME:-${CODEX_HOME:-${HOME:-}/.codex}}
+# An unset home is never turned into a path: with HOME unset `${HOME}/.codex` would be `/.codex`.
+if [ -n "${CODEX_TRANSCRIPT_RETENTION_HOME:-}" ]; then
+  CODEX_HOME_DIR=$CODEX_TRANSCRIPT_RETENTION_HOME
+elif [ -n "${CODEX_HOME:-}" ]; then
+  CODEX_HOME_DIR=$CODEX_HOME
+elif [ -n "${HOME:-}" ]; then
+  CODEX_HOME_DIR=$HOME/.codex
+else
+  log 'UNKNOWN: no Codex home is set (CODEX_TRANSCRIPT_RETENTION_HOME, CODEX_HOME or HOME)'
+  exit 2
+fi
 ME=$(id -u) || { log 'UNKNOWN: cannot read the current user id' >&2; exit 2; }
 
+# "Absent" is believed only when the parent directory can be searched: below one that cannot,
+# -e and -L read false for a home that exists, and nothing would have been examined.
 if [ ! -e "$CODEX_HOME_DIR" ] && [ ! -L "$CODEX_HOME_DIR" ]; then
-  log "no Codex home at ${CODEX_HOME_DIR}; nothing to do"
-  retention_finished=1
-  exit 0
+  home_parent=$(dirname -- "$CODEX_HOME_DIR")
+  if [ -d "$home_parent" ] && [ -x "$home_parent" ]; then
+    log "no Codex home at ${CODEX_HOME_DIR}; nothing to do"
+    retention_finished=1
+    exit 0
+  fi
+  log "UNKNOWN: ${CODEX_HOME_DIR} cannot be examined (its parent cannot be searched)"
+  exit 2
 fi
 if [ -L "$CODEX_HOME_DIR" ] || [ ! -d "$CODEX_HOME_DIR" ]; then
   log "UNKNOWN: ${CODEX_HOME_DIR} is not a plain directory; refusing"
@@ -177,6 +193,16 @@ drop_open() {
   LC_ALL=C awk -v open="$2" '
     FILENAME == open { held[tolower($0)] = 1; next }
     !(tolower($0) in held)' "$2" "$1" > "$3"
+}
+
+# file_size <path> prints one file's size in bytes, or fails when it cannot be read.
+file_size() {
+  local s
+  if [ "$(uname -s)" = Darwin ]; then s=$(stat -f %z -- "$1" 2>/dev/null) || return 1
+  else s=$(stat -c %s -- "$1" 2>/dev/null) || return 1
+  fi
+  case "$s" in '' | *[!0-9]*) return 1 ;; esac
+  printf '%s' "$s"
 }
 
 # total_bytes <list> prints the summed size of the files a newline list names (BSD stat on
@@ -323,44 +349,31 @@ for name in sessions archived_sessions; do
       unknown=$((unknown + 1))
       break
     fi
-    # Sizes are read before anything is unlinked, so a failed read keeps the batch.
-    if ! b=$(total_bytes "$batch.doomed"); then
-      log "UNKNOWN: sizes under ${root} could not be read completely; the rest of it is kept"
-      unknown=$((unknown + 1))
-      break
-    fi
     kept_young=$((kept_young + bn - o))
     kept_open=$((kept_open + o - d))
-    # Write the removal list in full before anything is unlinked, and check it holds one entry
-    # per path: a list cut short while being written must remove nothing.
-    if [ "$d" -gt 0 ]; then
-      if ! tr '\n' '\0' < "$batch.doomed" > "$batch.nul" ||
-        [ "$(tr -cd '\0' < "$batch.nul" | wc -c | tr -d ' ')" != "$d" ]; then
-        log "UNKNOWN: the removal list under ${root} could not be written completely; the rest of it is kept"
-        unknown=$((unknown + 1))
-        break
-      fi
-      xargs -0 rm -f -- < "$batch.nul" 2>/dev/null
-    fi
-    # Count what is really gone rather than trusting rm's status for a whole batch. A path
-    # whose directory can no longer be searched reads as absent to -e and -L alike, so it is
-    # counted gone only when that directory is still searchable; otherwise it is a failure.
-    left=0
-    : > "$batch.left" || { log "UNKNOWN: a batch under ${root} could not be checked"; unknown=$((unknown + 1)); break; }
+    # One file at a time: read its size, remove it, then confirm it is gone from a directory
+    # that can still be searched (an unsearchable one reads as absent to -e and -L alike).
+    # Only a confirmed removal is counted, with the size read before it, so any failed read
+    # leaves a file uncounted and the run UNKNOWN — never counted as reclaimed.
+    seen=0
     while IFS= read -r f; do
-      if [ -e "$f" ] || [ -L "$f" ] || [ ! -d "${f%/*}" ] || [ ! -x "${f%/*}" ]; then
-        left=$((left + 1))
-        printf '%s\n' "$f" >> "$batch.left"
+      seen=$((seen + 1))
+      if ! sz=$(file_size "$f"); then
+        failed=$((failed + 1))
+        continue
+      fi
+      rm -f -- "$f" 2>/dev/null
+      if [ ! -e "$f" ] && [ ! -L "$f" ] && [ -d "${f%/*}" ] && [ -x "${f%/*}" ]; then
+        removed=$((removed + 1))
+        bytes=$((bytes + sz))
+      else
+        failed=$((failed + 1))
       fi
     done < "$batch.doomed"
-    removed=$((removed + d - left))
-    failed=$((failed + left))
-    # Reclaimed bytes are the batch's minus what is still there; when the survivors cannot be
-    # measured nothing is added, and the failed removals already make the run UNKNOWN.
-    if [ "$left" -eq 0 ]; then
-      bytes=$((bytes + b))
-    elif kept_b=$(total_bytes "$batch.left"); then
-      bytes=$((bytes + b - kept_b))
+    if [ "$seen" -ne "$d" ]; then
+      log "UNKNOWN: the removal list under ${root} was read for ${seen} of ${d} path(s); the rest of it is kept"
+      unknown=$((unknown + 1))
+      break
     fi
   done
 done
