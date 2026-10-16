@@ -113,6 +113,17 @@ else
 fi
 echo
 
+# The census excludes scripts without errexit only while that shape preserves aborts.
+sed 's/^set -euo pipefail$/set -uo pipefail/' "$tmp/naive.sh" > "$tmp/no-errexit.sh"
+chmod +x "$tmp/no-errexit.sh"
+if ! grep -qx 'set -uo pipefail' "$tmp/no-errexit.sh"; then
+  fail "no-errexit control did not remove errexit"
+elif [ "$(status_of "$tmp/no-errexit.sh" unbound)" -eq 0 ]; then
+  fail "without errexit, the naive trap also masks the abort — excluding it would be unsafe"
+else
+  pass "without errexit, an abort already reports failure"
+fi
+
 # Control: the same abort with NO trap at all must be non-zero on every bash.
 # If this ever reported 0, the fixture would not be aborting and every result
 # above and below it would be vacuous.
