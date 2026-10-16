@@ -6446,16 +6446,74 @@ if want outcomes; then
             | sed -E 's|^.*[:/]([^/]+)/([^/]+)$|\1/\2|' \
             | grep -i '^devantler-tech/' | sort -u)
     REPOS=$(printf 'devantler-tech/monorepo\n%s\n' "$REPOS" | grep -v '^$' | sort -u)
-    TOTAL=0; APIFAIL=0
+    TOTAL=0; APIFAIL=0; REPO_COUNT=0; REST_USED=0
+    # REST fallback for ONE repository's merged agent PRs (monorepo#4267). `gh pr
+    # list` spends the GraphQL budget; when that budget is gone every repository
+    # read UNKNOWN and the merged-PR floor of every open hypothesis went blank
+    # (2 of 8 Improver slots, 10-15 and 10-17), while REST reads in this same
+    # section still worked. Same rules as the GraphQL join below, with the
+    # registry's REST author spelling: `<name>[bot]` is how REST names an app.
+    # Pages are newest-update first; merged_at <= updated_at, so once a page's
+    # oldest update precedes the window no later page holds an in-window merge.
+    # A page cap, an unreadable page or malformed provenance returns failure,
+    # which the caller reports as UNKNOWN — never a partial count.
+    rest_merged_count() {
+      rest_repo=$1; rest_page=1; rest_total=0
+      while [ "$rest_page" -le 10 ]; do
+        rest_raw=$(gh api -X GET "repos/$rest_repo/pulls" -f state=closed -f sort=updated \
+                     -f direction=desc -f per_page=100 -f page="$rest_page" 2>/dev/null) || return 1
+        rest_page_out=$(printf '%s' "$rest_raw" | jq -er --arg since "$SINCE_ISO" --argjson registry "$registry" '
+            if type != "array" then error("malformed PR listing") else . end
+            | . as $rows
+            | [.[]
+               | if (.head.ref | if type == "string"
+                    then length > 0 and (test("[[:space:][:cntrl:]]") | not) else false end)
+                 then . else error("missing or malformed PR branch") end
+               | if (.updated_at | type) != "string" or (has("merged_at") | not)
+                    or ((.merged_at | type) as $t | $t != "string" and $t != "null")
+                 then error("missing PR timestamps") else . end
+               | select(.merged_at != null and .merged_at >= $since) | . as $pr
+               | select(any($registry.instances[];
+                   . as $instance | $pr.head.ref | startswith($instance.namespace + "/")))
+               | if (.user.login | type) != "string" or (.user.login | length == 0)
+                    or (.base.repo.full_name | type) != "string" or (.head | has("repo") | not)
+                 then error("missing PR provenance") else . end
+               | select(.head.repo != null and .head.repo.full_name == .base.repo.full_name)
+               | select(any($registry.instances[];
+                   . as $instance | ($pr.head.ref | startswith($instance.namespace + "/"))
+                   and $pr.user.login == $instance.authors.rest))]
+            | "\(length) \($rows | length) \(if ($rows | length) == 0 then "true" else ($rows[-1].updated_at < $since) end)"
+          ' 2>/dev/null) || return 1
+        read -r rest_n rest_rows rest_older <<<"$rest_page_out" || return 1
+        case "$rest_n" in ''|*[!0-9]*) return 1 ;; esac
+        case "$rest_rows" in ''|*[!0-9]*) return 1 ;; esac
+        case "$rest_older" in true|false) ;; *) return 1 ;; esac
+        rest_total=$((rest_total + rest_n))
+        if [ "$rest_rows" -lt 100 ] || [ "$rest_older" = true ]; then
+          printf '%s\n' "$rest_total"; return 0
+        fi
+        rest_page=$((rest_page + 1))
+      done
+      return 1
+    }
     while IFS= read -r r; do
       [ -n "$r" ] || continue
+      REPO_COUNT=$((REPO_COUNT + 1))
       # AGENT-AUTHORED ONLY. This scorecard diagnoses the registered instances, so a
       # maintainer, external-contributor, or dependency-bot merge must not move
       # it — otherwise a quiet week for the agents plus a busy week for Renovate
       # reads as agent productivity and can trigger a definition change.
       # Match the registered namespace AND the CLI author spelling on an
       # explicitly same-repository head. Same-owner sibling repositories are forks.
-      if ! c=$(gh pr list --repo "$r" --state merged --limit 300 --json mergedAt,headRefName,author,isCrossRepository \
+      # Only a FAILED listing falls back to REST; a malformed answer stays UNKNOWN.
+      if ! prs_json=$(gh pr list --repo "$r" --state merged --limit 300 \
+                        --json mergedAt,headRefName,author,isCrossRepository 2>/dev/null); then
+        if c=$(rest_merged_count "$r"); then
+          REST_USED=$((REST_USED + 1))
+        else
+          printf '    %-42s UNKNOWN (query or provenance)\n' "$r"; APIFAIL=$((APIFAIL+1)); continue
+        fi
+      elif ! c=$(printf '%s' "$prs_json" \
             | jq -er --arg since "$SINCE_ISO" --argjson registry "$registry" '
                 if type != "array" then error("malformed PR listing") else . end
                 | [.[]
@@ -6486,6 +6544,9 @@ EOF
     else
       echo "    ────────────────────────────────────────── total: ${TOTAL}"
     fi
+    # Name the source whenever the fallback answered, so a reader comparing slots
+    # can see which counts came from a different query (monorepo#4267).
+    [ "$REST_USED" -eq 0 ] || echo "    merged-PR source: REST fallback for ${REST_USED} of ${REPO_COUNT} repositories (GraphQL listing failed)"
     # PORTFOLIO-WIDE, matching the merge count above. Reverts are the sharper
     # half of the quality signal, and most agent work lands in product repos —
     # a submodule revert against a monorepo-only check reported "nothing needed
@@ -6736,24 +6797,24 @@ EOF
     echo "    join in its row. Treat that repository as UNMEASURED, never green,"
     echo "    and resolve the named evidence gap before drawing a CI verdict."
     echo "  revert commits since ${SINCE_ISO} (portfolio):"
-    RTOTAL=0
+    RTOTAL=0; RFAIL=0
     while IFS= read -r r; do
       [ -n "$r" ] || continue
       if ! rcraw=$(gh api "repos/$r/commits" -X GET -f since="${SINCE_ISO}T00:00:00Z" --paginate \
              --jq '[.[]|select(.commit.message|test("^Revert";"i"))]|length' 2>/dev/null); then
-        printf '    %-42s QUERY FAILED (auth/rate-limit/network)\n' "$r"; APIFAIL=$((APIFAIL+1)); continue
+        printf '    %-42s QUERY FAILED (auth/rate-limit/network)\n' "$r"; RFAIL=$((RFAIL+1)); continue
       fi
       rc=$(printf '%s' "$rcraw" | awk '{s+=$1} END{print s+0}')
-      case "$rc" in ''|*[!0-9]*) printf '    %-42s UNPARSEABLE RESULT\n' "$r"; APIFAIL=$((APIFAIL+1)); continue ;; esac
+      case "$rc" in ''|*[!0-9]*) printf '    %-42s UNPARSEABLE RESULT\n' "$r"; RFAIL=$((RFAIL+1)); continue ;; esac
       [ "$rc" -gt 0 ] && printf '    %-42s %s\n' "$r" "$rc"
       RTOTAL=$((RTOTAL + rc))
     done <<EOF
 $REPOS
 EOF
     echo "    ────────────────────────────────────────── total: ${RTOTAL}"
-    if [ "${APIFAIL:-0}" -gt 0 ]; then
-      echo "    ⚠️  ${APIFAIL} repo quer(y|ies) FAILED — these totals are INCOMPLETE."
-      echo "        Do NOT read them as 'nothing merged / nothing reverted'."
+    if [ "$RFAIL" -gt 0 ]; then
+      echo "    ⚠️  ${RFAIL} revert quer(y|ies) FAILED — this total is INCOMPLETE."
+      echo "        Do NOT read it as 'nothing reverted'."
     else
       echo "    (0 = nothing needed reverting anywhere in the portfolio)"
     fi

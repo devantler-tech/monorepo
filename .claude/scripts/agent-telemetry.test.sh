@@ -477,6 +477,22 @@ cat > "$FIX/outcomes/prs.json" <<'JSON'
   {"mergedAt":"2099-01-01T00:00:00Z","headRefName":"claude/unregistered","author":{"login":"devantler"},"isCrossRepository":false,"headRepositoryOwner":{"login":"devantler-tech"}}
 ]
 JSON
+# The same population as prs.json in the REST pulls shape, plus the rows only
+# REST can carry: closed-unmerged, merged before the window, a deleted fork.
+# REST spells a bot author `<name>[bot]`, so the registry's REST spelling counts
+# here and the CLI spelling does not (monorepo#4267).
+cat > "$FIX/outcomes/rest-prs.json" <<'JSON'
+[
+  {"merged_at":"2099-01-01T00:00:00Z","updated_at":"2099-01-01T00:00:00Z","head":{"ref":"worker/change","repo":{"full_name":"devantler-tech/monorepo"}},"base":{"repo":{"full_name":"devantler-tech/monorepo"}},"user":{"login":"build-worker[bot]"}},
+  {"merged_at":"2099-01-01T00:00:00Z","updated_at":"2099-01-01T00:00:00Z","head":{"ref":"worker/wrong-spelling","repo":{"full_name":"devantler-tech/monorepo"}},"base":{"repo":{"full_name":"devantler-tech/monorepo"}},"user":{"login":"app/build-worker"}},
+  {"merged_at":"2099-01-01T00:00:00Z","updated_at":"2099-01-01T00:00:00Z","head":{"ref":"worker/fork","repo":{"full_name":"someone/monorepo"}},"base":{"repo":{"full_name":"devantler-tech/monorepo"}},"user":{"login":"build-worker[bot]"}},
+  {"merged_at":"2099-01-01T00:00:00Z","updated_at":"2099-01-01T00:00:00Z","head":{"ref":"worker/deleted-fork","repo":null},"base":{"repo":{"full_name":"devantler-tech/monorepo"}},"user":{"login":"build-worker[bot]"}},
+  {"merged_at":"2099-01-01T00:00:00Z","updated_at":"2099-01-01T00:00:00Z","head":{"ref":"codex/forged","repo":{"full_name":"devantler-tech/monorepo"}},"base":{"repo":{"full_name":"devantler-tech/monorepo"}},"user":{"login":"stranger"}},
+  {"merged_at":"2099-01-01T00:00:00Z","updated_at":"2099-01-01T00:00:00Z","head":{"ref":"claude/unregistered","repo":{"full_name":"devantler-tech/monorepo"}},"base":{"repo":{"full_name":"devantler-tech/monorepo"}},"user":{"login":"devantler"}},
+  {"merged_at":null,"updated_at":"2099-01-01T00:00:00Z","head":{"ref":"worker/closed-unmerged","repo":{"full_name":"devantler-tech/monorepo"}},"base":{"repo":{"full_name":"devantler-tech/monorepo"}},"user":{"login":"build-worker[bot]"}},
+  {"merged_at":"2000-01-01T00:00:00Z","updated_at":"2000-01-01T00:00:00Z","head":{"ref":"worker/before-window","repo":{"full_name":"devantler-tech/monorepo"}},"base":{"repo":{"full_name":"devantler-tech/monorepo"}},"user":{"login":"build-worker[bot]"}}
+]
+JSON
 : > "$FIX/outcomes/classification-empty.tsv"
 printf '%s\n' \
   $'22\tfailure\thttps://example.test/managed-failure\tAnalyze (actions)\tdynamic\tdynamic/github-code-scanning/codeql\t2026-09-18T09:00:00Z\t201\t1' \
@@ -540,6 +556,8 @@ cat > "$FIX/outcomes/bin/gh" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
   'pr list '*)
+    # A GraphQL outage: the listing command itself fails (monorepo#4267).
+    [ -z "${OUTCOMES_PR_LIST_FAIL:-}" ] || exit 1
     while [ $# -gt 0 ]; do
       if [ "$1" = --jq ]; then jq -r "$2" "$OUTCOMES_PRS"; exit; fi
       shift
@@ -549,6 +567,15 @@ case "$*" in
     printf '%s\n' '0123456789abcdef0123456789abcdef01234567' ;;
   'api --paginate --slurp --method GET repos/devantler-tech/monorepo/actions/workflows/22/runs '*)
     cat "$OUTCOMES_MANAGED_HISTORY" ;;
+  'api -X GET repos/devantler-tech/monorepo/pulls -f state=closed -f sort=updated -f direction=desc -f per_page=100 -f page=1')
+    [ -z "${OUTCOMES_REST_FAIL:-}" ] || exit 1
+    cat "$OUTCOMES_REST_PAGE1" ;;
+  'api -X GET repos/devantler-tech/monorepo/pulls -f state=closed -f sort=updated -f direction=desc -f per_page=100 -f page=2')
+    [ -n "${OUTCOMES_REST_PAGE2:-}" ] || exit 93
+    cat "$OUTCOMES_REST_PAGE2" ;;
+  'api repos/devantler-tech/monorepo/commits -X GET '*)
+    [ -z "${OUTCOMES_COMMITS_FAIL:-}" ] || exit 1
+    printf '0\n' ;;
   'api repos/'*) printf '0\n' ;;
   *) exit 93 ;;
 esac
@@ -567,6 +594,9 @@ outcomes_run() {
   PATH="$FIX/outcomes/bin:$PATH" OUTCOMES_PRS="${OUTCOMES_PRS:-$FIX/outcomes/prs.json}" \
   OUTCOMES_CLASSIFICATION="${OUTCOMES_CLASSIFICATION:-$FIX/outcomes/classification-empty.tsv}" \
   OUTCOMES_MANAGED_HISTORY="${OUTCOMES_MANAGED_HISTORY:-$FIX/outcomes/managed-history-first.json}" \
+  OUTCOMES_PR_LIST_FAIL="${OUTCOMES_PR_LIST_FAIL:-}" OUTCOMES_REST_FAIL="${OUTCOMES_REST_FAIL:-}" \
+  OUTCOMES_REST_PAGE1="${OUTCOMES_REST_PAGE1:-$FIX/outcomes/rest-prs.json}" \
+  OUTCOMES_REST_PAGE2="${OUTCOMES_REST_PAGE2:-}" OUTCOMES_COMMITS_FAIL="${OUTCOMES_COMMITS_FAIL:-}" \
   AGENT_CI_CLASSIFIER="$FIX/outcomes/classifier" \
   AGENT_CI_DESIRED_STATE="$FIX/outcomes/desired-state.json" \
   MONOREPO_DIR="$FIX/outcomes/repo" CLAUDE_PROJECTS_DIR="$FIX/outcomes/no-corpus" \
@@ -707,6 +737,47 @@ if grep -qE 'devantler-tech/monorepo +1$' <<<"$OUT"; then
 else
   ok "outcomes never presents a partial branch join as a complete count"
 fi
+# GraphQL outage → REST fallback (monorepo#4267). The listing command failing is
+# the only trigger: a malformed GraphQL answer stays UNKNOWN, as above.
+jq '[.[0] | del(.author)]' "$FIX/outcomes/prs.json" > "$FIX/outcomes/missing.json"
+OUT=$(OUTCOMES_PRS="$FIX/outcomes/missing.json" outcomes_run); RC=$?
+check "outcomes malformed GraphQL answer stays UNKNOWN" "$OUT" 'merged PRs: UNKNOWN'
+nocheck "outcomes malformed GraphQL answer never falls back to REST" "$OUT" 'REST fallback'
+OUT=$(OUTCOMES_PR_LIST_FAIL=1 outcomes_run); RC=$?
+check "outcomes GraphQL listing failure counts the same population through REST" "$OUT" 'devantler-tech/monorepo                    1'
+check "outcomes REST fallback names its source" "$OUT" 'merged-PR source: REST fallback for 1 of 1 repositories'
+nocheck "outcomes REST fallback is not reported as UNKNOWN" "$OUT" 'merged PRs: UNKNOWN'
+nocheck "outcomes GraphQL-only outage does not mark the measured revert total incomplete" "$OUT" 'FAILED'
+OUT=$(OUTCOMES_PR_LIST_FAIL=1 OUTCOMES_REST_FAIL=1 outcomes_run); RC=$?
+check "outcomes GraphQL and REST failure stays UNKNOWN" "$OUT" 'merged PRs: UNKNOWN'
+nocheck "outcomes GraphQL and REST failure never names a REST source" "$OUT" 'REST fallback'
+for field in user head base merged_at updated_at; do
+  jq "[.[0] | del(.$field)]" "$FIX/outcomes/rest-prs.json" > "$FIX/outcomes/rest-missing.json"
+  OUT=$(OUTCOMES_PR_LIST_FAIL=1 OUTCOMES_REST_PAGE1="$FIX/outcomes/rest-missing.json" outcomes_run); RC=$?
+  check "outcomes REST row missing $field is UNKNOWN" "$OUT" 'merged PRs: UNKNOWN'
+done
+for branch in null '""' '"worker/space name"' 7; do
+  jq --argjson branch "$branch" '[.[0] | .head.ref = $branch]' "$FIX/outcomes/rest-prs.json" > "$FIX/outcomes/rest-missing.json"
+  OUT=$(OUTCOMES_PR_LIST_FAIL=1 OUTCOMES_REST_PAGE1="$FIX/outcomes/rest-missing.json" outcomes_run); RC=$?
+  check "outcomes REST malformed branch $branch is UNKNOWN" "$OUT" 'merged PRs: UNKNOWN'
+done
+printf '{"message":"API rate limit exceeded"}\n' > "$FIX/outcomes/rest-missing.json"
+OUT=$(OUTCOMES_PR_LIST_FAIL=1 OUTCOMES_REST_PAGE1="$FIX/outcomes/rest-missing.json" outcomes_run); RC=$?
+check "outcomes REST non-list answer is UNKNOWN" "$OUT" 'merged PRs: UNKNOWN'
+# A full page whose oldest update is still inside the window must read the next
+# page; a full page reaching before the window must stop there.
+jq '[range(100) as $i | .[0] | .head.ref = "worker/page-\($i)"]' "$FIX/outcomes/rest-prs.json" > "$FIX/outcomes/rest-full-recent.json"
+OUT=$(OUTCOMES_PR_LIST_FAIL=1 OUTCOMES_REST_PAGE1="$FIX/outcomes/rest-full-recent.json" \
+      OUTCOMES_REST_PAGE2="$FIX/outcomes/rest-prs.json" outcomes_run); RC=$?
+check "outcomes REST fallback sums every page inside the window" "$OUT" 'devantler-tech/monorepo                    101'
+OUT=$(OUTCOMES_PR_LIST_FAIL=1 OUTCOMES_REST_PAGE1="$FIX/outcomes/rest-full-recent.json" outcomes_run); RC=$?
+check "outcomes REST fallback with an unreadable next page is UNKNOWN" "$OUT" 'merged PRs: UNKNOWN'
+jq '[range(100) as $i | .[7] | .head.ref = "worker/old-\($i)"]' "$FIX/outcomes/rest-prs.json" > "$FIX/outcomes/rest-full-old.json"
+OUT=$(OUTCOMES_PR_LIST_FAIL=1 OUTCOMES_REST_PAGE1="$FIX/outcomes/rest-full-old.json" outcomes_run); RC=$?
+check "outcomes REST fallback stops at the first page reaching before the window" "$OUT" 'merged-PR source: REST fallback for 1 of 1 repositories'
+nocheck "outcomes REST fallback stopping early is not UNKNOWN" "$OUT" 'merged PRs: UNKNOWN'
+OUT=$(OUTCOMES_COMMITS_FAIL=1 outcomes_run); RC=$?
+check "outcomes revert query failure still marks the revert total incomplete" "$OUT" 'FAILED — this total is INCOMPLETE'
 for registry in missing malformed; do
   printf '{}\n' > "$FIX/outcomes/malformed-instances.json"
   OUT=$(outcomes_run --instances "$FIX/outcomes/$registry-instances.json"); RC=$?
