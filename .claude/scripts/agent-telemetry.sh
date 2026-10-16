@@ -5127,9 +5127,9 @@ fi
 # mode: duplicate artifacts, two-writer races, clobbered pushes.
 #
 # The local transcript adapters do not establish the deployment's writer count.
-# Session counts cover their respective corpora; collision metrics are Claude-only,
-# because they read errored tool results and Codex records carry no error flag.
-# Other adapters are unmeasured, never inferred from a branch namespace.
+# Session counts cover their respective corpora. Historical failure signals and
+# attributed edit-refusal candidates are Claude-only; distinct writers remain
+# unmeasured. Other adapters are never inferred from a branch namespace.
 if want a2a; then
   echo
   echo "── CROSS-INSTANCE / A2A ─────────────────────────────────────────"
@@ -5186,7 +5186,7 @@ if want a2a; then
     echo "          NOT counted — which understates precisely the cross-instance"
     echo "          coordination this section exists to measure. Unmeasured, not zero."
     echo "          These native adapters do not measure other runtime corpora;"
-    echo "          collision counts are a lower bound, never a deployment total."
+    echo "          raw phrase counts are not a deployment collision total."
   fi
   if command -v sqlite3 >/dev/null 2>&1 && [ -f "$CODEX_HOME/logs_2.sqlite" ]; then
     CUT=$(( $(date +%s) - SINCE_DAYS*86400 ))
