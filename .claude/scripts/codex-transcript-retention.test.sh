@@ -307,7 +307,8 @@ fi
 for mode in apply dry-run; do
   seed
   fake_lsof
-  printf '#!/bin/sh\nexit 1\n' > "$bin/stat"
+  # Fail only the size reads (%z / %s), so the root identity read still works.
+  printf '#!/bin/sh\ncase "$*" in *%%z*|*%%s*) exit 1 ;; esac\nexec %s "$@"\n' "$(command -v stat)" > "$bin/stat"
   chmod +x "$bin/stat"
   out=$(PATH="$bin:$PATH" CODEX_TRANSCRIPT_RETENTION_HOME="$home" CODEX_TRANSCRIPT_RETENTION_LSOF="$bin/lsof" \
     bash "$impl" "$mode" 14 2>&1)
@@ -340,6 +341,39 @@ if [ "$rc" = 2 ] && [ ! -e "$old_live" ] && [ -e "$ro_dir/rollout-2026-09-06T00-
   ok 'a partly failed batch exits 2 and still reports the ~3 MB it freed'
 else
   bad 'partial batch bytes' "rc=$rc out=$out"
+fi
+
+# --- a root swapped for a link after the scan is never deleted through --------------
+seed
+decoy="$fixture/decoy"
+rm -rf -- "$decoy" "$home/archived_sessions.real"
+mkdir -p "$decoy"
+decoy_file="$decoy/${old_arch##*/}"
+printf 'x\n' > "$decoy_file"
+age "$decoy_file" 30
+fake_lsof
+# split runs after a root is scanned and before its batches: when it splits
+# archived_sessions/' list, swap that root for a link to the decoy.
+real_split=$(command -v split)
+cat > "$bin/split" <<SPLIT
+#!/usr/bin/env bash
+case "\$*" in
+  *archived_sessions.batch.*)
+    mv '$home/archived_sessions' '$home/archived_sessions.real'
+    ln -s '$decoy' '$home/archived_sessions' ;;
+esac
+exec '$real_split' "\$@"
+SPLIT
+chmod +x "$bin/split"
+out=$(PATH="$bin:$PATH" CODEX_TRANSCRIPT_RETENTION_HOME="$home" CODEX_TRANSCRIPT_RETENTION_LSOF="$bin/lsof" \
+  bash "$impl" apply 14 2>&1)
+rc=$?
+rm -f "$bin/split" "$home/archived_sessions"
+mv "$home/archived_sessions.real" "$home/archived_sessions"
+if [ "$rc" = 2 ] && [ -e "$decoy_file" ] && grep -q 'changed since it was scanned' <<<"$out"; then
+  ok 'a root replaced by a link after its scan keeps the link target untouched and exits 2'
+else
+  bad 'swapped root pinned' "rc=$rc out=$out"
 fi
 
 # --- an unset home is UNKNOWN, never `/.codex` ---------------------------------------

@@ -195,6 +195,16 @@ drop_open() {
     !(tolower($0) in held)' "$2" "$1" > "$3"
 }
 
+# dir_id <path> prints the device and inode a path resolves to, or fails.
+dir_id() {
+  local id
+  if [ "$(uname -s)" = Darwin ]; then id=$(stat -f '%d:%i' -- "$1" 2>/dev/null) || return 1
+  else id=$(stat -c '%d:%i' -- "$1" 2>/dev/null) || return 1
+  fi
+  case "$id" in '' | *[!0-9:]* | :* | *:) return 1 ;; esac
+  printf '%s' "$id"
+}
+
 # file_size <path> prints one file's size in bytes, or fails when it cannot be read.
 file_size() {
   local s
@@ -265,13 +275,20 @@ for name in sessions archived_sessions; do
     unknown=$((unknown + 1))
     continue
   fi
+  # Pin the root: before each batch it must still be this same directory, so a root swapped
+  # for a link (or moved under a linked ancestor) after the scan is never deleted through.
+  root_id=$(dir_id "$root") || {
+    log "UNKNOWN: ${root} could not be identified; nothing removed from it"
+    unknown=$((unknown + 1))
+    continue
+  }
   old="$work/$name.old"
   if ! list_old "$root" "$old"; then
     log "UNKNOWN: ${root} could not be read completely; nothing removed from it"
     unknown=$((unknown + 1))
     continue
   fi
-  odd=$(cat "$old.odd" 2>/dev/null)
+  odd=$(cat "$old.odd" 2>/dev/null) || odd=1
   case "$odd" in '' | *[!0-9]*) odd=1 ;; esac
   if [ "$odd" -gt 0 ]; then
     log "UNKNOWN: ${odd} path(s) under ${root} hold a line break; nothing removed from it"
@@ -322,6 +339,11 @@ for name in sessions archived_sessions; do
   }
   for batch in "$work/$name".batch.*; do
     [ -s "$batch" ] || continue
+    if [ -L "$root" ] || [ ! -d "$root" ] || [ "$(dir_id "$root" 2>/dev/null)" != "$root_id" ]; then
+      log "UNKNOWN: ${root} changed since it was scanned; the rest of it is kept"
+      unknown=$((unknown + 1))
+      break
+    fi
     bn=$(count "$batch") || {
       log "UNKNOWN: a batch under ${root} could not be counted; the rest of it is kept"
       unknown=$((unknown + 1))
