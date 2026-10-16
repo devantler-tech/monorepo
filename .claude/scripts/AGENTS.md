@@ -13,6 +13,8 @@ guides honest. The root [`AGENTS.md`](../../AGENTS.md) still applies; this file 
   from a filtered read as unproven until an unfiltered control agrees.
 - **Fail closed on an abort.** bash 3.2 can exit `0` from an `EXIT` trap after a `set -u` abort: set a
   `…_finished` flag at the end and list the script in `cleanup-trap-fail-closed.test.sh`.
+  Its syntax-aware census requires an injected-abort case or an explained exception for every
+  tracked script that combines errexit with an exit trap.
 - Start with `set -euo pipefail`, quote every expansion, and keep `shellcheck` clean.
 - **Probe the way the script runs (`bash -c`),** not in the interactive zsh, whose wrapped tools
   hide BSD failures. `gnu-only-syntax-guard.sh` flags the measured GNU-only forms.

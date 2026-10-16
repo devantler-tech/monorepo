@@ -204,8 +204,8 @@ echo
 #    missing input) can never pass vacuously. On a bash that carries the defect
 #    the copy must also report through the sentinel, which is what proves the
 #    sentinel, and not some earlier failure, turned the abort into a failure.
-#    The list only grows: a script removed from it, or a sentinel removed from a
-#    script on it, fails here.
+#    A syntax-aware census requires every tracked errexit/EXIT-trap script to
+#    have an injection case or a reviewed exception (monorepo#4114).
 # ---------------------------------------------------------------------------
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
@@ -217,8 +217,24 @@ printf 'replacement line\n' > "$tmp/converted/replacement.md"
 printf '{"scheduledTasks":[{"id":"alpha","enabled":true,"lastRunAt":1,"createdAt":0,"cronExpression":"0 * * * *"}]}\n' \
   > "$tmp/converted/store.json"
 
-# <script>|<arguments that carry it past its own input checks to the trap line>
+# <script>|<arguments that reach the trap>|<optional backstop text or exit:status>
 converted_scripts="
+cleanup-trap-fail-closed.test.sh|
+bash-parse-guard.sh|$repo_root
+bot-pr-adaptation-push.sh|
+business-site-publication.test.sh||exit:2
+ci-job-wiring.sh|$repo_root/.github/workflows/ci.yaml
+contract-test-invocation.sh|$repo_root/.github/workflows/ci.yaml $script_dir
+disk-preflight.sh|
+gnu-only-syntax-guard.sh|
+maintainer-comment-candidates.sh|
+pr-worktree-holder.sh|--input -|exit:2
+required-gate-completeness.sh|--input -|exit:2
+sibling-lane-watch.sh|
+silent-scheduled-workflows.sh|
+worktree-inventory-classify.sh|--inventory $tmp/converted/memory.md|exit:2
+worktree-inventory-merged-check.sh|$tmp/converted|exit:2
+worktree-lane-sweep.sh|
 business-site-ci.test.sh|
 memory-backup.sh|
 memory-hygiene.sh|
@@ -339,26 +355,38 @@ worktree-cleanup.test.sh|
 agent-role-delivery-contract.test.sh|
 "
 
+# This trap is installed only inside a real submodule synchronization transaction.
+# The generic pre-trap harness must not perform those checkouts merely to reach it.
+# Exceptions remain explicit reviewed obligations, not evidence of an injected abort.
+excepted_scripts='submodule-init.sh|The --sync handler is installed after Git/submodule transactions; reaching it needs its dedicated isolation fixtures rather than the generic pre-trap harness.'
+printf '%s\n' "$converted_scripts" > "$tmp/injected"
+printf '%s\n' "$excepted_scripts" > "$tmp/exceptions"
+go -C "$script_dir/cleanup-trap-census-go" test ./...
+go -C "$script_dir/cleanup-trap-census-go" build -o "$tmp/census" .
+"$tmp/census" --root "$repo_root" --covered "$tmp/injected" --exceptions "$tmp/exceptions"
+
 echo "converted scripts (\`set -u\` abort injected after the trap line):"
-while IFS='|' read -r name args; do
+while IFS='|' read -r name args backstop; do
   [ -n "$name" ] || continue
   src="$script_dir/$name"
   if [ ! -f "$src" ]; then
     fail "${name}: listed as converted but not found at ${src}"
     continue
   fi
-  trap_line="$(grep -n -E '^[[:space:]]*trap [A-Za-z_][A-Za-z0-9_]* EXIT$' "$src" | head -1 | cut -d: -f1 || true)"
+  trap_line="$(grep -n -E '^[[:space:]]*trap .+ EXIT$' "$src" | head -1 | cut -d: -f1 || true)"
   if [ -z "$trap_line" ]; then
-    fail "${name}: no \`trap <handler> EXIT\` line to inject after — the canonical shape is missing"
+    fail "${name}: no EXIT trap line to inject after — the cleanup shape is missing"
     continue
   fi
-  # Each copy gets its own directory. A script that sources a sibling by its own location needs
-  # that sibling beside it, so the directory is filled with links to the other scripts. The copy
-  # is written first, into a fresh directory, and a link is never created over an existing name,
-  # so nothing here can write through a link into a real script.
+  # Each copy gets its own directory with sibling links for relative sources. One ln invocation
+  # avoids thousands of process starts. Unlink only this script's private link before writing
+  # its copy, so no write can follow a link into a real script.
   run_dir="$tmp/converted/$name.d"
   mkdir "$run_dir"
   copy="$run_dir/$name"
+  ln -s "$script_dir"/*.sh "$run_dir/"
+  [ -L "$copy" ] || { fail "${name}: fixture link missing"; continue; }
+  rm "$copy"
   {
     head -n "$trap_line" "$src"
     # shellcheck disable=SC2016 # Written literally into the copy, expanded when it runs.
@@ -366,9 +394,6 @@ while IFS='|' read -r name args; do
     tail -n "+$((trap_line + 1))" "$src"
   } > "$copy"
   chmod +x "$copy"
-  for sibling in "$script_dir"/*.sh; do
-    [ -e "$run_dir/$(basename "$sibling")" ] || ln -s "$sibling" "$run_dir/"
-  done
   reached="$tmp/converted/$name.reached"
   rm -f "$reached"
   rc=0
@@ -380,8 +405,23 @@ while IFS='|' read -r name args; do
     fail "${name}: the copy stopped before its trap line (exit ${rc}), so this result proves nothing: ${err}"
   elif [ "$rc" -eq 0 ]; then
     fail "${name}: a \`set -u\` abort after the trap line reported a CLEAN PASS"
-  elif [ "$naive_unbound" -eq 0 ] && ! grep -q 'aborted before' <<<"$err"; then
-    fail "${name}: exit ${rc}, but not through the sentinel on a bash that masks the abort: ${err}"
+  elif [ "$naive_unbound" -eq 0 ]; then
+    case "$backstop" in
+      exit:*)
+        if [ "$rc" != "${backstop#exit:}" ]; then
+          fail "${name}: abort exited ${rc}, expected its explicit backstop status ${backstop#exit:}"
+        else
+          pass "${name}: the reached abort reports its explicit backstop status ${rc}"
+        fi
+        ;;
+      *)
+        if ! grep -Fq -- "${backstop:-aborted before}" <<<"$err"; then
+          fail "${name}: exit ${rc}, but not through the sentinel on a bash that masks the abort: ${err}"
+        else
+          pass "${name}: the abort reports failure (exit ${rc})"
+        fi
+        ;;
+    esac
   else
     pass "${name}: the abort reports failure (exit ${rc})"
   fi
