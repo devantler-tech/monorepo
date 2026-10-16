@@ -38,11 +38,15 @@
 # allowance read at startup (monorepo#4100). The oldest-list lookup counts against that budget too.
 # Concurrent users can still spend the allowance first; a refusal defers rather than retries.
 #
-# Read-only. Prints issue and PR numbers only, never titles or bodies (untrusted input).
+# Forge read-only. Go parses body references locally using its normal build cache.
+# Prints issue and PR numbers only, never titles or bodies (untrusted input).
 #
 # Test seam: when DELIVERED_OPEN_GH is set, it is run instead of `gh` for every API call, with the
 # same arguments.
 set -uo pipefail
+
+script_dir="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)" || exit 2
+command -v go >/dev/null 2>&1 || { echo "UNKNOWN Go is required for local body-reference parsing" >&2; exit 2; }
 
 ORG=devantler-tech
 issues=()
@@ -193,8 +197,9 @@ for ref in "${issues[@]}"; do
 
   # A PR whose body names the issue does not always leave a timeline event: platform#2973 delivered
   # platform#2972 and says so in its body, yet #2972 records no cross-reference. So also search the
-  # repository's PRs for the number and keep only bodies that name it as `#<n>` (not `owner/repo#<n>`,
-  # and not a longer number). Bodies are matched locally and never printed.
+  # repository's PRs for the number. Bare references and canonical links to this issue count;
+  # foreign release-note link labels do not (monorepo#4237). No linked destination is fetched.
+  # Bodies are matched locally and never printed.
   mentions_q="repo:${owner}/${name} is:pr ${number} in:body"
   search_read -f q="$mentions_q" -f per_page=100
   search=$search_result
@@ -202,11 +207,8 @@ for ref in "${issues[@]}"; do
   [ "$(jq -r '.total_count' <<<"$search")" -le 100 ] 2>/dev/null || unknown "$ref: more than 100 PRs match its number"
   jq -e '(.items | type) == "array" and (.items | length) == .total_count' >/dev/null 2>&1 <<<"$search" ||
     unknown "$ref: mention search returned fewer items than it counted"
-  mentions=$(jq -c --arg n "$number" '[ .items[]
-    | select((.body // "") | test("(^|[^A-Za-z0-9_./#-])#" + $n + "([^0-9]|$)"))
-    | {k: "\(.repository_url | split("/") | .[-2:] | join("/"))#\(.number)",
-       s: (if .pull_request.merged_at then "MERGED" elif .state == "open" then "OPEN" else "CLOSED" end),
-       c: false} ]' <<<"$search") || unknown "$ref: unparseable mention search"
+  mentions=$(go -C "$script_dir/issue-body-references-go" run . "$owner/$name" "$number" <<<"$search") ||
+    unknown "$ref: cannot parse body references"
 
   # One row per distinct PR: a PR can be cross-referenced several times and also linked manually.
   # It counts as closing when ANY of its references does.
