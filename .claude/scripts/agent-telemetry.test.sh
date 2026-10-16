@@ -4217,12 +4217,17 @@ esac
 exec "$SAFETY_TEST_RMDIR" "$@"
 EOF
 chmod +x "$FIX/safety-controller-cleanup-shim/rmdir"
+# A zero-exit cleanup control needs a complete corpus. Malformed candidate-scan
+# fixtures deliberately make the independent A2A observation UNKNOWN.
+mkdir -p "$FIX/safety-controller-clean-corpus"
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"text","text":"ordinary controller cleanup record"}]}}' \
+  > "$FIX/safety-controller-clean-corpus/s.jsonl"
 rm -f "$FIX/safety-controller-cleanup-started"
 controller_cleanup_start=$(date +%s)
 CONTROLLER_CLEANUP_BOUNDED=$(PATH="$FIX/safety-controller-cleanup-shim:$PATH" \
   SAFETY_TEST_RMDIR="$(command -v rmdir)" \
   SAFETY_CONTROLLER_CLEANUP_STARTED="$FIX/safety-controller-cleanup-started" \
-  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  CLAUDE_PROJECTS_DIR="$FIX/safety-controller-clean-corpus" CODEX_HOME="$FIX/nocodex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
   bash "$TARGET" --since-days 3650 --safety-timeout-seconds 30 2>&1)
 controller_cleanup_bounded_rc=$?
