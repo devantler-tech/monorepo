@@ -15,6 +15,9 @@ func TestExposure(t *testing.T) {
 		name, source string
 		want         bool
 	}{
+		{"lowercase exit", "set -e\ntrap cleanup exit\n", true},
+		{"invalid SIGEXIT", "set -e\ntrap cleanup SIGEXIT\n", false},
+		{"invalid sigexit", "set -e\ntrap cleanup sigexit\n", false},
 		{"canonical", "set -euo pipefail\ntrap cleanup EXIT\n", true},
 		{"long option and numeric signal", "set -o errexit\ntrap 'rm -f x' 0\n", true},
 		{"separate flags", "set -u -e\ntrap cleanup INT EXIT\n", true},

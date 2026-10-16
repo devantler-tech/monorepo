@@ -97,7 +97,7 @@ func exposed(source []byte) (bool, error) {
 			}
 			for _, arg := range args[2:] {
 				signal, known := literal(arg)
-				exitTrap = exitTrap || !known || signal == "EXIT" || signal == "0"
+				exitTrap = exitTrap || !known || strings.EqualFold(signal, "EXIT") || signal == "0"
 			}
 		}
 		return true
