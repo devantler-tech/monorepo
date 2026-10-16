@@ -205,6 +205,31 @@ case "${review_bullet}" in
 esac
 
 # ---------------------------------------------------------------------------
+# 10. The waiter is named where every run READS it (monorepo#4153). The bullet above lives in a guide
+#     loaded on demand. After #3603 moved the Claude waiter out of the always-loaded AGENTS.md on
+#     2026-09-25, Claude Engineer runs that waited at all used `Monitor` in 84% of runs (09-19→09-25),
+#     then 8% (09-26→10-11) and 2% (10-11→10-13), while foreground loop time went from 0.6 to 12.9
+#     minutes per run. Scoped to the every-run list of the Agentic Engineer section.
+agents_md="${LATENCY_CONTRACT_FIXTURE_AGENTS:-${repo_root}/AGENTS.md}"
+[ -r "${agents_md}" ] || fail "cannot read ${agents_md}"
+every_run="$(
+  awk '
+    /Every run:$/                     { inl = 1; next }
+    inl && /^Read the \[definition guide\]/ { inl = 0 }
+    inl                                 { print }
+  ' "${agents_md}" | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"
+[ -n "${every_run}" ] ||
+  fail "could not locate the AGENTS.md every-run list — the extraction anchors moved, so the waiter assertion would be vacuous"
+every_run_words="$(printf '%s' "${every_run}" | wc -w | tr -d ' ')"
+[ "${every_run_words}" -lt 400 ] ||
+  fail "AGENTS.md every-run list extracted as ${every_run_words} words, which is runaway-extraction size — the 'Read the [definition guide]' end anchor is gone"
+case "${every_run}" in
+  *'- Claude waits with `Monitor` (via ToolSearch), never a foreground loop.'*) ;;
+  *) fail "the AGENTS.md every-run list no longer names Monitor as the Claude waiter — the waiter is then named only in a guide no run is required to load" ;;
+esac
+
+# ---------------------------------------------------------------------------
 # PORTABLE HALF — rule 7 of the pinned engineer definition, flattened the same way. Scoped to that
 # rule for the same reason the deployment half is scoped to its bullet: a whole-file check passes
 # while rule 7 itself is weakened, as long as the phrases survive in some other paragraph.
@@ -328,6 +353,18 @@ if [ -z "${LATENCY_CONTRACT_FIXTURE_GUIDE:-}" ]; then
     'iteration cap make a foreground review-poll loop acceptable'
   expect_review_rejected 'The one watcher that section prescribes is the only loop allowed' \
     'Every loop is forbidden' 'exempts the prescribed Latency discipline watcher'
+
+  # Item 10's control removes the waiter line from a copy of AGENTS.md.
+  agents_src="${repo_root}/AGENTS.md"
+  grep -v '^- Claude waits with `Monitor`' "${agents_src}" >"${fixture_dir}/AGENTS.md" || true
+  ! cmp -s "${agents_src}" "${fixture_dir}/AGENTS.md" ||
+    fail "negative control for the every-run waiter changed nothing — the line is no longer in AGENTS.md"
+  if LATENCY_CONTRACT_FIXTURE_AGENTS="${fixture_dir}/AGENTS.md" LATENCY_CONTRACT_FIXTURE_GUIDE="${guide}" \
+    bash "${BASH_SOURCE[0]}" >/dev/null 2>"${fixture_dir}/err"; then
+    fail "negative control: AGENTS.md still passed with the every-run waiter line removed"
+  fi
+  grep -Fq -- 'no longer names Monitor as the Claude waiter' "${fixture_dir}/err" ||
+    fail "negative control for the every-run waiter failed for the wrong reason: $(cat "${fixture_dir}/err")"
   rm -rf "${fixture_dir}"
 fi
 
