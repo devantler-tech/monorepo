@@ -376,8 +376,13 @@ agent-role-delivery-contract.test.sh|
 # This trap is installed only inside a real submodule synchronization transaction.
 # The generic pre-trap harness must not perform those checkouts merely to reach it.
 # Exceptions remain explicit reviewed obligations, not evidence of an injected abort.
-excepted_scripts='submodule-init.sh|The --sync handler is installed after Git/submodule transactions; reaching it needs its dedicated isolation fixtures rather than the generic pre-trap harness.'
+excepted_scripts='submodule-init.sh|The --sync handler is installed after Git/submodule transactions; reaching it needs its dedicated isolation fixtures rather than the generic pre-trap harness.
+worktree-claim.sh:2|origin_redirects is a process-substitution probe whose caller requires its final checked marker; an abort without the marker is refused independently of exit status. The generic harness cannot reach this nested Git probe.
+branch-op-lock.test.sh:2|This subshell deliberately installs a marker-writing trap to test preservation of the caller trap; the enclosing test checks the marker rather than trusting subshell exit status.
+branch-op-lock.test.sh:3|This subshell deliberately installs an ancestor marker trap to test that an inner shell leaves it dormant; the enclosing test checks marker timing rather than trusting subshell exit status.'
 printf '%s\n' "$converted_scripts" > "$tmp/injected"
+# The second handler is exercised by the lifted spend fixture below, after the first-trap loop.
+printf '%s\n' 'agent-role-delivery-contract.test.sh:2|Lifted spend handler injected below.' >> "$tmp/injected"
 printf '%s\n' "$excepted_scripts" > "$tmp/exceptions"
 go -C "$script_dir/cleanup-trap-census-go" test ./...
 go -C "$script_dir/cleanup-trap-census-go" build -o "$tmp/census" .

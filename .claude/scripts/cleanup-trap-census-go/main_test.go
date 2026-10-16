@@ -40,7 +40,8 @@ func TestExposure(t *testing.T) {
 		{"embedded fixture", "cat <<'EOF'\nset -e\ntrap cleanup EXIT\nEOF\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := exposed([]byte(tc.source))
+			traps, err := exposed([]byte(tc.source))
+			got := len(traps) > 0
 			if err != nil || got != tc.want {
 				t.Fatalf("exposed = %v, %v; want %v", got, err, tc.want)
 			}
@@ -69,6 +70,18 @@ func TestCoverage(t *testing.T) {
 		if err != nil || len(findings) != 0 {
 			t.Fatalf("reviewed coverage: %v, %v", findings, err)
 		}
+	}
+	files[path] = &fstest.MapFile{Data: []byte("set -e\ntrap cleanup EXIT\nf() (trap other EXIT)\n")}
+	findings, err = auditPaths(files, []string{path}, map[string]string{path: "first"}, nil)
+	if err != nil || len(findings) != 1 || !strings.Contains(findings[0], path+":2") {
+		t.Fatalf("uncovered second trap: %v, %v", findings, err)
+	}
+	findings, err = auditPaths(files, []string{path}, map[string]string{path: "first"}, map[string]string{path + ":2": "Caller checks a completion marker."})
+	if err != nil || len(findings) != 0 {
+		t.Fatalf("explicit second-trap exception: %v, %v", findings, err)
+	}
+	if _, err = auditPaths(files, []string{path}, nil, map[string]string{path + ":3": "Absent trap."}); err == nil {
+		t.Fatal("coverage for an absent trap must be UNKNOWN")
 	}
 	files[path] = &fstest.MapFile{Data: []byte("set -u\ntrap cleanup EXIT\n")}
 	if findings, err = auditPaths(files, []string{path}, nil, nil); err != nil || len(findings) != 0 {

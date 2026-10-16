@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -38,14 +39,15 @@ func literal(word *syntax.Word) (string, bool) {
 	return out.String(), true
 }
 
-// exposed conservatively joins live set/trap commands anywhere in a parsed script.
+// exposed returns each EXIT trap's line, conservatively joining live set/trap commands.
 // Literal fixture bodies, comments and quoted examples are not shell commands.
-func exposed(source []byte) (bool, error) {
+func exposed(source []byte) ([]uint, error) {
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(bytes.NewReader(source), "")
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	errexit, exitTrap := false, false
+	errexit := false
+	var traps []uint
 	syntax.Walk(file, func(node syntax.Node) bool {
 		call, ok := node.(*syntax.CallExpr)
 		if !ok || len(call.Args) == 0 {
@@ -95,20 +97,32 @@ func exposed(source []byte) (bool, error) {
 			if known && (handler == "" || handler == "-") {
 				break
 			}
+			exitTrap := false
 			for _, arg := range args[2:] {
 				signal, known := literal(arg)
 				exitTrap = exitTrap || !known || strings.EqualFold(signal, "EXIT") || signal == "0"
 			}
+			if exitTrap {
+				traps = append(traps, call.Pos().Line())
+			}
 		}
 		return true
 	})
-	return errexit && exitTrap, nil
+	if !errexit {
+		return nil, nil
+	}
+	return traps, nil
 }
 
 // auditPaths uses one complete tracked-file observation for both coverage and findings.
 func auditPaths(files fs.FS, paths []string, injected, exceptions map[string]string) ([]string, error) {
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("no tracked shell scripts; nothing checked")
+	}
+	for key, reason := range exceptions {
+		if strings.TrimSpace(reason) == "" {
+			return nil, fmt.Errorf("%s: exception needs a reason", key)
+		}
 	}
 	seen := map[string]bool{}
 	var findings []string
@@ -123,17 +137,27 @@ func auditPaths(files fs.FS, paths []string, injected, exceptions map[string]str
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
-		candidate, err := exposed(source)
+		traps, err := exposed(source)
 		if err != nil {
 			return nil, fmt.Errorf("%s: cannot parse shell: %w", path, err)
 		}
-		_, covered := injected[path]
-		reason, excepted := exceptions[path]
-		if excepted && strings.TrimSpace(reason) == "" {
-			return nil, fmt.Errorf("%s: exception needs a reason", path)
-		}
-		if candidate && !covered && !excepted {
-			findings = append(findings, path+": errexit and EXIT trap have no injected-abort case or explained exception")
+		for i, line := range traps {
+			key := path
+			if i > 0 {
+				key += ":" + strconv.Itoa(i+1)
+			}
+			seen[key] = true
+			_, covered := injected[key]
+			reason, excepted := exceptions[key]
+			if covered && excepted {
+				return nil, fmt.Errorf("%s is both injected and excepted", key)
+			}
+			if excepted && strings.TrimSpace(reason) == "" {
+				return nil, fmt.Errorf("%s: exception needs a reason", key)
+			}
+			if !covered && !excepted {
+				findings = append(findings, fmt.Sprintf("%s (line %d): errexit and EXIT trap have no injected-abort case or explained exception", key, line))
+			}
 		}
 	}
 	for _, entries := range []map[string]string{injected, exceptions} {
@@ -146,7 +170,7 @@ func auditPaths(files fs.FS, paths []string, injected, exceptions map[string]str
 	return findings, nil
 }
 
-// manifest accepts the injection table's name|arguments and the exception table's name|reason.
+// manifest accepts name|arguments or name|reason; :2, :3, etc. select later EXIT traps.
 func manifest(path string) (map[string]string, error) {
 	file, err := os.Open(path)
 	if err != nil {

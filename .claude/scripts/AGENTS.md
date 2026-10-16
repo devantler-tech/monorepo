@@ -12,7 +12,7 @@ guides honest. The root [`AGENTS.md`](../../AGENTS.md) still applies; this file 
   never print a clean result: check every command's status, use `pipefail`, and treat an empty result
   from a filtered read as unproven until an unfiltered control agrees.
 - **Abort safely.** Bash 3.2 may mask `set -u` in EXIT traps. Set a completion flag and add an
-  injection or explained exception in `cleanup-trap-fail-closed.test.sh`.
+  injection or explained exception per EXIT handler in `cleanup-trap-fail-closed.test.sh`.
 - Start with `set -euo pipefail`, quote every expansion, and keep `shellcheck` clean.
 - **Probe the way the script runs (`bash -c`),** not in the interactive zsh, whose wrapped tools
   hide BSD failures. `gnu-only-syntax-guard.sh` flags the measured GNU-only forms.
