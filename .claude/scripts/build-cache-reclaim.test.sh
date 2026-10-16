@@ -2300,7 +2300,8 @@ c_home="${fixture_root}/codex-home-fixture"
 c_bin="${fixture_root}/codex-lsof-bin"
 mkdir -p "${c_home}/archived_sessions" "$c_bin" || fail 'fixture: codex home'
 c_old="${c_home}/archived_sessions/rollout-2026-09-01T00-00-00-old.jsonl.zst"
-printf 'x\n' > "$c_old"
+# Large enough to count in whole megabytes, so the parent summary can be checked for it.
+dd if=/dev/zero of="$c_old" bs=1048576 count=3 2>/dev/null || fail 'fixture: codex transcript'
 touch -t "$(date -v-30d +%Y%m%d%H%M 2>/dev/null || date -d '30 days ago' +%Y%m%d%H%M)" "$c_old"
 printf '#!/bin/sh\nprintf "p1\\nn/dev/null\\n"\n' > "${c_bin}/lsof"
 chmod +x "${c_bin}/lsof"
@@ -2309,6 +2310,9 @@ out=$(BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPTS=on CODEX_TRANSCRIPT_RETENTION_HOME="
 [ -e "$c_old" ] || fail '25: a dry-run removed a Codex transcript'
 grep -qF 'codex transcripts: summary: age>14d candidates=1 would remove=1' <<<"$out" ||
   fail "25: the dry-run did not report the old transcript: $out"
+c_mb=$(sed -n 's/^build-cache-reclaim: summary: .* would reclaim=~\([0-9][0-9]*\) MB.*/\1/p' <<<"$out")
+[ -n "$c_mb" ] && [ "$c_mb" -ge 3 ] ||
+  fail "25: the sweep summary left out the transcript step's ~3 MB (got '${c_mb}'): $out"
 out=$(BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPTS=on CODEX_TRANSCRIPT_RETENTION_HOME="$c_home" \
   CODEX_TRANSCRIPT_RETENTION_LSOF="${c_bin}/lsof" run apply 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$c_old" ] && fail "25: apply kept a 30-day-old closed Codex transcript: $out"

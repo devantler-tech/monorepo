@@ -153,13 +153,15 @@ list_old() {
   return 0
 }
 
-# still_old <list> <out> writes the files of <list> that are still past the age line now.
+# still_old <list> <out> writes the files of <list> that are still past the age line now and
+# still owned by the current user: a file handed to another user since the first read is kept.
 still_old() {
   : > "$2" || return 1
   [ -s "$1" ] || return 0
   # shellcheck disable=SC2016 # The program is for the inner sh, which expands it.
   tr '\n' '\0' < "$1" |
-    xargs -0 sh -c 'find "$@" -prune -type f -mmin +"$0" -print' "$MIN_AGE_MINUTES" 2>/dev/null |
+    xargs -0 sh -c 'm=$0; u=$1; shift; find "$@" -prune -type f -user "$u" -mmin +"$m" -print' \
+      "$MIN_AGE_MINUTES" "$ME" 2>/dev/null |
     LC_ALL=C sort -u > "$2"
 }
 
@@ -326,7 +328,17 @@ for name in sessions archived_sessions; do
     fi
     kept_young=$((kept_young + bn - o))
     kept_open=$((kept_open + o - d))
-    [ "$d" -eq 0 ] || tr '\n' '\0' < "$batch.doomed" | xargs -0 rm -f -- 2>/dev/null
+    # Write the removal list in full before anything is unlinked, and check it holds one entry
+    # per path: a list cut short while being written must remove nothing.
+    if [ "$d" -gt 0 ]; then
+      if ! tr '\n' '\0' < "$batch.doomed" > "$batch.nul" ||
+        [ "$(tr -cd '\0' < "$batch.nul" | wc -c | tr -d ' ')" != "$d" ]; then
+        log "UNKNOWN: the removal list under ${root} could not be written completely; the rest of it is kept"
+        unknown=$((unknown + 1))
+        break
+      fi
+      xargs -0 rm -f -- < "$batch.nul" 2>/dev/null
+    fi
     # Count what is really gone rather than trusting rm's status for a whole batch.
     left=0
     while IFS= read -r f; do

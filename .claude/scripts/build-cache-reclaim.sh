@@ -2293,7 +2293,7 @@ reclaim_container_images
 # BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPTS=off skips it; ..._DAYS sets the age.
 # ---------------------------------------------------------------------------
 reclaim_codex_transcripts() {
-  local helper rc line
+  local helper rc line counts
   if [ "${BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPTS:-on}" = off ]; then
     log 'codex transcripts: skipped (disabled)'
     return 0
@@ -2311,6 +2311,21 @@ reclaim_codex_transcripts() {
   printf '%s\n' "$line" | sed 's/^codex-transcript-retention: /build-cache-reclaim: codex transcripts: /'
   if [ "$rc" -ne 0 ]; then
     unknown=$((unknown + 1))
+  fi
+  # Carry the helper's counts into this sweep's summary, which would otherwise report nothing
+  # reclaimed after this step deleted gigabytes. Its summary is printed even on an UNKNOWN,
+  # so removals made before one are still counted.
+  counts=$(printf '%s\n' "$line" | awk '/^codex-transcript-retention: summary:/ {
+      n = ""; m = ""
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^removed?=[0-9]+$/) { split($i, a, "="); n = a[2] }
+        if ($i ~ /^reclaim(ed)?=~[0-9]+$/) { split($i, a, "~"); m = a[2] }
+      }
+    }
+    END { if (n != "" && m != "") print n, m }')
+  if [ -n "$counts" ]; then
+    removed=$((removed + ${counts% *}))
+    reclaimed_mb=$((reclaimed_mb + ${counts#* }))
   fi
 }
 
