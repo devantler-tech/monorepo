@@ -10306,6 +10306,11 @@ check "archived Codex run: a missing archive folder reads zero, not an error" "$
 # address is accepted in the same exact forms as the folder's remote, and only
 # when the folder is gone.
 mkdir -p "$FIX/cxgone/archived_sessions" "$FIX/cxgone/worktrees/kept/monorepo" "$FIX/empty"
+# Scope tests require a complete supported-runtime control when judging an A2A
+# exit status. The separate Codex-only regression above still requires UNKNOWN.
+mkdir -p "$FIX/cx-scope-control/-Users-x-git-personal-monorepo"
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"text","text":"ordinary scope control"}]}}' \
+  > "$FIX/cx-scope-control/-Users-x-git-personal-monorepo/s.jsonl"
 cxgone_file() { # $1 = name, $2 = recorded cwd, $3 = git record (JSON object or empty), $4 = sleep seconds
   local meta
   if [ -n "$3" ]; then meta="{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$2\",\"git\":$3}}"
@@ -10315,7 +10320,7 @@ cxgone_file() { # $1 = name, $2 = recorded cwd, $3 = git record (JSON object or 
     >> "$FIX/cxgone/archived_sessions/$1.jsonl"
 }
 cxgone_run() { # $1 = section
-  CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxgone" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
+  CLAUDE_PROJECTS_DIR="$FIX/cx-scope-control" CODEX_HOME="$FIX/cxgone" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
     PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
     bash "$TARGET" --since-days 3650 --section "$1" 2>&1
 }
@@ -10470,19 +10475,19 @@ if [ "$(id -u)" -ne 0 ]; then
   mkdir -p "$FIX/cxlocked/sessions" "$FIX/cxlocked/archived_sessions"
   cxarch_file "$FIX/cxlocked/sessions/rollout-live.jsonl" "$FIX/cxlocked" "ok"
   chmod 000 "$FIX/cxlocked/archived_sessions"
-  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxlocked" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/cx-scope-control" CODEX_HOME="$FIX/cxlocked" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
         bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
   chmod 700 "$FIX/cxlocked/archived_sessions"
   check "unreadable Codex folder: the report names it as unknown" "$OUT" "UNKNOWN: the Codex folder archived_sessions/ exists but could not be read in full"
   if [ "$rc" -eq 2 ]; then ok "unreadable Codex folder: exit 2"; else bad "unreadable Codex folder: exit 2" "exit $rc"; fi
   # The same corpus once readable is a known reading again.
-  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxlocked" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/cx-scope-control" CODEX_HOME="$FIX/cxlocked" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
         bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
   nocheck "readable Codex folders: no unknown line" "$OUT" "UNKNOWN: the Codex folder"
   if [ "$rc" -eq 0 ]; then ok "readable Codex folders: exit 0"; else bad "readable Codex folders: exit 0" "exit $rc"; fi
   # One transcript that cannot be opened is the same unknown, not a transcript out of scope.
   chmod 000 "$FIX/cxlocked/sessions/rollout-live.jsonl"
-  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxlocked" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/cx-scope-control" CODEX_HOME="$FIX/cxlocked" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
         bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
   chmod 600 "$FIX/cxlocked/sessions/rollout-live.jsonl"
   check "unreadable Codex transcript: the report names its folder as unknown" "$OUT" "UNKNOWN: the Codex folder sessions/ exists but could not be read in full"
