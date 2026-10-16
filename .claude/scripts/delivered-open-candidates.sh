@@ -30,10 +30,9 @@
 # Exit codes:
 #   0  every issue was read in full and none is a candidate
 #   1  every issue was read in full and at least one is a candidate
-#   2  UNKNOWN — usage error, a failed or truncated read; no verdict is printed for an issue whose
-#      references could not be read completely, because a short read looks exactly like "no PR"
-#   3  DEFERRED — the search budget ran out or the forge refused a search for rate reasons.
-#      Completed verdicts remain usable; stderr provides a command for the unchecked issues.
+#   2  UNKNOWN — usage error, a failed/truncated read or issues deferred for search allowance.
+#      No verdict is printed for an unchecked issue. A DEFERRED diagnostic identifies a budget
+#      stop or rate refusal and provides a continuation command; completed verdicts remain usable.
 #
 # Each invocation spends at most one quarter (rounded down) of the search limit AND remaining
 # allowance read at startup (monorepo#4100). The oldest-list lookup counts against that budget too.
@@ -74,7 +73,7 @@ defer() {
     printf ' %q' "${original_args[@]}" >&2
   fi
   printf '\n' >&2
-  exit 3
+  exit 2
 }
 # Reject unsupported arguments before any forge request is made.
 usage() { unknown "usage: --issue <owner/repo>#<n> ... | --oldest <N> [--type <IssueType>]"; }
