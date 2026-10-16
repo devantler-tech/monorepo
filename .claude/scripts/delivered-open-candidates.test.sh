@@ -142,6 +142,60 @@ mention 6 "60:merged:Delivers #6 end to end." "61:merged:See other/repo#6 for co
 check "a body-only mention counts; owner/repo#n and longer numbers do not" 1 \
   "CANDIDATE-SINGLE o/r#6 state=OPEN merged=1 open=0" "" --issue o/r#6
 
+# Foreign release-note links name their own repository's issue, never a local issue
+# with the same number (monorepo#4237). These exercise the actual body-search path.
+gql 4114 0 "" ""
+mention 4114 '2807:merged:<a href="https://redirect.github.com/withastro/starlight/pull/4114">#4114</a>'
+check "the real HTML release-note shape is not local delivery" 0 \
+  "NOT-CANDIDATE o/r#4114 state=OPEN merged=0 open=0" "" --issue o/r#4114
+
+gql 202 0 "" ""
+mention 202 '2020:merged:See [#202](https://github.com/other/repo/issues/202).'
+check "a foreign Markdown label is not a bare local reference" 0 "merged=0 open=0" "CANDIDATE-SINGLE" --issue o/r#202
+
+gql 203 0 "" ""
+mention 203 '2030:merged:<a href="https://github.com/other/repo/issues/203"><code>#203</code></a>'
+check "nested HTML in a foreign link stays foreign" 0 "merged=0 open=0" "CANDIDATE-SINGLE" --issue o/r#203
+
+gql 204 0 "" ""
+mention 204 '2040:merged:Delivers https://github.com/o/r/issues/204.'
+check "an explicit local issue URL counts without a numeric label" 1 "merged=1 open=0" "" --issue o/r#204
+
+gql 205 0 "" ""
+mention 205 '2050:merged:<a href="https://github.com/o/r/issues/205">#205</a>'
+check "a link to the local issue still counts" 1 "merged=1 open=0" "" --issue o/r#205
+
+gql 206 0 "" ""
+mention 206 '2060:merged:[#206](https://github.com/O/R/issues/206)'
+check "a local Markdown link is matched case insensitively" 1 "merged=1 open=0" "" --issue o/r#206
+
+gql 207 0 "" ""
+mention 207 '2070:merged:Upstream [#207](https://github.com/other/repo/issues/207); fixes #207 here.'
+check "foreign links cannot hide a separate genuine bare reference" 1 "merged=1 open=0" "" --issue o/r#207
+
+gql 208 0 "" ""
+mention 208 '2080:merged:See https://github.com/o/r/issues/2080 and other/repo#208.'
+check "a longer local URL and foreign qualified reference stay excluded" 0 "merged=0 open=0" "CANDIDATE-SINGLE" --issue o/r#208
+
+gql 209 0 "" ""
+mention 209 '2090:merged:placeholder'
+jq '.items[0].body = "See [#209][upstream].\n\n[upstream]: https://github.com/other/repo/issues/209"' \
+  "$FIX/mention-209.json" > "$FIX/mention-209-new.json"
+mv "$FIX/mention-209-new.json" "$FIX/mention-209.json"
+check "a foreign reference-style link label stays excluded" 0 "merged=0 open=0" "CANDIDATE-SINGLE" --issue o/r#209
+
+gql 210 0 "" ""
+mention 210 '2100:merged:Not an issue: https://github.com/o/r/issues/210legacy'
+check "a local URL must end its issue number at a route boundary" 0 "merged=0 open=0" "CANDIDATE-SINGLE" --issue o/r#210
+
+gql 211 0 "" ""
+mention 211 '2110:merged:See https://github.com/other/repo/issues/211?text=#211'
+check "a foreign URL fragment is not a bare local reference" 0 "merged=0 open=0" "CANDIDATE-SINGLE" --issue o/r#211
+
+gql 212 0 "" ""
+mention 212 '2120:merged:https://github.com/o/r/issues/212#issuecomment-123'
+check "a local comment fragment retains its issue reference" 1 "merged=1 open=0" "" --issue o/r#212
+
 # 7 — two pages accumulate
 gql 7 2 "c2" "" "$(pr xref 70 MERGED)"
 gql 7 2 "" "-c2" "$(pr xref 71 MERGED)"

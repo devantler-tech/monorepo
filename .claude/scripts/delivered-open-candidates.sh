@@ -193,8 +193,9 @@ for ref in "${issues[@]}"; do
 
   # A PR whose body names the issue does not always leave a timeline event: platform#2973 delivered
   # platform#2972 and says so in its body, yet #2972 records no cross-reference. So also search the
-  # repository's PRs for the number and keep only bodies that name it as `#<n>` (not `owner/repo#<n>`,
-  # and not a longer number). Bodies are matched locally and never printed.
+  # repository's PRs for the number. Bare references and canonical links to this issue count;
+  # foreign release-note link labels do not (monorepo#4237). No linked destination is fetched.
+  # Bodies are matched locally and never printed.
   mentions_q="repo:${owner}/${name} is:pr ${number} in:body"
   search_read -f q="$mentions_q" -f per_page=100
   search=$search_result
@@ -202,8 +203,21 @@ for ref in "${issues[@]}"; do
   [ "$(jq -r '.total_count' <<<"$search")" -le 100 ] 2>/dev/null || unknown "$ref: more than 100 PRs match its number"
   jq -e '(.items | type) == "array" and (.items | length) == .total_count' >/dev/null 2>&1 <<<"$search" ||
     unknown "$ref: mention search returned fewer items than it counted"
-  mentions=$(jq -c --arg n "$number" '[ .items[]
-    | select((.body // "") | test("(^|[^A-Za-z0-9_./#-])#" + $n + "([^0-9]|$)"))
+  mentions=$(jq -c --arg n "$number" --arg repo "$owner/$name" '
+    def names_issue:
+      . as $body
+      | ([match("https?://(?:redirect\\.)?github\\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/([0-9]+)/?(?=$|[?#[:space:]<>\"\\x27\\])},;:]|\\.(?:$|[[:space:]]))"; "gi")
+          | select((.captures[0].string | ascii_downcase) == ($repo | ascii_downcase)
+              and .captures[1].string == $n)] | length > 0)
+        or ($body
+          | gsub("<a\\b[^>]*>[\\s\\S]*?</a\\s*>"; ""; "i")
+          | gsub("\\[[^\\]]*\\]\\([^)]*\\)"; "")
+          | gsub("\\[[^\\]]*\\]"; "")
+          | gsub("https?://[^[:space:]<>\"\\x27]+"; ""; "i")
+          | gsub("<[^>]*>"; "")
+          | test("(^|[^A-Za-z0-9_./#-])#" + $n + "([^0-9]|$)"));
+    [ .items[]
+    | select((.body // "") | names_issue)
     | {k: "\(.repository_url | split("/") | .[-2:] | join("/"))#\(.number)",
        s: (if .pull_request.merged_at then "MERGED" elif .state == "open" then "OPEN" else "CLOSED" end),
        c: false} ]' <<<"$search") || unknown "$ref: unparseable mention search"
