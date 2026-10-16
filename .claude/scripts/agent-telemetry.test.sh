@@ -61,8 +61,9 @@ for tool in Bash Edit Write MultiEdit; do
   check "$tool preserves the historical raw signal" "$OUT" "file two-writer races ...... 1"
   if [ "$tool" = Bash ]; then expected=0; else expected=1; fi
   check "$tool is classified by its actual invocation" "$OUT" "stale-edit candidates v1 ... $expected"
-  check "$tool never establishes distinct writers" "$OUT" "confirmed writer collisions . UNKNOWN"
+  check "$tool leaves unmeasured coverage outside the checked series" "$OUT" "remain UNKNOWN; v1 does not evaluate either"
 done
+nocheck "unmeasured provenance is not presented as a checked count" "$OUT" "confirmed writer collisions ."
 # An unresolved invocation is unknown attribution, not an empty candidate set.
 printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"missing","is_error":true,"content":"File has been modified since read"}]}}' \
   > "$FIX/stale-edit/s.jsonl"
@@ -77,7 +78,7 @@ printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","is_er
   > "$FIX/stale-edit/s.jsonl"
 OUT=$(stale_edit_report)
 check "nested examples do not become candidates" "$OUT" "stale-edit candidates v1 ... 0"
-check "unsupported runtime coverage stays explicit" "$OUT" "Codex stale-edit coverage ... UNKNOWN"
+check "unsupported runtime coverage stays explicit" "$OUT" "Coverage note: distinct-writer provenance and Codex error attribution"
 # A duplicate call id cannot identify a unique invocation, even if the first was an edit.
 printf '%s\n' \
   '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"ambiguous","name":"Edit"},{"type":"tool_use","id":"ambiguous","name":"Bash"}]}}' \
@@ -135,6 +136,32 @@ stale_status=$?
 check "a mixed cohort can measure its supported subset" "$OUT" "stale-edit candidates v1 ... 0"
 if [ "$stale_status" -eq 0 ]; then ok "a completely observed supported subset exits zero"
 else bad "a completely observed supported subset exits zero" "exit=$stale_status"; fi
+for first_tool in Edit Bash; do
+  if [ "$first_tool" = Edit ]; then later_tool=Bash; else later_tool=Edit; fi
+  jq -cn --arg tool "$first_tool" \
+    '{type:"assistant",message:{content:[{type:"tool_use",id:"replayed",name:$tool}]}}' \
+    > "$FIX/stale-edit/s.jsonl"
+  printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"replayed","is_error":true,"content":"File has been modified since read"}]}}' \
+    >> "$FIX/stale-edit/s.jsonl"
+  jq -cn --arg tool "$later_tool" \
+    '{type:"assistant",message:{content:[{type:"tool_use",id:"replayed",name:$tool}]}}' \
+    >> "$FIX/stale-edit/s.jsonl"
+  OUT=$(stale_edit_report)
+  stale_status=$?
+  check "a later duplicate invalidates the earlier $first_tool attribution" "$OUT" "stale-edit candidates v1 ... UNKNOWN"
+  if [ "$stale_status" -eq 2 ]; then ok "a later duplicate after $first_tool exits UNKNOWN"
+  else bad "a later duplicate after $first_tool exits UNKNOWN" "exit=$stale_status"; fi
+done
+for shape in '{}' '{"type":"unrecognized","payload":{}}' '{"type":"assistant"}' \
+  '{"type":"user","message":{"content":[{"type":"tool_result","is_error":"true","content":"File has been modified since read"}]}}' \
+  '{"type":"user","message":{"content":[{"type":"tool_result","is_error":true,"content":{}}]}}'; do
+  printf '%s\n' "$shape" > "$FIX/stale-edit/s.jsonl"
+  OUT=$(stale_edit_report)
+  stale_status=$?
+  check "unrecognized input is not a native observation: $shape" "$OUT" "stale-edit candidates v1 ... UNKNOWN"
+  if [ "$stale_status" -eq 2 ]; then ok "unrecognized native input exits UNKNOWN: $shape"
+  else bad "unrecognized native input exits UNKNOWN: $shape" "exit=$stale_status"; fi
+done
 # End stale-edit classification regression.
 
 # #3830: no runtime phrase means no runtime normalisation work. Instrument the

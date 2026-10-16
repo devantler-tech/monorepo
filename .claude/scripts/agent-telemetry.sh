@@ -2251,29 +2251,47 @@ tool_result_failure_text() {
 # their preceding invocations; count edit refusals as candidates, never proof of
 # distinct writers. Keep the historical phrase-only series separately below.
 # Read the whole file before publishing counts: a partial JSON read is UNKNOWN.
+# Retain only matching result IDs and their preceding tool names, so a later
+# duplicate can invalidate attribution without retaining transcript bodies.
 stale_edit_counts() {
   jq -n "$JQ_SHAPE_DEFS"'
-    reduce inputs as $record ({tools:{}, records:0, candidates:0, unattributed:0};
-      .records += 1 |
+    reduce inputs as $record ({tools:{}, records:0, pending:[]};
       if ($record | type) != "object" then error("invalid record")
-      elif $record.type == "assistant" then
-        reduce ($record | content_blocks | select(.type == "tool_use")) as $call (. ;
-          if ($call.id | type) == "string" and ($call.id | length) > 0 then
-            if .tools | has($call.id) then .tools[$call.id] = null
-            else .tools[$call.id] = $call.name end
-          else . end)
-      elif $record.type == "user" then
-        reduce ($record | content_blocks
-          | select(.type == "tool_result" and .is_error == true)
-          | select(block_text | contains("has been modified since read"))) as $result (. ;
-          (if ($result.tool_use_id | type) == "string"
-            then .tools[$result.tool_use_id] else null end) as $tool
-          | if $tool == "Edit" or $tool == "Write" or $tool == "MultiEdit" then
-              .candidates += 1
-            elif $tool == "Bash" or $tool == "Grep" or $tool == "Read" or $tool == "Glob" then .
-            else .unattributed += 1 end)
+      elif $record.type == "assistant" or $record.type == "user" then
+        if ($record.message | type) != "object"
+          or (["array","object","string"] | index($record.message.content | type)) == null
+        then error("unsupported native record") else . end
+        | .records += 1
+        | if $record.type == "assistant" then
+            reduce ($record | content_blocks | select(.type == "tool_use")) as $call (. ;
+              if ($call.id | type) == "string" and ($call.id | length) > 0 then
+                if .tools | has($call.id) then .tools[$call.id] = null
+                else .tools[$call.id] = (if ($call.name | type) == "string" then $call.name else null end) end
+              else . end)
+          else
+            reduce ($record | content_blocks
+              | select(.type == "tool_result")
+              | if has("is_error") and (.is_error | type) != "boolean"
+                then error("unsupported error flag") else . end
+              | select(.is_error == true)
+              | if (.content | type) == "string" or (.content | type) == "array"
+                then . else error("unsupported error content") end
+              | select(block_text | contains("has been modified since read"))) as $result (. ;
+              .pending += [{
+                id:(if ($result.tool_use_id | type) == "string" then $result.tool_use_id else null end),
+                tool:(if ($result.tool_use_id | type) == "string" then .tools[$result.tool_use_id] else null end)
+              }])
+          end
       else . end)
-    | if .records == 0 then error("empty transcript") else {records, candidates, unattributed} end
+    | if .records == 0 then error("no recognized native records") else . end
+    | . as $observed
+    | reduce $observed.pending[] as $result ({records:$observed.records, candidates:0, unattributed:0};
+        (if ($result.id | type) == "string" and ($result.tool | type) == "string"
+          and $observed.tools[$result.id] == $result.tool
+         then $result.tool else null end) as $tool
+        | if $tool == "Edit" or $tool == "Write" or $tool == "MultiEdit" then .candidates += 1
+          elif $tool == "Bash" or $tool == "Grep" or $tool == "Read" or $tool == "Glob" then .
+          else .unattributed += 1 end)
   ' "$1" 2>/dev/null
 }
 
@@ -5185,8 +5203,10 @@ if want a2a; then
       main_rc=2
       echo "  stale-edit candidates v1 ... UNKNOWN (incomplete extraction)"
     fi
-    echo "  confirmed writer collisions . UNKNOWN (distinct-writer provenance unmeasured)"
-    echo "  Codex stale-edit coverage ... UNKNOWN (native error attribution unmeasured)"
+    # These capabilities are outside v1, not checks with a successful status.
+    # Every UNKNOWN reading of the actual candidate series above still exits 2.
+    echo "    Coverage note: distinct-writer provenance and Codex error attribution"
+    echo "    remain UNKNOWN; v1 does not evaluate either."
     echo "  push/merge collisions ...... ${NONFF}   (CLAUDE ONLY — see note)"
     echo "    NOTE: collisions read errored tool results, and Codex records carry no"
     echo "          error flag (verified). Its side of a two-writer race is therefore"
