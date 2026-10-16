@@ -132,7 +132,9 @@ card.
    not start with the projection the guard checked;
    other exit-2 causes may rerun the guard in this session after resolution.
    🔴 **All of that is `--phase preflight` (the default), and it is the ONLY phase where a changed
-   projection means something is wrong.** A run that re-measures **after** banking its memory adds
+   projection means something is wrong.** `--phase` is for Codex only: the legacy (Claude) layout has
+   no projection gate and rejects it with exit 2, so a Claude run re-measures with its pre-flight
+   command unchanged. A Codex run that re-measures **after** banking its memory adds
    `--phase closing`: the rebuild is then the expected result of the run doing its job, so the guard
    reports it as an informational line and proceeds to the size and shape checks instead of exiting 2.
    The freshness gate runs before the size sweep, so leaving it armed at closing makes the threshold
