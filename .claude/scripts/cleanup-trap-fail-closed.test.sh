@@ -335,6 +335,8 @@ worktree-lane-sweep.test.sh|
 plugin-definition-refresh.test.sh|
 surveyor-vocabulary-coverage.test.sh|
 build-cache-reclaim.test.sh|
+codex-transcript-retention.sh|dry-run 14
+codex-transcript-retention.test.sh|
 worktree-cleanup.test.sh|
 agent-role-delivery-contract.test.sh|
 "
