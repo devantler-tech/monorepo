@@ -47,6 +47,17 @@ cat > "${bin}/gh" <<'STUB'
 s=$GH_STUB_STATE
 get() { cat "$s/$1"; }
 case "$1 $2" in
+  "api graphql")
+    printf 'queue\n' >> "$s/calls"
+    case "$(get queue_mode)" in
+      fail) exit 1 ;;
+      missing) printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s"}}}}' "$(get head)"; exit ;;
+      errors) printf '{"errors":[{"message":"unavailable"}],"data":{"repository":{"pullRequest":{"headRefOid":"%s","mergeQueueEntry":null}}}}' "$(get head)"; exit ;;
+      moved) get queue_head > "$s/head" ;;
+    esac
+    if [ "$(get queued)" = 1 ]; then entry='{"id":"queue-entry"}'; else entry=null; fi
+    printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","mergeQueueEntry":%s}}}}' "$(get head)" "$entry"
+    ;;
   "pr view")
     n=$(($(get reads) + 1)); printf '%s' "$n" > "$s/reads"
     printf 'view\n' >> "$s/calls"
@@ -86,6 +97,7 @@ for a in "\$@"; do
 done
 [ "\$pushing" = 1 ] || exec "$real_git" "\$@"
 printf 'push\n' >> "\$s/calls"
+[ "\$(cat "\$s/queued")" = 1 ] && { printf 'GH006: queued branches cannot be updated\n' >&2; exit 1; }
 [ "\$(cat "\$s/git_mode")" = swallow ] && exit 0
 "$real_git" "\$@" || exit \$?
 [ "\$(cat "\$s/git_mode")" = nofollow ] || printf '%s' "\${spec%%:*}" > "\$s/head"
@@ -133,7 +145,7 @@ reset() {
   printf '%s' "$branch" > "${state}/branch"
   printf '%s' "$base" > "${state}/head"
   printf '0' > "${state}/reads"
-  for f in fail_read undraft_on_read drop_auto ready_clears_auto ready_mode auto_mode move_head_to git_mode; do
+  for f in fail_read undraft_on_read drop_auto ready_clears_auto ready_mode auto_mode move_head_to git_mode queue_mode queue_head queued; do
     : > "${state}/${f}"
   done
   : > "${state}/calls"
@@ -145,7 +157,7 @@ calls() { tr '\n' ' ' < "${state}/calls" | sed 's/ $//'; }
 
 run() { # [<commit>] — sets out and rc
   out=$(GH_STUB_STATE="$state" PATH="${bin}:$PATH" \
-    BOT_PR_ADAPTATION_PUSH_HEAD_WAIT_SECONDS="${HEAD_WAIT:-0}" bash "$impl" --remote "${RUN_REMOTE:-origin}" \
+    BOT_PR_ADAPTATION_PUSH_HEAD_WAIT_SECONDS="${HEAD_WAIT:-0}" "${TEST_BASH:-bash}" "$impl" --remote "${RUN_REMOTE:-origin}" \
     --repo acme/widgets --pr 7 --repo-dir "$work" --commit "${1:-$fix}" 2>&1)
   rc=$?
 }
@@ -160,7 +172,7 @@ expect_untouched() {
 reset false armed
 run
 [ "$rc" -eq 0 ] || fail "1: exit ${rc}, not 0: ${out}"
-[ "$(calls)" = 'view ready-undo view disable-auto view push view' ] ||
+[ "$(calls)" = 'view ready-undo view disable-auto view queue push view' ] ||
   fail "1: the fence was not applied and confirmed before the push ($(calls))"
 [ "$(remote_head)" = "$fix" ] || fail '1: the commit is not the remote branch head'
 grep -qF "FENCED acme/widgets#7 draft=true auto_merge=none head=${base}" <<<"$out" ||
@@ -174,7 +186,7 @@ set_state ready_clears_auto 1
 set_state auto_mode fail
 run
 [ "$rc" -eq 0 ] || fail "1b: exit ${rc}, not 0: ${out}"
-[ "$(calls)" = 'view ready-undo view view push view' ] ||
+[ "$(calls)" = 'view ready-undo view view queue push view' ] ||
   fail "1b: a disable was attempted with nothing armed ($(calls))"
 [ "$(remote_head)" = "$fix" ] || fail '1b: the commit is not the remote branch head'
 
@@ -182,14 +194,14 @@ run
 reset true none
 run
 [ "$rc" -eq 0 ] || fail "2: exit ${rc}, not 0: ${out}"
-[ "$(calls)" = 'view view push view' ] || fail "2: unexpected calls ($(calls))"
+[ "$(calls)" = 'view view queue push view' ] || fail "2: unexpected calls ($(calls))"
 [ "$(remote_head)" = "$fix" ] || fail '2: the commit is not the remote branch head'
 
 # --- 3. a draft with auto-merge armed: only the armed half is changed ------------------------
 reset true armed
 run
 [ "$rc" -eq 0 ] || fail "3: exit ${rc}, not 0: ${out}"
-[ "$(calls)" = 'view disable-auto view push view' ] || fail "3: unexpected calls ($(calls))"
+[ "$(calls)" = 'view disable-auto view queue push view' ] || fail "3: unexpected calls ($(calls))"
 
 # --- 4. a failed read is UNKNOWN, whichever read it is, and nothing is pushed ----------------
 reset false armed
@@ -318,7 +330,7 @@ set_state git_mode swallow
 run
 [ "$rc" -eq 2 ] || fail "11a: a push that delivered nothing exited ${rc}, not 2"
 grep -qF 'after the push' <<<"$out" || fail '11a: the branch read-back did not catch the undelivered push'
-[ "$(calls)" = 'view view push' ] || fail "11a: the run went on after the failed read-back ($(calls))"
+[ "$(calls)" = 'view view queue push' ] || fail "11a: the run went on after the failed read-back ($(calls))"
 grep -q PUSHED <<<"$out" && fail '11a: an undelivered push was reported as pushed'
 # 11b. the branch has the commit but the pull request never shows it.
 reset true none
@@ -330,7 +342,7 @@ grep -q PUSHED <<<"$out" && fail '11b: a commit the pull request does not show w
 reset true none
 set_state git_mode nofollow
 HEAD_WAIT=1 run
-[ "$(calls)" = 'view view push view view' ] ||
+[ "$(calls)" = 'view view queue push view view' ] ||
   fail "11c: the head was not read again within the wait ($(calls))"
 
 # --- 12. an abort is UNKNOWN, never "refused" and never success ------------------------------
@@ -347,6 +359,37 @@ GH_STUB_STATE="$state" PATH="${bin}:$PATH" bash "$impl" --repo not-a-repo --pr 7
   --repo-dir "$work" --commit "$fix" >&- 2>&-
 rc=$?
 [ "$rc" -eq 2 ] || fail "12: a usage error with stderr closed exited ${rc}, not 2"
+
+# --- 13. a draft may retain a queue entry; never try a repair push into that entry -----------
+reset true none
+set_state queued 1
+run
+[ "$rc" = 1 ] || fail "13: queued draft exited $rc, not a precise refusal: $out"
+grep -qF 'dequeue' <<<"$out" || fail '13: normal dequeue was not named'
+expect_untouched 13
+# A failed external dequeue leaves the same entry: retrying still refuses without a push.
+run
+[ "$rc" = 1 ] || fail '13b: retained queue entry was not refused again'
+expect_untouched 13b
+# After a verified external dequeue, the ordinary repair path works and stays draft.
+set_state queued ''
+run
+[ "$rc" = 0 ] && [ "$(remote_head)" = "$fix" ] && [ "$(cat "$state/draft")" = true ] ||
+  fail "13c: unqueued repair failed or left draft: $out"
+
+for mode in fail missing errors; do
+  reset true none
+  set_state queue_mode "$mode"
+  run
+  [ "$rc" = 2 ] || fail "14 ($mode): unreadable queue exited $rc, not UNKNOWN"
+  expect_untouched "14 ($mode)"
+done
+reset true none
+set_state queue_mode moved
+set_state queue_head "$other"
+run
+[ "$rc" = 1 ] || fail "15: head movement during queue read exited $rc, not refusal"
+expect_untouched 15
 
 test_run_completed=1
 if [ "$failures" -eq 0 ]; then

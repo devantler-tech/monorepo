@@ -25,7 +25,7 @@
 #               showing the commit as its head, which is required before PUSHED is said.
 #
 # OUTPUT (stdout)
-#   FENCED <repo>#<n> draft=true auto_merge=none head=<sha>
+#   FENCED <repo>#<n> draft=true auto_merge=none head=<sha> queue=none
 #   PUSHED <repo>#<n> <commit> -> <branch>
 #
 # EXIT CODES
@@ -206,7 +206,31 @@ parse_pr "$(read_pr)"
 [ "$pr_auto" = none ] || refuse "${repo}#${pr} still has auto-merge armed"
 [ "$pr_head" = "$observed_head" ] ||
   refuse "the head of ${repo}#${pr} moved from ${observed_head} to ${pr_head}; it stays fenced"
-printf 'FENCED %s#%s draft=true auto_merge=none head=%s\n' "$repo" "$pr" "$observed_head"
+
+# A draft can retain a merge-queue entry, which rejects repair pushes (monorepo#4205).
+# gh pr view has no mergeQueueEntry field; read it explicitly and bind it to the same head.
+# Leave queue administration to the caller: an absent or unreadable entry is never guessed.
+# shellcheck disable=SC2016  # GraphQL variables are expanded by GitHub, not the shell.
+queue_json=$(gh api graphql -f query='query($owner:String!,$name:String!,$number:Int!){
+  repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid mergeQueueEntry{id}}}
+}' -f owner="${repo%%/*}" -f name="${repo#*/}" -F number="$pr" 2>/dev/null) ||
+  unknown "could not read the merge queue for ${repo}#${pr}; nothing pushed"
+queue_line=$(jq -ers 'select(length == 1) | .[0] | select((.errors // []) == [])
+  | .data.repository.pullRequest
+  | select(type == "object" and (.headRefOid | type) == "string" and has("mergeQueueEntry")
+    and (.mergeQueueEntry == null or
+      ((.mergeQueueEntry | type) == "object" and (.mergeQueueEntry.id | type) == "string"
+       and (.mergeQueueEntry.id | length) > 0)))
+  | [.headRefOid, (if .mergeQueueEntry == null then "none" else "queued" end)] | @tsv' \
+  <<<"$queue_json" 2>/dev/null) || unknown "incomplete merge queue read for ${repo}#${pr}; nothing pushed"
+[ -n "$queue_line" ] || unknown "incomplete merge queue read for ${repo}#${pr}; nothing pushed"
+IFS=$'\t' read -r queue_head queue_state <<<"$queue_line"
+[[ "$queue_head" =~ ^[0-9a-f]{40}$ ]] || unknown "invalid head in merge queue read for ${repo}#${pr}"
+[ "$queue_head" = "$observed_head" ] ||
+  refuse "the head of ${repo}#${pr} moved during the merge queue read; it stays fenced"
+[ "$queue_state" = none ] ||
+  refuse "${repo}#${pr} is in the merge queue; dequeue it normally, then retry; it stays fenced"
+printf 'FENCED %s#%s draft=true auto_merge=none head=%s queue=none\n' "$repo" "$pr" "$observed_head"
 
 # 4. Push, never forced: the commit descends from the observed head, so a branch that moved
 #    since is rejected by the remote. The branch is then read back; the push's own status is not
