@@ -624,6 +624,11 @@ func TestShellWrapperPreservesRuntimeBehavior(t *testing.T) {
 	})
 }
 
+// legacyPhaseScoping is the sentence both memory documents must carry: the legacy
+// layout rejects `--phase` on purpose (TestPhaseArgumentValidation), so the
+// closing re-measure instruction has to say it is for Codex only.
+const legacyPhaseScoping = "`--phase` is for Codex only: the legacy (Claude) layout has no projection gate and rejects it with exit 2, so a Claude run re-measures with its pre-flight command unchanged"
+
 func TestRepositoryContracts(t *testing.T) {
 	read := func(path string) string {
 		t.Helper()
@@ -646,6 +651,9 @@ func TestRepositoryContracts(t *testing.T) {
 		// recovery above also governs a post-run invocation it cannot satisfy.
 		"That precondition is a PRE-FLIGHT property",
 		"That recovery is scoped to `--phase preflight`",
+		// Unscoped, a Claude run passes `--phase closing` to the legacy layout,
+		// which rejects it, and loses its closing size check (monorepo#4227).
+		legacyPhaseScoping,
 	} {
 		if !strings.Contains(normalizedConstitution, required) {
 			t.Fatalf("the durable-memory guide is missing %q", required)
@@ -674,6 +682,9 @@ func TestRepositoryContracts(t *testing.T) {
 		"it is the ONLY phase where a changed projection means something is wrong",
 	) {
 		t.Fatal("portfolio maintenance omits the closing-phase scoping")
+	}
+	if !strings.Contains(normalizedMaintenance, legacyPhaseScoping) {
+		t.Fatal("portfolio maintenance does not say that --phase is Codex-only")
 	}
 
 	workflow := read(filepath.Join("..", "..", "..", ".github", "workflows", "ci.yaml"))

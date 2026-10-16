@@ -76,7 +76,9 @@ step:
    request that injected it, the guard cannot prove that it checked the projection in this session
    and fails closed. 🔴 **That precondition is a PRE-FLIGHT property, and the `--phase` selector is what
    keeps it from eating the post-run re-measure.** `--phase preflight` is the default and is unchanged.
-   A run that re-measures **after** banking its memory passes `--phase closing`, which still reads the
+   `--phase` is for Codex only: the legacy (Claude) layout has no projection gate and rejects it with
+   exit 2, so a Claude run re-measures with its pre-flight command unchanged.
+   A Codex run that re-measures **after** banking its memory passes `--phase closing`, which still reads the
    same trusted boundary and still reports a changed projection — but as an informational line rather
    than a stop, because at that point the rebuild is the expected result of the run doing its job. The
    freshness gate runs BEFORE the size sweep, so leaving it armed at closing makes the entire
