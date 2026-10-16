@@ -23,6 +23,11 @@
 # bash 3.2) so the per-version behaviour is measured rather than assumed.
 set -euo pipefail
 
+# The system shell is Bash 3.2 on macOS and Bash 5 on Linux, independent of PATH.
+if [ "$BASH" != /bin/bash ]; then
+  exec /bin/bash "$0" "$@"
+fi
+
 tmp="$(mktemp -d)"
 cleanup_trap_test_finished=0
 cleanup() {
@@ -40,7 +45,7 @@ fails=0
 pass() { echo "  ok   $1"; }
 fail() { echo "  FAIL $1" >&2; fails=$((fails + 1)); }
 
-echo "shell: $(bash --version | head -1)"
+echo "shell: $("$BASH" --version | head -1)"
 echo "BASH_VERSION=${BASH_VERSION:-unknown}"
 echo
 
@@ -94,7 +99,7 @@ chmod +x "$tmp/naive.sh" "$tmp/canonical.sh"
 
 status_of() { # <script> <arg>
   local rc=0
-  "$1" "$2" >/dev/null 2>&1 || rc=$?
+  "$BASH" "$1" "$2" >/dev/null 2>&1 || rc=$?
   echo "$rc"
 }
 
@@ -169,7 +174,7 @@ done
 
 # The trap must still do its actual job.
 record="$tmp/canonical-tmpdir"
-CLEANUP_TRAP_TEST_TMPDIR_RECORD="$record" "$tmp/canonical.sh" unbound >/dev/null 2>&1 || true
+CLEANUP_TRAP_TEST_TMPDIR_RECORD="$record" "$BASH" "$tmp/canonical.sh" unbound >/dev/null 2>&1 || true
 inner="$(cat "$record" 2>/dev/null || echo)"
 if [ -n "$inner" ] && [ ! -d "$inner" ]; then
   pass "cleanup still removed the temporary directory on the aborting path"
@@ -413,7 +418,7 @@ while IFS='|' read -r name args backstop; do
   # Word splitting of $args is intended: it is a fixed argument list with no spaces inside a word.
   # shellcheck disable=SC2086
   err="$(cd "$tmp/converted" && env -u CLEANUP_TRAP_TEST_UNSET_VAR CLEANUP_TRAP_TEST_REACHED="$reached" \
-    "$copy" $args 2>&1 >/dev/null)" || rc=$?
+    "$BASH" "$copy" $args 2>&1 >/dev/null)" || rc=$?
   if [ ! -f "$reached" ]; then
     fail "${name}: the copy stopped before its trap line (exit ${rc}), so this result proves nothing: ${err}"
   elif [ "$rc" -eq 0 ]; then
@@ -465,7 +470,7 @@ else
   reached="$tmp/nested-spend.reached"
   rm -f "$reached"
   rc=0
-  err="$(env -u CLEANUP_TRAP_TEST_UNSET_VAR CLEANUP_TRAP_TEST_REACHED="$reached" "$nested" 2>&1 >/dev/null)" || rc=$?
+  err="$(env -u CLEANUP_TRAP_TEST_UNSET_VAR CLEANUP_TRAP_TEST_REACHED="$reached" "$BASH" "$nested" 2>&1 >/dev/null)" || rc=$?
   if [ ! -f "$reached" ]; then
     fail "spend cases handler: the fixture stopped before its trap line (exit ${rc}), so this result proves nothing: ${err}"
   elif [ "$rc" -eq 0 ]; then
