@@ -14,12 +14,13 @@ import (
 	"time"
 
 	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
 	renderer "github.com/yuin/goldmark/renderer/html"
 	"golang.org/x/net/html"
 )
 
 var repoName = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
-var address = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s<>"']+`)
+var address = regexp.MustCompile(`(?:[A-Za-z][A-Za-z0-9+.-]*://|www\.)[^\s<>"']+`)
 
 // localIssue checks a complete destination, including relative links on a PR page.
 func localIssue(destination, repo string, number int) bool {
@@ -45,7 +46,12 @@ func bodyMentions(body, repo string, number int) (bool, error) {
 		return false, fmt.Errorf("invalid issue identity")
 	}
 	var rendered bytes.Buffer
-	markdown := goldmark.New(goldmark.WithRendererOptions(renderer.WithUnsafe()))
+	// GFM recognizes schemeless web/email links. Protocol URLs remain whole text tokens
+	// for the punctuation handling below (including URLs in code spans).
+	markdown := goldmark.New(
+		goldmark.WithExtensions(extension.NewLinkify(extension.WithLinkifyURLRegexp(regexp.MustCompile(`^$`)))),
+		goldmark.WithRendererOptions(renderer.WithUnsafe()),
+	)
 	if err := markdown.Convert([]byte(body), &rendered); err != nil {
 		return false, err
 	}

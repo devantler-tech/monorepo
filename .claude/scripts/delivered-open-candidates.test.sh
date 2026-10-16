@@ -216,6 +216,14 @@ gql 217 0 "" ""
 mention 217 '2170:merged:https://github.com/o/r/issues/217!'
 check "sentence punctuation does not hide a canonical issue URL" 1 "merged=1 open=0" "" --issue o/r#217
 
+gql 218 0 "" ""
+mention 218 '2180:merged:www.example.com/?next=#218'
+check "a schemeless foreign URL is not a local reference" 0 "merged=0 open=0" "CANDIDATE-SINGLE" --issue o/r#218
+
+gql 219 0 "" ""
+mention 219 '2190:merged:a+#219@example.com'
+check "a GFM email is not a local reference" 0 "merged=0 open=0" "CANDIDATE-SINGLE" --issue o/r#219
+
 # 7 — two pages accumulate
 gql 7 2 "c2" "" "$(pr xref 70 MERGED)"
 gql 7 2 "" "-c2" "$(pr xref 71 MERGED)"

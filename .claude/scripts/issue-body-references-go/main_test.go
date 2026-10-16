@@ -35,6 +35,9 @@ func TestBodyMentions(t *testing.T) {
 		{"route suffix", "https://github.com/o/r/issues/42legacy", false},
 		{"file suffix", "https://github.com/o/r/issues/42.md", false},
 		{"foreign code URL", "`https://other.example/?text=#42`", false},
+		{"GFM www URL", "www.example.com/?next=#42", false},
+		{"literal www URL", "`www.example.com/?next=#42`", false},
+		{"GFM email", "a+#42@example.com", false},
 		{"empty", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
