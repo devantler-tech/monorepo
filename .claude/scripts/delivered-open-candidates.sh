@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # delivered-open-candidates.sh — list open issues that a merged pull request may already have
-# delivered (monorepo#2967). The work-selection ladder serves the OLDEST actionable issue first, and
-# the oldest issues are the ones most likely to have shipped through a PR that said only
+# delivered (monorepo#2967). Older issues are especially likely to have shipped through a PR that said only
 # `Part of #N` or a bare mention, which closes nothing. Every lane that descends to such an issue
 # rebuilds finished work. The work-selection guide's *Completion check* asks a run to look for
 # delivery before starting; this is the repeatable command behind that step.
@@ -33,6 +32,12 @@
 #   1  every issue was read in full and at least one is a candidate
 #   2  UNKNOWN — usage error, a failed or truncated read; no verdict is printed for an issue whose
 #      references could not be read completely, because a short read looks exactly like "no PR"
+#   3  DEFERRED — the search budget ran out or the forge refused a search for rate reasons.
+#      Completed verdicts remain usable; stderr provides a command for the unchecked issues.
+#
+# Each invocation spends at most one quarter (rounded down) of the search limit AND remaining
+# allowance read at startup (monorepo#4100). The oldest-list lookup counts against that budget too.
+# Concurrent users can still spend the allowance first; a refusal defers rather than retries.
 #
 # Read-only. Prints issue and PR numbers only, never titles or bodies (untrusted input).
 #
@@ -44,8 +49,30 @@ ORG=devantler-tech
 issues=()
 oldest=""
 type=""
+original_args=("$@")
+completed=0
+listed_issues=0
 
-unknown() { echo "delivered-open-candidates: UNKNOWN — $*" >&2; exit 2; }
+progress() {
+  if [ "$listed_issues" = 1 ]; then
+    printf 'completed=%s remaining=%s\n' "$completed" "$((${#issues[@]} - completed))" >&2
+  fi
+}
+unknown() { echo "delivered-open-candidates: UNKNOWN — $*" >&2; progress; exit 2; }
+defer() {
+  echo "delivered-open-candidates: DEFERRED — $*; retry after the search allowance recovers" >&2
+  progress
+  printf 'resume:' >&2
+  printf ' %q' "$0" >&2
+  if [ "$listed_issues" = 1 ]; then
+    local i
+    for ((i=completed; i<${#issues[@]}; i++)); do printf ' --issue %q' "${issues[$i]}" >&2; done
+  else
+    printf ' %q' "${original_args[@]}" >&2
+  fi
+  printf '\n' >&2
+  exit 3
+}
 usage() { unknown "usage: --issue <owner/repo>#<n> ... | --oldest <N> [--type <IssueType>]"; }
 
 while [ $# -gt 0 ]; do
@@ -70,14 +97,36 @@ if [ -n "$oldest" ]; then
 else
   [ "${#issues[@]}" -gt 0 ] || usage
   [ -z "$type" ] || unknown "--type needs --oldest"
+  listed_issues=1
 fi
 
 gh_() { if [ -n "${DELIVERED_OPEN_GH:-}" ]; then "$DELIVERED_OPEN_GH" "$@"; else gh "$@"; fi; }
 
+allowance=$(gh_ api rate_limit) || unknown "search allowance read failed"
+budget=$(jq -ers 'select(length == 1) | .[0].resources.search | select(
+  (.limit | type) == "number" and (.remaining | type) == "number" and
+  .limit > 0 and .limit == (.limit | floor) and
+  .remaining >= 0 and .remaining <= .limit and .remaining == (.remaining | floor))
+  | [(.limit / 4 | floor), (.remaining / 4 | floor)] | min' <<<"$allowance") ||
+  unknown "invalid search allowance"
+
+# Run in the caller, not a command substitution: the budget must survive each search.
+search_read() {
+  [ "$budget" -gt 0 ] || defer "invocation search budget reached"
+  budget=$((budget - 1))
+  if ! search_result=$(gh_ api -X GET search/issues "$@" 2>&1); then
+    case "$search_result" in
+      *"rate limit"*|*"rate-limit"*|*"HTTP 429"*) defer "forge refused a search for rate reasons" ;;
+      *) unknown "${ref:-issue list}: search read failed" ;;
+    esac
+  fi
+}
+
 if [ -n "$oldest" ]; then
   q="org:${ORG} is:issue is:open archived:false"
   [ -z "$type" ] || q="$q type:${type}"
-  search=$(gh_ api -X GET search/issues -f q="$q" -f sort=created -f order=asc -f per_page="$oldest") || unknown "issue search failed"
+  search_read -f q="$q" -f sort=created -f order=asc -f per_page="$oldest"
+  search=$search_result
   listed=$(jq -r '.items[] | "\(.repository_url | split("/") | .[-2:] | join("/"))#\(.number)"' <<<"$search") ||
     unknown "issue search returned an unparseable payload"
   total=$(jq -r '.total_count' <<<"$search")
@@ -87,6 +136,7 @@ if [ -n "$oldest" ]; then
   got=$(grep -c . <<<"$listed" || true)
   [ "$got" -eq "$want" ] || unknown "issue search returned $got of $want issues"
   while IFS= read -r ref; do [ -n "$ref" ] && issues+=("$ref"); done <<<"$listed"
+  listed_issues=1
 fi
 
 # shellcheck disable=SC2016  # GraphQL variables, not shell expansions.
@@ -111,6 +161,8 @@ query='query($owner:String!,$name:String!,$number:Int!,$after:String){
 
 found=0
 for ref in "${issues[@]}"; do
+  # Avoid reading an issue's timeline when its mandatory mention search cannot be served.
+  [ "$budget" -gt 0 ] || defer "invocation search budget reached"
   owner=${ref%%/*}; rest=${ref#*/}; name=${rest%%#*}; number=${ref##*#}
   after=""; nodes="[]"; seen=0; total=""; state=""; subs=""
   while :; do
@@ -140,7 +192,8 @@ for ref in "${issues[@]}"; do
   # repository's PRs for the number and keep only bodies that name it as `#<n>` (not `owner/repo#<n>`,
   # and not a longer number). Bodies are matched locally and never printed.
   mentions_q="repo:${owner}/${name} is:pr ${number} in:body"
-  search=$(gh_ api -X GET search/issues -f q="$mentions_q" -f per_page=100) || unknown "$ref: mention search failed"
+  search_read -f q="$mentions_q" -f per_page=100
+  search=$search_result
   [ "$(jq -r '.incomplete_results' <<<"$search")" = "false" ] || unknown "$ref: mention search reported incomplete results"
   [ "$(jq -r '.total_count' <<<"$search")" -le 100 ] 2>/dev/null || unknown "$ref: more than 100 PRs match its number"
   jq -e '(.items | type) == "array" and (.items | length) == .total_count' >/dev/null 2>&1 <<<"$search" ||
@@ -177,6 +230,7 @@ for ref in "${issues[@]}"; do
   else verdict=CANDIDATE-MULTI; found=1
   fi
   echo "$verdict $ref state=$state merged=$merged open=$open closing=$closing subissues=$subs"
+  completed=$((completed + 1))
 done
 
 exit "$found"
