@@ -134,13 +134,15 @@ def review_body: text | startswith("**Actionable comments posted:")
   or startswith("> [!CAUTION]\n> Some comments are outside the diff");
 # The refusal's own retry window ("Next included review available in 51 minutes", "available in:
 # 16 minutes", "available in **1 hour and 5 minutes**", "available in 40 seconds") as the UTC time
-# it ends; - when it states none.
+# it ends; - when it states none. Whole-minute waits are rounded down by the provider,
+# so reserve one more minute unless seconds were stated explicitly (monorepo#4101).
 def retry_until:
   ([body | capture("available in:?[*\\s]*(?:(?<h>[0-9]+)\\s*hours?[,\\s]*(?:and\\s*)?)?(?:(?<m>[0-9]+)\\s*minutes?[,\\s]*(?:and\\s*)?)?(?:(?<s>[0-9]+)\\s*seconds?)?"; "i")]
     | map(select(.h != null or .m != null or .s != null)) | first) as $w
   | if $w == null then "-"
     else (.at | fromdateiso8601) + (($w.h // "0" | tonumber) * 3600) + (($w.m // "0" | tonumber) * 60)
       + ($w.s // "0" | tonumber)
+      + (if $w.s == null then 60 else 0 end)
       | todateiso8601 end;
 select(.at != null) |
 if .login == "coderabbitai[bot]" then
@@ -179,7 +181,7 @@ else
   fi
   # The stored sweep is named and headed by the arguments that decide what a sweep reads, so a sweep
   # for other arguments is never reused. Arguments that cannot be a safe file name are not cached.
-  cache_file="" cache_head="# review-lane-health sweep org=$org since=$since limit=$limit at="
+  cache_file="" cache_head="# review-lane-health sweep-v2 org=$org since=$since limit=$limit at="
   if [ "$cache_seconds" -gt 0 ] && [[ "$org" =~ ^[A-Za-z0-9._-]+$ && "$since" =~ ^[0-9-]+$ ]]; then
     cache_file="$cache_dir/$org.$since.$limit.events"
   fi
