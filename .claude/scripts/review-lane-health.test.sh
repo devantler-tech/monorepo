@@ -185,7 +185,7 @@ sweep() { # [checker arguments] — one cached-mode run against the stub, counti
   PATH="$bin:$PATH" run --org o --since 2026-09-14 --cache-seconds 900 "$@"
   n="$(calls)"
 }
-cached="$tmp/cache/o.2026-09-14.60.events"
+cached="$tmp/cache/o.2026-09-14.60.v2.events"
 head_line="# review-lane-health sweep-v2 org=o since=2026-09-14 limit=60 at="
 
 sweep
@@ -204,6 +204,13 @@ sweep
 cmp -s "$tmp/out" "$tmp/live-out" ||
   { diff "$tmp/live-out" "$tmp/out" >&2; fail "a reused sweep must print the live sweep's verdicts"; }
 grep -qF "reusing the sweep" "$tmp/err" || fail "a reused sweep must be announced"
+
+# An older concurrent collector writes its original cache key. It must not evict
+# the current result and make both collectors repeat the expensive sweep.
+sed '1s/review-lane-health sweep[^ ]*/review-lane-health sweep/' "$cached" >"$tmp/older-writer"
+mv "$tmp/older-writer" "$tmp/cache/o.2026-09-14.60.events"
+sweep
+[ "$n" -eq 0 ] || fail "an older collector's cache write must not evict the current sweep"
 
 # Older sweeps contain rounded-down retry times (#4101), so collect them again.
 sed '1s/review-lane-health sweep[^ ]*/review-lane-health sweep/' "$cached" >"$tmp/legacy-cache"
@@ -226,7 +233,7 @@ sweep
 [ "$n" -eq 0 ] || fail "the sweep just stored must be reused, got $n gh calls"
 sweep --limit 5
 [ "$n" -gt 0 ] || fail "a sweep for another --limit must not be reused"
-cp "$cached" "$tmp/cache/o.2026-09-14.7.events"
+cp "$cached" "$tmp/cache/o.2026-09-14.7.v2.events"
 sweep --limit 7
 [ "$n" -gt 0 ] || fail "a stored sweep whose first line names other arguments must not be reused"
 sweep --refresh
