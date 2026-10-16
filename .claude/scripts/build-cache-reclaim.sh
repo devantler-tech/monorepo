@@ -2314,18 +2314,23 @@ reclaim_codex_transcripts() {
   fi
   # Carry the helper's counts into this sweep's summary, which would otherwise report nothing
   # reclaimed after this step deleted gigabytes. Its summary is printed even on an UNKNOWN,
-  # so removals made before one are still counted.
-  counts=$(printf '%s\n' "$line" | awk '/^codex-transcript-retention: summary:/ {
-      n = ""; m = ""
+  # so removals made before one are still counted. Exactly one complete summary is required;
+  # the only run that prints none is the explicit no-Codex-home no-op.
+  if counts=$(printf '%s\n' "$line" | awk '/^codex-transcript-retention: summary:/ {
+      k++; n = ""; m = ""
       for (i = 1; i <= NF; i++) {
         if ($i ~ /^removed?=[0-9]+$/) { split($i, a, "="); n = a[2] }
         if ($i ~ /^reclaim(ed)?=~[0-9]+$/) { split($i, a, "~"); m = a[2] }
       }
     }
-    END { if (n != "" && m != "") print n, m }')
-  if [ -n "$counts" ]; then
+    END { if (k == 1 && n != "" && m != "") print n, m }') && [ -n "$counts" ]; then
     removed=$((removed + ${counts% *}))
     reclaimed_mb=$((reclaimed_mb + ${counts#* }))
+  elif [ "$rc" -eq 0 ] && grep -q '^codex-transcript-retention: no Codex home at ' <<<"$line"; then
+    :
+  elif [ "$rc" -eq 0 ]; then # a failed helper is already counted above
+    log 'UNKNOWN: codex transcripts: the helper gave no single complete summary'
+    unknown=$((unknown + 1))
   fi
 }
 
