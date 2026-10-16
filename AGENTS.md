@@ -97,8 +97,8 @@ no row are filed on the **default intake repo** below.
 
 The scheduled **Agentic Engineer** is the primary engineer for every product above: it **operates**,
 **advances**, **hardens** and **stewards the spend** of each one. The **Agent Improver** improves the
-engineer from the outside. (Once named *Daily AI …*; the `daily-maintainer` slug and
-scheduled-task ids are unchanged.)
+engineer from the outside. (Once *Daily AI …*; `daily-maintainer` slug and task
+ids unchanged.)
 
 The deployed definition is assembled, never copied: the reviewed
 [`agentic-engineering`](libraries/agent-plugins/plugins/agentic-engineering/agents/agentic-engineer.agent.md)
@@ -115,6 +115,7 @@ role behaviour changes in its owning upstream first** (resolve a bundled skill's
   Run `.claude/scripts/review-lane-health.sh` before requesting any review.
 - Run `.claude/scripts/sibling-lane-watch.sh --lane <sibling>`; obey `ESCALATE`.
 - Sweep your own lane's worktrees, then run `.claude/scripts/disk-preflight.sh`.
+- Claude waits with `Monitor` (via ToolSearch), never a foreground loop.
 
 Read the [definition guide](.claude/guides/definition-and-plugin.md).
 
@@ -348,7 +349,7 @@ Guides govern their topics; summaries must agree, and rule changes update both i
 | [worktree-isolation](.claude/worktree-isolation.md) | submodule isolation | repairing a submodule worktree |
 
 **Keep this file small:** universal rules here, topic guidance in guides or beside the code.
-`.claude/scripts/agent-instructions-layout-contract.test.sh` enforces Codex's 32 KiB instruction limit.
+`.claude/scripts/agent-instructions-layout-contract.test.sh` enforces Codex's 32 KiB limit.
 
 ## Maintenance
 
