@@ -272,7 +272,7 @@ repair() {
   mdir=$(module_dir "$path") || mdir=''
   tree=$(module_tree "$path") || tree=''
   { [ -n "$mdir" ] && [ -d "$mdir" ] && [ -n "$tree" ]; } ||
-    unknown "git cannot read a gitdir for '$path' (a dangling core.worktree, or not an initialised submodule?) — refusing to repair it"
+    unknown "git cannot read a gitdir for '$path': its .git link does not resolve to a usable module directory (one removed, or left incomplete by an interrupted populate?) — inspect '$path/.git' and that module directory before changing either; refusing to repair it"
 
   # `git -C <dir>` walks UP when <dir> is not itself a repository, so a REGISTERED submodule path that
   # is non-empty but NOT initialised resolves to the SUPERPROJECT's gitdir — and repair would then pin
@@ -768,6 +768,31 @@ shared_object_store() {
   printf '%s\n' "$store"
 }
 
+# The spelling a submodule path argument is matched by. Registration is a literal string comparison, so
+# `./applications/ksail`, a trailing slash or an absolute path inside the superproject named a registered
+# submodule and still read as "not a registered submodule" (exit 1), a false finding about a path that
+# IS registered. Relative to the superproject root, with no leading `./` and no trailing `/`.
+normalize_path() {
+  local p=$1
+  case "$p" in
+    "$super_root"/*) p=${p#"$super_root"/} ;;
+  esac
+  while [ "${p#./}" != "$p" ]; do p=${p#./}; done
+  printf '%s' "${p%/}"
+}
+
+# This checkout's module directory, when THIS worktree owns it. A LINKED superproject worktree keeps its
+# submodules' repositories under its own admin directory (.git/worktrees/<wt>/modules/<path>), which only
+# this worktree writes. Prints nothing for the main checkout: its modules directory is the SHARED store
+# that other sessions borrow from, so nothing there is ever cleared by this script.
+own_module_dir() {
+  local path=$1 gitdir common
+  gitdir=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null) || return 0
+  common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
+  [ -n "$gitdir" ] && [ -n "$common" ] && [ "$gitdir" != "$common" ] || return 0
+  printf '%s/modules/%s' "$gitdir" "$path"
+}
+
 init_repair_probe() {
   local path=${1%/}
   # Only ever mutate config for a path git actually registers as a submodule. Handed a linked
@@ -790,6 +815,16 @@ init_repair_probe() {
     # ahead-of-pin work. Populating is the only thing update is for, and this tree is already
     # populated.
     repair "$path"
+    # An interrupted populate can leave `.git` in place with only part of the pinned files on disk. The
+    # tree is non-empty, so the checks below never run for it, and isolation alone would report a partial
+    # checkout as populated (measured 2026-10-17: 137 tracked files missing, exit 0). Refuse it and name
+    # the restore, which touches only the missing files.
+    local missing_files
+    missing_files=$(git --no-replace-objects -C "$path" ls-files --deleted 2>/dev/null) ||
+      unknown "could not list the tracked files of '$path' — do not read or edit it"
+    if [ -n "$missing_files" ]; then
+      die "'$path' is populated but $(printf '%s\n' "$missing_files" | grep -c .) tracked file(s) are missing from its checkout (an interrupted populate?) — list them with 'git -C $path ls-files --deleted' and restore each with 'git -C $path checkout -- <file>'; do not read or edit it until then"
+    fi
   else
     # Fresh (empty) submodule: populate it at its pinned commit, then relocate the `core.worktree`
     # that `git submodule update` writes into the shared config.
@@ -800,14 +835,30 @@ init_repair_probe() {
     # Borrow the main checkout's objects when that is safe (see `shared_object_store`). The store is
     # told never to prune first; if that cannot be written, clone in full instead of borrowing from a
     # store that may later delete what this checkout needs.
+    # An interrupted populate can leave this worktree's own module directory without a HEAD: a SIGTERM
+    # can leave it empty, a SIGKILL can leave it partly written. Git will not resume a directory that is
+    # not a repository, so `submodule update` exits 128 on every retry, before this script says anything.
+    # Clear it only when it is THIS worktree's (see own_module_dir) and the checkout is still empty, which
+    # is this branch, so nothing git could have resumed is lost. The main checkout's directory is the
+    # shared store and is never cleared.
+    local own_mdir
+    own_mdir=$(own_module_dir "$path") || own_mdir=''
+    if [ -n "$own_mdir" ] && [ -d "$own_mdir" ] && [ ! -f "$own_mdir/HEAD" ]; then
+      rm -rf -- "$own_mdir"
+      warn "$path — cleared the incomplete module directory an interrupted populate left in this worktree"
+    fi
     local store reference=()
     store=$(shared_object_store "$path") || store=''
     if [ -n "$store" ] && git --git-dir="$store" config gc.pruneExpire never 2>/dev/null &&
       [ "$(git --git-dir="$store" config --get gc.pruneExpire 2>/dev/null)" = never ]; then
       reference=(--reference "$store")
     fi
-    GIT_NO_REPLACE_OBJECTS=1 git submodule update --init --checkout \
-      ${reference[@]+"${reference[@]}"} -- ":(literal)$path"
+    # A git failure here is UNKNOWN with this script's own line, not git's raw status (128) ending the run
+    # silently under errexit: nothing was checked out, so there is nothing to repair or conclude.
+    if ! GIT_NO_REPLACE_OBJECTS=1 git submodule update --init --checkout \
+      ${reference[@]+"${reference[@]}"} -- ":(literal)$path"; then
+      unknown "git could not populate '$path' (its message is above), so nothing was checked out or repaired — do not read or edit it; inspect this worktree's module directory before retrying"
+    fi
     # It can exit 0 having populated NOTHING — observed 2026-07-26 running from a linked superproject
     # worktree while a sibling worktree already held that submodule: git printed `checked out '<sha>'`,
     # exited 0, and left the directory empty. `probe` below verifies ISOLATION, not content, so it
@@ -1210,13 +1261,13 @@ case "$1" in
     ;;
   --advance)
     [ $# -eq 2 ] || unknown 'usage: submodule-init.sh --advance <submodule-path>'
-    advance "$2"
+    advance "$(normalize_path "$2")"
     ;;
   --sync)
     [ $# -eq 2 ] || unknown 'usage: submodule-init.sh --sync <from-sha>'
     sync_from "$2"
     ;;
   *)
-    for path in "$@"; do init_repair_probe "$path"; done
+    for path in "$@"; do init_repair_probe "$(normalize_path "$path")"; done
     ;;
 esac
