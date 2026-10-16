@@ -358,9 +358,10 @@ reviewed definition at the pinned gitlink and following it, exactly as above. On
 not invoke this Claude-only tool: proceed directly to the condition-based tracker below while using
 the reviewed definition.
 
-The refresh resolves its pin from the working tree it runs in. When the currency check carried a
-`ROLLOUT`, `SUPERSEDED` or `UNADOPTED` notice, that is not the adopted pin, so pass the refresh the
-one the check printed: `--gitlink <pinned revision>`.
+Pass the refresh the consumer commit printed by the currency check:
+`--adopted-ref <consumer commit>`. It reads both the plugin pin and required runtime file list from
+that commit, including during a rollout. An unreadable commit is UNKNOWN before any runtime change.
+`--gitlink <pinned revision>` selects only a plugin pin and uses the working tree's file list.
 
 ⚠️ **Running the refresh never makes the pin active for THIS run — do not report it as if it had.**
 On a `1` or `2` the installed definition is unchanged by construction, so the runtime is still

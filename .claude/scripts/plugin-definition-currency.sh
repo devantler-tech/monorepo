@@ -42,7 +42,7 @@
 #                      owns its freshness, and every verdict says so (CALLER-NAMED PIN). A local
 #                      branch or tag is refused: this checkout wrote it, so it shows a proposal.
 #   --gitlink SHA      a pin the caller names outright. Neither the adopted nor the working-tree pin
-#                      is resolved; the refresh script binds its gated target this way.
+#                      is resolved; the runtime file list comes from the working tree.
 # An adopted pin that cannot be read is UNKNOWN. The working tree's gitlink never stands in for it.
 # --remote takes the NAME of a configured remote, never a path or URL. Each remote call is bounded
 # by PLUGIN_CURRENCY_REMOTE_TIMEOUT_SECS (default 20): a remote that does not answer in time is
@@ -956,11 +956,11 @@ if [ "$RUNTIME" = codex ]; then
   say "         gitlink with the revision you intend to run through the reviewed rollout instead."
 else
   say "     For Claude: the /plugin marketplace update flow."
-  if [ -n "$WORKTREE_NOTE" ]; then
-    # The refresh script resolves its pin from the working tree it runs in. Left to that default
-    # here it would gate on, and could install, the pin this notice says is not adopted.
-    say "     plugin-definition-refresh.sh resolves its pin from the working tree, which here does"
-    say "     not hold the adopted one: name the adopted pin to it with --gitlink $GITLINK."
+  if [ -n "$ADOPTED_COMMIT" ]; then
+    say "     Bind the refresh and its runtime file list to this consumer revision:"
+    say "       plugin-definition-refresh.sh --adopted-ref $ADOPTED_COMMIT"
+  else
+    say "     Bind the refresh to the named plugin pin: plugin-definition-refresh.sh --gitlink $GITLINK"
   fi
 fi
 say "  3. If the refresh needs an interactive session this run cannot open, surface it to the"

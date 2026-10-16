@@ -1864,8 +1864,8 @@ case "${out}" in
 esac
 # The Claude remediation must not send the refresh at the working tree's pin.
 case "${out}" in
-  *"--gitlink ${gitlink}"*) ok "the drift remediation names the adopted pin for the refresh" ;;
-  *) fail "the drift remediation does not bind the refresh to the adopted pin: ${out}" ;;
+  *"plugin-definition-refresh.sh --adopted-ref ${adopted_commit}"*) ok "the drift remediation binds the refresh to the adopted consumer revision" ;;
+  *) fail "the drift remediation does not bind the refresh to the adopted consumer revision: ${out}" ;;
 esac
 
 # --adopted-ref names an already-fetched revision, and the output says it was not refreshed.
@@ -2309,9 +2309,9 @@ case "${section}" in
 esac
 # The refresh resolves its own pin from the working tree, so the contract has to bind it.
 case "${section}" in
-  *"pass the refresh the one the check printed: \`--gitlink <pinned revision>\`"*)
-    ok "the contract binds the refresh to the adopted pin under a notice" ;;
-  *) fail "the plugin contract section does not bind the refresh to the adopted pin" ;;
+  *"Pass the refresh the consumer commit printed by the currency check:"*"\`--adopted-ref <consumer commit>\`"*)
+    ok "the contract binds the refresh and runtime file list to the consumer revision" ;;
+  *) fail "the plugin contract section does not bind the refresh to the consumer revision" ;;
 esac
 # And the fallback read must not follow a proposal.
 case "${section}" in
