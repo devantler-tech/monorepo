@@ -163,6 +163,15 @@ review at the current head**
 session is alive; across hourly runs older PRs accumulate red checks, threads, and conflicts that
 otherwise sit for days (a recurring miss the maintainer flagged — twice: open CodeRabbit threads
 2026-06-29, then the full dashboard of red/conflicted/unresolved PRs 2026-07-01).
+**List the sweep's PRs with identity fields only, then read each PR's state on its own.** An org-wide
+`search(query:"org:devantler-tech is:pr is:open …")` that also asks for `mergeStateStatus`,
+`statusCheckRollup` or `mergeable` makes GitHub work out merge and check state for every result, and
+it often answers with an HTML error page instead of JSON (`invalid character '<' looking for beginning
+of value`). Between 2026-10-13 and 2026-10-16, 15 of 31 such calls failed, at page sizes from 20 to
+100, while 49 identity-only searches failed 0 times (monorepo#4242). So search for the number,
+repository, head ref, draft state and URL, then read merge and check state per PR with
+`gh pr view <n> --repo devantler-tech/<repo> --json …`: the same two steps the surveyor takes. A
+smaller page size does not fix it.
 **Review-BODY findings count toward (b) even though no thread exists for them — and that means EVERY
 collapsed finding section, not just one.** CodeRabbit emits findings it does not post inline as
 collapsed sections **in the review body**: **`⚠️ Outside diff range comments (N)`** (inside a
