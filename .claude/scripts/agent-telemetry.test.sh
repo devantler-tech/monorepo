@@ -55,6 +55,9 @@ for tool in Bash Edit Write MultiEdit; do
   printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"edit-1","is_error":true,"content":"File has been modified since read"}]}}' \
     >> "$FIX/stale-edit/s.jsonl"
   OUT=$(stale_edit_report)
+  stale_status=$?
+  if [ "$stale_status" -eq 0 ]; then ok "$tool returns a measured result"
+  else bad "$tool returns a measured result" "exit=$stale_status"; fi
   check "$tool preserves the historical raw signal" "$OUT" "file two-writer races ...... 1"
   if [ "$tool" = Bash ]; then expected=0; else expected=1; fi
   check "$tool is classified by its actual invocation" "$OUT" "stale-edit candidates v1 ... $expected"
@@ -64,8 +67,11 @@ done
 printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"missing","is_error":true,"content":"File has been modified since read"}]}}' \
   > "$FIX/stale-edit/s.jsonl"
 OUT=$(stale_edit_report)
+stale_status=$?
 check "an unmatched error is not a clean zero" "$OUT" "stale-edit candidates v1 ... UNKNOWN"
 check "unmatched errors retain their observed count" "$OUT" "unattributed stale-edit errors: 1"
+if [ "$stale_status" -eq 2 ]; then ok "unmatched attribution exits UNKNOWN"
+else bad "unmatched attribution exits UNKNOWN" "exit=$stale_status"; fi
 # A tool-result-shaped object inside a returned example is data, not another result.
 printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","is_error":false,"content":[{"type":"tool_result","tool_use_id":"missing","is_error":true,"content":"File has been modified since read"}]}]}}' \
   > "$FIX/stale-edit/s.jsonl"
@@ -94,8 +100,17 @@ check "successful edits quoting the phrase are not candidates" "$OUT" "stale-edi
 # jq can read plausible earlier records before it encounters an invalid tail.
 printf '%s\n' '{"type":' >> "$FIX/stale-edit/s.jsonl"
 OUT=$(stale_edit_report)
+stale_status=$?
 check "a partial file cannot publish earlier clean counts" "$OUT" "stale-edit candidates v1 ... UNKNOWN (incomplete extraction)"
 nocheck "a partial file publishes no clean candidate aggregate" "$OUT" "stale-edit candidates v1 ... 0"
+if [ "$stale_status" -eq 2 ]; then ok "partial extraction exits UNKNOWN"
+else bad "partial extraction exits UNKNOWN" "exit=$stale_status"; fi
+: > "$FIX/stale-edit/s.jsonl"
+OUT=$(stale_edit_report)
+stale_status=$?
+check "an empty selected file is unproven" "$OUT" "stale-edit candidates v1 ... UNKNOWN (incomplete extraction)"
+if [ "$stale_status" -eq 2 ]; then ok "an empty selected file exits UNKNOWN"
+else bad "an empty selected file exits UNKNOWN" "exit=$stale_status"; fi
 # End stale-edit classification regression.
 
 # #3830: no runtime phrase means no runtime normalisation work. Instrument the

@@ -2253,7 +2253,8 @@ tool_result_failure_text() {
 # Read the whole file before publishing counts: a partial JSON read is UNKNOWN.
 stale_edit_counts() {
   jq -n "$JQ_SHAPE_DEFS"'
-    reduce inputs as $record ({tools:{}, candidates:0, unattributed:0};
+    reduce inputs as $record ({tools:{}, records:0, candidates:0, unattributed:0};
+      .records += 1 |
       if ($record | type) != "object" then error("invalid record")
       elif $record.type == "assistant" then
         reduce ($record | content_blocks | select(.type == "tool_use")) as $call (. ;
@@ -2272,7 +2273,7 @@ stale_edit_counts() {
             elif $tool == "Bash" or $tool == "Grep" or $tool == "Read" or $tool == "Glob" then .
             else .unattributed += 1 end)
       else . end)
-    | {candidates, unattributed}
+    | if .records == 0 then error("empty transcript") else {candidates, unattributed} end
   ' "$1" 2>/dev/null
 }
 
@@ -5172,10 +5173,12 @@ if want a2a; then
       if [ "$stale_unattributed" -eq 0 ]; then
         echo "  stale-edit candidates v1 ... ${stale_candidates}   (CLAUDE ONLY)"
       else
+        main_rc=2
         echo "  stale-edit candidates v1 ... UNKNOWN (attributed candidates: ${stale_candidates})"
         echo "    unattributed stale-edit errors: ${stale_unattributed}"
       fi
     else
+      main_rc=2
       echo "  stale-edit candidates v1 ... UNKNOWN (incomplete extraction)"
     fi
     echo "  confirmed writer collisions . UNKNOWN (distinct-writer provenance unmeasured)"
