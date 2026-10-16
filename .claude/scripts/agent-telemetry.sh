@@ -2273,7 +2273,7 @@ stale_edit_counts() {
             elif $tool == "Bash" or $tool == "Grep" or $tool == "Read" or $tool == "Glob" then .
             else .unattributed += 1 end)
       else . end)
-    | if .records == 0 then error("empty transcript") else {candidates, unattributed} end
+    | if .records == 0 then error("empty transcript") else {records, candidates, unattributed} end
   ' "$1" 2>/dev/null
 }
 
@@ -5159,14 +5159,18 @@ if want a2a; then
     echo "    historical raw phrase signal; not a confirmed writer collision"
     # Evaluate only the observed native schema. No errored-result flag or writer
     # attribution is invented for Codex or other runtimes. A failed file read
-    # invalidates the aggregate, including any plausible earlier output.
+    # invalidates the aggregate, including any plausible earlier output. Publish
+    # counts only after one positive record receipt per selected Claude file;
+    # an empty supported cohort cannot borrow coverage from Codex sessions.
     if stale_rows=$(printf '%s\n' "$SF_CACHE" | while IFS= read -r f; do
         [ -n "$f" ] || continue
         stale_edit_counts "$f" || exit 1
-      done) && stale_totals=$(printf '%s\n' "$stale_rows" | jq -s -e '
-        if all(.[]; (.candidates | type) == "number" and (.unattributed | type) == "number")
-        then {candidates:([.[].candidates] | add // 0),
-              unattributed:([.[].unattributed] | add // 0)}
+      done) && stale_totals=$(printf '%s\n' "$stale_rows" | jq -s -e --argjson expected "$SF_COUNT" '
+        if $expected > 0 and length == $expected
+          and all(.[]; (.records | type) == "number" and .records > 0
+            and (.candidates | type) == "number" and (.unattributed | type) == "number")
+        then {candidates:([.[].candidates] | add),
+              unattributed:([.[].unattributed] | add)}
         else error("invalid counts") end'); then
       stale_candidates=$(jq -r .candidates <<<"$stale_totals")
       stale_unattributed=$(jq -r .unattributed <<<"$stale_totals")

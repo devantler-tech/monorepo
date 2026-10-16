@@ -111,6 +111,30 @@ stale_status=$?
 check "an empty selected file is unproven" "$OUT" "stale-edit candidates v1 ... UNKNOWN (incomplete extraction)"
 if [ "$stale_status" -eq 2 ]; then ok "an empty selected file exits UNKNOWN"
 else bad "an empty selected file exits UNKNOWN" "exit=$stale_status"; fi
+# An observed Codex session cannot provide evidence for the Claude-only series.
+mkdir -p "$FIX/stale-no-claude" "$FIX/stale-codex/sessions"
+jq -cn --arg cwd "$FIX/stale-codex" '{type:"session_meta",payload:{cwd:$cwd}}' \
+  > "$FIX/stale-codex/sessions/s.jsonl"
+printf '%s\n' '{"type":"response_item","payload":{"type":"function_call_output","output":"has been modified since read"}}' \
+  >> "$FIX/stale-codex/sessions/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/stale-no-claude" CODEX_HOME="$FIX/stale-codex" \
+  MONOREPO_DIR="$SCRIPT_DIR/../.." HOME="$FIX" bash "$TARGET" --since-days 3650 --section a2a 2>&1)
+stale_status=$?
+check "the unsupported-runtime control actually admits its session" "$OUT" "codex sessions in window ... 1"
+check "no Claude observation cannot certify zero candidates" "$OUT" "stale-edit candidates v1 ... UNKNOWN"
+nocheck "no Claude observation publishes no clean candidate count" "$OUT" "stale-edit candidates v1 ... 0"
+if [ "$stale_status" -eq 2 ]; then ok "an unsupported-only cohort exits UNKNOWN"
+else bad "an unsupported-only cohort exits UNKNOWN" "exit=$stale_status"; fi
+printf '%s\n' \
+  '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"mixed","name":"Bash"}]}}' \
+  '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"mixed","is_error":true,"content":"File has been modified since read"}]}}' \
+  > "$FIX/stale-edit/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/stale-edit" CODEX_HOME="$FIX/stale-codex" \
+  MONOREPO_DIR="$SCRIPT_DIR/../.." HOME="$FIX" bash "$TARGET" --since-days 3650 --section a2a 2>&1)
+stale_status=$?
+check "a mixed cohort can measure its supported subset" "$OUT" "stale-edit candidates v1 ... 0"
+if [ "$stale_status" -eq 0 ]; then ok "a completely observed supported subset exits zero"
+else bad "a completely observed supported subset exits zero" "exit=$stale_status"; fi
 # End stale-edit classification regression.
 
 # #3830: no runtime phrase means no runtime normalisation work. Instrument the
