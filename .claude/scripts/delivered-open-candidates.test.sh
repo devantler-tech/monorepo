@@ -35,6 +35,11 @@ fail=0
 cat >"$FIX/gh" <<'EOF'
 #!/usr/bin/env bash
 fix=$(dirname "$0")
+printf '%s\n' "$*" >>"$fix/calls"
+if [ "${2:-}" = rate_limit ]; then
+  [ ! -f "$fix/rate-fail" ] || exit 1
+  cat "$fix/rate.json"; exit
+fi
 n=""; after=""; q=""
 for a in "$@"; do
   case "$a" in
@@ -47,10 +52,12 @@ if [ -n "$n" ]; then file="$fix/gql-$n$after.json"
 elif [[ "$q" == *"in:body"* ]]; then n=$(awk '{print $3}' <<<"$q"); file="$fix/mention-$n.json"
 else file="$fix/org.json"
 fi
+[ ! -f "$file.fail" ] || { cat "$file.fail" >&2; exit 1; }
 [ -f "$file" ] || exit 1
 cat "$file"
 EOF
 chmod +x "$FIX/gh"
+jq -n '{resources:{search:{limit:30,remaining:30,reset:2000000000}}}' >"$FIX/rate.json"
 
 # pr <kind> <number> <state> [closing] — one timeline node
 pr() {
@@ -83,6 +90,7 @@ mention() {
       body: ($p[2:] | join(":"))}' | jq -s '{total_count: length, incomplete_results: false, items: .}' >"$FIX/mention-$n.json"
 }
 
+# Invoke the actual checker with the fixture forge and retain its diagnostics for assertions.
 run() { DELIVERED_OPEN_GH="$FIX/gh" "${TEST_BASH:-bash}" "$SCRIPT" "$@" 2>&1; }
 
 # check <name> <want-rc> <want-substring|""> <reject-substring|""> args...
@@ -181,6 +189,69 @@ check "no arguments is UNKNOWN" 2 "usage" ""
 check "a malformed --issue is UNKNOWN" 2 "must be <owner/repo>#<n>" "" --issue o/r-1
 check "--type without --oldest is UNKNOWN" 2 "--type needs --oldest" "" --issue o/r#1 --type Bug
 check "--oldest above the page size is UNKNOWN" 2 "--oldest must be 1..100" "" --oldest 101
+
+# A complete requested list must make bounded progress, with an exact continuation.
+for ((n=1001; n<=1100; n++)); do
+  gql "$n" 0 "" ""
+  mention "$n"
+done
+jq -n '{total_count:100,incomplete_results:false,items:[range(1001;1101)|
+  {repository_url:"https://api.github.com/repos/o/r",number:.}]}' >"$FIX/org.json"
+: >"$FIX/calls"
+check "100 issues yield a bounded resumable batch" 2 \
+  "completed=6 remaining=94" "o/r#1007 state=" --oldest 100
+if [ "$(grep -c 'search/issues' "$FIX/calls")" = 7 ] &&
+   [ "$(grep -c 'api rate_limit' "$FIX/calls")" = 1 ]; then
+  echo "ok: a batch spends at most one quarter of the search limit"; pass=$((pass+1))
+else echo "FAIL: unbounded search requests"; fail=$((fail+1)); fi
+check "continuation uses explicit unchecked issues" 0 "o/r#1008 state=" "o/r#1006 state=" \
+  --issue o/r#1007 --issue o/r#1008
+# Exercise the actual printed command, with only this test's synthetic repository names.
+first=$(run --oldest 100) || [ "$?" = 2 ]
+resume=$(sed -n 's/^resume: //p' <<<"$first")
+continued_rc=0
+continued=$(DELIVERED_OPEN_GH="$FIX/gh" "${TEST_BASH:-bash}" -c "$resume" 2>&1) || continued_rc=$?
+if [ "$continued_rc" = 2 ] && grep -qF 'o/r#1007 state=' <<<"$continued" &&
+   grep -qF 'completed=7 remaining=87' <<<"$continued" &&
+   ! grep -qF 'o/r#1006 state=' <<<"$continued"; then
+  echo "ok: the printed continuation advances without repeating completed issues"; pass=$((pass+1))
+else echo "FAIL: printed continuation did not advance: $continued"; fail=$((fail+1)); fi
+
+jq -n '{resources:{search:{limit:30,remaining:4,reset:2000000000}}}' >"$FIX/rate.json"
+: >"$FIX/calls"
+check "low allowance preserves checked progress" 2 "completed=1 remaining=1" "o/r#1002 state=" \
+  --issue o/r#1001 --issue o/r#1002
+if [ "$(grep -c 'search/issues' "$FIX/calls")" = 1 ]; then
+  echo "ok: low allowance leaves three quarters available"; pass=$((pass+1))
+else echo "FAIL: low allowance was overspent"; fail=$((fail+1)); fi
+jq -n '{resources:{search:{limit:30,remaining:0,reset:2000000000}}}' >"$FIX/rate.json"
+: >"$FIX/calls"
+check "empty allowance defers the original selection" 2 "--oldest 100" "state=" --oldest 100
+if ! grep -q 'search/issues' "$FIX/calls"; then
+  echo "ok: empty allowance makes no search request"; pass=$((pass+1))
+else echo "FAIL: empty allowance still searched"; fail=$((fail+1)); fi
+
+jq -n '{resources:{search:{limit:30,remaining:30,reset:2000000000}}}' >"$FIX/rate.json"
+printf '%s\n' 'gh: API rate limit exceeded (HTTP 403)' >"$FIX/mention-1002.json.fail"
+check "a concurrent rate refusal defers only unfinished work" 2 "completed=1 remaining=1" "o/r#1002 state=" \
+  --issue o/r#1001 --issue o/r#1002
+check "rate refusal uses the incomplete-read exit with a deferred diagnostic" 2 "DEFERRED" "UNKNOWN" \
+  --issue o/r#1001 --issue o/r#1002
+printf '%s\n' 'gh: HTTP 503 service unavailable' >"$FIX/mention-1002.json.fail"
+check "a failed read remains UNKNOWN and retains progress" 2 "completed=1 remaining=1" "o/r#1002 state=" \
+  --issue o/r#1001 --issue o/r#1002
+check "ordinary read failure is distinct from rate deferral" 2 "UNKNOWN" "DEFERRED" \
+  --issue o/r#1001 --issue o/r#1002
+rm "$FIX/mention-1002.json.fail"
+touch "$FIX/rate-fail"
+check "an unreadable allowance is UNKNOWN before any verdict" 2 "search allowance read failed" "state=" --issue o/r#1
+rm "$FIX/rate-fail"
+jq -n '{resources:{search:{limit:30,remaining:31,reset:2000000000}}}' >"$FIX/rate.json"
+check "an inconsistent allowance is UNKNOWN" 2 "invalid search allowance" "state=" --issue o/r#1
+jq -n '{resources:{search:{limit:30,remaining:30,reset:2000000000}}}' >"$FIX/rate.json"
+cat "$FIX/rate.json" >>"$FIX/rate-copy.json"
+cat "$FIX/rate-copy.json" >>"$FIX/rate.json"
+check "multiple allowance payloads are UNKNOWN" 2 "invalid search allowance" "state=" --issue o/r#1
 
 echo "delivered-open-candidates: $pass passed, $fail failed"
 test_run_completed=1
