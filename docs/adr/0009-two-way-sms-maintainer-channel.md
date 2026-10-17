@@ -46,7 +46,8 @@ Two facts must be confirmed when the account is opened, before anything is built
 
 If either fails, the fallback is **GatewayAPI's EU setup with a Danish virtual number**. The reply
 follow-up then becomes a receiver in the cluster that checks GatewayAPI's webhook signature, with its
-secrets held in OpenBao. Everything else in this record stays the same.
+secrets held in OpenBao, and the list of open asks moves into that receiver's own storage (see
+*Where the open asks come from*). Everything else in this record stays the same.
 
 ### How the pieces fit
 
@@ -62,9 +63,10 @@ needs no new service, no new image and no new public route into the cluster.
 - **Agent asks:** an agent records the ask on its issue first, then dispatches the workflow with a
   pointer to that record and nothing else. The workflow re-reads the record itself, accepts it only
   from the exact `devantler` login with the 🤖 disclosure line on a `devantler-tech` issue, builds
-  the message from a fixed template, applies the limits below and records the delivery on the issue.
-  An injected agent can therefore ask for an SMS only about a real, public, disclosed ask, in the
-  template's words, within the ceiling.
+  the message from a fixed template, applies the limits below and records the delivery on the issue
+  for people to read. That note is never read back to decide what a reply may answer. An injected
+  agent can therefore ask for an SMS only about a real, public, disclosed ask, in the template's
+  words, within the ceiling.
 - **Platform reachability:** the same workflow probes the public sites and the cluster's public entry
   point on a schedule, from GitHub's network rather than ours.
 - **Platform incidents:** the agents already read live production health every run. A critical
@@ -72,11 +74,12 @@ needs no new service, no new image and no new public route into the cluster.
   integration, and an agent always tries first.
 - **Replies:** on a schedule (every ten minutes by default), the workflow reads new inbound messages
   to the Danish number through Twilio's authenticated message list. It checks each one as described
-  below, then deletes it from Twilio. A reply therefore takes up to one polling interval, plus any
-  delay in GitHub's scheduler, to arrive. That is fine for decisions, which today wait hours.
+  below, then deletes it from Twilio, with the exceptions under *Where the open asks come from*. A
+  reply therefore takes up to one polling interval, plus any delay in GitHub's scheduler, to arrive.
+  That is fine for decisions, which today wait hours.
 - **Recording replies:** the workflow posts each verified reply through a dedicated GitHub App that
-  nothing else uses, so a reply record from that exact identity can only have come from this
-  workflow. The App needs only permission to write issue comments.
+  nothing else uses, so a reply record from that exact identity that was never edited can only have
+  come from this workflow. The App needs only permission to write issue comments.
 
 ### What may trigger an SMS
 
@@ -102,9 +105,9 @@ Deduplication and limits:
 - **No status, ever.** No "resolved", no "found nothing", no summaries, no savings. There are three
   exceptions, each bounded: the receipt for a recorded reply and at most one "not understood" a
   day, both described below, and the waiting-asks notice under the ceiling.
-- **A hard ceiling of three asks a day and ten a week.** Over the ceiling, asks wait. The next
-  morning carries one notice that names how many are waiting and links the board filter. The notice
-  counts as one of that day's three.
+- **A hard ceiling of three asks a day and ten in any seven days.** Over the ceiling, asks wait. The
+  next morning carries one notice that names how many are waiting and links the board filter. The
+  notice counts as one of that day's three.
 - **Urgent alerts do not queue behind asks.** The reachability and security rows have their own
   limit instead: one SMS per incident, and at most three such alerts a day. Past that limit, the
   third alert of the day says that more are open and that the details are in Coroot and the issues.
@@ -120,18 +123,21 @@ The reply path is the security-critical part, so it is built to fail closed at e
    `devantler-tech AI: decision needed on ksail#123. Reply "K7Q2X 1" to approve, "K7Q2X 2" to
    decline. Details: <link>`. The code is five characters from a 32-letter alphabet without
    look-alike characters (about 33 million values).
-2. **The code is derived, not stored.** It is an HMAC of the ask's public identifier (the issue and
-   the ask comment) and its send time, keyed by a secret that only the sender holds. Nothing that
-   would let someone compute a valid code is ever written to a public place.
+2. **The code is derived and never published.** It is an HMAC of the ask's public identifier (the
+   issue and the ask comment) and its send time, keyed by a secret that only the sender holds. Its
+   only copy outside his phone is the sent SMS in the provider account, which the verifier reads back
+   (see *Where the open asks come from*). Nothing that would let someone compute a valid code is ever
+   written to a public place.
 3. **A reply is accepted only when every check passes:** it was read through the provider's
    authenticated API (or, with the fallback provider, its webhook signature verified);
    the sender matches the maintainer's number (compared against the secret, necessary but never
-   sufficient); the reply is exactly `<code> <option>`, ignoring case and spaces; the code matches an
-   open ask; the option is one the ask offered; the ask is less than seven days old; and no earlier
-   reply to that ask was recorded. After three wrong codes in a day, SMS replies stop being accepted
-   until the next day. With at most ten asks open, a forger who already knows both numbers and can
-   spoof the sender has roughly a one-in-a-million chance a day of hitting a valid code. Locking
-   replies out costs the maintainer nothing he cannot do on GitHub.
+   sufficient); the reply is exactly `<code> <option>`, ignoring case and spaces; the code matches
+   exactly one open ask; the option is one the ask offered; the ask is less than seven days old; and
+   no earlier reply to that ask was recorded. After three wrong codes in a day, SMS replies stop
+   being accepted until the next day. With at most ten asks open, which only the sender can add (see
+   *Where the open asks come from*), a forger who already knows both numbers and can spoof the sender
+   has roughly a one-in-a-million chance a day of hitting a valid code. Locking replies out costs the
+   maintainer nothing he cannot do on GitHub.
 4. **Anything else does nothing.** Free text, a wrong or expired code, an unknown sender or an
    unreadable delivery is discarded without action and without being posted anywhere public, since
    it may be attacker-written. It is counted, and the maintainer gets at most one "not understood —
@@ -139,8 +145,10 @@ The reply path is the security-critical part, so it is built to fail closed at e
 5. **A verified reply is recorded before anything acts on it.** The sender posts a structured comment
    on the issue the ask names: which ask, which option, and that the checks passed — never the raw
    message. That record, from the sender's own dedicated identity, is the only form in which an SMS
-   reply reaches an agent. It carries the same limits as a reply in the Slack thread: it answers that
-   ask only, and it cannot loosen a guardrail.
+   reply reaches an agent. An agent accepts it only from that exact identity and only while GitHub
+   shows it was never edited, because anyone with write access to a repository can edit any comment
+   in it, the App's included. It carries the same limits as a reply in the Slack thread: it answers
+   that ask only, and it cannot loosen a guardrail.
 6. **Every recorded reply gets a one-line receipt by SMS.** The receipt exists to catch forgery:
    someone who intercepted an ask and answered first is exposed the moment the maintainer receives a
    receipt for an answer he never sent. He then corrects it on GitHub, where his comment outranks the
@@ -152,6 +160,43 @@ The reply path is the security-critical part, so it is built to fail closed at e
 8. **Never a credential by SMS.** No ask requests one, every ask's link points to GitHub for anything
    beyond picking an option, and an inbound message is never parsed for anything except the reply
    format.
+
+### Where the open asks come from
+
+Two of the checks above, that the code matches an open ask and that the option is one the ask
+offered, are only as strong as the list of open asks they read. If anyone could add to that list,
+each added entry would be one more code a guess could hit, and its options would be ones the forger
+wrote. So the list has one source, and only the sender can write to it.
+
+- **The source is the asks the sender actually sent, read back from the provider.** Each ask SMS
+  stays in the provider's message list until its ask closes. The verifier reads that list through the
+  same authenticated API it reads replies with. It keeps only messages that follow the ask template
+  and were sent from the Danish number to the maintainer's number in the last seven days. Each one
+  gives the ask's code, its link, its options as the SMS worded them and the provider's own send
+  time. Only the sender's provider credential, or the maintainer's own login to the provider, can add
+  a message to that list. With the fallback provider, the receiver keeps the same list in its own
+  storage, which nothing else writes.
+- **Nothing else can add an ask.** Not an inbound message, not a provider delivery or status
+  callback (this design uses none), not the delivery note or the `| asked sms` marker on the issue,
+  and not any comment shaped like an ask or a delivery record. Those are for people to read, and the
+  verifier never reads them. A record the sender never wrote is therefore rejected without being
+  examined: it is not in the provider's list, whoever posted it and whatever it says.
+- **At most ten asks are ever open.** The weekly ceiling counts any seven days in a row, the same
+  window in which an ask accepts replies. If the list ever holds more asks than that ceiling allows,
+  something other than the sender's limits is sending, and no reply is accepted while it does.
+- **A reply matches exactly one ask.** The sender never sends a code that an open ask already uses:
+  on a clash, it derives the code again from a later send time. The verifier accepts a reply only
+  when its code appears in exactly one open ask, and it rejects a code that matches several rather
+  than choosing between them. The reply record names the option as the sent SMS worded it, so editing
+  the ask on GitHub afterwards cannot change what he picked.
+- **An answered ask closes.** Once its reply is recorded, the sender deletes the ask SMS from the
+  provider. An ask that reaches seven days without an answer is deleted the same way.
+- **The lockout counter has the same kind of source.** A message from his number in the reply format
+  that fails a check is kept at the provider until the end of its day, not deleted at once. The day's
+  count of those messages is the counter, and only the provider credential can lower it.
+- **Fail closed.** If the list of sent asks or the day's failed replies cannot be read in full,
+  because of an error or a short page, no reply is accepted that cycle and nothing is deleted. The
+  next poll then sees the same messages.
 
 ### What an SMS may contain
 
@@ -173,20 +218,22 @@ The reply path is the security-critical part, so it is built to fail closed at e
   the fallback's receiver is ever built. It is passed to the provider with each request and never
   saved there as a contact or a group.
 - **Logs never show a number, a reply code or a message body.** Workflow logs on a public repository
-  are public, and a logged code would let anyone forge a reply. Every value read from an inbound
-  message is masked before it is handled.
+  are public, and a logged code would let anyone forge a reply. Every value read from the provider,
+  a sent ask included, is masked before it is handled.
 - **Residency.** Twilio's EU region processes and stores message bodies and the recipient's number in
   Ireland. Its documented exceptions are the mobile networks themselves, redundant routing that may
   cross regions, and support staff outside the EU working under data-transfer safeguards. The region
   uses its own credentials, so the integration uses those from the start. The fallback,
   GatewayAPI's EU setup, runs at Hetzner in Germany with routing inside the EU, a data processing
   agreement and yearly ISAE 3000 and 3402 assurance reports.
-- **What the provider holds.** Outbound messages carry nothing the linked GitHub artifact does not.
-  The personal data at stake is his number, his replies, and any inbound message from anyone to the
+- **What the provider holds.** Outbound messages carry nothing the linked GitHub artifact does not,
+  apart from an ask's reply code. The personal data at stake is his number, his replies, and any inbound message from anyone to the
   Danish number. That last group can be free text holding anything at all. The sender never
   interprets it and never copies it anywhere. Every inbound message, verified or not, is deleted from
-  the provider once processed, and outbound bodies are not retained where the provider's API allows
-  it. Deletion is not instant erasure: Twilio states that message bodies may stay in its database
+  the provider once processed, except that a failed reply from his number stays until the end of its
+  day to count toward the lockout. An ask SMS stays until its ask closes, because it is the record of
+  what was asked; other outbound bodies are not retained where the provider's API allows it.
+  Deletion is not instant erasure: Twilio states that message bodies may stay in its database
   backups for up to 30 days after deletion.
 
 ## Cost
@@ -194,19 +241,29 @@ The reply path is the security-critical part, so it is built to fail closed at e
 List prices seen on 2026-10-17, excluding VAT. Twilio notes that carrier fees may be added on top
 of its per-message rate and publishes no amount for Denmark, so its figures below are a floor, not
 an all-in price. GitHub Actions minutes are free on this public repository, so polling adds no
-cost.
+cost. US dollar amounts are converted at Danmarks Nationalbank's rate for 2026-10-16, DKK 6.6425 per
+USD.
 
 | Item | Twilio, EU region (chosen) | GatewayAPI, EU setup (fallback) |
 |---|---|---|
 | Danish number | USD 15 a month | DKK 105 a month, plus DKK 100 once |
 | SMS sent to a Danish mobile | USD 0.0592 each | DKK 0.299 each |
 | SMS received | USD 0.0075 each | Not published |
-| **Expected month** (about 20 sent, 10 received) | **about USD 16.3 (about DKK 110)** | about DKK 111, plus received messages |
-| Month at the ask ceiling (about 90 sent, 45 received) | about USD 21 | about DKK 132, plus received messages |
+| **Expected month** (about 20 sent, 10 received) | **about USD 16.3 (about DKK 108)** | about DKK 111, plus received messages |
+| Month at every send limit (about 205 sent, 45 received) | about USD 27.5 (about DKK 182) | about DKK 166, plus received messages |
 
 The expected month assumes the trigger list above: a few asks, their receipts and the rare alert.
-Both limits bound the worst case, so a runaway agent cannot run up the bill: each urgent alert
-adds about USD 0.06, and there are at most three a day.
+The send-limit month adds up every sending limit at once: about 43 asks (ten in any seven days),
+a receipt for each, three urgent alerts a day and one "not understood" a day. Those limits bound
+everything the sender can send, so a runaway agent cannot run the bill past that row.
+
+**Received messages are not bounded by any of those limits.** Anyone can text the Danish number, and
+each message is billed on arrival, at about USD 0.0075, whether it is a verified reply or discarded.
+The daily lockout limits accepted replies, not received ones, so a flood of a thousand texts costs
+about USD 7.50 and nothing in the sender can refuse it. The bound is on the provider account instead:
+a usage alert emails him once received messages pass USD 2 in a month, about 270 messages and six
+times the send-limit month's 45. That is the most a flood can cost before he hears of it. Releasing
+the number then stops it at once, and a replacement number costs USD 15 a month.
 
 ## Options considered
 
@@ -243,9 +300,10 @@ adds about USD 0.06, and there are at most three a day.
 Filed as sub-issues of the spike, in the order they can land:
 
 1. [#4276](https://github.com/devantler-tech/monorepo/issues/4276) — the sender workflow: template,
-   limits, reply codes and delivery records, off by default.
-2. [#4277](https://github.com/devantler-tech/monorepo/issues/4277) — reply ingestion: verification,
-   reply records and receipts.
+   limits, reply codes and delivery records, keeping each ask SMS at the provider until it closes,
+   off by default.
+2. [#4277](https://github.com/devantler-tech/monorepo/issues/4277) — reply ingestion: the open-ask
+   list read only from the provider, verification that fails closed, reply records and receipts.
 3. [platform#5005](https://github.com/devantler-tech/platform/issues/5005) — platform alert routing:
    classify every current alert stream and add the external reachability probe.
 4. [#4278](https://github.com/devantler-tech/monorepo/issues/4278) — the channel switch in `AGENTS.md`,
@@ -260,7 +318,8 @@ Agents never create accounts, sign agreements, enter credentials or move money. 
    agreement, and add a payment method. For Twilio: open it in the EU region (Ireland), rent a
    Danish mobile number, confirm that it supports SMS and works in that region, and create an API
    key scoped to messages only. Twilio documents no paperwork for Danish mobile numbers, only for
-   local ones. If either check fails, stop and say which, and the GatewayAPI fallback applies.
+   local ones. Add a monthly usage alert that emails him once received messages pass USD 2 (see
+   *Cost*). If either check fails, stop and say which, and the GatewayAPI fallback applies.
 2. **Create the dedicated GitHub App** for reply records, with permission to write issue comments
    only, and install it on the organisation.
 3. **Enter the secret values** in the protected environment that the sender follow-up creates: the
