@@ -29,10 +29,12 @@
 #      it is named, once nothing in it was written for a threshold counted in HOURS
 #      (2026-10-12: 14 GB of one-to-three-day-old trees, half under names no prefix list
 #      knew, monorepo#4136). A short keep-list names what is never considered.
-#   2b. Per-run Go and golangci-lint caches directly under the temp root, or one level below
-#      a Claude Code session scratchpad (claude-*/<project>/<session>/scratchpad/<cache>),
-#      whatever they are named, recognised by the README each tool writes into its cache and
-#      reclaimed once nothing was written to them for a threshold counted in HOURS
+#   2b. Per-run Go and golangci-lint caches directly under the temp root, one level below
+#      a Claude Code session scratchpad (claude-*/<project>/<session>/scratchpad/<cache>), or
+#      one level below a Codex app task directory (<CODEX_HOME>/worktrees/<id>/<cache>, where a
+#      worktree is never a candidate and one whose git registration is gone is only reported,
+#      monorepo#4248), whatever they are named, recognised by the README each tool writes
+#      into its cache and reclaimed once nothing was written to them for a threshold counted in HOURS
 #      (2026-09-30: 75 GB). A Go build cache a lane REUSES is never idle, so while it is still
 #      being written to it is emptied only when it exceeds cache_budget_gb (monorepo#3831).
 #   2c. Per-lane fallback module caches (go-mod-*) directly under the temp root, each removed
@@ -65,6 +67,8 @@
 #                                             DARWIN_USER_TEMP_DIR`, else ${TMPDIR:-/tmp}
 #   BUILD_CACHE_RECLAIM_GO_TMP_MIN_AGE_HOURS  age threshold for (4); default 6
 #   BUILD_CACHE_RECLAIM_RUN_CACHE_IDLE_HOURS  idle threshold for (2b); default 6
+#   BUILD_CACHE_RECLAIM_CODEX_WORKTREES       the Codex app worktree root (2b) also lists; default
+#                                             ${CODEX_HOME:-~/.codex}/worktrees, `off` skips it
 #   BUILD_CACHE_RECLAIM_CONTAINER_CLI         container runtime CLI for (5); default
 #                                             `container`, `off` skips the step
 #   BUILD_CACHE_RECLAIM_CONTAINER_STORE       that runtime's store directory; default
@@ -94,6 +98,8 @@
 #   * A tree any running process holds open is KEPT, and each cache or tree is asked about
 #     again immediately before it is removed.
 #   * The caller's own session tree is KEPT.
+#   * A Codex app worktree is KEPT, and so is everything below a task dir that is a checkout. One
+#     whose git registration is gone is reported, never removed (2b).
 #   * A Go work dir is KEPT while a Go toolchain process that could own it is running.
 #   * A browser test profile is KEPT while any process names it on its command line.
 #   * The golangci-lint cache is KEPT while golangci-lint runs, and is emptied only when
@@ -1448,6 +1454,105 @@ $run_cache_trees
 EOF
   run_cache_trees="${run_cache_trees}"$'\n'"${scratch_cache_trees}"
 fi
+# The Codex desktop app gives each task a directory <CODEX_HOME>/worktrees/<id>/ and puts the task's
+# git worktree one level below it (<id>/monorepo). A run that points GOCACHE beside its worktree leaves
+# the cache one level below <id> as well: outside the temp root, and outside the Codex sweep, which
+# removes registered worktrees only. On 2026-10-16 one such cache held 5.1 GB, unwritten since July
+# (monorepo#4248). So each <id>'s children are listed too. A child holding a `.git` entry is a worktree
+# and never a candidate; when the `gitdir:` its `.git` file names is gone it is reported by path and
+# still never removed, because git can no longer salvage anything uncommitted in it. A task dir that is
+# itself a checkout holds repository content, so its children are skipped. Every other child goes
+# through the marker, idle and liveness rules below -- with the host-wide open-file snapshot, because
+# this root is not under the temp root.
+codex_worktree_root=${BUILD_CACHE_RECLAIM_CODEX_WORKTREES:-${CODEX_HOME:-${HOME:-}/.codex}/worktrees}
+
+# codex_worktree_report <dir> keeps a Codex task's worktree, and reports one whose git registration
+# is gone. It never removes anything. A `.git` directory is a repository of its own: kept silently.
+# A `.git` symlink that points nowhere is a git link that dangles, like a `gitdir:` file naming a
+# missing directory, so it is reported the same way.
+codex_worktree_report() {
+  local wt=$1 link='' gitdir wt_mb
+  if [ -L "${wt}/.git" ] && [ ! -e "${wt}/.git" ]; then
+    wt_mb=$(size_mb "$wt") || wt_mb='?'
+    kept=$((kept + 1))
+    log "ORPHAN (git link dangles; never removed) ${wt_mb} MB  $wt"
+    return 0
+  fi
+  [ -f "${wt}/.git" ] || return 0
+  { IFS= read -r link || [ -n "$link" ]; } 2>/dev/null <"${wt}/.git"
+  case "$link" in
+    'gitdir: '?*) gitdir=${link#gitdir: } ;;
+    *)
+      unknown=$((unknown + 1))
+      log "UNKNOWN (worktree link unreadable, never removed) $wt"
+      return 0
+      ;;
+  esac
+  case "$gitdir" in
+    /*) ;;
+    *) gitdir="${wt}/${gitdir}" ;;
+  esac
+  [ -e "$gitdir" ] && return 0
+  wt_mb=$(size_mb "$wt") || wt_mb='?'
+  kept=$((kept + 1))
+  log "ORPHAN (git registration gone; never removed) ${wt_mb} MB  $wt"
+}
+
+codex_cache_trees=''
+case "$codex_worktree_root" in
+  off | /*) ;;
+  *)
+    unknown=$((unknown + 1))
+    log "UNKNOWN (Codex worktree root '$codex_worktree_root' is not absolute): Codex worktree caches not examined"
+    codex_worktree_root=off
+    ;;
+esac
+if [ "$run_caches_readable" -eq 1 ] && [ "$codex_worktree_root" != off ] && [ -d "$codex_worktree_root" ]; then
+  # Read on its own, like the temp-root listing: a failed or partial scan must be seen, so a task dir
+  # that cannot be listed makes the whole root UNKNOWN rather than a sweep of whatever was readable.
+  # Only safe names are listed, as for the temp root's run trees: the listing is read a line at a
+  # time, and a newline in a name would split it into two paths, the second relative to the working
+  # directory. Each line must also be <root>/<id>/<name> with both parts safe, so a task dir whose
+  # own name carries a newline cannot produce a candidate either.
+  if ! codex_children=$(find -H "$codex_worktree_root" -mindepth 2 -maxdepth 2 -type d \
+    ! -name "*[!${SAFE_NAME_CHARS}]*" 2>/dev/null); then
+    unknown=$((unknown + 1))
+    log "UNKNOWN (scan failed) $codex_worktree_root: Codex worktree caches not examined"
+  else
+    while IFS= read -r child; do
+      [ -n "$child" ] || continue
+      case "$child" in
+        "${codex_worktree_root%/}"/*) codex_rel=${child#"${codex_worktree_root%/}"/} ;;
+        *) continue ;;
+      esac
+      codex_rel=${codex_rel#/}
+      case "$codex_rel" in
+        */*/* | /* | */ | *[!/${SAFE_NAME_CHARS}]*) continue ;;
+        ?*/?*) ;;
+        *) continue ;;
+      esac
+      [ -L "$child" ] && continue
+      # A `.git` symlink to nothing still marks a checkout: `-e` follows the link, so ask `-L` too.
+      if [ -e "${child%/*}/.git" ] || [ -L "${child%/*}/.git" ]; then
+        continue
+      fi
+      if [ -e "${child}/.git" ] || [ -L "${child}/.git" ]; then
+        codex_worktree_report "$child"
+        continue
+      fi
+      codex_cache_trees="${codex_cache_trees}${child}"$'\n'
+    done <<EOF
+$codex_children
+EOF
+    # Said, so a directory that is never reaped for its name is not a silent leftover.
+    if codex_unsafe=$(find -H "$codex_worktree_root" -mindepth 1 -maxdepth 2 -type d \
+      -name "*[!${SAFE_NAME_CHARS}]*" -print0 2>/dev/null |
+      tr -dc '\000' | wc -c | tr -d ' ') && [ "${codex_unsafe:-0}" != 0 ]; then
+      log "Codex worktree caches: ${codex_unsafe} never considered for a name outside the safe set"
+    fi
+  fi
+fi
+[ -z "$codex_cache_trees" ] || run_cache_trees="${run_cache_trees}"$'\n'"${codex_cache_trees}"
 if [ -n "$run_cache_trees" ]; then
   while IFS= read -r tree; do
     [ -n "$tree" ] || continue
@@ -1468,9 +1573,15 @@ if [ -n "$run_cache_trees" ]; then
         [ -n "$canon" ] && continue
         ;;
     esac
+    # The narrowed snapshot sees only the temp root, so a Codex-root cache is asked about host-wide.
+    # Decided by exact membership in that listing, never by a path prefix a spelling could miss.
+    cache_scope=temp-root
+    case $'\n'"$codex_cache_trees" in
+      *$'\n'"$tree"$'\n'*) cache_scope=host ;;
+    esac
     hold=$(run_cache_hold "$tree")
     case "$hold" in
-      '') sweep_candidate "$tree" temp-root run-cache ;;
+      '') sweep_candidate "$tree" "$cache_scope" run-cache ;;
       recent)
         # A cache in use between runs: budgeted when it is a Go build cache (monorepo#3831).
         # The kind comes from the same bounded reader; anything but a readable Go marker keeps
@@ -1487,7 +1598,7 @@ if [ -n "$run_cache_trees" ]; then
           log "KEEP  (written within ${RUN_CACHE_IDLE_HOURS}h) ${cache_mb} MB, budget $((CACHE_BUDGET_GB * 1024)) MB  $tree"
         else
           log "per-run GOCACHE ${tree} = ${cache_mb} MB (budget $((CACHE_BUDGET_GB * 1024)) MB), over budget while written within ${RUN_CACHE_IDLE_HOURS}h"
-          sweep_candidate "$tree" temp-root budget-cache "$cache_mb"
+          sweep_candidate "$tree" "$cache_scope" budget-cache "$cache_mb"
         fi
         ;;
       linting)
