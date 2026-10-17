@@ -11,7 +11,8 @@ GitHub emails it to him. Write it for one reader who has not followed the week.
 - Name the file `docs/digests/<ISO year>-W<week>.md` after the Monday it is sent, for example
   `2026-W43.md`. It covers the seven days before that Monday.
 - Merge it through an ordinary reviewed pull request before 06:00 UTC on Monday. If the file is
-  missing, the workflow sends only the open asks and says that the summary is missing.
+  missing, too long or fails the check below, the workflow sends only the open asks and says that
+  the summary is missing.
 - Copy everything below the line at the end of this guide into the file, then fill it in.
 
 ## Writing rules
@@ -22,9 +23,10 @@ GitHub emails it to him. Write it for one reader who has not followed the week.
 - **Group the work.** Under What shipped, group the lines by product or area, then by Fixed,
   Improved and New. Leave out a group that has nothing in it.
 - **Give Agent Improver work its own heading**, after the products.
-- **Put Needs you first.** Print it with `.claude/scripts/maintainer-digest.sh needs-you` and paste
-  it in. Every open ask then has its number, question, options, recommendation and what happens if
-  it is unanswered. When nothing is open, the section says so in one line.
+- **Leave Needs you to the workflow.** When it sends the digest, it fills that section with the asks
+  open at that moment: each with its number, question, options, recommendation and what happens if
+  it is unanswered, or one line saying nothing needs him. An ask filed after you wrote the file is
+  still in it. `.claude/scripts/maintainer-digest.sh needs-you` shows what it will put there.
 - **Keep it short.** Aim for a two-minute read. Leave out routine updates that change nothing a
   person would notice.
 - **Say what changed in the digest itself.** When this template or these rules change, the next
@@ -55,7 +57,7 @@ workflow holds back a file that fails it.
 
 ## Needs you
 
-<!-- Paste the output of `.claude/scripts/maintainer-digest.sh needs-you` here. -->
+<!-- Leave this section as it is: the workflow fills it with the open asks when it sends the digest. -->
 
 ## What shipped
 

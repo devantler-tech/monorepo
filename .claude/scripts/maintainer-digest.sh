@@ -13,20 +13,23 @@
 #   send [--repo OWNER/REPO] [--week YYYY-Www] [--dir DIR] [--dry-run]
 #     Open DIR/<week>.md (default docs/digests, the current ISO week in UTC) as the issue
 #     "🙋 Maintainer digest — week <n>", labelled maintainer-digest and assigned to the maintainer,
-#     then close the earlier digests github-actions[bot] opened. When the file is missing, too long or
-#     fails `check`, a short digest of the open asks goes instead, saying the summary is missing.
-#     Nothing is sent when that week's digest is already open.
+#     then close the earlier digests github-actions[bot] opened. Its Needs you section is replaced by
+#     the asks open at the moment of sending, so an ask filed after the summary was written still
+#     goes out. When the file is missing, too long or fails `check`, a short digest of the open asks
+#     goes instead, saying the summary is missing. Nothing is sent when that week's digest is
+#     already open and assigned to him.
 #   needs-you [--repo OWNER/REPO]
-#     Print the "Needs you" section for the open asks: the one the fallback sends, and the one to
-#     paste into the week's file.
+#     Print the Needs you section for the open asks, as `send` puts it in the digest.
 #   urgent --issue N --label NAME --sender LOGIN [--repo OWNER/REPO] [--today YYYY-MM-DD] [--dry-run]
 #     Assign the maintainer to an urgent ask, so GitHub emails him at once. At most three a UTC day.
 #   check FILE...
 #     Check a digest file: its four sections in order, the note that a reply posts publicly, and no
 #     private-content marker. A finding names the file, the line and the kind, never the text found.
 #
-# Anyone can open an issue through the ask form, so only asks the maintainer's own account filed are
-# shown. Another account's ask is named by its number and its text is left out.
+# What an ask may put in the digest. Anyone can open an issue through the ask form, so only asks the
+# maintainer's own account filed are shown; another account's ask is named by its number only. An
+# ask whose text shows a private-content marker is listed with its text held back. An @mention is
+# shown as code, so a digest never notifies anyone again.
 #
 # Exit: 0 done with no finding; 1 a finding or a refusal, each printed (a digest with a finding is
 # still sent); 2 unknown: a usage error, an unreadable input, a failed GitHub read or write, or an
@@ -144,36 +147,102 @@ section_text() {
     }' "$1"
 }
 
-# Loads ask $1 (an index into the sorted asks) into ask_number, ask_url, ask_title and ask_missing,
-# writing each section's text to $tmp/section-<k>.md, and reports each missing section.
+# Shows each @mention as code, so a digest that repeats an ask never notifies anyone again.
+quiet_mentions() {
+  # shellcheck disable=SC2016 # The backticks are literal Markdown, not a command substitution.
+  sed -E 's/(^|[^A-Za-z0-9_`])@([A-Za-z0-9][A-Za-z0-9-]*(\/[A-Za-z0-9_.-]+)?)/\1`@\2`/g'
+}
+
+# Prints the numbers of the lines in file $3 that match regex $2 with grep flags $1. Returns 1 when no
+# line matches and 2 when grep fails. The matched text itself is never printed.
+matching_lines() {
+  local out rc=0
+  # -a reads the file as text, so a stray byte can never turn the line list into "Binary file matches".
+  out="$(grep -a -n "$1" -e "$2" -- "$3")" || rc=$?
+  case "$rc" in
+    0) printf '%s\n' "$out" | cut -d: -f1 ;;
+    1) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+# Reports every private-content marker in file $1 as "<$2>:<line>: private-content: <kind>". Returns 0
+# when there is none, 1 when there is one and 2 when the file cannot be read.
+scan_private() {
+  local i=0 rc lines line any=0
+  while [ "$i" -lt "${#private_kinds[@]}" ]; do
+    rc=0
+    lines="$(matching_lines "${private_flags[$i]}" "${private_patterns[$i]}" "$1")" || rc=$?
+    case "$rc" in
+      0)
+        while IFS= read -r line; do
+          finding "$2:$line: private-content: ${private_kinds[$i]}"
+        done <<<"$lines"
+        any=1
+        ;;
+      1) ;;
+      *) return 2 ;;
+    esac
+    i=$((i + 1))
+  done
+  return "$any"
+}
+
+# Loads ask $1 (an index into the sorted asks) into ask_number, ask_url, ask_title, ask_missing and
+# ask_private, writing each section's text to $tmp/section-<k>.md. Reports each missing section and
+# each private-content marker.
 load_ask() {
-  local k name
+  local k name rc
   ask_number="$(jq -r --argjson i "$1" '.[$i].number' "$tmp/asks.json")"
   ask_url="$(jq -r --argjson i "$1" '.[$i].html_url' "$tmp/asks.json")"
-  ask_title="$(jq -r --argjson i "$1" '.[$i].title | sub("^🙋 *Ask: *"; "")' "$tmp/asks.json")"
+  ask_title="$(jq -r --argjson i "$1" '.[$i].title | sub("^🙋 *Ask: *"; "")' "$tmp/asks.json" | quiet_mentions)"
   jq -r --argjson i "$1" '.[$i].body // ""' "$tmp/asks.json" >"$tmp/ask-body.md"
   ask_missing=""
+  printf '%s\n' "$ask_title" >"$tmp/ask-text.md"
   k=0
   for name in "${ask_sections[@]}"; do
-    section_text "$tmp/ask-body.md" "$name" >"$tmp/section-$k.md"
+    section_text "$tmp/ask-body.md" "$name" | quiet_mentions >"$tmp/section-$k.md"
+    cat "$tmp/section-$k.md" >>"$tmp/ask-text.md"
     if [ ! -s "$tmp/section-$k.md" ]; then
       ask_missing="${ask_missing:+$ask_missing, }$name"
       finding "MISSING-SECTION #$ask_number $name"
     fi
     k=$((k + 1))
   done
+  rc=0
+  scan_private "$tmp/ask-text.md" "#$ask_number" || rc=$?
+  case "$rc" in
+    0) ask_private=0 ;;
+    1) ask_private=1 ;;
+    *) unknown "could not check the text of #$ask_number" ;;
+  esac
 }
 
-# Writes the "Needs you" section for the open asks to stdout. Every ask is listed, a missing section is
-# named in the digest as well as reported, and another account's ask is named by number only.
+# Writes the Needs you section for the open asks to stdout. Every ask is listed: a missing section is
+# named in the digest, an ask showing private content is listed with its text held back, and another
+# account's ask is named by its number only. With $1 = brief, each ask is a numbered link only.
 render_needs_you() {
-  local count i k name others number
+  local brief=${1:-} count i k name others number
   count="$(jq 'length' "$tmp/asks.json")"
   printf '## Needs you\n\n'
   [ "$count" -gt 0 ] || printf 'Nothing needs you this week.\n'
+  [ "$brief" != brief ] || [ "$count" -eq 0 ] ||
+    printf '_The asks are too long to show in full here, so open each one to read it._\n\n'
   i=0
   while [ "$i" -lt "$count" ]; do
     load_ask "$i"
+    if [ "$ask_private" -eq 1 ]; then
+      [ "$i" -eq 0 ] || [ "$brief" = brief ] || printf '\n'
+      printf '### %s. Held back ([#%s](%s))\n' "$((i + 1))" "$ask_number" "$ask_url"
+      printf '\n> ⚠️ #%s shows private content, so its text is not repeated here. Edit the ask to remove it.\n' "$ask_number"
+      i=$((i + 1))
+      continue
+    fi
+    if [ "$brief" = brief ]; then
+      printf -- '- %s. %s ([#%s](%s))\n' "$((i + 1))" "$ask_title" "$ask_number" "$ask_url"
+      i=$((i + 1))
+      continue
+    fi
     [ "$i" -eq 0 ] || printf '\n'
     printf '### %s. %s ([#%s](%s))\n' "$((i + 1))" "$ask_title" "$ask_number" "$ask_url"
     [ -z "$ask_missing" ] || printf '\n> ⚠️ #%s is missing: %s.\n' "$ask_number" "$ask_missing"
@@ -198,22 +267,9 @@ render_needs_you() {
   [ -z "$others" ] || printf '\nAsks another account filed, named here without their text: %s.\n' "$others"
 }
 
-# Prints the numbers of the lines in file $3 that match regex $2 with grep flags $1. Returns 1 when no
-# line matches and 2 when grep fails. The matched text itself is never printed.
-matching_lines() {
-  local out rc=0
-  # -a reads the file as text, so a stray byte can never turn the line list into "Binary file matches".
-  out="$(grep -a -n "$1" -e "$2" -- "$3")" || rc=$?
-  case "$rc" in
-    0) printf '%s\n' "$out" | cut -d: -f1 ;;
-    1) return 1 ;;
-    *) return 2 ;;
-  esac
-}
-
 # Checks one digest file. Returns 0 when clean, 1 with each finding printed, 2 when it cannot be read.
 check_file() {
-  local f=$1 bad=0 name stats count first prev=0 i lines line rc
+  local f=$1 bad=0 name stats count first prev=0 rc
   { [ -f "$f" ] && [ -r "$f" ]; } || return 2
   if [ ! -s "$f" ]; then
     finding "$f: empty"
@@ -246,23 +302,40 @@ check_file() {
     finding "$f: reply-note: How to reply does not say that a reply posts publicly"
     bad=1
   fi
-  i=0
-  while [ "$i" -lt "${#private_kinds[@]}" ]; do
-    rc=0
-    lines="$(matching_lines "${private_flags[$i]}" "${private_patterns[$i]}" "$f")" || rc=$?
-    case "$rc" in
-      0)
-        while IFS= read -r line; do
-          finding "$f:$line: private-content: ${private_kinds[$i]}"
-        done <<<"$lines"
-        bad=1
-        ;;
-      1) ;;
-      *) return 2 ;;
-    esac
-    i=$((i + 1))
-  done
+  rc=0
+  scan_private "$f" "$f" || rc=$?
+  case "$rc" in
+    0) ;;
+    1) bad=1 ;;
+    *) return 2 ;;
+  esac
   return "$bad"
+}
+
+# Writes file $1 with its Needs you section replaced by $tmp/needs-you.md. `check` has already proved
+# the section appears once and that a later section ends it.
+compose_body() {
+  awk -v needs="$tmp/needs-you.md" '
+    { line = $0; sub(/\r$/, "", line); sub(/[ \t]+$/, "", line) }
+    line == "## Needs you" { while ((getline l < needs) > 0) print l; print ""; skipping = 1; next }
+    skipping && line ~ /^## / { skipping = 0 }
+    !skipping { print }' "$1"
+}
+
+# Writes the fallback digest for $1, the reason the summary is missing, to $tmp/body.md.
+compose_fallback() {
+  {
+    printf '> 🤖 Generated by the Agentic Engineer\n\n'
+    printf '**The summary is missing this week:** %s, so this digest lists only the open asks.\n\n' "$1"
+    cat "$tmp/needs-you.md"
+    printf '\n## How to reply\n\n%s\n%s\n' \
+      "Reply to this email with an ask's number and your choice, for example \`1: B\`, or the number and your own words." \
+      "Your reply posts publicly, as a comment on this issue in the public $repo repository."
+  } >"$tmp/body.md"
+}
+
+too_long() {
+  [ "$(wc -c <"$1")" -gt "$max_body_bytes" ]
 }
 
 cmd_check() {
@@ -296,7 +369,7 @@ cmd_needs_you() {
 }
 
 cmd_send() {
-  local week="" dir="" dry_run=0 week_number title file reason="" rc existing count i number
+  local week="" dir="" dry_run=0 week_number title file reason="" rc existing number assigned=1
   repo="${GITHUB_REPOSITORY:-}"
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -316,50 +389,41 @@ cmd_send() {
   file="$dir/$week.md"
 
   read_issues "repos/$repo/issues?state=open&labels=$digest_label&per_page=100" "$tmp/digests.json"
-  existing="$(jq -r --arg title "$title" --arg bot "$bot" \
-    'map(select(.title == $title and .user.login == $bot) | .number) | first // empty' "$tmp/digests.json")"
+  # A digest GitHub did not assign to him was never emailed, so it does not count as sent.
+  existing="$(jq -r --arg title "$title" --arg bot "$bot" --arg who "$maintainer" '
+    map(select(.title == $title and .user.login == $bot and any(.assignees[]?; .login == $who)) | .number)
+    | first // empty' "$tmp/digests.json")"
   if [ -n "$existing" ]; then
     echo "ALREADY-SENT #$existing: this week's digest is already open, so nothing is sent"
     finish 0
   fi
   fetch_asks
+  render_needs_you >"$tmp/needs-you.md"
 
   if [ ! -e "$file" ]; then
     reason="no summary was written for week $week_number"
   elif [ ! -f "$file" ] || [ ! -r "$file" ]; then
     unknown "cannot read $file"
-  elif [ "$(wc -c <"$file")" -gt "$max_body_bytes" ]; then
-    reason="the summary for week $week_number was too long to send"
   else
     rc=0
     check_file "$file" || rc=$?
     case "$rc" in
-      0) ;;
+      0)
+        compose_body "$file" >"$tmp/body.md"
+        ! too_long "$tmp/body.md" || reason="the summary for week $week_number was too long to send"
+        ;;
       1) reason="the summary for week $week_number failed the digest check, so it was held back" ;;
       *) unknown "cannot read $file" ;;
     esac
   fi
-
-  if [ -z "$reason" ]; then
-    cp "$file" "$tmp/body.md"
-    count="$(jq 'length' "$tmp/asks.json")"
-    i=0
-    while [ "$i" -lt "$count" ]; do
-      load_ask "$i"
-      grep -Eq -e "(/issues/$ask_number|#$ask_number)([^0-9]|$)" -- "$file" ||
-        finding "NOT-IN-SUMMARY #$ask_number: the week's summary does not list this open ask"
-      i=$((i + 1))
-    done
-  else
+  if [ -n "$reason" ]; then
     finding "FALLBACK: $reason"
-    {
-      printf '> 🤖 Generated by the Agentic Engineer\n\n'
-      printf '**The summary is missing this week:** %s, so this digest lists only the open asks.\n\n' "$reason"
-      render_needs_you
-      printf '\n## How to reply\n\n%s\n%s\n' \
-        "Reply to this email with an ask's number and your choice, for example \`1: B\`, or the number and your own words." \
-        "Your reply posts publicly, as a comment on this issue in the public $repo repository."
-    } >"$tmp/body.md"
+    compose_fallback "$reason"
+    if too_long "$tmp/body.md"; then
+      render_needs_you brief >"$tmp/needs-you.md"
+      compose_fallback "$reason"
+      ! too_long "$tmp/body.md" || unknown "even the shortest digest is too long to send"
+    fi
   fi
 
   jq -r --arg bot "$bot" 'map(select(.user.login == $bot) | .number) | .[]' \
@@ -384,10 +448,13 @@ cmd_send() {
     unknown "an unexpected response when opening the digest issue"
   [ -n "$number" ] || unknown "an unexpected response when opening the digest issue"
   echo "SENT #$number: \"$title\" from ${reason:+the fallback because }${reason:-$file}"
-  # GitHub drops an assignee it cannot assign without an error, and then no email goes out.
-  jq -e --arg who "$maintainer" 'any(.assignees[]?; .login == $who)' "$tmp/created.json" >/dev/null ||
+  # GitHub drops an assignee it cannot assign without an error, and then no email goes out. Last
+  # week's digest then stays open: it is still the newest one he received.
+  if ! jq -e --arg who "$maintainer" 'any(.assignees[]?; .login == $who)' "$tmp/created.json" >/dev/null; then
     finding "NOT-ASSIGNED #$number: GitHub did not assign $maintainer, so the digest was not emailed"
-  while IFS= read -r existing; do
+    assigned=0
+  fi
+  while [ "$assigned" -eq 1 ] && IFS= read -r existing; do
     [ -n "$existing" ] || continue
     gh api -X PATCH "repos/$repo/issues/$existing" -f state=closed -f state_reason=completed >/dev/null ||
       unknown "could not close the earlier digest #$existing"
@@ -397,7 +464,7 @@ cmd_send() {
 }
 
 cmd_urgent() {
-  local issue="" label="" sender="" today="" dry_run=0 used=0 m k already
+  local issue="" label="" sender="" today="" dry_run=0 used=0 m k l already
   repo="${GITHUB_REPOSITORY:-}"
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -442,9 +509,14 @@ cmd_urgent() {
     finish 0
   fi
 
-  # An assignment updates the issue, so every urgent ask assigned today was updated today.
-  read_issues "repos/$repo/issues?state=all&labels=$urgent_label&since=${today}T00:00:00Z&per_page=100" "$tmp/urgent.json"
-  jq -r '.[].number' "$tmp/urgent.json" >"$tmp/urgent.txt" || unknown "could not list today's urgent asks"
+  # An assignment updates the issue, so every ask assigned today was updated today. An ask is found
+  # by either label, so taking the urgent label off after it fired keeps it in the count.
+  : >"$tmp/today.txt"
+  for l in "$urgent_label" "$ask_label"; do
+    read_issues "repos/$repo/issues?state=all&labels=$l&since=${today}T00:00:00Z&per_page=100" "$tmp/today.json"
+    jq -r '.[].number' "$tmp/today.json" >>"$tmp/today.txt" || unknown "could not list today's asks"
+  done
+  sort -un "$tmp/today.txt" >"$tmp/today-unique.txt"
   while IFS= read -r m; do
     [ -n "$m" ] || continue
     gh api --paginate "repos/$repo/issues/$m/events?per_page=100" >"$tmp/events.json" ||
@@ -457,7 +529,7 @@ cmd_urgent() {
       else error("not a list of events") end' "$tmp/events.json" 2>/dev/null)" ||
       unknown "an unexpected response for the events of #$m"
     used=$((used + k))
-  done <"$tmp/urgent.txt"
+  done <"$tmp/today-unique.txt"
   if [ "$used" -ge "$urgent_daily_cap" ]; then
     finding "REFUSED #$issue: $used urgent asks were already assigned today (UTC), and the limit is $urgent_daily_cap"
     finish 1
