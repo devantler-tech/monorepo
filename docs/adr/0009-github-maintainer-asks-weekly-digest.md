@@ -54,7 +54,10 @@ findings.
   or 08:00 in Denmark, with `issues: write` only and `GITHUB_TOKEN`. It opens that week's file as an
   issue titled `🙋 Maintainer digest — week <n>`, labelled `maintainer-digest` and **assigned to
   `devantler` by `github-actions[bot]`**. Because a different identity opens the issue and assigns
-  him, GitHub emails him the whole body. Last week's digest is closed.
+  him, GitHub emails him the whole body, provided his notification settings email him about
+  assignments. That setting is a prerequisite of Phase 1: before the first digest relies on it, a
+  test issue assigned by `github-actions[bot]` must arrive in his inbox. Last week's digest is
+  closed.
 - **If the file is missing**, the workflow still sends a short digest listing the open asks and
   saying the summary was not written, so an ask is never held back by a failed run.
 - **What it contains**, in this order:
@@ -74,7 +77,10 @@ findings.
 - **Urgent asks** reach him at once: a public site or the production cluster unreachable for two
   consecutive checks, a confirmed leak of a credential only he can rotate, or a sibling-lane
   `ESCALATE`. The label `maintainer-ask-urgent` triggers a second workflow that assigns him as
-  `github-actions[bot]`, at most three times a day.
+  `github-actions[bot]`, at most three times a day. The cap is global, so a fault cannot flood his
+  inbox; an urgent ask beyond it stays open and labelled, and is listed first under **Needs you** in
+  the next digest. The sibling-lane watch changes with it: on `ESCALATE` its caller files and labels
+  an urgent ask instead of sending a Slack DM, and records the notification only after both succeed.
 
 ### Phase 2 — a self-hosted mail service for private content
 
@@ -89,7 +95,7 @@ and answered by replying. It can later carry the whole digest, and serve the sit
   outbound port 25 by default, so the service either sends through an unblocked port, which needs a
   support request only the maintainer can make, or relays. The choice is recorded in that issue.
 - **Receiving:** it accepts mail for its own addresses only, and is never an open relay. A reply
-  counts only when DMARC passes for one of the maintainer's own addresses.
+  counts only under the rule in *How a reply becomes an instruction*.
 - **Who may send:** the service account the agents use may send only to the maintainer's own
   addresses, enforced by the server.
 - **Credentials:** generated in the cluster and kept in OpenBao. Workloads read them through
@@ -102,7 +108,10 @@ and answered by replying. It can later carry the whole digest, and serve the sit
 - **Phase 1:** GitHub posts his email reply on the digest issue as `devantler`. A `devantler` comment
   without the leading 🤖 marker is a maintainer instruction under the existing contract.
 - **Phase 2:** the platform's mail service keeps his reply, and the agents read it with the service
-  account. Only a reply whose DMARC passes for one of his own addresses is an instruction.
+  account. A reply is an instruction only when it answers a digest by its own unguessable reply
+  token, carried in the reply address, and DMARC passes for one of his own addresses. DMARC proves
+  only the sending domain, so the token is what ties the reply to a message that reached his
+  mailbox.
 - **In both phases:** an answer names its ask by number: `1: B`, `2: A`, or `3:` followed by free
   text. An agent acts on an answer only when it maps to exactly one open ask in that digest.
   Anything else is carried into the next digest as not understood. It fails closed, never with a
