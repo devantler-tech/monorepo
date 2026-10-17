@@ -2,8 +2,7 @@ name: Maintainer urgent ask
 
 # Assigns the maintainer to an ask the moment it is labelled maintainer-ask-urgent, so GitHub emails
 # him at once instead of in the weekly digest (monorepo#4285). It runs as github-actions[bot] because
-# GitHub never emails a user about their own activity. At most three assignments go out a UTC day;
-# runs for two asks labelled in the same moment count at the same time, so only they can pass it.
+# GitHub never emails a user about their own activity. At most three assignments go out a UTC day.
 # The logic and its tests live in .claude/scripts/maintainer-digest.sh.
 on:
   issues:
@@ -11,15 +10,17 @@ on:
 
 permissions: {}
 
-concurrency:
-  # One run per issue at a time. A shared group would cancel a waiting run, and so drop an ask.
-  group: maintainer-ask-urgent-${{ github.event.issue.number }}
-  cancel-in-progress: false
-
 jobs:
   assign:
     name: Assign the maintainer
     if: github.event.label.name == 'maintainer-ask-urgent'
+    # One assignment at a time, so two asks marked urgent together cannot both pass the daily limit.
+    # The queue keeps every waiting run, where the default would cancel one and drop its ask. It sits
+    # on the job, so the many runs for other labels, whose job is skipped, never join it.
+    concurrency:
+      group: maintainer-ask-urgent
+      queue: max
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

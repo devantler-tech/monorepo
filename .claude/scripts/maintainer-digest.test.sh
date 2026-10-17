@@ -615,6 +615,9 @@ expect_json() {
 expect_json "$tmp/urgent-wf.json" '.on' '{"issues":{"types":["labeled"]}}' "the urgent workflow runs only when a label is added"
 expect_json "$tmp/urgent-wf.json" '.jobs.assign.if' "\"github.event.label.name == 'maintainer-ask-urgent'\"" "the urgent job runs only for the urgent label"
 expect_json "$tmp/urgent-wf.json" '[.permissions, .jobs.assign.permissions]' '[{},{"contents":"read","issues":"write"}]' "the urgent workflow holds only what it needs"
+expect_json "$tmp/urgent-wf.json" '[.concurrency, .jobs.assign.concurrency]' \
+  '[null,{"group":"maintainer-ask-urgent","queue":"max","cancel-in-progress":false}]' \
+  "urgent assignments run one at a time, queued, so the daily limit holds and no ask is dropped"
 expect_json "$tmp/urgent-wf.json" '[.jobs.assign.steps[].run // empty | test("maintainer-digest\\.sh urgent")] | any' 'true' "the urgent workflow runs the helper"
 expect_json "$tmp/digest-wf.json" '.on.schedule' '[{"cron":"0 6 * * 1"}]' "the digest goes every Monday at 06:00 UTC"
 expect_json "$tmp/digest-wf.json" '.on | has("workflow_dispatch")' 'true' "the digest can be sent by hand"
