@@ -99,11 +99,16 @@ Deduplication and limits:
   exactly as `| asked slack <date>` is today, and is renewed only when the blocker check reports it
   `STALE-ASK` (14 days). An alert is keyed on its incident; a reopening within six hours sends
   nothing new.
-- **No status, ever.** No "resolved", no "found nothing", no summaries, no savings. The only
-  exceptions answer a message he sent: the receipt for a recorded reply, and at most one "not
-  understood" a day, both described below.
-- **A hard ceiling of three asks and alerts a day, and ten a week.** Over the ceiling, asks wait,
-  and the next day carries one SMS that names how many are waiting and links the board filter.
+- **No status, ever.** No "resolved", no "found nothing", no summaries, no savings. There are three
+  exceptions, each bounded: the receipt for a recorded reply and at most one "not understood" a
+  day, both described below, and the waiting-asks notice under the ceiling.
+- **A hard ceiling of three asks a day and ten a week.** Over the ceiling, asks wait. The next
+  morning carries one notice that names how many are waiting and links the board filter. The notice
+  counts as one of that day's three.
+- **Urgent alerts do not queue behind asks.** The reachability and security rows have their own
+  limit instead: one SMS per incident, and at most three such alerts a day. Past that limit, the
+  third alert of the day says that more are open and that the details are in Coroot and the issues.
+  An urgent alert is never held back for an ask.
 - **Quiet hours from 22:00 to 07:00 Danish time.** Only the reachability and security rows send at
   night. These hours are a default he can change.
 
@@ -176,14 +181,20 @@ The reply path is the security-critical part, so it is built to fail closed at e
   uses its own credentials, so the integration uses those from the start. The fallback,
   GatewayAPI's EU setup, runs at Hetzner in Germany with routing inside the EU, a data processing
   agreement and yearly ISAE 3000 and 3402 assurance reports.
-- **Little to protect by construction.** Messages carry nothing the linked GitHub artifact does not, so the
-  personal data at stake is his number and his short replies. Each processed reply is deleted from
-  the provider, and outbound bodies are not retained where the provider's API allows it.
+- **What the provider holds.** Outbound messages carry nothing the linked GitHub artifact does not.
+  The personal data at stake is his number, his replies, and any inbound message from anyone to the
+  Danish number. That last group can be free text holding anything at all. The sender never
+  interprets it and never copies it anywhere. Every inbound message, verified or not, is deleted from
+  the provider once processed, and outbound bodies are not retained where the provider's API allows
+  it. Deletion is not instant erasure: Twilio states that message bodies may stay in its database
+  backups for up to 30 days after deletion.
 
 ## Cost
 
-List prices seen on 2026-10-17, excluding VAT. GitHub Actions minutes are free on this public
-repository, so polling adds no cost.
+List prices seen on 2026-10-17, excluding VAT. Twilio notes that carrier fees may be added on top
+of its per-message rate and publishes no amount for Denmark, so its figures below are a floor, not
+an all-in price. GitHub Actions minutes are free on this public repository, so polling adds no
+cost.
 
 | Item | Twilio, EU region (chosen) | GatewayAPI, EU setup (fallback) |
 |---|---|---|
@@ -191,10 +202,11 @@ repository, so polling adds no cost.
 | SMS sent to a Danish mobile | USD 0.0592 each | DKK 0.299 each |
 | SMS received | USD 0.0075 each | Not published |
 | **Expected month** (about 20 sent, 10 received) | **about USD 16.3 (about DKK 110)** | about DKK 111, plus received messages |
-| Month at the ceiling (about 90 sent, 45 received) | about USD 21 | about DKK 132, plus received messages |
+| Month at the ask ceiling (about 90 sent, 45 received) | about USD 21 | about DKK 132, plus received messages |
 
 The expected month assumes the trigger list above: a few asks, their receipts and the rare alert.
-The ceiling bounds the worst case, so a runaway agent cannot run up the bill.
+Both limits bound the worst case, so a runaway agent cannot run up the bill: each urgent alert
+adds about USD 0.06, and there are at most three a day.
 
 ## Options considered
 
