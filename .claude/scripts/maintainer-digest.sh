@@ -121,10 +121,14 @@ read_issues() {
     unknown "an unexpected response for $path"
 }
 
-# Splits the open asks into the maintainer's own, oldest first, and the numbers of everyone else's.
+# Splits the open asks into the maintainer's own and the numbers of everyone else's. His own are
+# urgent first, then oldest first, so an urgent ask the daily assignment cap held back leads the
+# next digest (ADR 0009).
 fetch_asks() {
   read_issues "repos/$repo/issues?state=open&labels=$ask_label&per_page=100" "$tmp/asks-all.json"
-  jq --arg who "$maintainer" 'map(select(.user.login == $who)) | sort_by(.number)' \
+  jq --arg who "$maintainer" --arg urgent "$urgent_label" \
+    'map(select(.user.login == $who))
+     | sort_by([((.labels // []) | any(.name == $urgent) | not), .number])' \
     "$tmp/asks-all.json" >"$tmp/asks.json" || unknown "could not sort the asks"
   jq -r --arg who "$maintainer" 'map(select(.user.login != $who) | .number) | sort | .[]' \
     "$tmp/asks-all.json" >"$tmp/untrusted.txt" || unknown "could not sort the asks"

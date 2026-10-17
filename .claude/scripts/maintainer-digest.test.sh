@@ -303,6 +303,19 @@ else
   bad "an empty Needs you printed: $(cat "$tmp/out")"
 fi
 
+# An urgent ask leads Needs you, ahead of older asks, so one the daily assignment cap held back is
+# the first thing the next digest shows.
+reset_case
+{
+  issue 10 devantler "🙋 Ask: Keep 30 days of backups" "$complete_body"
+  issue 11 devantler "🙋 Ask: Retire the status page" "$second_body" |
+    jq '.labels += [{name: "maintainer-ask-urgent"}]'
+} | jq -s . | fixture GET "$asks_path"
+run needs-you --repo "$repo"
+expect_rc 0 "two complete asks are no finding"
+expect_in "$tmp/out" "### 1. Retire the status page" "an urgent ask is listed first"
+expect_in "$tmp/out" "### 2. Keep 30 days of backups" "older asks follow the urgent one"
+
 echo "needs-you: what an ask may put in the digest"
 reset_case
 {
