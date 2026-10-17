@@ -1509,7 +1509,10 @@ if [ "$run_caches_readable" -eq 1 ] && [ "$codex_worktree_root" != off ] && [ -d
     while IFS= read -r child; do
       [ -n "$child" ] || continue
       [ -L "$child" ] && continue
-      [ -e "${child%/*}/.git" ] && continue
+      # A `.git` symlink to nothing still marks a checkout: `-e` follows the link, so ask `-L` too.
+      if [ -e "${child%/*}/.git" ] || [ -L "${child%/*}/.git" ]; then
+        continue
+      fi
       if [ -e "${child}/.git" ] || [ -L "${child}/.git" ]; then
         codex_worktree_report "$child"
         continue

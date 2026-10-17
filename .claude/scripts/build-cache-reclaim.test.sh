@@ -2374,6 +2374,10 @@ make_cx_cache "$cx_wt" "$go_marker" 7 "$cx_live_gitdir" || fail 'fixture: 26 reg
 make_cx_cache "$cx_orphan" '' 7 "${fixture_root}/cx-gitdirs/gone" || fail 'fixture: 26 orphaned worktree'
 make_cx_cache "$cx_inner" "$go_marker" 7 || fail 'fixture: 26 cache inside a checkout'
 printf 'gitdir: %s\n' "$cx_live_gitdir" > "${cx_root}/a6/.git"
+# A task dir whose `.git` is a symlink to nothing is still a checkout: `-e` is false for it, `-L` is not.
+cx_dangling="${cx_root}/a9/inner-cache"
+make_cx_cache "$cx_dangling" "$go_marker" 7 || fail 'fixture: 26 cache inside a dangling-link checkout'
+ln -s "${fixture_root}/cx-gitdirs/nowhere" "${cx_root}/a9/.git" || fail 'fixture: 26 dangling .git link'
 make_cx_cache "$cx_held" "$go_marker" 7 || fail 'fixture: 26 held cache'
 
 # Two dry runs, each with a host-wide open-file snapshot, must finish inside the holder's life; it is
@@ -2408,6 +2412,8 @@ said "$out" "$cx_orphan" 'ORPHAN (git registration gone; never removed)' ||
 grep -qF "$cx_plain" <<<"$out" && fail '26: a directory without a cache marker was considered'
 grep -qF "$cx_wt" <<<"$out" && fail '26: a registered worktree was considered, though it carries a cache marker'
 grep -qF "$cx_inner" <<<"$out" && fail '26: a directory inside a task dir that is a checkout was considered'
+grep -qF "$cx_dangling" <<<"$out" &&
+  fail '26: a directory inside a task dir whose .git is a dangling symlink was considered'
 [ -e "${cx_idle}/00/a1-d" ] || fail '26: dry-run deleted a Codex-root cache'
 
 out=$(CX_ROOT=off run_cx dry-run 3 "$NEVER_CLEAN_BUDGET")
@@ -2428,6 +2434,7 @@ out=$(run_cx apply 3 "$NEVER_CLEAN_BUDGET")
 [ -e "${cx_wt}/.git" ] || fail '26: apply touched a registered Codex worktree'
 [ -e "${cx_orphan}/.git" ] || fail '26: apply removed a worktree whose git registration is gone'
 [ -e "$cx_inner" ] || fail '26: apply reaped a directory inside a task dir that is a checkout'
+[ -e "$cx_dangling" ] || fail '26: apply reaped a directory inside a task dir whose .git is a dangling symlink'
 
 # An unreadable `.git` link cannot say whether the worktree is registered: UNKNOWN, never removed.
 mkdir -p "${cx_root}/a8/broken" || fail 'fixture: 26 broken link'
