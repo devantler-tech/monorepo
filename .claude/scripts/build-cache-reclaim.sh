@@ -1468,8 +1468,16 @@ codex_worktree_root=${BUILD_CACHE_RECLAIM_CODEX_WORKTREES:-${CODEX_HOME:-${HOME:
 
 # codex_worktree_report <dir> keeps a Codex task's worktree, and reports one whose git registration
 # is gone. It never removes anything. A `.git` directory is a repository of its own: kept silently.
+# A `.git` symlink that points nowhere is a git link that dangles, like a `gitdir:` file naming a
+# missing directory, so it is reported the same way.
 codex_worktree_report() {
   local wt=$1 link='' gitdir wt_mb
+  if [ -L "${wt}/.git" ] && [ ! -e "${wt}/.git" ]; then
+    wt_mb=$(size_mb "$wt") || wt_mb='?'
+    kept=$((kept + 1))
+    log "ORPHAN (git link dangles; never removed) ${wt_mb} MB  $wt"
+    return 0
+  fi
   [ -f "${wt}/.git" ] || return 0
   { IFS= read -r link || [ -n "$link" ]; } 2>/dev/null <"${wt}/.git"
   case "$link" in

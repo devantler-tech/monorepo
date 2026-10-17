@@ -2378,6 +2378,11 @@ printf 'gitdir: %s\n' "$cx_live_gitdir" > "${cx_root}/a6/.git"
 cx_dangling="${cx_root}/a9/inner-cache"
 make_cx_cache "$cx_dangling" "$go_marker" 7 || fail 'fixture: 26 cache inside a dangling-link checkout'
 ln -s "${fixture_root}/cx-gitdirs/nowhere" "${cx_root}/a9/.git" || fail 'fixture: 26 dangling .git link'
+# A worktree one level below its task dir whose own `.git` symlink points nowhere: kept and reported.
+cx_dangling_wt="${cx_root}/b1/checkout"
+make_cx_cache "$cx_dangling_wt" '' 7 || fail 'fixture: 26 worktree with a dangling .git link'
+ln -s "${fixture_root}/cx-gitdirs/nowhere" "${cx_dangling_wt}/.git" ||
+  fail 'fixture: 26 dangling worktree .git link'
 make_cx_cache "$cx_held" "$go_marker" 7 || fail 'fixture: 26 held cache'
 
 # Two dry runs, each with a host-wide open-file snapshot, must finish inside the holder's life; it is
@@ -2409,6 +2414,8 @@ said "$out" "$cx_held" 'KEEP  (in use)' ||
   fail '26: a Codex-root cache held open was not kept (the liveness check read only the temp root)'
 said "$out" "$cx_orphan" 'ORPHAN (git registration gone; never removed)' ||
   fail '26: a worktree whose git registration is gone was not reported'
+said "$out" "$cx_dangling_wt" 'ORPHAN (git link dangles; never removed)' ||
+  fail '26: a worktree whose .git symlink dangles was not reported'
 grep -qF "$cx_plain" <<<"$out" && fail '26: a directory without a cache marker was considered'
 grep -qF "$cx_wt" <<<"$out" && fail '26: a registered worktree was considered, though it carries a cache marker'
 grep -qF "$cx_inner" <<<"$out" && fail '26: a directory inside a task dir that is a checkout was considered'
@@ -2433,6 +2440,7 @@ out=$(run_cx apply 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$cx_plain" ] || fail '26: apply reaped a directory without a cache marker'
 [ -e "${cx_wt}/.git" ] || fail '26: apply touched a registered Codex worktree'
 [ -e "${cx_orphan}/.git" ] || fail '26: apply removed a worktree whose git registration is gone'
+[ -L "${cx_dangling_wt}/.git" ] || fail '26: apply removed a worktree whose .git symlink dangles'
 [ -e "$cx_inner" ] || fail '26: apply reaped a directory inside a task dir that is a checkout'
 [ -e "$cx_dangling" ] || fail '26: apply reaped a directory inside a task dir whose .git is a dangling symlink'
 
