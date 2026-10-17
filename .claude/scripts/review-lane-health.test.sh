@@ -20,8 +20,10 @@ trap on_exit EXIT
 fail() { echo "review-lane-health test: $*" >&2; exit 1; }
 
 now=1790000000 # 2026-09-21T14:13:20Z
-# Every run names a cache directory inside $tmp and leaves the cache off, so no case reads the real
-# per-user cache or another case's sweep; the cache cases below switch it on. $at overrides the clock.
+# Every run names a cache directory inside $tmp and leaves the sweep cache off, so no case reads the
+# real per-user cache or another case's sweep; the cache cases below switch it on. The conditional
+# cache under it stays on, so later cases also replay 304s; the cases at the end start it empty.
+# $at overrides the clock.
 run() {
   set +e
   "$checker" --cache-dir "$tmp/cache" --cache-seconds 0 "$@" --now "${at:-$now}" >"$tmp/out" 2>"$tmp/err"
@@ -171,6 +173,9 @@ if [ -n "$page" ]; then # a list: serve one page of 100, and link the next one w
   out="$(jq -c --argjson p "$page" --argjson s "$size" '.[($p - 1) * $s:$p * $s]' <<<"$full")"
   [ -z "${NO_LINK:-}" ] && [ "$(jq --argjson p "$page" --argjson s "$size" 'length > $p * $s' <<<"$full")" = true ] &&
     link="Link: <https://api.github.invalid/${base}?per_page=100&page=$((page + 1))>; rel=\"next\""
+  # ENDLESS: every page of comments is full, however far the reader goes.
+  [ -z "${ENDLESS:-}" ] || [ "$base" != repos/o/r/issues/7/comments ] ||
+    out="$(jq -cn --argjson p "$page" '[range(100) | {user: {login: "someone"}, updated_at: "2026-09-01T00:00:00Z", body: "p\($p)-\(.)"}]')"
 else
   out="$full"
 fi
@@ -347,7 +352,10 @@ fresh() { # [checker arguments] — one sweep against the conditional cache in $
   : >"$GH_LOG"
   PATH="$bin:$PATH" run --org o --since 2026-09-14 --cache-dir "$tmp/cond" "$@"
 }
-reads() { grep -c "^$1" "$GH_LOG" || true; } # <status[ conditional|full]> — reads logged with it
+# reads <status> [conditional|full] [path] — reads logged so; a path must match the whole URL.
+reads() {
+  if [ $# -ge 3 ]; then grep -cxF "$1 $2 $3" "$GH_LOG" || true; else grep -c "^$*" "$GH_LOG" || true; fi
+}
 same_as_cold() { # <label> — the verdicts of a first sweep that read everything in full
   cmp -s "$tmp/out" "$tmp/cold-out" || { diff "$tmp/cold-out" "$tmp/out" >&2; fail "$1: verdicts changed"; }
 }
@@ -375,7 +383,7 @@ grep -qF "4 REST reads, 4 answered 304 Not Modified" "$tmp/err" || fail "the rep
 
 # A 200 replaces the kept body, and the next 304 replays the new one.
 EXTRA=1 fresh
-[ "$(reads "200 conditional $comments")" -eq 1 ] && [ "$(reads 304)" -eq 3 ] || { cat "$GH_LOG" >&2; fail "a changed list is read again"; }
+[ "$(reads 200 conditional "$comments")" -eq 1 ] && [ "$(reads 304)" -eq 3 ] || { cat "$GH_LOG" >&2; fail "a changed list is read again"; }
 expect "changed list" 1 "codex=DOWN usage-limit since 2026-09-21T13:30:00Z last-review 2026-09-21T11:45:00Z — MAINTAINER-ONLY"
 EXTRA=1 fresh
 [ "$(reads 304)" -eq 4 ] || { cat "$GH_LOG" >&2; fail "the refreshed read must be kept"; }
@@ -397,7 +405,7 @@ corrupt() { # <label> <sed program or "rm"/"truncate"/"foreign"> — damage the 
     *) sed "$2" "$e" >"$tmp/entry" && mv "$tmp/entry" "$e" ;;
   esac
   fresh
-  [ "$(reads "200 full $pull")" -eq 1 ] && [ "$(reads 304)" -eq 3 ] || { cat "$GH_LOG" >&2; fail "$1: must be read in full"; }
+  [ "$(reads 200 full "$pull")" -eq 1 ] && [ "$(reads 304)" -eq 3 ] || { cat "$GH_LOG" >&2; fail "$1: must be read in full"; }
   same_as_cold "$1"
 }
 corrupt "missing entry" rm
@@ -409,7 +417,7 @@ corrupt "malformed tag" '3s/^etag .*/etag unquoted/'
 e="$(entry_for "$pull")"
 cp "$e" "$tmp/planted-entry" && rm -f "$e" && ln -s "$tmp/planted-entry" "$e"
 fresh
-[ "$(reads "200 full $pull")" -eq 1 ] || fail "a symlinked entry must not be read"
+[ "$(reads 200 full "$pull")" -eq 1 ] || fail "a symlinked entry must not be read"
 rm -f "$e"
 fresh
 
@@ -417,8 +425,12 @@ fresh
 FAIL_ON=reviews fresh
 if [ "$rc" -ne 2 ] || ! grep -qF UNKNOWN "$tmp/err"; then fail "a failed conditional read must be UNKNOWN, got $rc"; fi
 grep -q '^LANE-HEALTH' "$tmp/out" && fail "a failed read must print no verdict from kept reads"
+# A 304 that is not gh's exact signal (GH_DEBUG output, a new gh notice) is never replayed: it is
+# read again in full, so it can neither pass on a kept body nor make every later sweep UNKNOWN.
 NOISY_304=1 fresh
-[ "$rc" -eq 2 ] || fail "a 304 that is not gh's exact signal must be UNKNOWN, got $rc"
+[ "$(reads "304 conditional")" -eq 4 ] && [ "$(reads "200 full")" -eq 4 ] || { cat "$GH_LOG" >&2; fail "a 304 that is not gh's exact signal must be read again in full"; }
+same_as_cold "304 without gh's exact signal"
+grep -qF "4 answers of 304 were not gh's exact signal" "$tmp/err" || fail "unconfirmed 304s must be counted on stderr"
 ROGUE_304=1 fresh --cache-dir "$tmp/cond-empty"
 [ "$rc" -eq 2 ] || fail "a 304 to a read that sent no tag must be UNKNOWN, got $rc"
 # The same with kept reads beside it: the read before it must not be replayed in its place.
@@ -435,18 +447,24 @@ same_as_cold "304 for another tag"
 # Lists are read 100 a page. With 105 comments the stub's real ones end on page 2, so the verdicts
 # match only when page 2 is read.
 PAD=95 fresh --cache-dir "$tmp/cond-pages"
-[ "$(reads "200 full repos/o/r/issues/7/comments?per_page=100&page=2")" -eq 1 ] || { cat "$GH_LOG" >&2; fail "page 2 must be read"; }
+[ "$(reads 200 full "repos/o/r/issues/7/comments?per_page=100&page=2")" -eq 1 ] || { cat "$GH_LOG" >&2; fail "page 2 must be read"; }
 same_as_cold "two pages"
 # A page shorter than asked for that still links a next one is followed too.
 PAGE_SIZE=50 PAD=95 fresh --cache-dir "$tmp/cond-short"
-[ "$(reads "200 full repos/o/r/issues/7/comments?per_page=100&page=3")" -eq 1 ] || { cat "$GH_LOG" >&2; fail "a linked next page must be read"; }
+[ "$(reads 200 full "repos/o/r/issues/7/comments?per_page=100&page=3")" -eq 1 ] || { cat "$GH_LOG" >&2; fail "a linked next page must be read"; }
 same_as_cold "linked short pages"
+# A list that never ends stops at 100 pages as UNKNOWN: a cut-off list is never a complete read.
+ENDLESS=1 fresh --cache-dir "$tmp/cond-endless"
+if [ "$rc" -ne 2 ] || ! grep -qF "UNKNOWN — cannot read r#7 comments" "$tmp/err"; then fail "an endless list must be UNKNOWN, got $rc"; fi
+[ "$(reads 200 full "repos/o/r/issues/7/comments?per_page=100&page=100")" -eq 1 ] &&
+  [ "$(reads 200 full "repos/o/r/issues/7/comments?per_page=100&page=101")" -eq 0 ] ||
+  { tail -3 "$GH_LOG" >&2; fail "an endless list must be read to page 100 and no further"; }
 # Exactly 100 comments: page 2 is empty and nothing links it. A comment added later lands on page 2
 # while page 1 is answered 304 with its old links, so a full page must always read the next one.
 NO_LINK=1 PAD=90 fresh --cache-dir "$tmp/cond-full"
 same_as_cold "one full page"
 EXTRA=1 NO_LINK=1 PAD=90 fresh --cache-dir "$tmp/cond-full"
-[ "$(reads "304 conditional $comments")" -eq 1 ] || { cat "$GH_LOG" >&2; fail "the unchanged full page must be answered 304"; }
+[ "$(reads 304 conditional "$comments")" -eq 1 ] || { cat "$GH_LOG" >&2; fail "the unchanged full page must be answered 304"; }
 expect "comment after a full page" 1 "codex=DOWN usage-limit since 2026-09-21T13:30:00Z"
 
 # Kept reads are pruned by last use: one no sweep used for two days goes, the ones in use stay.

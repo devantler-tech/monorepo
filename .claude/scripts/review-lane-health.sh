@@ -112,7 +112,7 @@ unknown() { echo "review-lane-health: UNKNOWN — $*" >&2; exit 2; }
 # then the body. Only ETag is used: Last-Modified has one-second resolution, so a second change within
 # the same second would replay a stale body, and the list reads do not send it.
 http_dir="$cache_dir/http-v1" http_magic="# review-lane-health http-v1" http_usable=0
-http_reads=0 http_replays=0 http_unstored=0
+http_reads=0 http_replays=0 http_unstored=0 http_unconfirmed=0
 etag_re='^(W/)?"[[:alnum:]._:+/=-]+"$'
 checksum() { cksum | awk '{ print $1 "-" $2 }'; }
 # opaque <entity tag> — If-None-Match compares tags weakly, and GitHub sends W/"x" with a 200 but "x"
@@ -180,8 +180,10 @@ http_take() {
   (
     umask 077
     part="$(mktemp "$http_dir/.part.XXXXXX")" || exit 1
+    # rm first: mv onto a symlink to a directory would move the body into the link's target.
     { printf '%s\nurl %s\netag %s\nnext %s\nsum %s\n' "$http_magic" "$1" "$tag" "$http_next" \
-      "$(checksum <"$2")" && cat "$2"; } >"$part" && mv -f "$part" "$3" || { rm -f "$part"; exit 1; }
+      "$(checksum <"$2")" && cat "$2"; } >"$part" && rm -f "$3" && mv -f "$part" "$3" ||
+      { rm -f "$part"; exit 1; }
   ) 2>/dev/null || http_unstored=$((http_unstored + 1))
 }
 
@@ -200,16 +202,18 @@ http_get() {
     http_take "$path" "$out" "$entry"
     return
   fi
-  [ -n "$tag" ] && [ "$rc" -eq 1 ] && [ "$http_status" = 304 ] &&
-    [ "$(cat "$tmp/http-err")" = "gh: HTTP 304" ] || return 1
-  if [ "$(opaque "$(http_header etag)")" = "$(opaque "$tag")" ]; then
+  [ "$http_status" = 304 ] || return 1
+  if [ -n "$tag" ] && [ "$rc" -eq 1 ] && [ "$(cat "$tmp/http-err")" = "gh: HTTP 304" ] &&
+    [ "$(opaque "$(http_header etag)")" = "$(opaque "$tag")" ]; then
     cp "$tmp/http-stored" "$out" || return 1
     http_next="$http_stored_next" http_replays=$((http_replays + 1))
     touch "$entry" 2>/dev/null || true # pruning goes by last use
     return 0
   fi
-  # A 304 that names another tag confirms nothing about the stored body: read it in full.
-  rc=0
+  # Any other 304 — another tag, no tag sent, or not gh's exact signal (GH_DEBUG output, a new gh
+  # notice) — confirms nothing about the stored body: read it in full, so it never becomes either a
+  # replay or an UNKNOWN that every later sweep repeats.
+  http_unconfirmed=$((http_unconfirmed + 1)) rc=0
   http_request "$path" || rc=$?
   [ "$rc" -eq 0 ] && [ "$http_status" = 200 ] || return 1
   http_take "$path" "$out" "$entry"
@@ -218,6 +222,7 @@ http_get() {
 # http_list <path> <jq filter> <out> — every page of a list, 100 items a page, through http_get, each
 # item through <filter>. Pages are walked by number and a full page always reads the next one: a 304
 # for a full page replays its old links, so it cannot say whether a next page has appeared since.
+# This relies on GitHub serving the 100 asked for, its documented maximum for both list reads.
 http_list() {
   local path="$1" filter="$2" out="$3" page=1 n
   : >"$out"
@@ -358,7 +363,9 @@ else
     if [ "$http_usable" = 1 ]; then
       [ "$http_unstored" -eq 0 ] ||
         echo "review-lane-health: $http_unstored reads could not be kept; they are read in full next time" >&2
-      # Entries are touched on every use: drop those no sweep has used for two days.
+      [ "$http_unconfirmed" -eq 0 ] ||
+        echo "review-lane-health: $http_unconfirmed answers of 304 were not gh's exact signal for the tag sent; read in full" >&2
+      # Entries are touched on every use: drop those no sweep has used for more than two days.
       find "$http_dir" -maxdepth 1 -type f -mtime +2 -exec rm -f {} + 2>/dev/null || true
     fi
     # Every read above succeeded, or the script has already exited UNKNOWN: only a complete sweep is
