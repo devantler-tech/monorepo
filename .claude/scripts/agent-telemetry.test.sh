@@ -761,6 +761,12 @@ for branch in null '""' '"worker/space name"' 7; do
   OUT=$(OUTCOMES_PR_LIST_FAIL=1 OUTCOMES_REST_PAGE1="$FIX/outcomes/rest-missing.json" outcomes_run); RC=$?
   check "outcomes REST malformed branch $branch is UNKNOWN" "$OUT" 'merged PRs: UNKNOWN'
 done
+for bad in '.[0].merged_at = "9999-not-a-date"' '.[0].updated_at = "2099-01-01"' \
+           '.[0].head.repo = {}' '.[0].head.repo.full_name = ""' '.[0].base.repo.full_name = 7'; do
+  jq "[$bad | .[0]]" "$FIX/outcomes/rest-prs.json" > "$FIX/outcomes/rest-missing.json"
+  OUT=$(OUTCOMES_PR_LIST_FAIL=1 OUTCOMES_REST_PAGE1="$FIX/outcomes/rest-missing.json" outcomes_run); RC=$?
+  check "outcomes REST row with $bad is UNKNOWN" "$OUT" 'merged PRs: UNKNOWN'
+done
 printf '{"message":"API rate limit exceeded"}\n' > "$FIX/outcomes/rest-missing.json"
 OUT=$(OUTCOMES_PR_LIST_FAIL=1 OUTCOMES_REST_PAGE1="$FIX/outcomes/rest-missing.json" outcomes_run); RC=$?
 check "outcomes REST non-list answer is UNKNOWN" "$OUT" 'merged PRs: UNKNOWN'

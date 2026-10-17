@@ -6469,14 +6469,21 @@ if want outcomes; then
                | if (.head.ref | if type == "string"
                     then length > 0 and (test("[[:space:][:cntrl:]]") | not) else false end)
                  then . else error("missing or malformed PR branch") end
-               | if (.updated_at | type) != "string" or (has("merged_at") | not)
-                    or ((.merged_at | type) as $t | $t != "string" and $t != "null")
-                 then error("missing PR timestamps") else . end
+               # Canonical UTC timestamps only: they are compared as strings, so a
+               # malformed one could count a merge or end the paging early.
+               | def utc: type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$");
+                 if (.updated_at | utc | not) or (has("merged_at") | not)
+                    or (.merged_at != null and (.merged_at | utc | not))
+                 then error("missing or malformed PR timestamps") else . end
                | select(.merged_at != null and .merged_at >= $since) | . as $pr
                | select(any($registry.instances[];
                    . as $instance | $pr.head.ref | startswith($instance.namespace + "/")))
-               | if (.user.login | type) != "string" or (.user.login | length == 0)
-                    or (.base.repo.full_name | type) != "string" or (.head | has("repo") | not)
+               # A null head.repo is a deleted fork (excluded below); a present one
+               # must name itself, or the same-repository test could drop a real merge.
+               | def named: type == "string" and length > 0;
+                 if (.user.login | named | not) or (.base.repo.full_name | named | not)
+                    or (.head | has("repo") | not)
+                    or (.head.repo != null and (.head.repo.full_name | named | not))
                  then error("missing PR provenance") else . end
                | select(.head.repo != null and .head.repo.full_name == .base.repo.full_name)
                | select(any($registry.instances[];
