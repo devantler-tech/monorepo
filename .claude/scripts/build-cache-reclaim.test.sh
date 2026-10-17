@@ -2390,9 +2390,12 @@ rc=$?
 slash_out=$(CX_ROOT="${cx_root}/" run_cx dry-run 3 "$NEVER_CLEAN_BUDGET")
 kill "$cx_holder" 2>/dev/null
 wait "$cx_holder" 2>/dev/null
-grep 'WOULD REAP' <<<"$slash_out" | grep -qF 'a7/go-build-cache' &&
+# Fed from a variable, not a pipe: under pipefail an early-exiting grep -q can kill its writer, and
+# the pipeline would then report a match as a miss.
+slash_reaps=$(grep 'WOULD REAP' <<<"$slash_out")
+grep -qF 'a7/go-build-cache' <<<"$slash_reaps" &&
   fail '26: a held Codex-root cache was selected when the root was spelled with a trailing slash'
-grep 'WOULD REAP' <<<"$slash_out" | grep -qF 'a1/go-build-cache' ||
+grep -qF 'a1/go-build-cache' <<<"$slash_reaps" ||
   fail '26: a root spelled with a trailing slash selected nothing (the ablation partner did not run)'
 [ "$rc" -eq 0 ] || fail "26: a readable Codex worktree root exited ${rc}, not 0: $(grep UNKNOWN <<<"$out")"
 said "$out" "$cx_idle" 'WOULD REAP' || fail '26: an idle Go cache beside a Codex worktree was not selected'
