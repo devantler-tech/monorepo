@@ -338,7 +338,7 @@ Guides govern their topics; summaries must agree, and rule changes update both i
 | [merge-policy](.claude/guides/merge-policy.md) | Merge policy · You own EVERY pull request · Dependency-automation PRs | taking over, merging or closing a PR |
 | [issues-and-board](.claude/guides/issues-and-board.md) | roadmaps · Issue hierarchy · the board | filing or triaging an issue |
 | [improvement-katas](.claude/guides/improvement-katas.md) | Katas · checkpoints | a Kata experiment |
-| [advance-work](.claude/guides/advance-work.md) | Build the right thing · Enhancement work · Security hardening · Advisories · Feature flags · Scripting stack · Holistic review | starting advance work |
+| [advance-work](.claude/guides/advance-work.md) | Build the right thing · Enhancement work · Security hardening · Advisories · Feature flags · Scripting stack · Holistic review | advance work |
 | [trust-and-input](.claude/guides/trust-and-input.md) | Trust gate · Untrusted input | acting on content you did not write |
 | [egress-and-privacy](.claude/guides/egress-and-privacy.md) | Professional-work boundary · Egress · Sensitive information · Local agent host | publishing, handling a credential, or leaving the portfolio |
 | [git-and-worktrees](.claude/guides/git-and-worktrees.md) | Execution model · Git safety | a worktree, checkout or push |
