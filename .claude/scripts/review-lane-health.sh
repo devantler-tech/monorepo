@@ -44,6 +44,13 @@
 # line is ignored and a new sweep runs, so a failed read still reports UNKNOWN and a stored sweep is
 # never reported past its lifetime. A reused sweep is announced on stderr; --refresh forces a new one.
 #
+# A NEW SWEEP ASKS ONLY WHAT CHANGED. Most of what a sweep reads is unchanged since the last one, and
+# GitHub does not charge a conditional read it answers with 304 Not Modified. So each read is kept
+# with its ETag under <cache-dir>/http-v1 and the next read of that URL sends the ETag back. The kept
+# body is used only on gh's exact 304 signal for that tag; any other answer is a full read or UNKNOWN.
+# An entry carries its URL and a checksum, so a missing, corrupt or foreign one costs one full read.
+# The verdicts are the same as with every read in full; stderr counts the reads answered 304.
+#
 # Usage:
 #   review-lane-health.sh [--org ORG] [--since YYYY-MM-DD] [--limit N] [--stale-hours N] [--now EPOCH]
 #                         [--cache-seconds N] [--cache-dir DIR] [--refresh]
@@ -100,19 +107,147 @@ trap review_lane_health_cleanup EXIT
 
 unknown() { echo "review-lane-health: UNKNOWN — $*" >&2; exit 2; }
 
+# Conditional reads (monorepo#3973). An entry is one file named by a checksum of its URL: a version
+# line, `url`, `etag`, `next` (whether its response linked a next page), `sum` (cksum of the body),
+# then the body. Only ETag is used: Last-Modified has one-second resolution, so a second change within
+# the same second would replay a stale body, and the list reads do not send it.
+http_dir="$cache_dir/http-v1" http_magic="# review-lane-health http-v1" http_usable=0
+http_reads=0 http_replays=0 http_unstored=0
+etag_re='^(W/)?"[[:alnum:]._:+/=-]+"$'
+checksum() { cksum | awk '{ print $1 "-" $2 }'; }
+# opaque <entity tag> — If-None-Match compares tags weakly, and GitHub sends W/"x" with a 200 but "x"
+# with the 304 that matches it.
+opaque() { printf '%s' "${1#W/}"; }
+# http_header <name> — the first value of that header in the last response.
+http_header() {
+  awk -v n="$1" 'BEGIN { n = tolower(n) ":" }
+    tolower(substr($0, 1, length(n))) == n {
+      v = substr($0, length(n) + 1); sub(/^[ \t]+/, "", v); sub(/[ \t]+$/, "", v); print v; exit }' \
+    "$tmp/http-head"
+}
+
+# http_entry <file> <path> — copy the stored read of <path> to $tmp/http-stored and set http_tag and
+# http_stored_next; false for anything but an intact, private entry for exactly that path.
+http_entry() {
+  local f="$1" path="$2" magic url tag next sum
+  http_tag="" http_stored_next=0
+  rm -f "$tmp/http-stored" # never leave the previous read's body where this one's is looked for
+  [ -f "$f" ] && [ ! -L "$f" ] && [ -O "$f" ] && [ -r "$f" ] || return 1
+  cp "$f" "$tmp/http-entry" 2>/dev/null || return 1
+  { IFS= read -r magic && IFS= read -r url && IFS= read -r tag && IFS= read -r next && IFS= read -r sum; } \
+    <"$tmp/http-entry" || return 1
+  [ "$magic" = "$http_magic" ] && [ "$url" = "url $path" ] || return 1
+  [[ "$tag" == "etag "* && "$next" == "next "* && "$sum" == "sum "* ]] || return 1
+  tag="${tag#etag }" next="${next#next }" sum="${sum#sum }"
+  [[ "$tag" =~ $etag_re && "$next" =~ ^[01]$ ]] || return 1
+  tail -n +6 "$tmp/http-entry" >"$tmp/http-stored" 2>/dev/null || return 1
+  [ "$(checksum <"$tmp/http-stored")" = "$sum" ] || return 1
+  jq -e 'type == "array" or type == "object"' "$tmp/http-stored" >/dev/null 2>&1 || return 1
+  http_tag="$tag" http_stored_next="$next"
+}
+
+# http_request <path> [entity tag] — one GET, conditional when a tag is given. Leaves the status code
+# in http_status, the headers in $tmp/http-head, the body in $tmp/http-body, gh's stderr in
+# $tmp/http-err, and returns gh's exit status.
+http_request() {
+  local rc=0
+  http_reads=$((http_reads + 1)) http_status=""
+  if [ -n "${2:-}" ]; then
+    GH_NO_UPDATE_NOTIFIER=1 gh api --include -H "If-None-Match: $2" "$1" </dev/null \
+      >"$tmp/http-raw" 2>"$tmp/http-err" || rc=$?
+  else
+    GH_NO_UPDATE_NOTIFIER=1 gh api --include "$1" </dev/null >"$tmp/http-raw" 2>"$tmp/http-err" || rc=$?
+  fi
+  : >"$tmp/http-head"
+  : >"$tmp/http-body"
+  # gh prints the status line, the headers ending in CRLF, an empty line, then the body.
+  awk -v h="$tmp/http-head" -v b="$tmp/http-body" 'NR == 1 { next }
+    body { print > b; next } { sub(/\r$/, "") } $0 == "" { body = 1; next } { print > h }' \
+    "$tmp/http-raw" || return 99
+  http_status="$(awk 'NR == 1 && $1 ~ /^HTTP\/[0-9.]+$/ && $2 ~ /^[0-9][0-9][0-9]$/ { print $2 }' \
+    "$tmp/http-raw")" || return 99
+  return "$rc"
+}
+
+# http_take <path> <body file> <entry> — accept a 200 just read: hand its body on and store it.
+http_take() {
+  local tag
+  cp "$tmp/http-body" "$2" || return 1
+  grep -qiE '^link:.*rel="next"' "$tmp/http-head" && http_next=1
+  tag="$(http_header etag)"
+  [ -n "$3" ] && [[ "$tag" =~ $etag_re ]] || return 0
+  # Storing is best-effort, as for the sweep: a read that cannot be kept is simply read in full later.
+  (
+    umask 077
+    part="$(mktemp "$http_dir/.part.XXXXXX")" || exit 1
+    { printf '%s\nurl %s\netag %s\nnext %s\nsum %s\n' "$http_magic" "$1" "$tag" "$http_next" \
+      "$(checksum <"$2")" && cat "$2"; } >"$part" && mv -f "$part" "$3" || { rm -f "$part"; exit 1; }
+  ) 2>/dev/null || http_unstored=$((http_unstored + 1))
+}
+
+# http_get <path> <body file> — read <path>, revalidating its stored read when one is usable. Sets
+# http_next=1 when the response linked a next page. False on any read that is neither a 200 nor gh's
+# exact 304 signal for the tag that was sent, so a failed read never falls back to a stored body.
+http_get() {
+  local path="$1" out="$2" entry="" tag="" rc=0
+  http_next=0
+  if [ "$http_usable" = 1 ]; then
+    entry="$http_dir/$(printf '%s' "$path" | checksum)"
+    http_entry "$entry" "$path" && tag="$http_tag"
+  fi
+  http_request "$path" "$tag" || rc=$?
+  if [ "$rc" -eq 0 ] && [ "$http_status" = 200 ]; then
+    http_take "$path" "$out" "$entry"
+    return
+  fi
+  [ -n "$tag" ] && [ "$rc" -eq 1 ] && [ "$http_status" = 304 ] &&
+    [ "$(cat "$tmp/http-err")" = "gh: HTTP 304" ] || return 1
+  if [ "$(opaque "$(http_header etag)")" = "$(opaque "$tag")" ]; then
+    cp "$tmp/http-stored" "$out" || return 1
+    http_next="$http_stored_next" http_replays=$((http_replays + 1))
+    touch "$entry" 2>/dev/null || true # pruning goes by last use
+    return 0
+  fi
+  # A 304 that names another tag confirms nothing about the stored body: read it in full.
+  rc=0
+  http_request "$path" || rc=$?
+  [ "$rc" -eq 0 ] && [ "$http_status" = 200 ] || return 1
+  http_take "$path" "$out" "$entry"
+}
+
+# http_list <path> <jq filter> <out> — every page of a list, 100 items a page, through http_get, each
+# item through <filter>. Pages are walked by number and a full page always reads the next one: a 304
+# for a full page replays its old links, so it cannot say whether a next page has appeared since.
+http_list() {
+  local path="$1" filter="$2" out="$3" page=1 n
+  : >"$out"
+  while :; do
+    http_get "$path?per_page=100&page=$page" "$tmp/http-page" || return 1
+    n="$(jq 'if type == "array" then length else error("not a list") end' "$tmp/http-page" 2>/dev/null)" ||
+      return 1
+    [[ "$n" =~ ^[0-9]+$ ]] || return 1
+    jq -c "$filter" "$tmp/http-page" >>"$out" || return 1
+    [ "$n" -gt 0 ] && { [ "$n" -ge 100 ] || [ "$http_next" = 1 ]; } || return 0
+    page=$((page + 1))
+    [ "$page" -le 100 ] || return 1 # 10,000 items: something is wrong, and a cut-off list is no pass
+  done
+}
+
 # collect_pr <repo> <number> — append this pull request's lane events to $tmp/events.
 collect_pr() {
   local repo="$1" n="$2" head
-  head="$(gh api "repos/$org/$repo/pulls/$n" --jq '.head.sha')" || unknown "cannot read $repo#$n"
-  gh api "repos/$org/$repo/issues/$n/comments" --paginate \
-    --jq '.[] | {kind: "comment", login: .user.login, at: .updated_at, body: .body}' \
-    >"$tmp/comments" || unknown "cannot read $repo#$n comments"
-  gh api "repos/$org/$repo/pulls/$n/reviews" --paginate \
-    --jq '.[] | {kind: "review", login: .user.login, at: .submitted_at, state: .state, body: .body}' \
-    >"$tmp/reviews" || unknown "cannot read $repo#$n reviews"
-  gh api "repos/$org/$repo/commits/$head/check-runs?check_name=Cursor%20Bugbot&per_page=100" \
-    --jq '.check_runs[] | {app: .app.slug, at: .completed_at, conclusion: .conclusion, title: .output.title}' \
-    >"$tmp/checks" || unknown "cannot read $repo#$n check-runs"
+  http_get "repos/$org/$repo/pulls/$n" "$tmp/pull" || unknown "cannot read $repo#$n"
+  head="$(jq -r '.head.sha' "$tmp/pull")" || unknown "cannot read $repo#$n"
+  http_list "repos/$org/$repo/issues/$n/comments" \
+    '.[] | {kind: "comment", login: .user.login, at: .updated_at, body: .body}' \
+    "$tmp/comments" || unknown "cannot read $repo#$n comments"
+  http_list "repos/$org/$repo/pulls/$n/reviews" \
+    '.[] | {kind: "review", login: .user.login, at: .submitted_at, state: .state, body: .body}' \
+    "$tmp/reviews" || unknown "cannot read $repo#$n reviews"
+  http_get "repos/$org/$repo/commits/$head/check-runs?check_name=Cursor%20Bugbot&per_page=100" \
+    "$tmp/check-runs" || unknown "cannot read $repo#$n check-runs"
+  jq -c '.check_runs[] | {app: .app.slug, at: .completed_at, conclusion: .conclusion, title: .output.title}' \
+    "$tmp/check-runs" >"$tmp/checks" || unknown "cannot read $repo#$n check-runs"
   jq -r --arg pr "$repo#$n" -f "$tmp/classify-comments.jq" "$tmp/comments" "$tmp/reviews" >>"$tmp/events"
   # Only the Cursor app's run, and only the three documented conclusion/title pairs, count.
   jq -r 'select(.at != null and .app == "cursor") |
@@ -206,6 +341,12 @@ else
     sed 1d "$cache_file" >"$tmp/events" || unknown "cannot read $cache_file"
     echo "review-lane-health: reusing the sweep taken at epoch $cache_at ($((now - cache_at))s old); --refresh forces a new one" >&2
   else
+    if (umask 077 && mkdir -p "$http_dir") 2>/dev/null && [ -d "$http_dir" ] && [ ! -L "$http_dir" ] &&
+      [ -O "$http_dir" ] && [ -w "$http_dir" ]; then
+      http_usable=1
+    else
+      echo "review-lane-health: no conditional cache in $http_dir; every read is a full one" >&2
+    fi
     gh search prs --owner "$org" --updated ">=$since" --archived=false --sort updated --order desc \
       --limit "$limit" --json repository,number \
       --jq '.[] | "\(.repository.name) \(.number)"' >"$tmp/prs" || unknown "cannot search $org pull requests"
@@ -213,6 +354,13 @@ else
       [ -n "$pr" ] || continue
       collect_pr "${pr%% *}" "${pr##* }"
     done <"$tmp/prs"
+    echo "review-lane-health: $http_reads REST reads, $http_replays answered 304 Not Modified (not charged)" >&2
+    if [ "$http_usable" = 1 ]; then
+      [ "$http_unstored" -eq 0 ] ||
+        echo "review-lane-health: $http_unstored reads could not be kept; they are read in full next time" >&2
+      # Entries are touched on every use: drop those no sweep has used for two days.
+      find "$http_dir" -maxdepth 1 -type f -mtime +2 -exec rm -f {} + 2>/dev/null || true
+    fi
     # Every read above succeeded, or the script has already exited UNKNOWN: only a complete sweep is
     # stored. It is dated at this run's start, so it expires no later than its oldest read allows.
     # Storing is best-effort: the verdict below stands on the sweep, not on the cache.
