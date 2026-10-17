@@ -2376,7 +2376,9 @@ make_cx_cache "$cx_inner" "$go_marker" 7 || fail 'fixture: 26 cache inside a che
 printf 'gitdir: %s\n' "$cx_live_gitdir" > "${cx_root}/a6/.git"
 make_cx_cache "$cx_held" "$go_marker" 7 || fail 'fixture: 26 held cache'
 
-/bin/sh -c "exec 9<'${cx_held}/00/a1-d'; sleep 30" &
+# Two dry runs, each with a host-wide open-file snapshot, must finish inside the holder's life; it is
+# killed as soon as they do, so the long sleep only bounds a slow host, never the suite.
+/bin/sh -c "exec 9<'${cx_held}/00/a1-d'; exec sleep 300" &
 cx_holder=$!
 sleep 1
 kill -0 "$cx_holder" 2>/dev/null ||
