@@ -1510,12 +1510,27 @@ esac
 if [ "$run_caches_readable" -eq 1 ] && [ "$codex_worktree_root" != off ] && [ -d "$codex_worktree_root" ]; then
   # Read on its own, like the temp-root listing: a failed or partial scan must be seen, so a task dir
   # that cannot be listed makes the whole root UNKNOWN rather than a sweep of whatever was readable.
-  if ! codex_children=$(find -H "$codex_worktree_root" -mindepth 2 -maxdepth 2 -type d 2>/dev/null); then
+  # Only safe names are listed, as for the temp root's run trees: the listing is read a line at a
+  # time, and a newline in a name would split it into two paths, the second relative to the working
+  # directory. Each line must also be <root>/<id>/<name> with both parts safe, so a task dir whose
+  # own name carries a newline cannot produce a candidate either.
+  if ! codex_children=$(find -H "$codex_worktree_root" -mindepth 2 -maxdepth 2 -type d \
+    ! -name "*[!${SAFE_NAME_CHARS}]*" 2>/dev/null); then
     unknown=$((unknown + 1))
     log "UNKNOWN (scan failed) $codex_worktree_root: Codex worktree caches not examined"
   else
     while IFS= read -r child; do
       [ -n "$child" ] || continue
+      case "$child" in
+        "${codex_worktree_root%/}"/*) codex_rel=${child#"${codex_worktree_root%/}"/} ;;
+        *) continue ;;
+      esac
+      codex_rel=${codex_rel#/}
+      case "$codex_rel" in
+        */*/* | /* | */ | *[!/${SAFE_NAME_CHARS}]*) continue ;;
+        ?*/?*) ;;
+        *) continue ;;
+      esac
       [ -L "$child" ] && continue
       # A `.git` symlink to nothing still marks a checkout: `-e` follows the link, so ask `-L` too.
       if [ -e "${child%/*}/.git" ] || [ -L "${child%/*}/.git" ]; then
@@ -1529,6 +1544,12 @@ if [ "$run_caches_readable" -eq 1 ] && [ "$codex_worktree_root" != off ] && [ -d
     done <<EOF
 $codex_children
 EOF
+    # Said, so a directory that is never reaped for its name is not a silent leftover.
+    if codex_unsafe=$(find -H "$codex_worktree_root" -mindepth 1 -maxdepth 2 -type d \
+      -name "*[!${SAFE_NAME_CHARS}]*" -print0 2>/dev/null |
+      tr -dc '\000' | wc -c | tr -d ' ') && [ "${codex_unsafe:-0}" != 0 ]; then
+      log "Codex worktree caches: ${codex_unsafe} never considered for a name outside the safe set"
+    fi
   fi
 fi
 [ -z "$codex_cache_trees" ] || run_cache_trees="${run_cache_trees}"$'\n'"${codex_cache_trees}"

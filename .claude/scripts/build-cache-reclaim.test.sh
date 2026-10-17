@@ -2466,6 +2466,23 @@ chmod 755 "${cx_root}/a9"
 grep -qF "UNKNOWN (scan failed) ${cx_root}: Codex worktree caches not examined" <<<"$out" ||
   fail '26: an unlistable Codex worktree root was not reported UNKNOWN'
 [ -e "$cx_idle" ] || fail '26: a cache was reaped from a root that could not be fully listed'
+
+# A name with a newline would split into two lines of the listing, the second a relative path
+# resolved against the working directory. Only safe names are considered, and the skipped one is
+# counted; a marked idle cache in the working directory by the second name must survive.
+cx_split="${cx_root}/c1/"$'go-old\ncx-victim'
+make_cx_cache "$cx_split" "$go_marker" 7 || fail 'fixture: 26 newline-named Codex child'
+cx_victim_cwd="${fixture_root}/cx-victim-cwd"
+make_cx_cache "${cx_victim_cwd}/cx-victim" "$go_marker" 7 || fail 'fixture: 26 victim in the working directory'
+make_cx_cache "$cx_idle" "$go_marker" 7 || fail 'fixture: 26 idle cache for the newline case'
+out=$(cd "$cx_victim_cwd" && run_cx apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${cx_victim_cwd}/cx-victim/README" ] ||
+  fail '26: a cache in the working directory was removed through a newline in a Codex child name'
+[ -e "${cx_split}/README" ] || fail '26: a Codex child with a newline in its name was reaped'
+[ -e "$cx_idle" ] && fail '26: the newline case reaped nothing (the ablation partner did not run)'
+grep -qF 'Codex worktree caches: 1 never considered for a name outside the safe set' <<<"$out" ||
+  fail "26: the Codex child skipped for its name was not counted; it said: $(grep -F 'never considered' <<<"$out")"
+rm -rf -- "${cx_root}/c1" "$cx_victim_cwd"
 rm -rf -- "$cx_root" "$cx_tmp" "$cx_go_tmp" "${fixture_root}/cx-gitdirs"
 
 reclaim_test_finished=1
