@@ -154,6 +154,13 @@ Go build cache.
 Measured 2026-09-30: about 90 per-run caches under `/private/tmp`, 6–12 GB each for a full product
 build, filled the host twice in two days (#3706).
 
+**Scratch files are shared by every worker of one session** (#4263). Claude Code gives a session one
+scratchpad, and every subagent it dispatches writes into that same directory, so two workers that both
+write `ci.yaml` overwrite each other: on 2026-10-16, 13 scratch names were written by two to four
+workers each. The rule is the upstream Engineer definition's (*Work in isolation*): name every scratch
+file with your issue or PR number and a purpose word (`4263-ci.yaml`, never `ci.yaml`), and put that
+rule in every brief you dispatch.
+
 **Interrupted populates.** `submodule-init.sh <path>` finishes what an interrupted run left in this
 worktree's own module directory, and refuses what it cannot judge. A module directory with no `HEAD`
 under a linked worktree (a SIGTERM leaves it empty) is cleared and populated again. The main checkout's
