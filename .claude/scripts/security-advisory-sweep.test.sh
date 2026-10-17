@@ -201,19 +201,19 @@ assert_read "clean: the archived repository is never read" no "$(read_path devan
 assert_read "clean: the control was read" yes "$CONTROL"
 assert_private "clean"
 
-echo "windows (exit 1 on any overdue advisory)"
+echo "windows (exit 1 on any overdue advisory; NOW is a Saturday)"
 base_org
 fixture "$(read_path devantler-tech/site triage)" \
-  "[$(adv devantler-tech/site GHSA-cccc-2222-xxxx triage null $((3 * DAY + 60))),$(adv devantler-tech/site GHSA-cccc-3333-xxxx triage '"high"' $((3 * DAY)))]"
+  "[$(adv devantler-tech/site GHSA-cccc-2222-xxxx triage null $((5 * DAY))),$(adv devantler-tech/site GHSA-cccc-3333-xxxx triage '"high"' $((2 * DAY)))]"
 fixture "$(read_path devantler-tech/site draft)" \
   "[$(adv devantler-tech/site GHSA-ffff-2222-xxxx draft '"critical"' $((15 * DAY))),$(adv devantler-tech/site GHSA-ffff-3333-xxxx draft '"low"' $((89 * DAY))),$(adv devantler-tech/site GHSA-ffff-4444-xxxx draft null $((15 * DAY)))]"
 fixture "$CONTROL" "[$(adv devantler-tech/ksail "$KSAIL_DRAFT_ID" draft '"medium"' 3600),$(adv devantler-tech/site GHSA-cccc-2222-xxxx triage null 1),$(adv devantler-tech/site GHSA-cccc-3333-xxxx triage null 1),$(adv devantler-tech/site GHSA-ffff-2222-xxxx draft null 1),$(adv devantler-tech/site GHSA-ffff-3333-xxxx draft null 1),$(adv devantler-tech/site GHSA-ffff-4444-xxxx draft null 1)]"
 run_sweep --now "$NOW"
 assert_rc "windows" 1
-assert_contains "triage past three days is overdue" \
-  "GHSA-cccc-2222-xxxx state=triage severity=unset age=3d window=3d OVERDUE"
-assert_contains "triage at exactly three days is still open" \
-  "GHSA-cccc-3333-xxxx state=triage severity=high age=3d window=3d OPEN"
+assert_contains "a Monday report is overdue by Saturday (its third weekday was Thursday)" \
+  "GHSA-cccc-2222-xxxx state=triage severity=unset age=5d window=3bd OVERDUE"
+assert_contains "a Thursday report is still open on Saturday" \
+  "GHSA-cccc-3333-xxxx state=triage severity=high age=2d window=3bd OPEN"
 assert_contains "a critical draft past 14 days is overdue" \
   "GHSA-ffff-2222-xxxx state=draft severity=critical age=15d window=14d OVERDUE"
 assert_contains "a low draft inside 90 days is open" \
@@ -222,6 +222,36 @@ assert_contains "a draft with no severity is held to 14 days" \
   "GHSA-ffff-4444-xxxx state=draft severity=unset age=15d window=14d OVERDUE"
 assert_last_line "windows: CHECKED counts every open advisory" "CHECKED 6 open advisor(ies)"
 assert_private "windows"
+
+# Only site holds triage reports in the next two runs; the control lists the same set.
+site_triage_only() { # <advisory JSON>...
+  local list
+  list="$(IFS=,; printf '%s' "$*")"
+  base_org
+  fixture "$(read_path devantler-tech/site triage)" "[${list}]"
+  fixture "$CONTROL" "[$(adv devantler-tech/ksail "$KSAIL_DRAFT_ID" draft '"medium"' 3600),${list}]"
+}
+
+echo "a weekend does not count toward the three business days"
+# Friday 12:00 to Monday 13:00 is more than three calendar days but one business day.
+site_triage_only "$(adv devantler-tech/site GHSA-cccc-4444-xxxx triage null $((DAY + 3600)))"
+run_sweep --now "$((NOW + 2 * DAY))"
+assert_rc "weekend" 0
+assert_contains "a Friday report is open on Monday" \
+  "GHSA-cccc-4444-xxxx state=triage severity=unset age=3d window=3bd OPEN"
+assert_private "weekend"
+
+echo "the business-day deadline is exact to the second"
+# The sweep runs on Thursday 13:00; both reports came in on Monday, at 13:00 and one second earlier.
+site_triage_only "$(adv devantler-tech/site GHSA-cccc-5555-xxxx triage null $((5 * DAY)))" \
+  "$(adv devantler-tech/site GHSA-cccc-6666-xxxx triage null $((5 * DAY + 1)))"
+run_sweep --now "$((NOW - 2 * DAY))"
+assert_rc "deadline boundary" 1
+assert_contains "a report exactly at its deadline is still open" \
+  "GHSA-cccc-5555-xxxx state=triage severity=unset age=3d window=3bd OPEN"
+assert_contains "a report one second past its deadline is overdue" \
+  "GHSA-cccc-6666-xxxx state=triage severity=unset age=3d window=3bd OVERDUE"
+assert_private "deadline boundary"
 
 echo "negative control: a failed read (exit 2, never no reports)"
 base_org

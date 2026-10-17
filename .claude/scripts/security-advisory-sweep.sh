@@ -15,11 +15,12 @@
 # first. A value in any other shape is reported UNKNOWN and is never echoed.
 #
 # Windows, from the security policy's "What Happens Next" (devantler-tech/.github, SECURITY.md):
-#   triage  accept or decline within three business days. The sweep counts three CALENDAR days, so
-#           it flags a report no later than the policy does, and a day or two early over a weekend.
+#   triage  accept or decline within three business days: the deadline is the same time of day on
+#           the third weekday (Monday to Friday, in UTC) after the report. There is no holiday
+#           calendar, so a holiday can only make the sweep flag a report early, never late.
 #   draft   a fixed release within 14 days for critical and high severity, and 90 days for medium
 #           and low. A draft with no severity yet is held to 14 days.
-# Age counts from the advisory's `created_at`.
+# Both count from the advisory's `created_at`. The printed age is in calendar days.
 #
 # Reads, in order (about two REST calls per public repository, plus two):
 #   1. the organization's repositories, every page. Archived repositories are skipped, and so are
@@ -40,7 +41,8 @@
 #   security-advisory-sweep.sh [--org <login>] [--now <epoch-seconds>]
 #
 # Output, one line per item:
-#   ADVISORY <owner/repo> <GHSA-id> state=<triage|draft> severity=<level|unset> age=<n>d window=<n>d <OPEN|OVERDUE>
+#   ADVISORY <owner/repo> <GHSA-id> state=<triage|draft> severity=<level|unset> age=<n>d window=<3bd|<n>d> <OPEN|OVERDUE>
+#     (`bd` is business days, `d` calendar days)
 #   QUERY-UNKNOWN <owner/repo|org> — <what failed>
 #   CHECKED <n> open advisor(ies) across <m> public repositor(ies); skipped <a> archived, <p> private
 #     (always last, so a clean exit shows what it examined)
@@ -176,8 +178,22 @@ control_row='
     else empty end
   else "MALFORMED" end'
 
+# Set `deadline` to the same time of day on the <n>th weekday after <epoch>, in UTC. Day 0 of the
+# epoch was a Thursday, so (days + 4) % 7 is the weekday with 0 for Sunday and 6 for Saturday.
+business_deadline() { # <epoch> <n>
+  local remaining="$2" weekday
+  deadline="$1"
+  while [ "$remaining" -gt 0 ]; do
+    deadline=$((deadline + 86400))
+    weekday=$(((deadline / 86400 + 4) % 7))
+    if [ "$weekday" -ge 1 ] && [ "$weekday" -le 5 ]; then
+      remaining=$((remaining - 1))
+    fi
+  done
+}
+
 sweep_state() { # <owner/repo> <triage|draft>
-  local repo="$1" state="$2" page rows id severity created age_s window verdict
+  local repo="$1" state="$2" page rows id severity created age_s window deadline verdict
   if ! page="$(read_pages "repos/${repo}/security-advisories?state=${state}&per_page=100")"; then
     report_unknown "$repo" "the ${state} advisory read failed or returned a partial set of pages"
     failed_repos+="${repo}"$'\n'
@@ -198,17 +214,26 @@ sweep_state() { # <owner/repo> <triage|draft>
     age_s=$((now - created))
     [ "$age_s" -ge 0 ] || age_s=0
     case "${state}:${severity}" in
-      triage:*) window=3 ;;
-      draft:medium | draft:low) window=90 ;;
-      *) window=14 ;;
+      triage:*)
+        window=3bd
+        business_deadline "$created" 3
+        ;;
+      draft:medium | draft:low)
+        window=90d
+        deadline=$((created + 90 * 86400))
+        ;;
+      *)
+        window=14d
+        deadline=$((created + 14 * 86400))
+        ;;
     esac
-    if [ "$age_s" -gt $((window * 86400)) ]; then
+    if [ "$now" -gt "$deadline" ]; then
       verdict=OVERDUE
       overdue=1
     else
       verdict=OPEN
     fi
-    printf 'ADVISORY %s %s state=%s severity=%s age=%sd window=%sd %s\n' \
+    printf 'ADVISORY %s %s state=%s severity=%s age=%sd window=%s %s\n' \
       "$repo" "$id" "$state" "$severity" "$((age_s / 86400))" "$window" "$verdict"
     open_count=$((open_count + 1))
     seen+="${repo} ${id} ${state}"$'\n'
