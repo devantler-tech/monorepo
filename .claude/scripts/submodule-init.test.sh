@@ -2095,6 +2095,26 @@ out="$(cd "$c97m/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
 report "incomplete module: the main checkout's shared store is never cleared (UNKNOWN, exit 2, directory kept)" \
   "$([[ $rc -eq 2 && -d "$c97m/super/.git/modules/sub" ]] && echo yes || echo no)" "rc=$rc $out"
 
+# 97b. Git names a module directory after the submodule's NAME, which can differ from its path. The leftover
+# an interrupted populate left under that name is the one cleared; looking under the path found nothing and
+# git then failed on every retry.
+c97n="$tmp/c97n"
+mkdir -p "$c97n"
+git init -q "$c97n/remote-sub"
+git -C "$c97n/remote-sub" commit -q --allow-empty -m init
+echo seed >"$c97n/remote-sub/file.txt"
+git -C "$c97n/remote-sub" add file.txt
+git -C "$c97n/remote-sub" commit -q -m seed
+git init -q "$c97n/super"
+git -C "$c97n/super" commit -q --allow-empty -m init
+(cd "$c97n/super" && git submodule add -q --name modsub ../remote-sub sub && git commit -q -m "add sub")
+git -C "$c97n/super" worktree add -q "$c97n/super-wt" -b wt
+c97n_gitdir="$(git -C "$c97n/super-wt" rev-parse --path-format=absolute --git-dir)"
+mkdir -p "$c97n_gitdir/modules/modsub"
+out="$(cd "$c97n/super-wt" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "incomplete module: the leftover is found by the submodule's name when it differs from its path" \
+  "$([[ $rc -eq 0 && -f "$c97n/super-wt/sub/file.txt" && -f "$c97n_gitdir/modules/modsub/HEAD" ]] && echo yes || echo no)" "rc=$rc $out"
+
 # 98. A populated checkout with tracked files missing (an interrupted checkout keeps `.git` and a partial
 # tree) is NOT reported populated. Before, the non-empty `.git` skipped every content check and isolation
 # alone passed it. Restoring the missing files clears the refusal.

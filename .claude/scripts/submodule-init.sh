@@ -728,6 +728,23 @@ origin_is_own() {
   fi
 }
 
+# The name `.gitmodules` registers for path $1, which is what git names its module directory after (a
+# name can differ from its path). Fails when no entry or several entries register that path.
+registered_name() {
+  local path=$1 rec rec_key rec_val name='' count=0
+  while IFS= read -r -d '' rec; do
+    rec_key=${rec%%$'\n'*}
+    rec_val=${rec#*$'\n'}
+    if [ "$rec_val" = "$path" ]; then
+      name=${rec_key#submodule.}
+      name=${name%.path}
+      count=$((count + 1))
+    fi
+  done < <(git config -z -f .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null)
+  [ "$count" -eq 1 ] && [ -n "$name" ] || return 1
+  printf '%s' "$name"
+}
+
 # The main checkout's repository for the submodule at path $1, when a fresh checkout in THIS linked
 # superproject worktree can borrow its objects; prints nothing otherwise (monorepo#3431).
 #
@@ -743,7 +760,7 @@ origin_is_own() {
 # store that is absent or unreadable, an inherited GIT_DIR, GIT_WORK_TREE or GIT_COMMON_DIR, or
 # SUBMODULE_INIT_NO_SHARED_STORE=1.
 shared_object_store() {
-  local path=$1 gitdir common rec rec_key rec_val name='' count=0 store
+  local path=$1 gitdir common name store
   [ "${SUBMODULE_INIT_NO_SHARED_STORE:-}" != 1 ] || return 0
   # An inherited git location variable can point the lookups below at ANOTHER checkout, whose store
   # would then be borrowed from and reconfigured. Where git was told where to look, do not borrow.
@@ -751,16 +768,7 @@ shared_object_store() {
   gitdir=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null) || return 0
   common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
   [ -n "$gitdir" ] && [ -n "$common" ] && [ "$gitdir" != "$common" ] || return 0
-  while IFS= read -r -d '' rec; do
-    rec_key=${rec%%$'\n'*}
-    rec_val=${rec#*$'\n'}
-    if [ "$rec_val" = "$path" ]; then
-      name=${rec_key#submodule.}
-      name=${name%.path}
-      count=$((count + 1))
-    fi
-  done < <(git config -z -f .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null)
-  [ "$count" -eq 1 ] && [ -n "$name" ] || return 0
+  name=$(registered_name "$path") || return 0
   [ ! -e "$gitdir/modules/$name" ] || return 0
   store="$common/modules/$name"
   [ -d "$store/objects" ] || return 0
@@ -790,15 +798,19 @@ normalize_path() {
 }
 
 # This checkout's module directory, when THIS worktree owns it. A LINKED superproject worktree keeps its
-# submodules' repositories under its own admin directory (.git/worktrees/<wt>/modules/<path>), which only
+# submodules' repositories under its own admin directory (.git/worktrees/<wt>/modules/<name>), which only
 # this worktree writes. Prints nothing for the main checkout: its modules directory is the SHARED store
 # that other sessions borrow from, so nothing there is ever cleared by this script.
 own_module_dir() {
-  local path=$1 gitdir common
+  local path=$1 gitdir common name
   gitdir=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null) || return 0
   common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
   [ -n "$gitdir" ] && [ -n "$common" ] && [ "$gitdir" != "$common" ] || return 0
-  printf '%s/modules/%s' "$gitdir" "$path"
+  # Git names the module directory after the submodule NAME, which can differ from its path. A name it
+  # would refuse (one with a `..` component, or absolute) names no directory here, so nothing is cleared.
+  name=$(registered_name "$path") || return 0
+  case "/$name/" in */../* | //*) return 0 ;; esac
+  printf '%s/modules/%s' "$gitdir" "$name"
 }
 
 init_repair_probe() {
