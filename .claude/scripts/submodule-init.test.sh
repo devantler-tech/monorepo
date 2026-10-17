@@ -2049,6 +2049,30 @@ report "path spelling: a trailing slash is accepted" \
 out="$(cd "$c96/super" && "$helper" ./not-a-submodule 2>&1)" && rc=0 || rc=$?
 report "path spelling: a path registered in no spelling is still refused (negative control)" \
   "$([[ $rc -eq 1 ]] && echo yes || echo no)" "rc=$rc $out"
+# The same absolute path reached through a symlinked alias of the superproject root names the same
+# submodule; only its parent is spelled differently from the physical root.
+ln -s "$c96/super" "$c96/alias"
+out="$(cd "$c96/super" && "$helper" "$c96/alias/sub" 2>&1)" && rc=0 || rc=$?
+report "path spelling: an absolute path through a symlinked alias of the root is accepted" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+out="$(cd "$c96/super" && "$helper" "$c96/alias/not-a-submodule" 2>&1)" && rc=0 || rc=$?
+report "path spelling: an unregistered path through the alias is still refused (negative control)" \
+  "$([[ $rc -eq 1 ]] && echo yes || echo no)" "rc=$rc $out"
+
+# 96b. A registered path with a `..` component passes the literal registration check, and joined onto a
+# linked worktree's module directory it names a directory outside `modules`, which the interrupted-populate
+# cleanup would delete. It is refused (exit 1) before anything is touched; the directory it names survives.
+c96b="$tmp/c96b"
+mk_super "$c96b"
+git -C "$c96b/super" config -f .gitmodules submodule.escape.path 'x/../../escape'
+git -C "$c96b/super" config -f .gitmodules submodule.escape.url ../remote-sub
+git -C "$c96b/super" commit -q -am "register an escaping path"
+git -C "$c96b/super" worktree add -q "$c96b/super-wt" -b wt
+c96b_gitdir="$(git -C "$c96b/super-wt" rev-parse --path-format=absolute --git-dir)"
+mkdir -p "$c96b_gitdir/escape"
+out="$(cd "$c96b/super-wt" && "$helper" 'x/../../escape' 2>&1)" && rc=0 || rc=$?
+report "path safety: a registered path with a '..' component is refused (exit 1) and nothing outside modules is removed" \
+  "$([[ $rc -eq 1 && "$out" == *"'..' component"* && -d "$c96b_gitdir/escape" ]] && echo yes || echo no)" "rc=$rc $out"
 
 # 97. An interrupted populate can leave a module directory with no HEAD (a SIGTERM leaves it empty). In a
 # LINKED worktree that directory is this worktree's own, so the next populate clears it and completes; a

@@ -771,9 +771,17 @@ shared_object_store() {
 # The spelling a submodule path argument is matched by. Registration is a literal string comparison, so
 # `./applications/ksail`, a trailing slash or an absolute path inside the superproject named a registered
 # submodule and still read as "not a registered submodule" (exit 1), a false finding about a path that
-# IS registered. Relative to the superproject root, with no leading `./` and no trailing `/`.
+# IS registered. Relative to the superproject root, with no leading `./` and no trailing `/`. An absolute
+# path reached through a symlinked alias of the root does not start with the physical `$super_root`, so
+# its parent is resolved physically first; the last component is kept as typed.
 normalize_path() {
-  local p=$1
+  local p=$1 parent
+  case "$p" in
+    /*)
+      p=${p%/}
+      parent=$(cd -- "${p%/*}/" 2>/dev/null && pwd -P) && p="${parent%/}/${p##*/}"
+      ;;
+  esac
   case "$p" in
     "$super_root"/*) p=${p#"$super_root"/} ;;
   esac
@@ -801,6 +809,12 @@ init_repair_probe() {
   # this script exists to prevent. Validate against .gitmodules first and fail closed.
   is_registered_submodule "$path" ||
     refuse_unregistered "$path" repair
+  # Registration compares the raw `.gitmodules` string, so a registered path with a `..` component (or an
+  # absolute one) passes it. Joined onto this worktree's module directory by `own_module_dir`, such a path
+  # names a directory outside `modules`, which the interrupted-populate cleanup below would delete.
+  case "/$path/" in
+    */../* | //*) die "'$path' is registered with an absolute path or a '..' component — refusing to repair or populate it" ;;
+  esac
 
   # A directory that cannot be listed is neither "populated" nor "empty": refuse it rather than
   # repair or clone into what could not be seen.
