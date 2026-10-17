@@ -128,12 +128,25 @@ acq() {
 lock_dir() { printf '%s' "$store/refs/agent-review-lock/$1/$2"; }
 generations() { find "$(lock_dir "$1" "$2")" -type f 2>/dev/null | sed 's#.*/##' | sort -n; }
 has_lock() { [ -n "$(generations "$1" "$2")" ]; }
-lock_owner_of() { # lock_owner_of <pr> <head> — owner recorded in the newest generation
+lock_field_of() { # lock_field_of <field> <pr> <head> — a field recorded in the newest generation
   local g sha
-  g="$(generations "$1" "$2" | tail -n 1)"
-  sha="$(cat "$(lock_dir "$1" "$2")/$g")"
-  sed -n 's/^owner=//p' "$store/objects/$sha"
+  g="$(generations "$2" "$3" | tail -n 1)"
+  sha="$(cat "$(lock_dir "$2" "$3")/$g")"
+  sed -n "s/^$1=//p" "$store/objects/$sha"
 }
+lock_owner_of() { lock_field_of owner "$@"; }
+lock_lane_of() { lock_field_of lane "$@"; }
+
+# The fixture registry: `cursor-cloud` contains a hyphen, so the longest matching namespace must win.
+registry="$tmp/agent-instances.json"
+cat >"$registry" <<'JSON'
+{"version":1,"instances":{
+  "claude-local":{"namespace":"claude"},
+  "codex-local":{"namespace":"codex"},
+  "cursor-local":{"namespace":"cursor"},
+  "cursor-cloud":{"namespace":"cursor-cloud"}}}
+JSON
+export AGENT_INSTANCES_FILE="$registry"
 
 # race <n> <label> <pr> <head> <now> <owner-prefix> — n simultaneous acquires; sets winners/losers/winner.
 race() {
@@ -171,6 +184,42 @@ REVIEW_LOCK_NOW=$((1000000 + 30 * 60)) acq "an expired lock is taken over as the
 [ "$(generations 7 "$head_a" | tr '\n' ' ')" = "1 2 " ] || bad "takeover rewrote generation 1 instead of creating generation 2"
 acq "a shorter --lease-minutes is honoured" 1 "lease=60s" 7 "$head_a" cr claude-run1 --lease-minutes 1
 REVIEW_LOCK_NOW=$((1000000 + 30 * 60 + 61)) acq "…and expires on it" 0 "ACQUIRED agent-review-lock/7/${head_a}/3" 7 "$head_a" cr claude-run1 --lease-minutes 1
+
+echo "provenance (monorepo#4264):"
+[ "$(lock_lane_of 7 "$head_a")" = claude ] || bad "the lock object does not record the requesting lane"
+acq "a fresh lock names its lane" 0 "ACQUIRED agent-review-lock/20/${head_a}/1 owner=codex-r1 provider=cr lane=codex" 20 "$head_a" cr codex-r1
+[ "$(lock_lane_of 20 "$head_a")" = codex ] || bad "the codex lane was not recorded"
+acq "a stand-down names the holder's lane, not the caller's" 1 "lease=1800s lane=codex" 20 "$head_a" cr claude-r2
+acq "the holder's own retry reports its recorded lane" 0 "HELD agent-review-lock/20/${head_a}/1 owner=codex-r1 provider=cr lane=codex" 20 "$head_a" cr codex-r1
+acq "the longest registered namespace wins over a shorter prefix" 0 "lane=cursor-cloud" 21 "$head_a" cr cursor-cloud-r1
+acq "a token whose prefix only resembles a lane is unregistered" 0 "lane=unregistered" 22 "$head_a" cr claudex-r1
+[ "$(lock_lane_of 22 "$head_a")" = unregistered ] || bad "a lookalike prefix was attributed to a lane"
+acq "a token naming no lane still acquires, and says why" 0 "starts with no registered lane" 23 "$head_a" cr stale-run
+[ "$(lock_lane_of 23 "$head_a")" = unregistered ] || bad "an unregistered owner was not recorded as unregistered"
+AGENT_INSTANCES_FILE="$tmp/missing.json" acq "an unreadable registry records lane=unknown and still acquires" 0 "lane=unknown" 24 "$head_a" cr claude-r3
+[ "$(lock_lane_of 24 "$head_a")" = unknown ] || bad "an unreadable registry was not recorded as unknown"
+printf '{"instances":{"x":{"namespace":"Bad Lane"},"y":{"namespace":"claude"}}}' >"$tmp/malformed.json"
+AGENT_INSTANCES_FILE="$tmp/malformed.json" acq "a malformed registry is unknown, never a partial match" 0 "lane=unknown" 25 "$head_a" cr claude-r4
+printf '{"instances":{}}' >"$tmp/empty.json"
+AGENT_INSTANCES_FILE="$tmp/empty.json" acq "an empty registry is unknown, never unregistered" 0 "lane=unknown" 26 "$head_a" cr claude-r5
+rc=0 out="$(env -u AGENT_INSTANCES_FILE "$lock" acquire --repo o/r --pr 27 --head "$head_a" --provider cr --owner claude-r6 2>&1)" || rc=$?
+if [ "$rc" -eq 0 ] && [[ "$out" == *"lane=claude"* ]]; then
+  echo "  ok   the default registry path resolves to the shipped registry"
+else
+  bad "the default registry did not resolve the claude lane (exit ${rc}): ${out}"
+fi
+old="$(printf 'agent-review-lock\nowner=codex-old\ncreated_epoch=1000000\nprovider=cr\n' | tee "$tmp/old.rec" | shasum | cut -c1-40)"
+cp "$tmp/old.rec" "$store/objects/$old"
+mkdir -p "$(lock_dir 28 "$head_a")"
+printf '%s' "$old" >"$(lock_dir 28 "$head_a")/1"
+acq "a lock written before the lane field reads as unrecorded" 1 "lane=unrecorded" 28 "$head_a" cr claude-r7
+# shellcheck disable=SC2016 # the record must carry the literal text, never an expansion
+bad_lane="$(printf 'agent-review-lock\nowner=codex-x\nlane=$(id)\ncreated_epoch=1000000\n' | tee "$tmp/bad.rec" | shasum | cut -c1-40)"
+cp "$tmp/bad.rec" "$store/objects/$bad_lane"
+mkdir -p "$(lock_dir 29 "$head_a")"
+printf '%s' "$bad_lane" >"$(lock_dir 29 "$head_a")/1"
+acq "a recorded lane outside the namespace shape is reported as invalid, never echoed" 1 "lane=invalid" 29 "$head_a" cr claude-r8
+for n in 20 21 22 23 24 25 26 27 28 29; do rm -rf "$store/refs/agent-review-lock/$n"; done
 
 echo "heads:"
 acq "a new head is acquired independently" 0 "ACQUIRED agent-review-lock/7/${head_b}/1" 7 "$head_b" cr claude-run2

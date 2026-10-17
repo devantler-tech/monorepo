@@ -322,6 +322,8 @@ jobs:
               - '.claude/scripts/agent-claim-sweep.test.sh'
               - '.claude/scripts/review-request-lock.sh'
               - '.claude/scripts/review-request-lock.test.sh'
+              # The lock test resolves the shipped registry's lanes (monorepo#4264).
+              - '.claude/plugin-consumption/agent-instances.json'
               # The Claim protocol's assignee lease-clock read is executed by its own test.
               - 'AGENTS.md'
               - '.claude/guides/**'

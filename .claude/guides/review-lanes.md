@@ -387,7 +387,9 @@ result at the current head — self-promotion is forbidden before that. Request 
   [`review-request-lock.sh acquire --repo <owner>/<repo> --pr <n> --head <headRefOid> --provider <cr|codex|bugbot> --owner <session-owner-token>`](../scripts/review-request-lock.sh)
   after the marker re-read and before the comment. It creates the ref
   `refs/agent-review-lock/<pr>/<head>/<generation>` through the REST API, pointing at an annotated
-  tag object on the PR head (no commit is created). GitHub refuses to create a ref that already
+  tag object on the PR head (no commit is created). The tag records the owner token and the
+  registered lane it starts with, because every lock carries the same GitHub login and a race
+  between lanes could not otherwise be attributed (#4264). GitHub refuses to create a ref that already
   exists, so exactly one instance wins each head. There is one lock per head, whatever the
   provider, because only one review request may be in flight per head: the holder walks the
   provider order under its own lock. Exit `0` means

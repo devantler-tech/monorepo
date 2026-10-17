@@ -20,13 +20,22 @@
 #         (outside refs/heads and refs/tags, so it triggers no workflow, matches no ruleset and
 #         never shows up as a branch)
 #   value an annotated tag object on the PR head whose message records `owner=<token>`,
-#         `created_epoch=<seconds>` and the provider (no commit is created)
+#         `lane=<namespace>`, `created_epoch=<seconds>` and the provider (no commit is created)
 #   One lock per PR head, whatever the provider: only one review request may be in flight per head,
 #   and the holder moves to the next provider under the same lock. Every state change is the
 #   CREATE of a ref, never an update — the REST API has no compare-and-swap on update — so an
 #   expired lock is taken over by creating the next generation, which exactly one contender can do.
 #   acquire never deletes a lock: a stale worker must not remove a newer head's live lock. Locks
 #   for closed PRs and superseded heads are removed by `sweep`, which reads the PR's live head.
+#
+# PROVENANCE (monorepo#4264)
+#   Every lock is created by the maintainer's GitHub login, so the tagger and the commit author
+#   cannot tell two lanes apart. The record therefore names the requesting lane: the registered
+#   namespace the owner token starts with (a session-owner token is `<lane>-<run id>`). The
+#   instance registry decides which prefixes are lanes, so a token naming none is recorded as
+#   `lane=unregistered` and an unreadable registry as `lane=unknown` — never a guess. Provenance is a
+#   measurement, not a gate: neither case blocks the request. A lock written before this field
+#   existed reads as `lane=unrecorded`.
 #
 # USAGE
 #   review-request-lock.sh acquire --repo <owner/repo> --pr <n> --head <40-hex sha>
@@ -45,6 +54,8 @@
 set -euo pipefail
 
 PREFIX="agent-review-lock"
+INSTANCES="${AGENT_INSTANCES_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../plugin-consumption/agent-instances.json}"
+LANE_RE='^[a-z][a-z0-9-]*$'
 
 die() {
   echo "review-request-lock: $*" >&2
@@ -52,7 +63,7 @@ die() {
 }
 
 usage() {
-  sed -n '31,44p' "$0" >&2
+  sed -n '40,53p' "$0" >&2
   exit 2
 }
 
@@ -72,12 +83,30 @@ api() {
   return "${rc}"
 }
 
+# owner_lane — the registered namespace the owner token starts with (`<lane>-…`; the longest match
+# wins, since a namespace may itself contain a hyphen), `unregistered` when it starts with none, and
+# `unknown` when the registry cannot be read or is malformed. Each fallback says why on stderr.
+owner_lane() {
+  local lane
+  if ! lane="$(jq -er --arg o "${owner}" --arg re "${LANE_RE}" '
+      .instances | select(type == "object" and length > 0)
+      | [.[].namespace] | select(all(type == "string" and test($re)))
+      | map(select(. as $n | $o | startswith($n + "-")))
+      | max_by(length) // "unregistered"' "${INSTANCES}" 2>/dev/null)"; then
+    echo "review-request-lock: instance registry ${INSTANCES} is unreadable or malformed; recording lane=unknown" >&2
+    lane=unknown
+  elif [ "${lane}" = unregistered ]; then
+    echo "review-request-lock: owner '${owner}' starts with no registered lane; recording lane=unregistered" >&2
+  fi
+  printf '%s' "${lane}"
+}
+
 # new_lock_object — an annotated tag object on the PR head whose message is the lock record. It
 # creates no commit: the object it points at is the PR's own head commit.
 new_lock_object() {
   local content
-  content="$(printf '%s\nowner=%s\ncreated_epoch=%s\npr=%s\nhead=%s\nprovider=%s\n' \
-    "${PREFIX}" "${owner}" "$(now_epoch)" "${pr}" "${head}" "${provider}")"
+  content="$(printf '%s\nowner=%s\nlane=%s\ncreated_epoch=%s\npr=%s\nhead=%s\nprovider=%s\n' \
+    "${PREFIX}" "${owner}" "${lane}" "$(now_epoch)" "${pr}" "${head}" "${provider}")"
   api -X POST "repos/${repo}/git/tags" -f tag="${PREFIX}" -f message="${content}" \
     -f object="${head}" -f type=commit --jq .sha ||
     die "could not create the lock object: ${api_out}"
@@ -85,7 +114,8 @@ new_lock_object() {
   printf '%s' "${api_out}"
 }
 
-# read_lock <key> — sets lock_owner, lock_created and lock_provider from that lock's record.
+# read_lock <key> — sets lock_owner, lock_lane, lock_created and lock_provider from that lock's
+# record. The lane is display-only provenance, so a missing one is `unrecorded`, never a refusal.
 read_lock() {
   local sha content
   api "repos/${repo}/git/ref/$1" --jq .object.sha || die "could not read $1: ${api_out}"
@@ -96,6 +126,12 @@ read_lock() {
   lock_owner="$(printf '%s\n' "${content}" | sed -n 's/^owner=//p' | head -n 1)"
   lock_created="$(printf '%s\n' "${content}" | sed -n 's/^created_epoch=//p' | head -n 1)"
   lock_provider="$(printf '%s\n' "${content}" | sed -n 's/^provider=//p' | head -n 1)"
+  lock_lane="$(printf '%s\n' "${content}" | sed -n 's/^lane=//p' | head -n 1)"
+  if [ -z "${lock_lane}" ]; then
+    lock_lane=unrecorded
+  elif ! [[ "${lock_lane}" =~ ${LANE_RE} ]]; then
+    lock_lane=invalid
+  fi
   [ -n "${lock_owner}" ] && [[ "${lock_created}" =~ ^[0-9]+$ ]] ||
     die "lock $1 carries no owner/created_epoch — refusing to guess"
 }
@@ -119,31 +155,32 @@ latest_generation() {
 }
 
 acquire() {
-  local gen next key age=0 lock
+  local gen next key age=0 lock lane
   base="${PREFIX}/${pr}/${head}"
   gen="$(latest_generation)"
   next=1
   if [ "${gen}" -gt 0 ]; then
     read_lock "${base}/${gen}"
     if [ "${lock_owner}" = "${owner}" ]; then
-      echo "HELD ${base}/${gen} owner=${owner} provider=${provider}"
+      echo "HELD ${base}/${gen} owner=${owner} provider=${provider} lane=${lock_lane}"
       return 0
     fi
     age=$(($(now_epoch) - lock_created))
     if [ "${age}" -lt $((lease_minutes * 60)) ]; then
-      echo "LOCKED ${base}/${gen} owner=${lock_owner} provider=${lock_provider} age=${age}s lease=$((lease_minutes * 60))s"
+      echo "LOCKED ${base}/${gen} owner=${lock_owner} provider=${lock_provider} age=${age}s lease=$((lease_minutes * 60))s lane=${lock_lane}"
       return 1
     fi
     next=$((gen + 1))
   fi
 
   key="${base}/${next}"
+  lane="$(owner_lane)"
   lock="$(new_lock_object)"
   if api -X POST "repos/${repo}/git/refs" -f ref="refs/${key}" -f sha="${lock}" --jq .ref; then
     if [ "${next}" -gt 1 ]; then
-      echo "ACQUIRED ${key} owner=${owner} provider=${provider} takeover-after=${age}s"
+      echo "ACQUIRED ${key} owner=${owner} provider=${provider} takeover-after=${age}s lane=${lane}"
     else
-      echo "ACQUIRED ${key} owner=${owner} provider=${provider}"
+      echo "ACQUIRED ${key} owner=${owner} provider=${provider} lane=${lane}"
     fi
     return 0
   fi
@@ -152,7 +189,7 @@ acquire() {
     *) die "could not create ${key}: ${api_out}" ;;
   esac
   read_lock "${key}"
-  echo "LOCKED ${key} owner=${lock_owner} provider=${lock_provider} (another instance created it first)"
+  echo "LOCKED ${key} owner=${lock_owner} provider=${lock_provider} lane=${lock_lane} (another instance created it first)"
   return 1
 }
 
