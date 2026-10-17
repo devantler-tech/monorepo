@@ -4,6 +4,11 @@
 editorial standard are owned by [business-site](https://github.com/devantler-tech/business-site),
 checked out at `applications/business-site`.
 
+[`digests/`](digests/) holds the maintainer's weekly digests. Each Monday a workflow opens that
+week's digest as an issue assigned to him, so GitHub emails it to him; when the week's file is
+missing, it sends the open asks on their own. [`digests/TEMPLATE.md`](digests/TEMPLATE.md) is the
+starting point and carries the writing rules.
+
 The former website snapshot is retired after replacement publication under
 [#3086](https://github.com/devantler-tech/monorepo/issues/3086). Git history retains the original
 source and assets; this directory is not a second maintained or publishable application.

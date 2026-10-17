@@ -371,6 +371,8 @@ codex-transcript-retention.sh|dry-run 14
 codex-transcript-retention.test.sh|
 worktree-cleanup.test.sh|
 agent-role-delivery-contract.test.sh|
+maintainer-digest.sh|
+maintainer-digest.test.sh|
 "
 
 # This trap is installed only inside a real submodule synchronization transaction.

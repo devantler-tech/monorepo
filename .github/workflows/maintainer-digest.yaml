@@ -1,0 +1,48 @@
+name: Maintainer digest
+
+# Opens the week's maintainer digest as an issue assigned to the maintainer, so GitHub emails it to
+# him (monorepo#4285). It runs as github-actions[bot] because GitHub never emails a user about their
+# own activity, and the agents act through his account. When the week's file is missing, the open
+# asks go on their own. The logic and its tests live in .claude/scripts/maintainer-digest.sh.
+on:
+  schedule:
+    # Mondays at 06:00 UTC, which is 07:00 or 08:00 in Denmark.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Print the digest instead of opening it
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: maintainer-digest
+  cancel-in-progress: false
+
+jobs:
+  send:
+    name: Send the weekly digest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write # to open the digest issue and close the earlier one
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Open the digest issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          args=(send --repo "$REPOSITORY")
+          if [ "$DRY_RUN" = true ]; then
+            args+=(--dry-run)
+          fi
+          bash .claude/scripts/maintainer-digest.sh "${args[@]}"
