@@ -248,6 +248,7 @@ pr-worktree-holder.sh|--input -|exit:2
 required-gate-completeness.sh|--input -|exit:2
 sibling-lane-watch.sh|
 silent-scheduled-workflows.sh|
+security-advisory-sweep.sh|
 worktree-inventory-classify.sh|--inventory $tmp/converted/memory.md|exit:2
 worktree-inventory-merged-check.sh|$tmp/converted|exit:2
 worktree-lane-sweep.sh|
@@ -305,6 +306,7 @@ ci-job-wiring.test.sh|
 pipefail-grep-guard.test.sh|
 skill-owner.test.sh|
 silent-scheduled-workflows.test.sh|
+security-advisory-sweep.test.sh|
 claude-task-live-runs.test.sh|
 delivered-open-candidates.test.sh|
 lane-draft-count.test.sh|
