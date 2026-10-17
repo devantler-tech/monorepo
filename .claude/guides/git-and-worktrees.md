@@ -156,8 +156,8 @@ build, filled the host twice in two days (#3706).
 
 **Scratch files are shared by every worker of one session** (#4263). Claude Code gives a session one
 scratchpad, and every subagent it dispatches writes into that same directory, so two workers that both
-write `ci.yaml` overwrite each other: on 2026-10-16, 13 scratch names were written by two to four
-workers each. The rule is the upstream Engineer definition's (*Work in isolation*): name every scratch
+write `ci.yaml` overwrite each other: in the 24 hours to 2026-10-16 21:08 UTC, 13 scratch names were
+written by two to four workers each. The rule is the upstream Engineer definition's (*Work in isolation*): name every scratch
 file with your issue or PR number and a purpose word (`4263-ci.yaml`, never `ci.yaml`), and put that
 rule in every brief you dispatch.
 
