@@ -40,7 +40,7 @@ tmp="$(mktemp -d)"
 maintainer_digest_finished=0
 # Bash 3.2 can hand an EXIT trap a zero status for a `set -u` abort, so only `finish` may leave with
 # status 0 (cleanup-trap-fail-closed.test.sh).
-# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+# shellcheck disable=SC2317,SC2329 # Invoked indirectly by the EXIT trap.
 on_exit() {
   local rc=$?
   rm -rf "$tmp"
@@ -100,7 +100,9 @@ unknown() {
 }
 
 need_value() {
-  [ "$#" -ge 2 ] && [ -n "$2" ] || usage "$1 needs a value"
+  if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+    usage "$1 needs a value"
+  fi
 }
 
 check_repo() {
