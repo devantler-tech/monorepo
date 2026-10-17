@@ -2030,6 +2030,119 @@ for var in GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR; do
     "$([[ -z "$(env "$var=$c95/super/.git" bash -c '. "$1" >/dev/null 2>&1; cd "$2" && shared_object_store sub' _ "$helper" "$c95/super-wt")" ]] && echo yes || echo no)"
 done
 
+# 96. Path spelling. `./sub`, `sub/` and an absolute path naming the same registered submodule all work.
+# A literal-string registration check used to refuse the first and third with exit 1, "not a registered
+# submodule", a false finding about a registered path. A path registered in no spelling is still refused.
+c96="$tmp/c96"
+mk_super "$c96"
+git -C "$c96/super" submodule deinit -q -f sub
+rm -rf "$c96/super/.git/modules/sub"
+out="$(cd "$c96/super" && "$helper" ./sub 2>&1)" && rc=0 || rc=$?
+report "path spelling: './sub' populates the registered submodule" \
+  "$([[ $rc -eq 0 && -f "$c96/super/sub/file.txt" ]] && echo yes || echo no)" "rc=$rc $out"
+out="$(cd "$c96/super" && "$helper" "$(abspath "$c96/super")/sub" 2>&1)" && rc=0 || rc=$?
+report "path spelling: an absolute path inside the superproject is accepted" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+out="$(cd "$c96/super" && "$helper" sub/ 2>&1)" && rc=0 || rc=$?
+report "path spelling: a trailing slash is accepted" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+out="$(cd "$c96/super" && "$helper" ./not-a-submodule 2>&1)" && rc=0 || rc=$?
+report "path spelling: a path registered in no spelling is still refused (negative control)" \
+  "$([[ $rc -eq 1 ]] && echo yes || echo no)" "rc=$rc $out"
+# The same absolute path reached through a symlinked alias of the superproject root names the same
+# submodule; only its parent is spelled differently from the physical root.
+ln -s "$c96/super" "$c96/alias"
+out="$(cd "$c96/super" && "$helper" "$c96/alias/sub" 2>&1)" && rc=0 || rc=$?
+report "path spelling: an absolute path through a symlinked alias of the root is accepted" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+out="$(cd "$c96/super" && "$helper" "$c96/alias/not-a-submodule" 2>&1)" && rc=0 || rc=$?
+report "path spelling: an unregistered path through the alias is still refused (negative control)" \
+  "$([[ $rc -eq 1 ]] && echo yes || echo no)" "rc=$rc $out"
+
+# 96b. A registered path with a `..` component passes the literal registration check, and joined onto a
+# linked worktree's module directory it names a directory outside `modules`, which the interrupted-populate
+# cleanup would delete. It is refused (exit 1) before anything is touched; the directory it names survives.
+c96b="$tmp/c96b"
+mk_super "$c96b"
+git -C "$c96b/super" config -f .gitmodules submodule.escape.path 'x/../../escape'
+git -C "$c96b/super" config -f .gitmodules submodule.escape.url ../remote-sub
+git -C "$c96b/super" commit -q -am "register an escaping path"
+git -C "$c96b/super" worktree add -q "$c96b/super-wt" -b wt
+c96b_gitdir="$(git -C "$c96b/super-wt" rev-parse --path-format=absolute --git-dir)"
+mkdir -p "$c96b_gitdir/escape"
+out="$(cd "$c96b/super-wt" && "$helper" 'x/../../escape' 2>&1)" && rc=0 || rc=$?
+report "path safety: a registered path with a '..' component is refused (exit 1) and nothing outside modules is removed" \
+  "$([[ $rc -eq 1 && "$out" == *"'..' component"* && -d "$c96b_gitdir/escape" ]] && echo yes || echo no)" "rc=$rc $out"
+
+# 97. An interrupted populate can leave a module directory with no HEAD (a SIGTERM leaves it empty). In a
+# LINKED worktree that directory is this worktree's own, so the next populate clears it and completes; a
+# retry is not blocked by a leftover git cannot resume. The same leftover in the MAIN checkout is the
+# SHARED store, which is never cleared: the populate refuses with UNKNOWN (2) and leaves it in place.
+c97="$tmp/c97"
+mk_super "$c97"
+git -C "$c97/super" worktree add -q "$c97/super-wt" -b wt
+c97_gitdir="$(git -C "$c97/super-wt" rev-parse --path-format=absolute --git-dir)"
+mkdir -p "$c97_gitdir/modules/sub"
+out="$(cd "$c97/super-wt" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "incomplete module: a linked worktree clears its own module directory without a HEAD and populates" \
+  "$([[ $rc -eq 0 && -f "$c97/super-wt/sub/file.txt" && -f "$c97_gitdir/modules/sub/HEAD" ]] && echo yes || echo no)" "rc=$rc $out"
+c97m="$tmp/c97m"
+mk_super "$c97m"
+git -C "$c97m/super" submodule deinit -q -f sub
+rm -rf "$c97m/super/.git/modules/sub"
+mkdir -p "$c97m/super/.git/modules/sub"
+out="$(cd "$c97m/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "incomplete module: the main checkout's shared store is never cleared (UNKNOWN, exit 2, directory kept)" \
+  "$([[ $rc -eq 2 && -d "$c97m/super/.git/modules/sub" ]] && echo yes || echo no)" "rc=$rc $out"
+
+# 97b. Git names a module directory after the submodule's NAME, which can differ from its path. The leftover
+# an interrupted populate left under that name is the one cleared; looking under the path found nothing and
+# git then failed on every retry.
+c97n="$tmp/c97n"
+mkdir -p "$c97n"
+git init -q "$c97n/remote-sub"
+git -C "$c97n/remote-sub" commit -q --allow-empty -m init
+echo seed >"$c97n/remote-sub/file.txt"
+git -C "$c97n/remote-sub" add file.txt
+git -C "$c97n/remote-sub" commit -q -m seed
+git init -q "$c97n/super"
+git -C "$c97n/super" commit -q --allow-empty -m init
+(cd "$c97n/super" && git submodule add -q --name modsub ../remote-sub sub && git commit -q -m "add sub")
+git -C "$c97n/super" worktree add -q "$c97n/super-wt" -b wt
+c97n_gitdir="$(git -C "$c97n/super-wt" rev-parse --path-format=absolute --git-dir)"
+mkdir -p "$c97n_gitdir/modules/modsub"
+out="$(cd "$c97n/super-wt" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "incomplete module: the leftover is found by the submodule's name when it differs from its path" \
+  "$([[ $rc -eq 0 && -f "$c97n/super-wt/sub/file.txt" && -f "$c97n_gitdir/modules/modsub/HEAD" ]] && echo yes || echo no)" "rc=$rc $out"
+
+# 98. A populated checkout with tracked files missing (an interrupted checkout keeps `.git` and a partial
+# tree) is NOT reported populated. Before, the non-empty `.git` skipped every content check and isolation
+# alone passed it. Restoring the missing files clears the refusal.
+c98="$tmp/c98"
+mk_super "$c98"
+out="$(cd "$c98/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "missing files: a complete populated checkout is accepted (control)" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+rm -f "$c98/super/sub/file.txt"
+out="$(cd "$c98/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "missing files: a populated checkout with tracked files missing is refused (exit 1)" \
+  "$([[ $rc -eq 1 && "$out" == *"tracked file(s) are missing"* ]] && echo yes || echo no)" "rc=$rc $out"
+git -C "$c98/super/sub" checkout -q -- file.txt
+out="$(cd "$c98/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "missing files: restoring the missing file clears the refusal" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+
+# 99. A populate git cannot complete (here the registered remote does not exist) exits UNKNOWN (2) with
+# this script's own line and repairs nothing. Before, git's raw status (128) ended the run without a line.
+c99="$tmp/c99"
+mk_super "$c99"
+git -C "$c99/super" submodule deinit -q -f sub
+rm -rf "$c99/super/.git/modules/sub"
+git -C "$c99/super" config submodule.sub.url "$c99/does-not-exist"
+out="$(cd "$c99/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "populate failure: a git failure exits UNKNOWN (2) with the script's own message" \
+  "$([[ $rc -eq 2 && "$out" == *"git could not populate 'sub'"* ]] && echo yes || echo no)" "rc=$rc $out"
+
 test_run_finished=1
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2

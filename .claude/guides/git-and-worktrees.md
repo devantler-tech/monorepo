@@ -154,6 +154,32 @@ Go build cache.
 Measured 2026-09-30: about 90 per-run caches under `/private/tmp`, 6–12 GB each for a full product
 build, filled the host twice in two days (#3706).
 
+**Interrupted populates.** `submodule-init.sh <path>` finishes what an interrupted run left in this
+worktree's own module directory, and refuses what it cannot judge. A module directory with no `HEAD`
+under a linked worktree (a SIGTERM leaves it empty) is cleared and populated again. The main checkout's
+shared store is never cleared, and an incomplete one there exits UNKNOWN (2). A checkout that keeps its
+`.git` link but is missing tracked files exits 1: list them with `git -C <path> ls-files --deleted` and
+restore each with `git -C <path> checkout -- <file>`. A `.git` link whose module directory is gone exits 2:
+inspect `<path>/.git` and that module directory before removing either.
+
+**Guard refusals.** The isolation guard is a runtime check outside this repository. It judges each Bash
+call by its text, not by what the script runs, so a call that names git in a complex form or leaves the
+worktree is refused even when the work is read-only (monorepo#4262). Shapes refused in a worker session on
+2026-10-17, with the form that passes:
+
+| Refused shape | Passing equivalent |
+|---|---|
+| `cd <shared checkout> && …`, even when the rest is a plain `ls` | stay in the worktree; use a path under it, or `git -C <worktree path>` |
+| `git --git-dir=<shared checkout>/.git/modules/<name> …` | `git -C <worktree>/<path> …`, or `submodule-init.sh --check` |
+| A `for`/`if` loop, or a `;`/`&&` chain, that names git or a `.git/` path | one plain command per step, or a script under `.claude/scripts/` |
+| A pipeline followed by `echo "exit=${PIPESTATUS[0]}"` or `${?}` | run the command alone and read its exit status from the result |
+| `grep -E` with alternation whose pattern contains the word `git` | a plain `grep` without alternation, or a separate `grep` per term |
+
+Still allowed: one `ls`, `grep -rn` or `sed -n` of a path under the shared checkout's `.git/modules`,
+which names no git invocation; a single `git -C <worktree path> …`; and `submodule-init.sh`, whose git reads
+run in its own process. Do not work around a refusal by rewording the command. Stop, use the passing form,
+and report the refusal.
+
 ## Git safety
 Never `git reset --hard`, `git stash`, force-push, or discard changes you did not author. Never
 `git add -A` / `git add .` — stage only files you edited. Never stage submodule-pointer bumps unless
