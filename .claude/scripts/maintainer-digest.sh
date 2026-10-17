@@ -26,7 +26,7 @@
 #     Check a digest file: its four sections in order, the note that a reply posts publicly, and no
 #     private-content marker. A finding names the file, the line and the kind, never the text found.
 #
-# What an ask may put in the digest. Anyone can open an issue through the ask form, so only asks the
+# What an ask may put in the digest. Anyone can open an issue that looks like an ask, so only asks the
 # maintainer's own account filed are shown; another account's ask is named by its number only. An
 # ask whose text shows a private-content marker is listed with its text held back. An @mention is
 # shown as code, so a digest never notifies anyone again.

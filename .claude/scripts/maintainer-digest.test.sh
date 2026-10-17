@@ -598,15 +598,20 @@ run "${urgent_args[@]}"
 expect_rc 1 "an assignment GitHub did not record is a finding"
 expect_in "$tmp/err" "NOT-ASSIGNED #42" "the missing assignment is reported"
 
-echo "workflows and the ask form"
+echo "workflows, and the organization's shared issue forms"
 wf="$root/.github/workflows"
 digest_wf="$wf/maintainer-digest.yaml"
 urgent_wf="$wf/maintainer-ask-urgent.yaml"
-form="$root/.github/ISSUE_TEMPLATE/maintainer-ask.yaml"
 as_json() { yq -o=json '.' "$1"; }
 as_json "$urgent_wf" >"$tmp/urgent-wf.json"
 as_json "$digest_wf" >"$tmp/digest-wf.json"
-as_json "$form" >"$tmp/form.json"
+# GitHub shows the organization's shared issue forms only in a repository with no issue templates of
+# its own, so one local form would hide all of them. Asks are filed through the API, so none is needed.
+if [ -e "$root/.github/ISSUE_TEMPLATE" ]; then
+  bad "a local .github/ISSUE_TEMPLATE would hide the organization's shared issue forms"
+else
+  pass "the repository keeps the organization's shared issue forms"
+fi
 expect_json() {
   local actual
   actual="$(jq -c "$2" "$1")"
@@ -630,11 +635,6 @@ done
 for f in "$digest_wf" "$urgent_wf"; do
   expect_not_in "$f" "secrets." "$(basename "$f"): only the workflow's own token is used"
 done
-expect_json "$tmp/form.json" '.title' '"🙋 Ask: "' "the ask form titles an ask"
-expect_json "$tmp/form.json" '.labels' '["maintainer-ask"]' "the ask form labels an ask, and never urgent"
-expect_json "$tmp/form.json" '[.body[] | select(.type == "textarea") | .attributes.label]' \
-  '["Question","Options","Recommendation","If unanswered"]' "the ask form has the four sections in order"
-
 if [ "$fails" -ne 0 ]; then
   echo "maintainer-digest.test.sh: $fails assertion(s) failed" >&2
   exit 1

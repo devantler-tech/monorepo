@@ -399,7 +399,7 @@ jobs:
               - 'docs/digests/**'
               - '.github/workflows/maintainer-digest.yaml'
               - '.github/workflows/maintainer-ask-urgent.yaml'
-              - '.github/ISSUE_TEMPLATE/maintainer-ask.yaml'
+              - '.github/ISSUE_TEMPLATE/**'
               - '.github/workflows/ci.yaml'
             comment-disclosure-drift:
               # AGENTS.md carries the disclosure contract this guard enforces, so a
