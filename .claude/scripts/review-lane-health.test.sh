@@ -166,8 +166,10 @@ full="$(body)" || { echo "stub gh: unexpected $*" >&2; exit 1; }
 link=""
 if [ -n "$page" ]; then # a list: serve one page of 100, and link the next one while there is more
   [[ "$path" == *"per_page=100"* ]] || { echo "stub gh: lists are read 100 a page: $path" >&2; exit 1; }
-  out="$(jq -c --argjson p "$page" '.[($p - 1) * 100:$p * 100]' <<<"$full")"
-  [ -z "${NO_LINK:-}" ] && [ "$(jq --argjson p "$page" 'length > $p * 100' <<<"$full")" = true ] &&
+  # PAGE_SIZE stands for a server that serves fewer than the 100 asked for and links the rest.
+  size="${PAGE_SIZE:-100}"
+  out="$(jq -c --argjson p "$page" --argjson s "$size" '.[($p - 1) * $s:$p * $s]' <<<"$full")"
+  [ -z "${NO_LINK:-}" ] && [ "$(jq --argjson p "$page" --argjson s "$size" 'length > $p * $s' <<<"$full")" = true ] &&
     link="Link: <https://api.github.invalid/${base}?per_page=100&page=$((page + 1))>; rel=\"next\""
 else
   out="$full"
@@ -435,6 +437,10 @@ same_as_cold "304 for another tag"
 PAD=95 fresh --cache-dir "$tmp/cond-pages"
 [ "$(reads "200 full repos/o/r/issues/7/comments?per_page=100&page=2")" -eq 1 ] || { cat "$GH_LOG" >&2; fail "page 2 must be read"; }
 same_as_cold "two pages"
+# A page shorter than asked for that still links a next one is followed too.
+PAGE_SIZE=50 PAD=95 fresh --cache-dir "$tmp/cond-short"
+[ "$(reads "200 full repos/o/r/issues/7/comments?per_page=100&page=3")" -eq 1 ] || { cat "$GH_LOG" >&2; fail "a linked next page must be read"; }
+same_as_cold "linked short pages"
 # Exactly 100 comments: page 2 is empty and nothing links it. A comment added later lands on page 2
 # while page 1 is answered 304 with its old links, so a full page must always read the next one.
 NO_LINK=1 PAD=90 fresh --cache-dir "$tmp/cond-full"
