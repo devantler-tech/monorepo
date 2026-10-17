@@ -16,6 +16,9 @@ NEVER_CLEAN_BUDGET=1000000
 # Every case but 25 keeps the Codex transcript step off, so the suite never reads or removes
 # the real ~/.codex of the machine running it.
 export BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPTS=off
+# Every case but 26 keeps the Codex worktree root off too, so no apply run can reach a real cache
+# beside the machine's own Codex worktrees.
+export BUILD_CACHE_RECLAIM_CODEX_WORKTREES=off
 
 failures=0
 fail() {
@@ -2324,6 +2327,126 @@ BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPTS=on CODEX_TRANSCRIPT_RETENTION_HOME="$c_hom
 rc=$?
 [ "$rc" -eq 2 ] || fail "25: an unreadable open-file list in the transcript step exited ${rc}, not 2"
 [ -e "$c_old" ] || fail '25: a transcript was removed although the open-file list failed'
+
+# --- 26. caches beside Codex app worktrees are swept too (monorepo#4248) ----------------------
+# The Codex app puts each task's worktree at <root>/<id>/<repo>, and a cache a run left beside it, at
+# <root>/<id>/<cache>, held 5.1 GB on 2026-10-16 that neither this sweep nor the Codex sweep reached.
+# The idle marked cache is the one reap. Each partner differs from it in one dimension and is KEPT: a
+# recent write, no marker, a `.git` entry (a registered worktree that even carries the marker), a task
+# dir that is itself a checkout, and a live holder outside the temp root, which only the host-wide
+# open-file snapshot can see. A worktree whose git registration is gone is reported and kept.
+cx_tmp="${fixture_root}/cx-tmp"
+cx_go_tmp="${fixture_root}/cx-go-tmp"
+cx_root="${fixture_root}/cx-worktrees"
+cx_live_gitdir="${fixture_root}/cx-gitdirs/live"
+mkdir -p "$cx_tmp" "$cx_go_tmp" "$cx_root" "$cx_live_gitdir" || fail 'fixture: 26 roots'
+# make_cx_cache <dir> <marker-text> <idle-hours> [<gitdir>] builds a Go-cache-shaped dir whose every
+# entry, including the optional `.git` link to <gitdir>, was last written <idle-hours> ago.
+make_cx_cache() {
+  mkdir -p "$1/00" || return 1
+  printf 'entry\n' > "$1/00/a1-d"
+  [ -z "$2" ] || printf '%s\nRun "go clean -cache" if the directory is getting too large.\n' "$2" \
+    > "$1/README"
+  [ -z "${4:-}" ] || printf 'gitdir: %s\n' "$4" > "$1/.git"
+  age_path "$1/00/a1-d" "$3" && age_path "$1/00" "$3" || return 1
+  [ -z "$2" ] || age_path "$1/README" "$3" || return 1
+  [ -z "${4:-}" ] || age_path "$1/.git" "$3" || return 1
+  age_path "$1" "$3"
+}
+run_cx() {
+  BUILD_CACHE_RECLAIM_TMPDIR="$cx_tmp" BUILD_CACHE_RECLAIM_GO_TMPDIR="$cx_go_tmp" \
+    BUILD_CACHE_RECLAIM_CODEX_WORKTREES="${CX_ROOT:-$cx_root}" \
+    GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" PATH="${quiet_ps}:$PATH" \
+    bash "$impl" "$@" 2>&1
+}
+cx_idle="${cx_root}/a1/go-build-cache"
+cx_fresh="${cx_root}/a2/go-build-cache"
+cx_plain="${cx_root}/a3/notes"
+cx_wt="${cx_root}/a4/monorepo"
+cx_orphan="${cx_root}/a5/business-site"
+cx_inner="${cx_root}/a6/inner-cache"
+cx_held="${cx_root}/a7/go-build-cache"
+make_cx_cache "$cx_idle" "$go_marker" 7 || fail 'fixture: 26 idle cache'
+make_cx_cache "$cx_fresh" "$go_marker" 7 || fail 'fixture: 26 fresh cache'
+printf 'entry\n' > "${cx_fresh}/00/b2-d"
+make_cx_cache "$cx_plain" '' 7 || fail 'fixture: 26 unmarked dir'
+make_cx_cache "$cx_wt" "$go_marker" 7 "$cx_live_gitdir" || fail 'fixture: 26 registered worktree'
+make_cx_cache "$cx_orphan" '' 7 "${fixture_root}/cx-gitdirs/gone" || fail 'fixture: 26 orphaned worktree'
+make_cx_cache "$cx_inner" "$go_marker" 7 || fail 'fixture: 26 cache inside a checkout'
+printf 'gitdir: %s\n' "$cx_live_gitdir" > "${cx_root}/a6/.git"
+make_cx_cache "$cx_held" "$go_marker" 7 || fail 'fixture: 26 held cache'
+
+/bin/sh -c "exec 9<'${cx_held}/00/a1-d'; sleep 30" &
+cx_holder=$!
+sleep 1
+kill -0 "$cx_holder" 2>/dev/null ||
+  fail 'fixture: 26 holder did not stay alive; the liveness case is not exercised'
+out=$(run_cx dry-run 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+# A root spelled with a trailing slash lists the same caches under another spelling; the held one
+# must still be asked about host-wide.
+slash_out=$(CX_ROOT="${cx_root}/" run_cx dry-run 3 "$NEVER_CLEAN_BUDGET")
+kill "$cx_holder" 2>/dev/null
+wait "$cx_holder" 2>/dev/null
+grep 'WOULD REAP' <<<"$slash_out" | grep -qF 'a7/go-build-cache' &&
+  fail '26: a held Codex-root cache was selected when the root was spelled with a trailing slash'
+grep 'WOULD REAP' <<<"$slash_out" | grep -qF 'a1/go-build-cache' ||
+  fail '26: a root spelled with a trailing slash selected nothing (the ablation partner did not run)'
+[ "$rc" -eq 0 ] || fail "26: a readable Codex worktree root exited ${rc}, not 0: $(grep UNKNOWN <<<"$out")"
+said "$out" "$cx_idle" 'WOULD REAP' || fail '26: an idle Go cache beside a Codex worktree was not selected'
+said "$out" "$cx_fresh" 'KEEP  (written within 6h)' ||
+  fail '26: a recently written Go cache beside a Codex worktree was not kept'
+said "$out" "$cx_held" 'KEEP  (in use)' ||
+  fail '26: a Codex-root cache held open was not kept (the liveness check read only the temp root)'
+said "$out" "$cx_orphan" 'ORPHAN (git registration gone; never removed)' ||
+  fail '26: a worktree whose git registration is gone was not reported'
+grep -qF "$cx_plain" <<<"$out" && fail '26: a directory without a cache marker was considered'
+grep -qF "$cx_wt" <<<"$out" && fail '26: a registered worktree was considered, though it carries a cache marker'
+grep -qF "$cx_inner" <<<"$out" && fail '26: a directory inside a task dir that is a checkout was considered'
+[ -e "${cx_idle}/00/a1-d" ] || fail '26: dry-run deleted a Codex-root cache'
+
+out=$(CX_ROOT=off run_cx dry-run 3 "$NEVER_CLEAN_BUDGET")
+grep -qF "$cx_root" <<<"$out" && fail '26: BUILD_CACHE_RECLAIM_CODEX_WORKTREES=off still swept the Codex root'
+out=$(CX_ROOT="${fixture_root}/cx-absent" run_cx dry-run 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 0 ] || fail "26: a host without Codex worktrees exited ${rc}, not 0"
+out=$(CX_ROOT=relative/worktrees run_cx dry-run 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "26: a relative Codex worktree root exited ${rc}, not 2 (UNKNOWN)"
+grep -qF "UNKNOWN (Codex worktree root 'relative/worktrees' is not absolute)" <<<"$out" ||
+  fail '26: a relative Codex worktree root was not reported UNKNOWN'
+
+out=$(run_cx apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$cx_idle" ] && fail "26: apply did not reap an idle Go cache beside a Codex worktree: $cx_idle"
+[ -e "$cx_fresh" ] || fail '26: apply reaped a recently written Codex-root cache'
+[ -e "$cx_plain" ] || fail '26: apply reaped a directory without a cache marker'
+[ -e "${cx_wt}/.git" ] || fail '26: apply touched a registered Codex worktree'
+[ -e "${cx_orphan}/.git" ] || fail '26: apply removed a worktree whose git registration is gone'
+[ -e "$cx_inner" ] || fail '26: apply reaped a directory inside a task dir that is a checkout'
+
+# An unreadable `.git` link cannot say whether the worktree is registered: UNKNOWN, never removed.
+mkdir -p "${cx_root}/a8/broken" || fail 'fixture: 26 broken link'
+: > "${cx_root}/a8/broken/.git"
+out=$(run_cx apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "26: an unreadable worktree link exited ${rc}, not 2 (UNKNOWN)"
+said "$out" "${cx_root}/a8/broken" 'UNKNOWN (worktree link unreadable, never removed)' ||
+  fail '26: an unreadable worktree link was not reported UNKNOWN'
+[ -e "${cx_root}/a8/broken/.git" ] || fail '26: a worktree with an unreadable link was removed'
+rm -rf -- "${cx_root}/a8"
+
+# A task dir that cannot be listed makes the whole root UNKNOWN, never a sweep of what was readable.
+mkdir -p "${cx_root}/a9/sub" || fail 'fixture: 26 unlistable task dir'
+make_cx_cache "$cx_idle" "$go_marker" 7 || fail 'fixture: 26 idle cache again'
+chmod 000 "${cx_root}/a9"
+out=$(run_cx apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+chmod 755 "${cx_root}/a9"
+[ "$rc" -eq 2 ] || fail "26: an unlistable Codex worktree root exited ${rc}, not 2 (UNKNOWN)"
+grep -qF "UNKNOWN (scan failed) ${cx_root}: Codex worktree caches not examined" <<<"$out" ||
+  fail '26: an unlistable Codex worktree root was not reported UNKNOWN'
+[ -e "$cx_idle" ] || fail '26: a cache was reaped from a root that could not be fully listed'
+rm -rf -- "$cx_root" "$cx_tmp" "$cx_go_tmp" "${fixture_root}/cx-gitdirs"
 
 reclaim_test_finished=1
 if [ "$failures" -eq 0 ]; then
