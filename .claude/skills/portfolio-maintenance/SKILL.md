@@ -1066,8 +1066,8 @@ For each selected product:
    coverage, perf, refactor procedures).
 3. **Validate before any PR** (the card's command — build + tests; add/extend tests for behaviour
    changes). **Keep verbose output out of your context:** tee build/test/lint output to a file and
-   surface only the summary + failing lines (e.g. `<cmd> 2>&1 | tee /tmp/val.log | tail -n 40`, then
-   `grep -nE 'FAIL|error|Error|warning' /tmp/val.log`); read more from the file only when a failure
+   surface only the summary + failing lines (e.g. `<cmd> 2>&1 | tee <scratch>/<token>-val.log | tail -n 40`, then
+   `grep -nE 'FAIL|error|Error|warning' <scratch>/<token>-val.log`); read more from the file only when a failure
    needs it. For **read-heavy investigation** (locating code across many files or understanding a
    subsystem before changing it), delegate to a subagent (the built-in **`Explore`** type) that
    returns just the conclusion — keep the edits and `gh pr create` in your own loop. **Self-review the
