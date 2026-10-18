@@ -70,8 +70,8 @@ digest_sections=("Needs you" "What shipped" "What's in progress" "How to reply")
 
 # Private-content markers: what the template's "Never include" list forbids, in a form a line can
 # match. Each kind has its grep flags and an extended regular expression.
-private_kinds=(ip-address ipv6-address email-address phone-number money credential private-hostname spend-heading)
-private_flags=(-E -E -E -E -iE -E -iE -iE)
+private_kinds=(ip-address ipv6-address email-address phone-number money credential credential-assignment private-hostname spend-heading spend-wording)
+private_flags=(-E -E -E -E -iE -E -iE -iE -iE -iE)
 private_patterns=(
   '(^|[^0-9.])([0-9]{1,3}\.){3}[0-9]{1,3}([^0-9]|$)'
   # Eight full groups, or any "::" compressed form: groups on either side of the "::", or none.
@@ -81,9 +81,17 @@ private_patterns=(
   '(tel:|\+[0-9]{1,3}[ .-]?[0-9]{2,4}([ .-]?[0-9]{2,4}){2,})'
   '(\$|€|£) ?[0-9]|[0-9][0-9.,]* ?(kr|dkk|eur|usd|gbp|sek|nok|kroner|dollars?|euros?)([^a-z]|$)'
   '(^|[^A-Za-z0-9])(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,})|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+  # A secret, token, password or API key written as an assignment, the form agent-telemetry.sh redacts.
+  '(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,}'
   '[A-Za-z0-9-]\.(internal|local|localdomain|lan|intranet|corp|home\.arpa|ts\.net)([^A-Za-z0-9-]|$)'
   '^#{1,6}[[:space:]].*(spend|money|costs?|invoice|billing|savings?)'
+  # Spend findings belong in the private digest, so spend wording in ordinary prose is refused too. This
+  # list is a backstop for a digest the agent writes from the template, not the guarantee.
+  '(^|[^a-z])(spend(ing|s)?|invoices?|billing|budgets?|expenses?|savings?)([^a-z]|$)'
 )
+# The template's own "Never include" line names spend findings to forbid them. Only that exact, fixed
+# line is left out of the scan: it carries no data, and any other wording is still scanned.
+template_rule_line="- spend findings, prices, money amounts or invoices: they wait for the private Money digest;"
 
 found=0
 finding() {
@@ -180,9 +188,12 @@ matching_lines() {
 # when there is none, 1 when there is one and 2 when the file cannot be read.
 scan_private() {
   local i=0 rc lines line any=0
+  # Blanks the template's rule line in a copy, so line numbers still match the file.
+  awk -v rule="$template_rule_line" '{ l = $0; sub(/\r$/, "", l); print (l == rule ? "" : $0) }' "$1" >"$tmp/scan.txt" ||
+    return 2
   while [ "$i" -lt "${#private_kinds[@]}" ]; do
     rc=0
-    lines="$(matching_lines "${private_flags[$i]}" "${private_patterns[$i]}" "$1")" || rc=$?
+    lines="$(matching_lines "${private_flags[$i]}" "${private_patterns[$i]}" "$tmp/scan.txt")" || rc=$?
     case "$rc" in
       0)
         while IFS= read -r line; do
@@ -318,10 +329,11 @@ check_file() {
       { sub(/\r$/, ""); sub(/[ \t]+$/, "") }
       # Only the How to reply section counts: the next level-two heading ends it.
       seen && /^## / && $0 != h { seen = 0 }
-      seen && index($0, "Your reply posts publicly") == 1 { ok = 1 }
+      # The whole canonical line, so a continuation such as "? No, it stays private" never passes.
+      seen && $0 ~ /^Your reply posts publicly, as a comment on this issue in the public [A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+ repository\.$/ { ok = 1 }
       $0 == h { seen = 1 }
       END { exit ok ? 0 : 1 }' "$f"; then
-    finding "$f: reply-note: How to reply has no line starting \"Your reply posts publicly\""
+    finding "$f: reply-note: How to reply lacks the line \"Your reply posts publicly, as a comment on this issue in the public OWNER/REPO repository.\""
     bad=1
   fi
   rc=0
@@ -523,6 +535,13 @@ cmd_urgent() {
     unknown "an unexpected response for #$issue"
   if jq -e 'has("pull_request")' "$tmp/issue.json" >/dev/null; then
     finding "REFUSED #$issue: a pull request is not an ask"
+    finish 1
+  fi
+  # Only one of his own asks may be assigned, the same rule fetch_asks applies: a mistagged issue, or
+  # one another account wrote, would otherwise be emailed to him and spend a daily urgent slot.
+  if ! jq -e --arg who "$maintainer" --arg l "$ask_label" '.user.login == $who and any(.labels[]?; .name == $l)' \
+    "$tmp/issue.json" >/dev/null; then
+    finding "REFUSED #$issue: only an ask the maintainer wrote, labelled $ask_label, may be marked urgent"
     finish 1
   fi
   if ! jq -e '.state == "open"' "$tmp/issue.json" >/dev/null; then

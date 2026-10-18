@@ -204,7 +204,7 @@ rest_of_week_file() {
 ## How to reply
 
 Reply to this email with an ask's number and your choice, for example `1: B`.
-Your reply posts publicly, as a comment on this issue.
+Your reply posts publicly, as a comment on this issue in the public devantler-tech/monorepo repository.
 MD
 }
 
@@ -499,9 +499,18 @@ email-address|Write to $(printf '%s@%s' someone example.invalid) for access.
 phone-number|Call $(printf '+%s %s' 45 '00 00 00 00') when it breaks.
 money|The cluster costs $(printf '%s %s' 120 kr) a month.
 credential|The token is ${token}.
+credential-assignment|Set token=$(printf '%s%s' supersecret value) in the config.
 private-hostname|It runs on $(printf '%s.%s' build internal) now.
 spend-heading|## Money
+spend-wording|Cloud spend increased substantially after the migration.
 EOF
+
+# Only the template's exact rule line is left out of the scan; the same line with anything added is not.
+{ sed -n '/^---$/,$p' "$template" | sed '1d'
+  printf '%s\n' "- spend findings, prices, money amounts or invoices: they wait for the private Money digest; spend rose." ; } >"$tmp/rule-plus.md"
+run check "$tmp/rule-plus.md"
+expect_rc 1 "the template's rule line with words added is still scanned"
+expect_in "$tmp/err" "private-content: spend-wording" "the added spend wording is named"
 
 echo "check: the digest's shape"
 sed -n '/^---$/,$p' "$template" | sed '1d' >"$tmp/shape.md"
@@ -524,6 +533,10 @@ sed 's/^Your reply posts publicly/Your reply does not post publicly/' "$tmp/shap
 run check "$tmp/negated-note.md"
 expect_rc 1 "a reply note that denies it posts publicly is caught"
 expect_in "$tmp/err" "reply-note" "the negated note is named"
+sed 's/^Your reply posts publicly.*/Your reply posts publicly? No, your response stays private./' "$tmp/shape.md" >"$tmp/continued-note.md"
+run check "$tmp/continued-note.md"
+expect_rc 1 "a reply note that continues the prefix into a denial is caught"
+expect_in "$tmp/err" "reply-note" "the continued note is named"
 { sed 's/^Your reply posts publicly/Your reply does not post publicly/' "$tmp/shape.md"
   printf '\n## Footnotes\n\nYour reply posts publicly, but only here.\n'; } >"$tmp/late-note.md"
 run check "$tmp/late-note.md"
@@ -552,11 +565,13 @@ echo "urgent"
 # Ask #42 with the given assignees and labels (by default unassigned, with both ask labels).
 urgent_case() {
   local assignees='[]' labels='[{"name": "maintainer-ask"}, {"name": "maintainer-ask-urgent"}]'
+  local author=devantler
   if [ "$#" -ge 1 ]; then assignees=$1; fi
   if [ "$#" -ge 2 ]; then labels=$2; fi
+  if [ "$#" -ge 3 ]; then author=$3; fi
   reset_case
-  jq -n --argjson assignees "$assignees" --argjson labels "$labels" \
-    '{number: 42, state: "open", labels: $labels, assignees: $assignees}' | fixture GET "$api/issues/42"
+  jq -n --argjson assignees "$assignees" --argjson labels "$labels" --arg author "$author" \
+    '{number: 42, state: "open", user: {login: $author}, labels: $labels, assignees: $assignees}' | fixture GET "$api/issues/42"
   jq -n '[{number: 42}, {number: 43}]' | fixture GET "$api/issues?state=all&labels=maintainer-ask-urgent&since=2026-10-19T00:00:00Z&per_page=100"
   # #42 carries both labels, so it is listed twice and must be counted once.
   jq -n '[{number: 42}]' | fixture GET "$api/issues?state=all&labels=maintainer-ask&since=2026-10-19T00:00:00Z&per_page=100"
@@ -622,6 +637,18 @@ if [ "$(grep -E '^(POST|DELETE) ' "$GH_STUB_LOG" | cut -d' ' -f1 | tr '\n' ' ')"
 else
   bad "the writes were: $(grep -E '^(POST|DELETE) ' "$GH_STUB_LOG")"
 fi
+
+urgent_case '[]' '[{"name": "maintainer-ask"}, {"name": "maintainer-ask-urgent"}]' someone-else
+run "${urgent_args[@]}"
+expect_rc 1 "an urgent label on an issue another account wrote is refused"
+expect_in "$tmp/err" "only an ask the maintainer wrote" "the refusal names the untrusted author"
+expect_no_writes "an untrusted issue is not assigned"
+
+urgent_case '[]' '[{"name": "maintainer-ask-urgent"}]'
+run "${urgent_args[@]}"
+expect_rc 1 "an urgent label on an issue that is not an ask is refused"
+expect_in "$tmp/err" "only an ask the maintainer wrote" "the refusal names the missing ask label"
+expect_no_writes "a mistagged issue is not assigned"
 
 urgent_case '[]' '[{"name": "maintainer-ask"}]'
 run "${urgent_args[@]}"
