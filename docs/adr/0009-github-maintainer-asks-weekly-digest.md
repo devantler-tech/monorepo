@@ -41,80 +41,58 @@ Four facts about GitHub shape the first phase:
 
 ## Decision
 
-Two phases. The first gives him the weekly email now, with what can be public. The second adds a
-**self-hosted mail service on the platform** for what must stay private, starting with the spend
-findings.
+Two phases. The first gives him the weekly email now, carrying only what can be public. The second
+adds a **self-hosted mail service on the platform** for what must stay private, starting with the
+spend findings. This record fixes the channel, the phases, the public boundary and how a reply
+becomes an instruction. How the workflows, labels and agent runs carry it out is implementation,
+specified and tested in [#4285](https://github.com/devantler-tech/monorepo/issues/4285).
 
-### Phase 1 — the weekly digest, from this repository
+### Phase 1 — a weekly digest issue in this repository
 
-- **The Agentic Engineer writes it.** Its first run each Monday commits
-  `docs/digests/<ISO year>-W<week>.md` to this repository, using
-  `docs/digests/TEMPLATE.md`, through an ordinary reviewed pull request.
-- **A workflow sends it.** `maintainer-digest.yaml` runs every Monday at 06:17 UTC, which is 07:17
-  or 08:17 in Denmark, off the top of the hour when GitHub most often delays or drops scheduled
-  runs. It has `contents: read` and `issues: write` only, with `GITHUB_TOKEN`, and opens that week's
-  file as an issue titled `🙋 Maintainer digest — week <n>`, labelled `maintainer-digest` and
-  **assigned to `devantler` by `github-actions[bot]`**. Because a different identity opens the issue
-  and assigns him, GitHub emails him the whole body, provided his notification settings email him
-  about assignments. That setting is a prerequisite of Phase 1: before the first digest relies on
-  it, a test issue assigned by `github-actions[bot]` must arrive in his inbox. Last week's digest is
-  closed.
-- **If the file is missing**, the workflow still sends a short digest listing the open asks and
-  saying the summary was not written, so an ask is never held back by a failed run.
-- **What it contains**, in this order:
-  1. **Needs you**: each open ask, numbered, with its question, options, recommendation and default.
-     When there are none, this section says so in one line.
-  2. **What shipped**: the week's merged work, in plain English, grouped by product or area and
-     then by outcome (fixed, improved, new), each line linking its pull request or issue. Improver
-     work has its own heading.
-  3. **What's in progress**, in a few lines, with links.
-  4. **How to reply**, in two lines, including that a reply posts publicly on this repository.
-- **Plain English** means short sentences about what changed for a person, not a list of commit
-  titles. A reader who has not followed the week should understand every line.
-- **Asks** are issues in this repository, labelled `maintainer-ask`, titled
-  `🙋 Ask: <the decision in a few words>`, with four fixed sections (`### Question`, `### Options`
-  lettered `A`, `B`, …, `### Recommendation`, `### If unanswered`). The bar is unchanged: an ask is
-  filed only when he must act and no agent can. It carries only the sanitized minimum.
-- **Urgent asks** reach him at once: a public site or the production cluster unreachable for two
-  consecutive checks, or a sibling-lane `ESCALATE`. A leaked credential only he can rotate is never
-  an ask here, because naming it in a public issue would expose a live incident: until Phase 2
-  exists it goes to him privately through the existing last-resort Slack self-DM. The label
-  `maintainer-ask-urgent` triggers a second workflow that assigns him as `github-actions[bot]`, at
-  most three times a day. The cap is global, so a fault cannot flood his inbox; an urgent ask beyond
-  it stays open and labelled, and is listed first under **Needs you** in the next digest. The
-  sibling-lane watch changes with it: on `ESCALATE` its caller files and labels an urgent ask
-  instead of sending a Slack DM, and records the notification only after both succeed.
+- **Once a week, a digest issue opens here and is assigned to him by `github-actions[bot]`.** A
+  different identity opens it and assigns him, so GitHub emails him the whole body. That his
+  notification settings email him about assignments is a prerequisite, proven by a test email
+  before the first digest relies on it.
+- **The Agentic Engineer writes the digest** through an ordinary reviewed pull request; a workflow
+  only sends it. A missing or failed summary never holds back an open ask.
+- **It contains**, in this order: what needs him (each open ask, with its options, recommendation
+  and default), what shipped (the week's work in plain English, grouped by product, with a link on
+  every line, Improver work under its own heading), what is in progress, and how to reply. Plain
+  English means short sentences about what changed for a person, not a list of commit titles.
+- **Asks are issues in this repository** in one fixed format. The bar is unchanged: an ask is filed
+  only when he must act and no agent can, and it carries only the sanitized minimum.
+- **Urgent asks reach him at once**, rate-limited so that a fault cannot flood his inbox: a public
+  site or the production cluster down, or a sibling lane escalated. One that waits behind the limit
+  is listed first in the next digest.
 
 ### Phase 2 — a self-hosted mail service for private content
 
 The platform runs its own mail service as a platform capability, not as a new repository. Its first
-use is the **private Money digest**: the spend findings, sent from the platform to the maintainer
-and answered by replying. When it goes live, the whole weekly digest moves to it, so he still gets
-one email a week and it is the private channel for spend findings. It can later serve the sites'
-contact forms.
+use is the **private Money digest**: the spend findings, sent to him and answered by replying. When
+it goes live, the whole weekly digest moves to it, so he still gets one email a week, and that email
+is the private channel for spend findings. It can later serve the sites' contact forms.
 
-- **What runs:** a mail server deployed by the platform, for example Stalwart, which offers SMTP,
-  IMAP and JMAP and does its own DKIM signing. It serves a dedicated subdomain with its own MX
-  record, so the main domain's mail stays where it is.
-- **Sending:** it signs mail with DKIM and publishes SPF and DMARC for the subdomain. Hetzner blocks
-  outbound port 25 by default, so the service either sends through an unblocked port, which needs a
-  support request only the maintainer can make, or relays. Sending directly also needs matching
-  forward and reverse DNS (PTR) for the sending address, which large mailbox providers require, and
-  a test message that reaches his inbox before the first digest relies on it. The choice is recorded
-  in that issue.
-- **Receiving:** it accepts mail for its own addresses only, and is never an open relay. A reply
-  counts only under the rule in *How a reply becomes an instruction*.
-- **Who may send:** the service account the agents use may send only to the maintainer's own
-  addresses, enforced by the server.
-- **Credentials:** generated in the cluster and kept in OpenBao. Workloads read them through
-  ExternalSecrets. The agents' host gets its copy through a step the maintainer performs once, and
-  scripts read it from the macOS Keychain at run time. No credential is ever written to a
-  repository, an issue or a log.
+- It serves its own subdomain, so the main domain's mail stays where it is, and signs what it sends
+  so that his mailbox accepts it.
+- It sends only to his own addresses, enforced by the server, and is never an open relay.
+- Its credentials are generated in the cluster and kept in OpenBao, never in a repository, an issue
+  or a log.
+
+The server, the outbound route and their cost are chosen in the platform issue.
+
+### What may be public
+
+Phase 1 lives in a public repository, so a digest or ask there carries asks and links to public work
+only: never spend findings, credentials, internal hostnames, topology or weaknesses. A leaked
+credential only he can rotate is never an ask here, since naming it would expose a live incident;
+until Phase 2 exists it reaches him through the existing last-resort Slack self-DM.
 
 ### How a reply becomes an instruction
 
 - **Phase 1:** GitHub posts his email reply on the digest issue as `devantler`. A `devantler` comment
-  without the leading 🤖 marker is a maintainer instruction under the existing contract.
+  without the leading 🤖 marker is a maintainer instruction under the existing contract. A reply to
+  last week's email lands on last week's issue, so agents read replies on recent digests whether
+  open or closed.
 - **Phase 2:** the platform's mail service keeps his reply, and the agents read it with the service
   account. A reply is an instruction only when it answers a digest by its own unguessable reply
   token, carried in the reply address, and DMARC passes for one of his own addresses. DMARC proves
@@ -127,24 +105,22 @@ contact forms.
 
 ### Continuous improvement
 
-The digest is a product with one user. The Agent Improver reviews it every week: his feedback,
-broken links, items he asked about because they were unclear, its length, and whether it went out
-on time. It improves the template and the writing rules through ordinary reviewed pull requests, and
-the next digest says in one line what changed and why.
+The digest is a product with one user. The Agent Improver reviews it every week, from his feedback,
+broken links, items he asked about because they were unclear, its length and whether it went out on
+time, and improves it through ordinary reviewed pull requests. The next digest says in one line what
+changed and why.
 
 ### Making it unmistakable
 
 A digest comes from `github-actions[bot]` (Phase 1) or from the platform's own mail address
-(Phase 2). Its notification reason is `assign`, and its subject begins with `🙋`. One mail rule
-separates it, for example: *subject contains "🙋 Maintainer" → move to a "Maintainer" mailbox and
-mark as VIP*.
+(Phase 2), and its subject begins with `🙋`. One mail rule separates it, for example: *subject
+contains "🙋 Maintainer" → move to a "Maintainer" mailbox*.
 
 ## Cost
 
 Phase 1 costs nothing: Actions minutes are free on this public repository, and GitHub sends the
-email. Phase 2 runs on the existing cluster, so its cost is a small share of capacity, plus any relay
-if one is chosen. That cost is measured by a cost pass once the relay choice is made, not assumed
-here.
+email. Phase 2 runs on the existing cluster. Its cost, including any outbound relay, is measured by a
+cost pass once that choice is made, not assumed here.
 
 ## Options considered
 
@@ -165,19 +141,19 @@ here.
 - Until Phase 2 is live, spend findings are not produced. The spend contract's private channel then
   resolves to the Money digest, and the decision-producing half of spend stewardship is switched on,
   as he directed. That is recorded with the contract change.
-- Agents read the replies on every digest issue updated since their last run, open or closed,
-  instead of the Slack DM's threads, because a reply to last week's email still lands on that
-  closed issue. The `| asked slack <date>` blocker marker becomes `| asked digest <date>`.
+- Agents read his answers on digest issues instead of in the Slack DM's threads.
 - Asks still open in Slack threads are moved into ask issues before the first digest.
 - Platform alert streams that post to Slack are not maintainer asks and are not changed here. A
   condition from them that needs him becomes an urgent ask.
 
 ## Follow-ups
 
-- [#4285](https://github.com/devantler-tech/monorepo/issues/4285): Phase 1. The labels, the ask
-  format, the template and the two workflows, with a self-test.
+- [#4285](https://github.com/devantler-tech/monorepo/issues/4285): Phase 1, including every
+  mechanic this record leaves to the implementation, with a self-test.
 - [#4286](https://github.com/devantler-tech/monorepo/issues/4286): the contract change.
-- A platform issue for Phase 2's mail service.
+- [devantler-tech/platform#5030](https://github.com/devantler-tech/platform/issues/5030): Phase 2's mail
+  service.
+- [#4279](https://github.com/devantler-tech/monorepo/issues/4279): retiring the Slack DM.
 
 ## References
 
