@@ -86,7 +86,9 @@ private_patterns=(
   # Times such as 06:17:00 have too few groups and no "::", so they never match.
   '(^|[^0-9A-Za-z:])(([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|([0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4}){0,6})?::([0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4}){0,6})?)([^0-9A-Za-z:]|$)'
   '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}'
-  '(tel:|\+[0-9]{1,3}[ .-]?[0-9]{2,4}([ .-]?[0-9]{2,4}){2,})'
+  # Include common eight- and ten-digit national layouts without matching date fragments or
+  # longer numeric identifiers. The template still requires the author to exclude private detail.
+  '(tel:|\+[0-9]{1,3}[ .-]?[0-9]{2,4}([ .-]?[0-9]{2,4}){2,}|(^|[^0-9A-Za-z])([0-9]{8}|[0-9]{10}|([0-9]{2}[ .-]){3}[0-9]{2}|[0-9]{4}[ .-][0-9]{4}|([0-9]{3}[ .-]|\([0-9]{3}\)[ .-]?)[0-9]{3}[ .-][0-9]{4})([^0-9A-Za-z]|$))'
   '(\$|€|£) ?[0-9]|(^|[^a-z])(kr|dkk|eur|usd|gbp|sek|nok)\.? ?[0-9]|[0-9][0-9.,]* ?(kr|dkk|eur|usd|gbp|sek|nok|kroner|dollars?|euros?)([^a-z]|$)'
   '(^|[^A-Za-z0-9])(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,})|-----BEGIN [A-Z ]*PRIVATE KEY-----'
   # A secret, token, password or API key written as an assignment, the form agent-telemetry.sh redacts,
@@ -615,14 +617,24 @@ cmd_urgent() {
       unknown "could not read page $p of the issue events"
     [ -s "$tmp/events.json" ] || unknown "an empty response for page $p of the issue events"
     k="$(jq --arg bot "$bot" --arg who "$maintainer" --arg day "$today" '
-      if type == "array" then
+      def nonempty_string: type == "string" and length > 0;
+      def login: type == "object" and (.login | nonempty_string);
+      def utc_timestamp:
+        . as $stamp | type == "string"
+        and ((try (fromdateiso8601 | todateiso8601) catch null) == $stamp);
+      def complete_event:
+        type == "object" and (.event | nonempty_string) and (.created_at | utc_timestamp)
+        and (if .event == "assigned" then
+               (.actor | login) and (.assignee | login) and (.issue.user | login)
+             else true end);
+      if type == "array" and all(.[]; complete_event) then
         [.[] | select(.event == "assigned" and .actor.login == $bot and .assignee.login == $who
                       and .issue.user.login == $who
-                      and ((.created_at // "") | startswith($day)))] | length
-      else error("not a list of events") end' "$tmp/events.json" 2>/dev/null)" ||
+                      and (.created_at | startswith($day)))] | length
+      else error("not a complete list of events") end' "$tmp/events.json" 2>/dev/null)" ||
       unknown "an unexpected response for page $p of the issue events"
     used=$((used + k))
-    more="$(jq -r --arg day "$today" 'if length == 100 and ((.[-1].created_at // "") >= $day) then 1 else 0 end' \
+    more="$(jq -r --arg day "$today" 'if length == 100 and (.[-1].created_at >= $day) then 1 else 0 end' \
       "$tmp/events.json")" || unknown "an unexpected response for page $p of the issue events"
     [ "$more" = 1 ] || break
     p=$((p + 1))

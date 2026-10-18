@@ -574,6 +574,12 @@ done <<EOF
 ip-address|The node answers at $(printf '%s.%s.%s.%s' 198 51 100 7).
 email-address|Write to $(printf '%s@%s' someone example.invalid) for access.
 phone-number|Call $(printf '+%s %s' 45 '00 00 00 00') when it breaks.
+phone-number|Call $(printf '%s %s %s %s' 00 00 00 00) when it breaks.
+phone-number|Call $(printf '%s' 00000000) when it breaks.
+phone-number|Call $(printf '%s %s' 0000 0000) when it breaks.
+phone-number|Call $(printf '(%s) %s-%s' 000 000 0000) when it breaks.
+phone-number|Call $(printf '%s-%s-%s' 000 000 0000) when it breaks.
+phone-number|Call $(printf '%s' 0000000000) when it breaks.
 money|The cluster costs $(printf '%s %s' 120 kr) a month.
 credential|The token is ${token}.
 credential-assignment|Set token=$(printf '%s%s' supersecret value) in the config.
@@ -639,6 +645,9 @@ done
 { cat "$tmp/shape.md"; printf '\n- The digest now goes at 06:17:00 UTC.\n'; } >"$tmp/clock.md"
 run check "$tmp/clock.md"
 expect_rc 0 "a clock time is not mistaken for an IPv6 address"
+{ cat "$tmp/shape.md"; printf '\n- The next digest is dated 2026-10-19; run https://github.com/example-org/example-repo/actions/runs/00000000000 records it.\n'; } >"$tmp/numeric-identifiers.md"
+run check "$tmp/numeric-identifiers.md"
+expect_rc 0 "an ISO date and an action run identifier are not national phone numbers"
 run check "$tmp/absent.md"
 expect_rc 2 "an unreadable file is unknown"
 echo "urgent"
@@ -658,7 +667,7 @@ urgent_case() {
   # one from yesterday, which ends the count.
   jq -n '[
     {event: "assigned", actor: {login: "devantler"}, assignee: {login: "devantler"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-19T10:00:00Z"},
-    {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "someone-else"}, created_at: "2026-10-19T10:00:00Z"},
+    {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "someone-else"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-19T10:00:00Z"},
     {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-19T09:00:00Z"},
     {event: "labeled", actor: {login: "devantler"}, created_at: "2026-10-19T08:00:00Z"},
     {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-19T08:00:00Z"},
@@ -703,6 +712,43 @@ for p in $(seq 1 30); do full_page_today | fixture GET "$api/issues/events?per_p
 run "${urgent_args[@]}"
 expect_rc 2 "more pages of events today than the script reads is unknown"
 expect_no_writes "an incomplete count assigns nobody"
+
+# Every field used by the assignment count must be present and correctly typed. A partial event
+# could hide an earlier assignment and permit a fourth notification, so it must stop before writing.
+for field in actor assignee issue created_at; do
+  urgent_case
+  jq -n --arg field "$field" '[range(3) | {event: "assigned", actor: {login: "github-actions[bot]"},
+    assignee: {login: "devantler"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-19T08:00:00Z"}]
+    | .[0] |= del(.[$field])' | fixture GET "$api/issues/events?per_page=100&page=1"
+  run "${urgent_args[@]}"
+  expect_rc 2 "an assigned event missing $field makes the count unknown"
+  expect_no_writes "an assigned event missing $field assigns nobody"
+done
+
+# Nested identity fields and timestamps must also be usable, rather than just having a parent key.
+while IFS= read -r transform; do
+  urgent_case
+  jq -n '[range(3) | {event: "assigned", actor: {login: "github-actions[bot]"},
+    assignee: {login: "devantler"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-19T08:00:00Z"}]' |
+    jq ".[0] |= ($transform)" | fixture GET "$api/issues/events?per_page=100&page=1"
+  run "${urgent_args[@]}"
+  expect_rc 2 "a malformed event ($transform) makes the count unknown"
+  expect_no_writes "a malformed event ($transform) assigns nobody"
+done <<'TRANSFORMS'
+.actor.login = ""
+.assignee.login = null
+.issue.user = {}
+.created_at = "2026-10-19not-a-time"
+.created_at = "2026-02-30T08:00:00Z"
+.event = null
+TRANSFORMS
+
+# A malformed timestamp on a full page cannot be mistaken for yesterday and end pagination.
+urgent_case
+full_page_today | jq '.[-1] |= del(.created_at)' | fixture GET "$api/issues/events?per_page=100&page=1"
+run "${urgent_args[@]}"
+expect_rc 2 "a page-ending event without its timestamp makes pagination unknown"
+expect_no_writes "unknown pagination assigns nobody"
 
 reset_case
 run urgent --repo "$repo" --issue 42 --label maintainer-ask --sender devantler --today 2026-10-19
