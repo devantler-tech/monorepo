@@ -19,8 +19,9 @@
 #                           [--safety-timeout-seconds N]
 #
 # The safety section scans each runtime's transcripts (claude, then codex) as its
-# own bounded scope. --safety-timeout-seconds (default 300, at most 600) is the
-# deadline for EACH scope, so the section takes at most twice that. A scope that
+# own bounded scope. --safety-timeout-seconds (default 600, at most 600) is the
+# deadline for EACH scope. The scopes run at the same time, so the section takes
+# about one deadline, not two. A scope that
 # misses its deadline is reported UNKNOWN by name; the other scope's reading
 # stands (monorepo#3814).
 set -uo pipefail
@@ -59,8 +60,11 @@ verify_regex_locale() {
   return 0
 }
 # Per-scope default. Measured 2026-10-04 on the live one-day corpus: the claude
-# scope (117 MB) needs about 130 s, so 120 s left no scope with a reading.
-SAFETY_TIMEOUT_SECONDS=300
+# scope (117 MB) needs about 130 s, so 120 s left no scope with a reading. By
+# 2026-10-18 it needed about 320 s (245 MB), past the old 300 s default for six
+# slots in a row; the scopes now run concurrently, so 600 s costs the same wall
+# time the two sequential 300 s scopes did (#3830).
+SAFETY_TIMEOUT_SECONDS=600
 SAFETY_WORKER="${AGENT_TELEMETRY_SAFETY_WORKER:-0}"
 SAFETY_STANDALONE="${AGENT_TELEMETRY_SAFETY_STANDALONE:-0}"
 # Which runtime's transcripts one safety worker scans. The controller starts one
@@ -317,14 +321,66 @@ run_safety_early() (
   case "$worker_rc" in 0|2) exit "$worker_rc" ;; *) exit 3 ;; esac
 )
 
-# One bounded worker per runtime scope, in order. Each scope's report is emitted
-# only when ITS worker completed; a scope that timed out or failed is UNKNOWN by
-# name and forces exit 2, so a partial reading can never pass for a whole one.
+# Print a file through the shell alone (no external `cat`), failing when it
+# cannot be read, so a missing hand-off file reads as a failed worker.
+cat_builtin() {
+  [ -f "$1" ] && [ -r "$1" ] || return 1
+  local content
+  content=$(<"$1") || return 1
+  printf '%s' "$content"
+}
+
+# One bounded worker per runtime scope. Each scope's report is emitted only when
+# ITS worker completed; a scope that timed out or failed is UNKNOWN by name and
+# forces exit 2, so a partial reading can never pass for a whole one.
+#
+# The scopes run AT THE SAME TIME and are emitted in scope order (#3830). Run one
+# after the other, the section took up to twice the deadline, so the deadline was
+# held at 300 s; the Claude scope then missed it for six slots in a row
+# (2026-10-17/18, about 320 s on 245 MB) while the same scan finished inside
+# 600 s. Running them together gives each scope 600 s for the wall time the two
+# 300 s scopes used to cost.
+#
+# Each scope hands back its report and status through two files the parent
+# creates with shell redirection only: no external command runs before the
+# scopes' own deadlines start, and a file that is missing or unreadable is a
+# failed worker, never a clean one. Removal is asynchronous, like the
+# controller's own cleanup, so a stalled filesystem cannot hold the report open.
 run_safety_early_and_emit() {
-  local standalone=${1:-1} scope report rc overall=0
+  local standalone=${1:-1} scope report rc overall=0 base out rcf
+  local files=() pids=()
+  base="${TMPDIR:-/tmp}/.agtel_scope.${BASHPID:-$$}.${RANDOM}${RANDOM}${RANDOM}"
   for scope in $SAFETY_SCOPES; do
-    report=$(run_safety_early "$standalone" "$scope")
-    rc=$?
+    out="${base}.${scope}.report"
+    rcf="${base}.${scope}.rc"
+    files+=("$out" "$rcf")
+    if ! (set -C; umask 077; : > "$out" && : > "$rcf") 2>/dev/null; then
+      pids+=('')
+      continue
+    fi
+    # `exec` replaces stdout instead of redirecting one call: a per-call
+    # redirection keeps a saved copy of the report pipe that the controller's
+    # asynchronous cleanup would inherit and hold open.
+    (
+      scope_rc=0
+      exec >| "$out" || exit 3
+      run_safety_early "$standalone" "$scope" || scope_rc=$?
+      printf '%s\n' "$scope_rc" >| "$rcf"
+    ) &
+    pids+=("$!")
+  done
+  local i=0
+  for scope in $SAFETY_SCOPES; do
+    out="${base}.${scope}.report"
+    rcf="${base}.${scope}.rc"
+    rc=3
+    report=''
+    if [ -n "${pids[$i]}" ]; then
+      wait "${pids[$i]}" 2>/dev/null || true
+      rc=$(cat_builtin "$rcf") || rc=3
+      case "$rc" in 0|2|124) report=$(cat_builtin "$out") || rc=3 ;; *) rc=3 ;; esac
+    fi
+    i=$((i + 1))
     case "$rc" in
       0) printf '%s\n' "$report" ;;
       2) printf '%s\n' "$report"; overall=2 ;;
@@ -332,6 +388,7 @@ run_safety_early_and_emit() {
       *) emit_safety_unknown 'the safety worker failed; its measurements are incomplete.' "$scope"; overall=2 ;;
     esac
   done
+  ( rm -f -- "${files[@]}" ) >/dev/null 2>&1 &
   return "$overall"
 }
 

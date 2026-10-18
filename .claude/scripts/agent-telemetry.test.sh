@@ -4452,6 +4452,53 @@ else
   bad "two finished safety scopes share one banner and one footer" "$scope_both_shape"
 fi
 
+# The two scopes run at the same time (#3830). Each scope's worker stalls once
+# for 8 s; run one after the other they need at least 16 s, together about 8 s.
+# Both must still finish with a reading, in scope order.
+mkdir -p "$FIX/safety-concurrent-shim" "$FIX/safety-concurrent-marks"
+cat > "$FIX/safety-concurrent-shim/grep" <<'EOF_SHIM'
+#!/usr/bin/env bash
+if [ "${AGENT_TELEMETRY_SAFETY_WORKER:-0}" = 1 ] \
+   && /bin/mkdir "$SAFETY_CONCURRENT_MARKS/${AGENT_TELEMETRY_SAFETY_SCOPE:-all}" 2>/dev/null; then
+  sleep 8
+fi
+exec "$SAFETY_TEST_GREP" "$@"
+EOF_SHIM
+chmod +x "$FIX/safety-concurrent-shim/grep"
+concurrent_start=$(date +%s)
+SCOPE_CONCURRENT=$(PATH="$FIX/safety-concurrent-shim:$PATH" SAFETY_TEST_GREP="$candidate_real_grep" \
+  SAFETY_CONCURRENT_MARKS="$FIX/safety-concurrent-marks" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 60 2>&1)
+concurrent_secs=$(( $(date +%s) - concurrent_start ))
+concurrent_shape="marks=$(find "$FIX/safety-concurrent-marks" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ') claude=$(grep -c 'instance scope: claude transcripts' <<<"$SCOPE_CONCURRENT") codex=$(grep -c 'instance scope: codex transcripts' <<<"$SCOPE_CONCURRENT") unknown=$(grep -c 'UNKNOWN: ' <<<"$SCOPE_CONCURRENT")"
+if [ "$concurrent_shape" = "marks=2 claude=1 codex=1 unknown=0" ] && [ "$concurrent_secs" -lt 16 ]; then
+  ok "the two safety scopes run at the same time and both keep their reading"
+else
+  bad "the two safety scopes run at the same time and both keep their reading" \
+    "$concurrent_shape elapsed=${concurrent_secs}s"
+fi
+concurrent_order=$(grep -o 'instance scope: [a-z]* transcripts' <<<"$SCOPE_CONCURRENT" | tr '\n' ' ')
+if [ "$concurrent_order" = "instance scope: claude transcripts instance scope: codex transcripts " ]; then
+  ok "concurrent safety scopes are still reported in scope order"
+else
+  bad "concurrent safety scopes are still reported in scope order" "order=$concurrent_order"
+fi
+
+# A scope whose hand-off file cannot be created is a failed worker, never a
+# clean or missing reading: an unusable temporary directory must fail closed.
+HANDOFF_FAIL=$(CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" TMPDIR="$FIX/no-such-tmp-dir" \
+  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 30 2>&1)
+handoff_fail_rc=$?
+handoff_shape="rc=$handoff_fail_rc failed=$(grep -c 'UNKNOWN: the safety worker failed' <<<"$HANDOFF_FAIL") tables=$(grep -c 'TOTAL occurrences:' <<<"$HANDOFF_FAIL")"
+if [ "$handoff_shape" = "rc=2 failed=2 tables=0" ]; then
+  ok "an unusable hand-off directory reports both safety scopes as failed"
+else
+  bad "an unusable hand-off directory reports both safety scopes as failed" "$handoff_shape"
+fi
+
 # Interrupts must come from the structured flag, not prose quoting it.
 mkdir -p "$FIX/interrupt"
 cat > "$FIX/interrupt/s.jsonl" <<'EOF'
