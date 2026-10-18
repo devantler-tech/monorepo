@@ -4499,6 +4499,25 @@ else
   bad "an unusable hand-off directory reports both safety scopes as failed" "$handoff_shape"
 fi
 
+# A report that cannot be written in full must not pass for a complete one. A
+# one-block file-size limit (with SIGXFSZ ignored, so the write fails instead of
+# killing the shell) truncates every hand-off file; stdout goes to /dev/null,
+# which the limit does not touch, so only the hand-off write can fail.
+mkdir -p "$FIX/safety-short-write-empty" "$FIX/safety-short-write-tmp"
+short_write_rc=0
+(
+  trap '' XFSZ
+  ulimit -f 1
+  CLAUDE_PROJECTS_DIR="$FIX/safety-short-write-empty" CODEX_HOME="$FIX/nocodex" \
+    MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" TMPDIR="$FIX/safety-short-write-tmp" \
+    bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 30 >/dev/null 2>&1
+) || short_write_rc=$?
+if [ "$short_write_rc" -eq 2 ]; then
+  ok "a safety report truncated by a failed write exits 2, never success"
+else
+  bad "a safety report truncated by a failed write exits 2, never success" "rc=$short_write_rc"
+fi
+
 # Interrupts must come from the structured flag, not prose quoting it.
 mkdir -p "$FIX/interrupt"
 cat > "$FIX/interrupt/s.jsonl" <<'EOF'

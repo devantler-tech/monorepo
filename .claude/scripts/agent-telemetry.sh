@@ -291,7 +291,7 @@ run_safety_early() (
     [ "$payload" != "$report" ] || exit 3
     [ -n "$payload" ] || exit 3
     case "$payload" in *'── SAFETY (guardrails)'*) ;; *) exit 3 ;; esac
-    printf '%s\n' "$payload"
+    printf '%s\n' "$payload" || exit 3
     exit "$worker_rc"
   ) &
   worker_pid=$!
