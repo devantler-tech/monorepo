@@ -16,12 +16,15 @@
 #     then close the earlier digests github-actions[bot] opened. Its Needs you section is replaced by
 #     the asks open at the moment of sending, so an ask filed after the summary was written still
 #     goes out. When the file is missing, too long or fails `check`, a short digest of the open asks
-#     goes instead, saying the summary is missing. Nothing is sent when that week's digest is
-#     already open and assigned to him.
+#     goes instead, saying the summary is missing. Nothing new is sent when that week's digest is
+#     already open and assigned to him; the earlier digests are still closed, so a rerun after a failed
+#     close finishes the cleanup.
 #   needs-you [--repo OWNER/REPO]
 #     Print the Needs you section for the open asks, as `send` puts it in the digest.
 #   urgent --issue N --label NAME --sender LOGIN [--repo OWNER/REPO] [--today YYYY-MM-DD] [--dry-run]
-#     Assign the maintainer to an urgent ask, so GitHub emails him at once. At most three a UTC day.
+#     Assign the maintainer to an urgent ask, so GitHub emails him at once. At most three a UTC day,
+#     counted from the repository's issue events so removing an ask's labels does not hide one. Only an
+#     ask he wrote, labelled maintainer-ask, is assigned.
 #   check FILE...
 #     Check a digest file: its four sections in order, the note that a reply posts publicly, and no
 #     private-content marker. A finding names the file, the line and the kind, never the text found.
@@ -63,6 +66,8 @@ ask_label="maintainer-ask"
 urgent_label="maintainer-ask-urgent"
 digest_label="maintainer-digest"
 urgent_daily_cap=3
+# Pages of the repository's issue events read to count today's urgent assignments (100 events each).
+max_event_pages=30
 # GitHub refuses an issue body over 65,536 characters, and a byte count is never the smaller number.
 max_body_bytes=65536
 ask_sections=("Question" "Options" "Recommendation" "If unanswered")
@@ -81,9 +86,10 @@ private_patterns=(
   '(tel:|\+[0-9]{1,3}[ .-]?[0-9]{2,4}([ .-]?[0-9]{2,4}){2,})'
   '(\$|€|£) ?[0-9]|[0-9][0-9.,]* ?(kr|dkk|eur|usd|gbp|sek|nok|kroner|dollars?|euros?)([^a-z]|$)'
   '(^|[^A-Za-z0-9])(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,})|-----BEGIN [A-Z ]*PRIVATE KEY-----'
-  # A secret, token, password or API key written as an assignment, the form agent-telemetry.sh redacts.
-  '(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,}'
-  '[A-Za-z0-9-]\.(internal|local|localdomain|lan|intranet|corp|home\.arpa|ts\.net)([^A-Za-z0-9-]|$)'
+  # A secret, token, password or API key written as an assignment, the form agent-telemetry.sh redacts,
+  # and an Authorization header or bearer token.
+  'authorization["'"'"']?[[:space:]]*[:=]|bearer[[:space:]]+[A-Za-z0-9._~+/=-]{8,}|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,}'
+  '[A-Za-z0-9-]\.(internal|local|localdomain|lan|intranet|corp|home\.arpa|ts\.net|svc)([^A-Za-z0-9-]|$)'
   '^#{1,6}[[:space:]].*(spend|money|costs?|invoice|billing|savings?)'
   # Spend findings belong in the private digest, so spend wording in ordinary prose is refused too. This
   # list is a backstop for a digest the agent writes from the template, not the guarantee.
@@ -402,6 +408,23 @@ cmd_needs_you() {
   finish "$found"
 }
 
+# Closes every open digest the bot opened except #$1 (0 keeps none); with $2 = 1 it only says so.
+close_earlier() {
+  local keep=$1 dry=$2 n
+  jq -r --arg bot "$bot" --argjson keep "$keep" 'map(select(.user.login == $bot and .number != $keep) | .number) | .[]' \
+    "$tmp/digests.json" >"$tmp/earlier.txt" || unknown "could not list the earlier digests"
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    if [ "$dry" -eq 1 ]; then
+      echo "DRY-RUN would close the earlier digest #$n"
+      continue
+    fi
+    gh api -X PATCH "repos/$repo/issues/$n" -f state=closed -f state_reason=completed >/dev/null ||
+      unknown "could not close the earlier digest #$n"
+    echo "CLOSED #$n: the earlier digest"
+  done <"$tmp/earlier.txt"
+}
+
 cmd_send() {
   local week="" dir="" dry_run=0 week_number title file reason="" rc existing number assigned=1
   repo="${GITHUB_REPOSITORY:-}"
@@ -432,7 +455,9 @@ cmd_send() {
     | first // empty' "$tmp/digests.json")"
   if [ -n "$existing" ]; then
     echo "ALREADY-SENT #$existing: this week's digest is already open, so nothing is sent"
-    finish 0
+    # A rerun after a failed close still retires the earlier digests, keeping this week's open.
+    close_earlier "$existing" "$dry_run"
+    finish "$found"
   fi
   fetch_asks
   render_needs_you >"$tmp/needs-you.md"
@@ -463,17 +488,12 @@ cmd_send() {
     fi
   fi
 
-  jq -r --arg bot "$bot" 'map(select(.user.login == $bot) | .number) | .[]' \
-    "$tmp/digests.json" >"$tmp/earlier.txt" || unknown "could not list the earlier digests"
-
   if [ "$dry_run" -eq 1 ]; then
     echo "DRY-RUN would open \"$title\", labelled $digest_label and assigned to $maintainer, from ${reason:+the fallback because }${reason:-$file}"
     echo "--- body ---"
     cat "$tmp/body.md"
     echo "--- end of body ---"
-    while IFS= read -r number; do
-      [ -z "$number" ] || echo "DRY-RUN would close the earlier digest #$number"
-    done <"$tmp/earlier.txt"
+    close_earlier 0 1
     finish "$found"
   fi
 
@@ -491,17 +511,12 @@ cmd_send() {
     finding "NOT-ASSIGNED #$number: GitHub did not assign $maintainer, so the digest was not emailed"
     assigned=0
   fi
-  while [ "$assigned" -eq 1 ] && IFS= read -r existing; do
-    [ -n "$existing" ] || continue
-    gh api -X PATCH "repos/$repo/issues/$existing" -f state=closed -f state_reason=completed >/dev/null ||
-      unknown "could not close the earlier digest #$existing"
-    echo "CLOSED #$existing: the earlier digest"
-  done <"$tmp/earlier.txt"
+  [ "$assigned" -eq 0 ] || close_earlier 0 0
   finish "$found"
 }
 
 cmd_urgent() {
-  local issue="" label="" sender="" today="" dry_run=0 used=0 m k l already
+  local issue="" label="" sender="" today="" dry_run=0 used=0 k p more already
   repo="${GITHUB_REPOSITORY:-}"
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -553,27 +568,27 @@ cmd_urgent() {
     finish 0
   fi
 
-  # An assignment updates the issue, so every ask assigned today was updated today. An ask is found
-  # by either label, so taking the urgent label off after it fired keeps it in the count.
-  : >"$tmp/today.txt"
-  for l in "$urgent_label" "$ask_label"; do
-    read_issues "repos/$repo/issues?state=all&labels=$l&since=${today}T00:00:00Z&per_page=100" "$tmp/today.json"
-    jq -r '.[].number' "$tmp/today.json" >>"$tmp/today.txt" || unknown "could not list today's asks"
-  done
-  sort -un "$tmp/today.txt" >"$tmp/today-unique.txt"
-  while IFS= read -r m; do
-    [ -n "$m" ] || continue
-    gh api --paginate "repos/$repo/issues/$m/events?per_page=100" >"$tmp/events.json" ||
-      unknown "could not read the events of #$m"
-    [ -s "$tmp/events.json" ] || unknown "an empty response for the events of #$m"
-    k="$(jq -s --arg bot "$bot" --arg who "$maintainer" --arg day "$today" '
-      if all(.[]; type == "array") then
-        [.[][] | select(.event == "assigned" and .actor.login == $bot and .assignee.login == $who
-                        and ((.created_at // "") | startswith($day)))] | length
+  # Today's assignments are counted from the repository's issue-event feed, newest first, so an ask
+  # whose labels were all taken off after it fired still counts. Pages are read until one ends before
+  # today; more than max_event_pages of them today cannot be counted, which is UNKNOWN.
+  p=1
+  while :; do
+    [ "$p" -le "$max_event_pages" ] || unknown "more than $max_event_pages pages of issue events today, so the count is incomplete"
+    gh api "repos/$repo/issues/events?per_page=100&page=$p" >"$tmp/events.json" ||
+      unknown "could not read page $p of the issue events"
+    [ -s "$tmp/events.json" ] || unknown "an empty response for page $p of the issue events"
+    k="$(jq --arg bot "$bot" --arg who "$maintainer" --arg day "$today" '
+      if type == "array" then
+        [.[] | select(.event == "assigned" and .actor.login == $bot and .assignee.login == $who
+                      and ((.created_at // "") | startswith($day)))] | length
       else error("not a list of events") end' "$tmp/events.json" 2>/dev/null)" ||
-      unknown "an unexpected response for the events of #$m"
+      unknown "an unexpected response for page $p of the issue events"
     used=$((used + k))
-  done <"$tmp/today-unique.txt"
+    more="$(jq -r --arg day "$today" 'if length == 100 and ((.[-1].created_at // "") >= $day) then 1 else 0 end' \
+      "$tmp/events.json")" || unknown "an unexpected response for page $p of the issue events"
+    [ "$more" = 1 ] || break
+    p=$((p + 1))
+  done
   if [ "$used" -ge "$urgent_daily_cap" ]; then
     finding "REFUSED #$issue: $used urgent asks were already assigned today (UTC), and the limit is $urgent_daily_cap"
     finish 1

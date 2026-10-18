@@ -360,6 +360,19 @@ run send --repo "$repo" --week 2026-W43 --dir "$digests"
 expect_rc 0 "an open digest for the week is not sent again"
 expect_in "$tmp/out" "ALREADY-SENT #850" "the open digest is named"
 expect_no_writes "nothing is opened or closed"
+# A rerun after a close failed still retires the earlier digest, and keeps this week's open.
+reset_case
+complete_asks | fixture GET "$asks_path"
+jq -n --arg at "$(date -u -v-1d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '-1 day' +%Y-%m-%dT%H:%M:%SZ)" \
+  '[{number: 850, title: "🙋 Maintainer digest — week 43", user: {login: "github-actions[bot]"}, assignees: [{login: "devantler"}], created_at: $at},
+    {number: 801, title: "🙋 Maintainer digest — week 42", user: {login: "github-actions[bot]"}, assignees: [{login: "devantler"}], created_at: "2026-10-12T06:17:00Z"}]' |
+  fixture GET "$digests_path"
+echo '{"number": 801, "state": "closed"}' | fixture PATCH "$api/issues/801"
+run send --repo "$repo" --week 2026-W43 --dir "$digests"
+expect_rc 0 "a rerun with this week's digest open finishes the cleanup"
+expect_in "$tmp/out" "CLOSED #801: the earlier digest" "the earlier digest a failed close left open is closed"
+expect_not_in "$GH_STUB_LOG" "PATCH $api/issues/850" "this week's digest stays open"
+expect_not_in "$GH_STUB_LOG" "POST " "nothing new is opened"
 # The same week's title from a year ago, left open, does not hold back this year's digest.
 reset_case
 complete_asks | fixture GET "$asks_path"
@@ -500,6 +513,8 @@ phone-number|Call $(printf '+%s %s' 45 '00 00 00 00') when it breaks.
 money|The cluster costs $(printf '%s %s' 120 kr) a month.
 credential|The token is ${token}.
 credential-assignment|Set token=$(printf '%s%s' supersecret value) in the config.
+credential-assignment|Send it with Authorization: Bearer $(printf '%s%s' abcdefghij klmnopqrstuvwxyz).
+private-hostname|The app reads from postgres.database.svc on start.
 private-hostname|It runs on $(printf '%s.%s' build internal) now.
 spend-heading|## Money
 spend-wording|Cloud spend increased substantially after the migration.
@@ -572,22 +587,21 @@ urgent_case() {
   reset_case
   jq -n --argjson assignees "$assignees" --argjson labels "$labels" --arg author "$author" \
     '{number: 42, state: "open", user: {login: $author}, labels: $labels, assignees: $assignees}' | fixture GET "$api/issues/42"
-  jq -n '[{number: 42}, {number: 43}]' | fixture GET "$api/issues?state=all&labels=maintainer-ask-urgent&since=2026-10-19T00:00:00Z&per_page=100"
-  # #42 carries both labels, so it is listed twice and must be counted once.
-  jq -n '[{number: 42}]' | fixture GET "$api/issues?state=all&labels=maintainer-ask&since=2026-10-19T00:00:00Z&per_page=100"
-  # One assignment today and one yesterday on this ask; on another, one today plus two that do not
-  # count: the maintainer assigning himself, and the bot assigning someone else.
+  # The repository's issue events, newest first: two of the bot's assignments of him today, plus
+  # three that do not count (him assigning himself, the bot assigning someone else, a label) and
+  # one from yesterday, which ends the count.
   jq -n '[
+    {event: "assigned", actor: {login: "devantler"}, assignee: {login: "devantler"}, created_at: "2026-10-19T10:00:00Z"},
+    {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "someone-else"}, created_at: "2026-10-19T10:00:00Z"},
+    {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, created_at: "2026-10-19T09:00:00Z"},
+    {event: "labeled", actor: {login: "devantler"}, created_at: "2026-10-19T08:00:00Z"},
     {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, created_at: "2026-10-19T08:00:00Z"},
-    {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, created_at: "2026-10-18T23:59:59Z"},
-    {event: "labeled", actor: {login: "devantler"}, created_at: "2026-10-19T08:00:00Z"}]' |
-    fixture GET "$api/issues/42/events?per_page=100"
-  {
-    jq -n '[{event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, created_at: "2026-10-19T09:00:00Z"}]'
-    jq -n '[
-      {event: "assigned", actor: {login: "devantler"}, assignee: {login: "devantler"}, created_at: "2026-10-19T10:00:00Z"},
-      {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "someone-else"}, created_at: "2026-10-19T10:00:00Z"}]'
-  } | fixture GET "$api/issues/43/events?per_page=100"
+    {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, created_at: "2026-10-18T23:59:59Z"}]' |
+    fixture GET "$api/issues/events?per_page=100&page=1"
+}
+# Writes a page of 100 events from today that do not count, so the count reads the next page.
+full_page_today() {
+  jq -n '[range(100) | {event: "labeled", actor: {login: "devantler"}, created_at: "2026-10-19T11:00:00Z"}]'
 }
 urgent_args=(urgent --repo "$repo" --issue 42 --label maintainer-ask-urgent --sender devantler --today 2026-10-19)
 
@@ -599,23 +613,29 @@ expect_in "$tmp/out" "ASSIGNED #42: urgent assignment 3 of 3 today (UTC)" "only 
 expect_not_in "$GH_STUB_LOG" "DELETE" "an unassigned ask is not unassigned first"
 
 urgent_case
-jq -n '[
-  {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, created_at: "2026-10-19T08:00:00Z"},
-  {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, created_at: "2026-10-19T08:30:00Z"}]' |
-  fixture GET "$api/issues/42/events?per_page=100"
+jq -n '[range(3) | {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, created_at: "2026-10-19T08:00:00Z"}]' |
+  fixture GET "$api/issues/events?per_page=100&page=1"
 run "${urgent_args[@]}"
 expect_rc 1 "a fourth assignment in one day is refused"
 expect_in "$tmp/err" "REFUSED #42: 3 urgent asks were already assigned today (UTC), and the limit is 3" "the refusal says why"
 expect_no_writes "a refused ask is not assigned"
 
-# An ask that fired today and has since lost its urgent label still counts.
+# The count reads past a full page of today's events: an assignment on the second page, on an ask
+# whose labels may all be gone by now, still counts.
 urgent_case
-jq -n '[{number: 42}, {number: 44}]' | fixture GET "$api/issues?state=all&labels=maintainer-ask&since=2026-10-19T00:00:00Z&per_page=100"
-jq -n '[{event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, created_at: "2026-10-19T07:00:00Z"}]' |
-  fixture GET "$api/issues/44/events?per_page=100"
+full_page_today | fixture GET "$api/issues/events?per_page=100&page=1"
+jq -n '[range(3) | {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, created_at: "2026-10-19T07:00:00Z"}]' |
+  fixture GET "$api/issues/events?per_page=100&page=2"
 run "${urgent_args[@]}"
-expect_rc 1 "an ask that lost its urgent label still counts toward the limit"
-expect_no_writes "the limit holds after a label is taken off"
+expect_rc 1 "assignments on a later page of today's events still count toward the limit"
+expect_no_writes "the limit holds across pages"
+
+# A day with more pages of events than the script reads is UNKNOWN, never a count of what it read.
+urgent_case
+for p in $(seq 1 30); do full_page_today | fixture GET "$api/issues/events?per_page=100&page=$p"; done
+run "${urgent_args[@]}"
+expect_rc 2 "more pages of events today than the script reads is unknown"
+expect_no_writes "an incomplete count assigns nobody"
 
 reset_case
 run urgent --repo "$repo" --issue 42 --label maintainer-ask --sender devantler --today 2026-10-19
@@ -657,7 +677,7 @@ expect_in "$tmp/out" "no longer carries maintainer-ask-urgent" "the skip says wh
 expect_no_writes "an ask without the urgent label is not assigned"
 
 urgent_case
-rm "$GH_STUB_FIX/GET$(key "$api/issues/43/events?per_page=100").json"
+rm "$GH_STUB_FIX/GET$(key "$api/issues/events?per_page=100&page=1").json"
 run "${urgent_args[@]}"
 expect_rc 2 "a failed count of today's assignments is unknown"
 expect_no_writes "an unknown count assigns nobody"
