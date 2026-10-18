@@ -29,7 +29,7 @@
 # What an ask may put in the digest. Anyone can open an issue that looks like an ask, so only asks the
 # maintainer's own account filed are shown; another account's ask is named by its number only. An
 # ask whose text shows a private-content marker is listed with its text held back. An @mention is
-# shown as code, so a digest never notifies anyone again.
+# broken with a zero-width space, so a digest never notifies anyone or triggers a bot again.
 #
 # Exit: 0 done with no finding; 1 a finding or a refusal, each printed (a digest with a finding is
 # still sent); 2 unknown: a usage error, an unreadable input, a failed GitHub read or write, or an
@@ -74,8 +74,9 @@ private_kinds=(ip-address ipv6-address email-address phone-number money credenti
 private_flags=(-E -E -E -E -iE -E -iE -iE)
 private_patterns=(
   '(^|[^0-9.])([0-9]{1,3}\.){3}[0-9]{1,3}([^0-9]|$)'
-  # Eight full groups, or a "::" compressed form. Times such as 06:17:00 have too few groups to match.
-  '(^|[^0-9A-Za-z:])(([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|([0-9A-Fa-f]{1,4}:){1,6}:([0-9A-Fa-f]{1,4})?)([^0-9A-Za-z:]|$)'
+  # Eight full groups, or any "::" compressed form: groups on either side of the "::", or none.
+  # Times such as 06:17:00 have too few groups and no "::", so they never match.
+  '(^|[^0-9A-Za-z:])(([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|([0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4}){0,6})?::([0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4}){0,6})?)([^0-9A-Za-z:]|$)'
   '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}'
   '(tel:|\+[0-9]{1,3}[ .-]?[0-9]{2,4}([ .-]?[0-9]{2,4}){2,})'
   '(\$|€|£) ?[0-9]|[0-9][0-9.,]* ?(kr|dkk|eur|usd|gbp|sek|nok|kroner|dollars?|euros?)([^a-z]|$)'
@@ -155,10 +156,11 @@ section_text() {
     }' "$1"
 }
 
-# Shows each @mention as code, so a digest that repeats an ask never notifies anyone again.
+# Breaks each @mention with a zero-width space after the @, so a digest that repeats an ask never
+# notifies anyone or triggers a bot again. A code span would not do: bots parse the raw Markdown.
+zwsp=$'\xe2\x80\x8b'
 quiet_mentions() {
-  # shellcheck disable=SC2016 # The backticks are literal Markdown, not a command substitution.
-  sed -E 's/(^|[^A-Za-z0-9_`])@([A-Za-z0-9][A-Za-z0-9-]*(\/[A-Za-z0-9_.-]+)?)/\1`@\2`/g'
+  sed -E "s/(^|[^A-Za-z0-9_])@([A-Za-z0-9][A-Za-z0-9-]*(\/[A-Za-z0-9_.-]+)?)/\1@${zwsp}\2/g"
 }
 
 # Prints the numbers of the lines in file $3 that match regex $2 with grep flags $1. Returns 1 when no
@@ -314,6 +316,8 @@ check_file() {
   done
   if ! awk -v h="## How to reply" '
       { sub(/\r$/, ""); sub(/[ \t]+$/, "") }
+      # Only the How to reply section counts: the next level-two heading ends it.
+      seen && /^## / && $0 != h { seen = 0 }
       seen && index($0, "Your reply posts publicly") == 1 { ok = 1 }
       $0 == h { seen = 1 }
       END { exit ok ? 0 : 1 }' "$f"; then
