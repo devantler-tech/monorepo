@@ -52,7 +52,8 @@ standing substitute** for moving the real backlog:
   experiment parent per *Build the right thing*. **Being
   large or hard is never why you skip it — see *Issue-driven → Pull valuable Ready work*.**
 - **Security posture** — treat each product's live security findings as a first-class advance lever, not
-  only a break/fix chore. **Ingest** them (the survey looks at live scanner state, not just GitHub) and
+  only a break/fix chore. Use the [hosted security and quality adoption facts](#hosted-security-and-quality-adoption)
+  for this deployment's feature targets, cadence and cost boundary. **Ingest** them (the survey looks at live scanner state, not just GitHub) and
   beware the trap that **a `0`/empty reading is usually a *broken* scanner, not a clean cluster** — a
   broken scanner and a compliant one read identically, so verify the scanner is actually producing data.
   **Drive the numbers to 100% and hold them** — for the platform: Kubescape posture/compliance, the
@@ -154,6 +155,60 @@ it is **root-cause, validated, draft-PR** work under the guardrails below — ad
 never licence to skip tests, weaken a safety rule, or hand-edit generated files. Respect each repo's
 conventions; you set direction, but large structural change gets an ADR/issue and an incremental
 rollout, not a big-bang rewrite.
+
+## Hosted security and quality adoption
+
+**Deployment intent (maintainer direction 2026-10-18):** use the portfolio's existing GHAS and
+GitHub Code Quality entitlements and included capabilities fully, with **no additional cost**.
+These are consumer facts for the reviewed plugin's existing security intake and
+`portfolio-maintenance/references/security-and-quality-posture.md`; the portable procedure lives
+upstream, not in this guide.
+
+- **Scope and cadence:** every live, non-archived `devantler-tech` repository, including private
+  and unmapped infrastructure repositories. Use the Portfolio map for product metadata, not census
+  exclusion. Reconcile the complete live inventory rather than a selected App installation.
+  Sweep configured Dependabot, code scanning, secret scanning and Code Quality findings daily;
+  recheck an affected source after remediation. Review feature adoption weekly and after repository,
+  language, entitlement, provider or governance changes. An overdue or incomplete observation stays
+  due; another lane's complete current receipt may be reused with its identity and scope verified.
+- **Feature intent:** retain enforced strict security configuration associations and defaults for
+  new repositories. Use supported dependency graph/alerts/security updates, extended CodeQL scope,
+  secret scanning, push protection, validity checks and supported generic/non-provider detection
+  within existing entitlement. Use Code Quality on supported languages within verified existing
+  capacity, with standard runners and optional AI findings disabled. A missing language, failed or
+  detached association, unsupported feature or unreadable setting is a distinct gap, never adoption.
+- **Cost boundary:** verify the applicable existing entitlement, unique active committers, analysis
+  runner usage and metered AI usage. Preserve hard zero-overage AI-credit and Actions stops. An
+  alert-only budget or a GHAS budget does not prove charges cannot grow inside an enabled private
+  repository. Code Quality is a separate paid product, and disabling optional AI findings does not
+  disable in-PR AI fixes. Do not add licenses, paid products, paid runners, overage, new credentials
+  or weaker budgets. Unproven marginal cost holds activation; it does not stop observation or fixes.
+- **Freshness and findings:** bind each receipt to its repository, finding family, tool/language,
+  expected trigger/schedule and exact analyzed ref/commit. Observe successful current PR analyses
+  before relying on a merge gate; observe default-branch analyses at least weekly and after relevant
+  configuration changes. An older successful run describes only its own commit, not uncovered newer
+  source. Zero findings requires complete observations and positive liveness. Deduplicate native
+  finding identities into existing work, preserve original clocks, and prioritize actual exposure,
+  dated obligations and risk reduction through the existing ladder rather than severity labels alone.
+- **Governance intent:** prefer organization rulesets wherever the feature applies, with explicit
+  repository exceptions only for verified plan/API or targeting limits. Require CodeQL finding
+  protection (all severities), existing strict Code Quality protection (`all`), dependency-review
+  protection and required analysis producers on applicable default-branch pull requests. Preserve
+  existing protections, declare tool/threshold/actor/event coverage and verify effective rules and
+  native refusal behavior. Default-setup Dependabot and merge-queue exclusions need independent
+  coverage. Track secret merge protection and other unsupported plan/API/provider paths as gaps;
+  enabled secret scanning or push protection does not establish merge protection.
+- **Ownership and evidence:** repository/security settings belong to `devantler-tech/.github`'s
+  declarative configuration; portable intake belongs to `devantler-tech/agent-skills` and reaches
+  this deployment through `devantler-tech/agent-plugins`. Never round-trip unsupported rules through
+  a lossy provider, imperatively fight reconciliation, or hand-edit bundle/cache copies. Keep
+  repository-level findings, billing and access details in private out-of-repository evidence;
+  request server-side secret-value hiding before any alert read. Publish only sanitized issue
+  context. Native issues own remediation and adoption gaps; supported memory holds only cadence
+  cursors and evidence links, not a checked-in status ledger.
+
+Source merge, plugin inclusion, adopted source pin, loaded-runtime currency, deployed governance
+and native analysis/refusal are separate receipts. None clears a missing later receipt.
 
 ## Security hardening without a DevEx tax
 **Maintainer direction (2026-07-21): "good devex is easy and secure."** Read that as one claim, not
