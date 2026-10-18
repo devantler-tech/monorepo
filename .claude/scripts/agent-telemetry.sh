@@ -6585,8 +6585,9 @@ if want outcomes; then
     # whether or not it is a submodule. The submodule list missed repositories
     # without a checkout (2 of 25 on 2026-10-18), so their merges, reverts and
     # red main never reached this section. One REST listing (no GraphQL).
-    # A failed or malformed listing falls back to the submodule list and says
-    # so: those counts are a lower bound, never a clean portfolio-wide total.
+    # A failed or malformed listing leaves the portfolio inventory UNKNOWN. The
+    # section then counts only the submodule cohort, whose archive state it has
+    # not read, so every portfolio verdict below stays UNKNOWN or INCOMPLETE.
     echo "  AGENT-authored merged PRs since ${SINCE_ISO} (registered instance identities):"
     # The submodule cohort is kept as its own total so the series measured
     # before monorepo#4139 stays comparable; a wider denominator is not a gain.
@@ -6609,7 +6610,7 @@ if want outcomes; then
       REPOS=$COHORT_REPOS
     fi
     REPOS=$(printf '%s/monorepo\n%s\n' "$PORTFOLIO_ORG" "$REPOS" | grep -v '^$' | sort -u)
-    COHORT_TOTAL=0
+    COHORT_TOTAL=0; COHORT_FAIL=0
     EMPTY_REPOS=' '
     # GitHub answers HTTP 409 "Git Repository is empty." for a repository with no
     # commits. Such a repository has no main to break and nothing to revert, so it
@@ -6623,9 +6624,16 @@ if want outcomes; then
     if [ "$REPO_INVENTORY" = live ]; then
       echo "    repository inventory: live org, $(printf '%s\n' "$REPOS" | grep -c .) non-archived repositories"
     else
-      echo "    repository inventory: SUBMODULE FALLBACK (live org listing failed) — repositories without a submodule are not counted; every total below is a lower bound"
+      echo "    repository inventory: UNKNOWN (live org listing failed) — counting the submodule cohort only, archive state unread; no portfolio total follows"
     fi
     TOTAL=0; APIFAIL=0; REPO_COUNT=0; REST_USED=0
+    # A failed repository read leaves the cohort incomplete only when that
+    # repository is in the cohort, so the pre-#4139 series survives an
+    # unrelated failure elsewhere in the wider census.
+    merged_fail() {
+      APIFAIL=$((APIFAIL + 1))
+      if grep -qxF -- "$1" <<<"$COHORT_REPOS"; then COHORT_FAIL=$((COHORT_FAIL + 1)); fi
+    }
     # REST fallback for ONE repository's merged agent PRs (monorepo#4267). `gh pr
     # list` spends the GraphQL budget; when that budget is gone every repository
     # read UNKNOWN and the merged-PR floor of every open hypothesis went blank
@@ -6697,7 +6705,7 @@ if want outcomes; then
         if c=$(rest_merged_count "$r"); then
           REST_USED=$((REST_USED + 1))
         else
-          printf '    %-42s UNKNOWN (query or provenance)\n' "$r"; APIFAIL=$((APIFAIL+1)); continue
+          printf '    %-42s UNKNOWN (query or provenance)\n' "$r"; merged_fail "$r"; continue
         fi
       elif ! c=$(printf '%s' "$prs_json" \
             | jq -er --arg since "$SINCE_ISO" --argjson registry "$registry" '
@@ -6717,9 +6725,9 @@ if want outcomes; then
                        . as $instance | ($pr.headRefName | startswith($instance.namespace + "/"))
                        and $pr.author.login == $instance.authors.cli))] | length
               ' 2>/dev/null); then
-        printf '    %-42s UNKNOWN (query or provenance)\n' "$r"; APIFAIL=$((APIFAIL+1)); continue
+        printf '    %-42s UNKNOWN (query or provenance)\n' "$r"; merged_fail "$r"; continue
       fi
-      case "$c" in ''|*[!0-9]*) printf '    %-42s UNPARSEABLE RESULT\n' "$r"; APIFAIL=$((APIFAIL+1)); continue ;; esac
+      case "$c" in ''|*[!0-9]*) printf '    %-42s UNPARSEABLE RESULT\n' "$r"; merged_fail "$r"; continue ;; esac
       [ "$c" -gt 0 ] && printf '    %-42s %s\n' "$r" "$c"
       TOTAL=$((TOTAL + c))
       if grep -qxF -- "$r" <<<"$COHORT_REPOS"; then COHORT_TOTAL=$((COHORT_TOTAL + c)); fi
@@ -6728,15 +6736,15 @@ $REPOS
 EOF
     if [ "$APIFAIL" -gt 0 ]; then
       echo "    merged PRs: UNKNOWN (${APIFAIL} repository queries incomplete)"
-    else
+    elif [ "$REPO_INVENTORY" = live ]; then
       echo "    ────────────────────────────────────────── total: ${TOTAL}"
+    else
+      echo "    merged PRs: UNKNOWN (live repository inventory unavailable)"
     fi
-    if [ "$APIFAIL" -eq 0 ]; then
-      if [ "$REPO_INVENTORY" = live ]; then
-        echo "    submodule cohort (the series before monorepo#4139): ${COHORT_TOTAL}"
-      else
-        echo "    merged PRs: the total above is a LOWER BOUND (submodule fallback inventory)"
-      fi
+    if [ "$COHORT_FAIL" -eq 0 ]; then
+      echo "    submodule cohort (the series before monorepo#4139): ${COHORT_TOTAL}"
+    else
+      echo "    submodule cohort (the series before monorepo#4139): UNKNOWN (${COHORT_FAIL} repository queries incomplete)"
     fi
     # Name the source whenever the fallback answered, so a reader comparing slots
     # can see which counts came from a different query (monorepo#4267).
@@ -6861,6 +6869,8 @@ EOF
     }
     REDS=0
     REDS_UNKNOWN=0
+    # Without the live inventory, a repository outside the cohort may be red.
+    [ "$REPO_INVENTORY" = live ] || REDS_UNKNOWN=1
     while IFS= read -r r; do
       [ -n "$r" ] || continue
       if [ "$CI_CLASSIFIER_READY" -ne 1 ]; then
@@ -7014,7 +7024,10 @@ EOF
 $REPOS
 EOF
     echo "    ────────────────────────────────────────── total: ${RTOTAL}"
-    if [ "$RFAIL" -gt 0 ]; then
+    if [ "$REPO_INVENTORY" != live ]; then
+      echo "    ⚠️  live repository inventory unavailable — this total is INCOMPLETE."
+      echo "        Do NOT read it as 'nothing reverted'."
+    elif [ "$RFAIL" -gt 0 ]; then
       echo "    ⚠️  ${RFAIL} revert quer(y|ies) FAILED — this total is INCOMPLETE."
       echo "        Do NOT read it as 'nothing reverted'."
     else
