@@ -50,9 +50,10 @@ findings.
 - **The Agentic Engineer writes it.** Its first run each Monday commits
   `docs/digests/<ISO year>-W<week>.md` to this repository, using
   `docs/digests/TEMPLATE.md`, through an ordinary reviewed pull request.
-- **A workflow sends it.** `maintainer-digest.yaml` runs every Monday at 06:00 UTC, which is 07:00
-  or 08:00 in Denmark, with `issues: write` only and `GITHUB_TOKEN`. It opens that week's file as an
-  issue titled `🙋 Maintainer digest — week <n>`, labelled `maintainer-digest` and **assigned to
+- **A workflow sends it.** `maintainer-digest.yaml` runs every Monday at 06:17 UTC, which is 07:17
+  or 08:17 in Denmark, off the top of the hour when GitHub most often delays or drops scheduled
+  runs. It has `issues: write` only and `GITHUB_TOKEN`, and opens that week's file as an issue
+  titled `🙋 Maintainer digest — week <n>`, labelled `maintainer-digest` and **assigned to
   `devantler` by `github-actions[bot]`**. Because a different identity opens the issue and assigns
   him, GitHub emails him the whole body, provided his notification settings email him about
   assignments. That setting is a prerequisite of Phase 1: before the first digest relies on it, a
@@ -156,8 +157,9 @@ if one is chosen. Both stay within the lifestyle floor.
 - Until Phase 2 is live, spend findings are not produced. The spend contract's private channel then
   resolves to the Money digest, and the decision-producing half of spend stewardship is switched on,
   as he directed. That is recorded with the contract change.
-- Agents read the open digest's replies every run instead of the Slack DM's threads. The
-  `| asked slack <date>` blocker marker becomes `| asked digest <date>`.
+- Agents read the replies on every digest issue updated since their last run, open or closed,
+  instead of the Slack DM's threads, because a reply to last week's email still lands on that
+  closed issue. The `| asked slack <date>` blocker marker becomes `| asked digest <date>`.
 - Asks still open in Slack threads are moved into ask issues before the first digest.
 - Platform alert streams that post to Slack are not maintainer asks and are not changed here. A
   condition from them that needs him becomes an urgent ask.
