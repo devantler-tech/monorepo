@@ -98,6 +98,35 @@ payload="$(jq -cn --argjson p "${write_probe}" '$p + {agent_type: "portfolio-sur
 run "lookalike" "${payload}"
 [ "${ran}" -eq 0 ] || fail_case "a lookalike agent_type was forwarded (substring match)"
 
+# --- Codex-shaped payloads take the same route ---------------------------------------------
+# Codex (openai/codex rust-v0.155.0 onward; measured at rust-v0.163.0) serializes the same
+# optional `agent_id`/`agent_type` pair on its PreToolUse stdin, beside its own fields
+# (`turn_id`, `model`, `permission_mode`, `tool_use_id`). `agent_type` is the role the
+# subagent was spawned with, and an unnamed role is reported as "default"; the parent
+# thread carries neither field. Its shell calls arrive as tool_name "Bash" with
+# tool_input.command, the shape the forge hook reads. These cases pin that the dispatch
+# keys on `agent_type` alone, so the Codex extras neither hide a surveyor nor pull an
+# engineer call into the guard.
+codex_base='{"session_id":"019a0000-0000-7000-8000-000000000000","turn_id":"turn-1","transcript_path":null,"cwd":"/tmp","hook_event_name":"PreToolUse","model":"gpt-test","permission_mode":"default","tool_name":"Bash","tool_input":{"command":"gh pr merge 1 --repo devantler-tech/monorepo"},"tool_use_id":"call-1"}'
+for agent in portfolio-surveyor agentic-engineering:portfolio-surveyor; do
+  payload="$(jq -cn --arg a "${agent}" --argjson p "${codex_base}" '$p + {agent_id: "019a0000-0000-7000-8000-000000000001", agent_type: $a}')"
+  run "codex-fwd-${agent//:/_}" "${payload}"
+  [ "${ran}" -eq 1 ] || fail_case "codex ${agent}: the call was NOT forwarded to the forge hook"
+  [ "${rc}" -eq 7 ] || fail_case "codex ${agent}: the target's exit status (7) was not propagated, got ${rc}"
+  [ "$(cat "${STUB_LOG}.stdin" 2>/dev/null)" = "${payload}" ] ||
+    fail_case "codex ${agent}: stdin did not reach the target verbatim"
+done
+
+run "codex-parent" "${codex_base}"
+[ "${ran}" -eq 0 ] || fail_case "a Codex parent-thread call (no agent_type) was forwarded into the guard"
+[ "${rc}" -eq 0 ] || fail_case "a Codex parent-thread call did not exit 0, got ${rc}"
+[ ! -s "${tmp}/codex-parent.out" ] || fail_case "a Codex parent-thread call produced stdout (would be read as a hook decision)"
+
+payload="$(jq -cn --argjson p "${codex_base}" '$p + {agent_id: "019a0000-0000-7000-8000-000000000002", agent_type: "default"}')"
+run "codex-default-role" "${payload}"
+[ "${ran}" -eq 0 ] || fail_case "a Codex default-role subagent's call was forwarded into the guard"
+[ "${rc}" -eq 0 ] || fail_case "a Codex default-role subagent's call did not exit 0, got ${rc}"
+
 # --- Malformed input fails OPEN for the caller, never into the guard ----------------------
 run "empty" "__EMPTY__"
 if [ "${ran}" -ne 0 ] || [ "${rc}" -ne 0 ]; then
@@ -124,6 +153,9 @@ sed 's/^  portfolio-surveyor|agentic-engineering:portfolio-surveyor) ;;$/  never
 grep -q 'never-matches' "${tmp}/surveyor-hook-dispatch.sh" || fail_case "ablation did not apply; the case arm was not found"
 run "ablated" "${payload}"
 [ "${ran}" -eq 0 ] || fail_case "ablation control: a dispatch with no surveyor arm still forwarded (test is vacuous)"
+payload="$(jq -cn --argjson p "${codex_base}" '$p + {agent_id: "019a0000-0000-7000-8000-000000000001", agent_type: "portfolio-surveyor"}')"
+run "codex-ablated" "${payload}"
+[ "${ran}" -eq 0 ] || fail_case "ablation control: a dispatch with no surveyor arm still forwarded a Codex payload (test is vacuous)"
 
 # --- Wiring: settings.json attaches exactly this dispatch as a Bash PreToolUse hook -------
 # shellcheck disable=SC2016
