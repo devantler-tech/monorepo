@@ -52,12 +52,12 @@ findings.
   `docs/digests/TEMPLATE.md`, through an ordinary reviewed pull request.
 - **A workflow sends it.** `maintainer-digest.yaml` runs every Monday at 06:17 UTC, which is 07:17
   or 08:17 in Denmark, off the top of the hour when GitHub most often delays or drops scheduled
-  runs. It has `issues: write` only and `GITHUB_TOKEN`, and opens that week's file as an issue
-  titled `🙋 Maintainer digest — week <n>`, labelled `maintainer-digest` and **assigned to
-  `devantler` by `github-actions[bot]`**. Because a different identity opens the issue and assigns
-  him, GitHub emails him the whole body, provided his notification settings email him about
-  assignments. That setting is a prerequisite of Phase 1: before the first digest relies on it, a
-  test issue assigned by `github-actions[bot]` must arrive in his inbox. Last week's digest is
+  runs. It has `contents: read` and `issues: write` only, with `GITHUB_TOKEN`, and opens that week's
+  file as an issue titled `🙋 Maintainer digest — week <n>`, labelled `maintainer-digest` and
+  **assigned to `devantler` by `github-actions[bot]`**. Because a different identity opens the issue
+  and assigns him, GitHub emails him the whole body, provided his notification settings email him
+  about assignments. That setting is a prerequisite of Phase 1: before the first digest relies on
+  it, a test issue assigned by `github-actions[bot]` must arrive in his inbox. Last week's digest is
   closed.
 - **If the file is missing**, the workflow still sends a short digest listing the open asks and
   saying the summary was not written, so an ask is never held back by a failed run.
@@ -76,25 +76,32 @@ findings.
   lettered `A`, `B`, …, `### Recommendation`, `### If unanswered`). The bar is unchanged: an ask is
   filed only when he must act and no agent can. It carries only the sanitized minimum.
 - **Urgent asks** reach him at once: a public site or the production cluster unreachable for two
-  consecutive checks, a confirmed leak of a credential only he can rotate, or a sibling-lane
-  `ESCALATE`. The label `maintainer-ask-urgent` triggers a second workflow that assigns him as
-  `github-actions[bot]`, at most three times a day. The cap is global, so a fault cannot flood his
-  inbox; an urgent ask beyond it stays open and labelled, and is listed first under **Needs you** in
-  the next digest. The sibling-lane watch changes with it: on `ESCALATE` its caller files and labels
-  an urgent ask instead of sending a Slack DM, and records the notification only after both succeed.
+  consecutive checks, or a sibling-lane `ESCALATE`. A leaked credential only he can rotate is never
+  an ask here, because naming it in a public issue would expose a live incident: until Phase 2
+  exists it goes to him privately through the existing last-resort Slack self-DM. The label
+  `maintainer-ask-urgent` triggers a second workflow that assigns him as `github-actions[bot]`, at
+  most three times a day. The cap is global, so a fault cannot flood his inbox; an urgent ask beyond
+  it stays open and labelled, and is listed first under **Needs you** in the next digest. The
+  sibling-lane watch changes with it: on `ESCALATE` its caller files and labels an urgent ask
+  instead of sending a Slack DM, and records the notification only after both succeed.
 
 ### Phase 2 — a self-hosted mail service for private content
 
 The platform runs its own mail service as a platform capability, not as a new repository. Its first
 use is the **private Money digest**: the spend findings, sent from the platform to the maintainer
-and answered by replying. It can later carry the whole digest, and serve the sites' contact forms.
+and answered by replying. When it goes live, the whole weekly digest moves to it, so he still gets
+one email a week and it is the private channel for spend findings. It can later serve the sites'
+contact forms.
 
 - **What runs:** a mail server deployed by the platform, for example Stalwart, which offers SMTP,
   IMAP and JMAP and does its own DKIM signing. It serves a dedicated subdomain with its own MX
   record, so the main domain's mail stays where it is.
 - **Sending:** it signs mail with DKIM and publishes SPF and DMARC for the subdomain. Hetzner blocks
   outbound port 25 by default, so the service either sends through an unblocked port, which needs a
-  support request only the maintainer can make, or relays. The choice is recorded in that issue.
+  support request only the maintainer can make, or relays. Sending directly also needs matching
+  forward and reverse DNS (PTR) for the sending address, which large mailbox providers require, and
+  a test message that reaches his inbox before the first digest relies on it. The choice is recorded
+  in that issue.
 - **Receiving:** it accepts mail for its own addresses only, and is never an open relay. A reply
   counts only under the rule in *How a reply becomes an instruction*.
 - **Who may send:** the service account the agents use may send only to the maintainer's own
@@ -136,7 +143,8 @@ mark as VIP*.
 
 Phase 1 costs nothing: Actions minutes are free on this public repository, and GitHub sends the
 email. Phase 2 runs on the existing cluster, so its cost is a small share of capacity, plus any relay
-if one is chosen. Both stay within the lifestyle floor.
+if one is chosen. That cost is measured by a cost pass once the relay choice is made, not assumed
+here.
 
 ## Options considered
 
