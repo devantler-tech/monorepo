@@ -346,9 +346,35 @@ cat_builtin() {
 # scopes' own deadlines start, and a file that is missing or unreadable is a
 # failed worker, never a clean one. Removal is asynchronous, like the
 # controller's own cleanup, so a stalled filesystem cannot hold the report open.
-run_safety_early_and_emit() {
-  local standalone=${1:-1} scope report rc overall=0 base out rcf
-  local files=() pids=()
+#
+# Cancellation stops both scans. Each scope job starts in its own process group
+# (`set -m`, as the controller already does for its worker and watchdog), and the
+# emitter is its own subshell whose EXIT/signal trap terminates every scope group
+# still running, waits for it, and removes the hand-off files; the controller in
+# each group then kills its worker and watchdog groups from its own trap. A
+# safety-only run starts the emitter in a process group of its own and forwards a
+# signal sent to the script's PID alone to that whole group. A plain `kill` of the
+# job's PID would not do: a backgrounded subshell function is two processes, and
+# the PID names only the outer one.
+run_safety_early_and_emit() (
+  standalone=${1:-1}
+  overall=0
+  files=()
+  pids=()
+  # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+  scopes_cleanup() {
+    local p
+    for p in "${pids[@]}"; do
+      [ -n "$p" ] && kill -TERM -- "-$p" 2>/dev/null
+    done
+    for p in "${pids[@]}"; do
+      [ -n "$p" ] && wait "$p" 2>/dev/null
+    done
+    pids=()
+    ( rm -f -- "${files[@]}" ) >/dev/null 2>&1 &
+  }
+  trap scopes_cleanup EXIT
+  trap 'exit 130' HUP INT TERM
   base="${TMPDIR:-/tmp}/.agtel_scope.${BASHPID:-$$}.${RANDOM}${RANDOM}${RANDOM}"
   for scope in $SAFETY_SCOPES; do
     out="${base}.${scope}.report"
@@ -361,15 +387,19 @@ run_safety_early_and_emit() {
     # `exec` replaces stdout instead of redirecting one call: a per-call
     # redirection keeps a saved copy of the report pipe that the controller's
     # asynchronous cleanup would inherit and hold open.
+    set -m
     (
-      scope_rc=0
+      set +m
+      trap - EXIT HUP INT TERM
       exec >| "$out" || exit 3
+      scope_rc=0
       run_safety_early "$standalone" "$scope" || scope_rc=$?
       printf '%s\n' "$scope_rc" >| "$rcf"
     ) &
     pids+=("$!")
+    set +m
   done
-  local i=0
+  i=0
   for scope in $SAFETY_SCOPES; do
     out="${base}.${scope}.report"
     rcf="${base}.${scope}.rc"
@@ -377,6 +407,7 @@ run_safety_early_and_emit() {
     report=''
     if [ -n "${pids[$i]}" ]; then
       wait "${pids[$i]}" 2>/dev/null || true
+      pids[i]=''
       rc=$(cat_builtin "$rcf") || rc=3
       case "$rc" in 0|2|124) report=$(cat_builtin "$out") || rc=3 ;; *) rc=3 ;; esac
     fi
@@ -388,13 +419,18 @@ run_safety_early_and_emit() {
       *) emit_safety_unknown 'the safety worker failed; its measurements are incomplete.' "$scope"; overall=2 ;;
     esac
   done
-  ( rm -f -- "${files[@]}" ) >/dev/null 2>&1 &
-  return "$overall"
-}
+  exit "$overall"
+)
 
 if [ "$SAFETY_WORKER" = 0 ] && [ "$SECTION" = safety ]; then
-  run_safety_early_and_emit 1
-  exit $?
+  set -m
+  run_safety_early_and_emit 1 &
+  safety_emit_pid=$!
+  set +m
+  trap 'kill -TERM -- "-$safety_emit_pid" 2>/dev/null; wait "$safety_emit_pid" 2>/dev/null; exit 143' HUP INT TERM
+  safety_emit_rc=0
+  wait "$safety_emit_pid" || safety_emit_rc=$?
+  exit "$safety_emit_rc"
 fi
 
 # These safety-critical probes run inside the early worker for safety-only

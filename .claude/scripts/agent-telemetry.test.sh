@@ -4518,6 +4518,61 @@ else
   bad "a safety report truncated by a failed write exits 2, never success" "rc=$short_write_rc"
 fi
 
+# Cancelling a safety-only run stops BOTH concurrent scans. Each scope's worker
+# records its PID and stalls; the test then sends SIGTERM to the script's own
+# PID only, not its process group, and requires every stalled worker gone and
+# no hand-off file left behind well before the deadline.
+mkdir -p "$FIX/safety-cancel-shim" "$FIX/safety-cancel-pids" "$FIX/safety-cancel-tmp"
+cat > "$FIX/safety-cancel-shim/grep" <<'EOF_SHIM'
+#!/usr/bin/env bash
+if [ "${AGENT_TELEMETRY_SAFETY_WORKER:-0}" = 1 ]; then
+  printf '%s\n' "$$" > "$SAFETY_CANCEL_PIDS/${AGENT_TELEMETRY_SAFETY_SCOPE:-all}.$$"
+  exec sleep 120
+fi
+exec "$SAFETY_TEST_GREP" "$@"
+EOF_SHIM
+chmod +x "$FIX/safety-cancel-shim/grep"
+PATH="$FIX/safety-cancel-shim:$PATH" SAFETY_TEST_GREP="$candidate_real_grep" \
+  SAFETY_CANCEL_PIDS="$FIX/safety-cancel-pids" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" TMPDIR="$FIX/safety-cancel-tmp" \
+  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 120 >/dev/null 2>&1 &
+cancel_pid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  [ "$(find "$FIX/safety-cancel-pids" -type f | wc -l | tr -d ' ')" -ge 2 ] && break
+  sleep 1
+done
+cancel_started=$(find "$FIX/safety-cancel-pids" -type f | wc -l | tr -d ' ')
+kill -TERM "$cancel_pid" 2>/dev/null
+wait "$cancel_pid" 2>/dev/null
+cancel_alive=0
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  cancel_alive=0
+  for pid_file in "$FIX/safety-cancel-pids"/*; do
+    [ -f "$pid_file" ] || continue
+    stalled=$(cat "$pid_file")
+    if kill -0 "$stalled" 2>/dev/null; then
+      case "$(ps -o stat= -p "$stalled" 2>/dev/null | tr -d '[:space:]')" in
+        Z*) ;;
+        *) cancel_alive=$((cancel_alive + 1)) ;;
+      esac
+    fi
+  done
+  [ "$cancel_alive" -eq 0 ] && break
+  sleep 1
+done
+sleep 1
+cancel_left=$(find "$FIX/safety-cancel-tmp" -maxdepth 1 -name '.agtel_scope.*' | wc -l | tr -d ' ')
+if [ "$cancel_started" -ge 2 ] && [ "$cancel_alive" -eq 0 ] && [ "$cancel_left" -eq 0 ]; then
+  ok "cancelling a safety-only run stops both concurrent scans and removes hand-off files"
+else
+  bad "cancelling a safety-only run stops both concurrent scans and removes hand-off files" \
+    "started=$cancel_started alive=$cancel_alive handoff_left=$cancel_left"
+fi
+for pid_file in "$FIX/safety-cancel-pids"/*; do
+  [ -f "$pid_file" ] && kill -KILL "$(cat "$pid_file")" 2>/dev/null
+done
+
 # Interrupts must come from the structured flag, not prose quoting it.
 mkdir -p "$FIX/interrupt"
 cat > "$FIX/interrupt/s.jsonl" <<'EOF'
