@@ -758,6 +758,13 @@ check "outcomes count a live org repository that has no submodule" "$OUT" 'devan
 check "outcomes total includes the repository without a submodule" "$OUT" 'total: 2'
 check "outcomes inventory counts only non-archived repositories" "$OUT" 'live org, 2 non-archived repositories'
 check "outcomes keep the submodule cohort series beside the wider total" "$OUT" 'submodule cohort (the series before monorepo#4139): 1'
+nocheck "outcomes complete cohort is not labelled active-only" "$OUT" 'ACTIVE ONLY'
+printf '%s\n' '[{"full_name":"devantler-tech/monorepo","archived":true},{"full_name":"devantler-tech/no-submodule","archived":false}]' \
+  > "$FIX/outcomes/org-repos.json"
+OUT=$(OUTCOMES_ORG_REPOS="$FIX/outcomes/org-repos.json" outcomes_run); RC=$?
+nocheck "outcomes never re-add an archived monorepo to the live inventory" "$OUT" 'devantler-tech/monorepo                    1'
+check "outcomes count only the live repositories when the monorepo is archived" "$OUT" 'total: 1'
+check "outcomes label a cohort missing an archived repository active-only" "$OUT" 'submodule cohort (the series before monorepo#4139): 0 — ACTIVE ONLY, 1 cohort repositories not in the live inventory were not queried'
 printf '%s\n' '[{"full_name":"devantler-tech/monorepo","archived":false},{"full_name":"devantler-tech/empty-repo","archived":false}]' \
   > "$FIX/outcomes/org-repos.json"
 OUT=$(OUTCOMES_ORG_REPOS="$FIX/outcomes/org-repos.json" outcomes_run); RC=$?
@@ -774,6 +781,7 @@ nocheck "outcomes a failing repository is never reported EMPTY" "$OUT" 'EMPTY (n
 check "outcomes a failed repository outside the cohort makes the wider total UNKNOWN" "$OUT" 'merged PRs: UNKNOWN (1 repository queries incomplete)'
 check "outcomes a failed repository outside the cohort keeps the cohort series" "$OUT" 'submodule cohort (the series before monorepo#4139): 1'
 OUT=$(OUTCOMES_ORG_FAIL=1 outcomes_run); RC=$?
+if [ "$RC" = 2 ]; then ok "outcomes failed org listing exits 2 (UNKNOWN)"; else bad "outcomes failed org listing exits 2 (UNKNOWN)" "rc=$RC"; fi
 check "outcomes failed org listing leaves the inventory UNKNOWN" "$OUT" 'repository inventory: UNKNOWN (live org listing failed)'
 check "outcomes failed org listing prints no portfolio merge total" "$OUT" 'merged PRs: UNKNOWN (live repository inventory unavailable)'
 nocheck "outcomes failed org listing never claims a portfolio total" "$OUT" '── total: 1'

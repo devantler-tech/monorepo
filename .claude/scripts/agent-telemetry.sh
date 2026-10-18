@@ -6608,9 +6608,17 @@ if want outcomes; then
        || grep -Evq "^${PORTFOLIO_ORG}/[A-Za-z0-9._-]+\$" <<<"$REPOS"; then
       REPO_INVENTORY=submodules
       REPOS=$COHORT_REPOS
+      main_rc=2
     fi
-    REPOS=$(printf '%s/monorepo\n%s\n' "$PORTFOLIO_ORG" "$REPOS" | grep -v '^$' | sort -u)
+    # The live listing is used as read: re-adding the monorepo here would bring
+    # it back if it were ever archived.
+    REPOS=$(sort -u <<<"$REPOS")
     COHORT_TOTAL=0; COHORT_FAIL=0
+    # Cohort repositories the live listing left out (archived, or gone) are not
+    # queried, so the cohort series is then active-only and says so. (awk, not
+    # `grep -vxF -f`: BSD grep misreports that set difference.)
+    COHORT_EXCLUDED=$(awk 'NR == FNR { seen[$0] = 1; next } $0 != "" && !($0 in seen) { n++ } END { print n + 0 }' \
+                      <(printf '%s\n' "$REPOS") <(printf '%s\n' "$COHORT_REPOS"))
     EMPTY_REPOS=' '
     # GitHub answers HTTP 409 "Git Repository is empty." for a repository with no
     # commits. Such a repository has no main to break and nothing to revert, so it
@@ -6741,7 +6749,9 @@ EOF
     else
       echo "    merged PRs: UNKNOWN (live repository inventory unavailable)"
     fi
-    if [ "$COHORT_FAIL" -eq 0 ]; then
+    if [ "$COHORT_FAIL" -eq 0 ] && [ "$COHORT_EXCLUDED" -gt 0 ]; then
+      echo "    submodule cohort (the series before monorepo#4139): ${COHORT_TOTAL} — ACTIVE ONLY, ${COHORT_EXCLUDED} cohort repositories not in the live inventory were not queried"
+    elif [ "$COHORT_FAIL" -eq 0 ]; then
       echo "    submodule cohort (the series before monorepo#4139): ${COHORT_TOTAL}"
     else
       echo "    submodule cohort (the series before monorepo#4139): UNKNOWN (${COHORT_FAIL} repository queries incomplete)"
