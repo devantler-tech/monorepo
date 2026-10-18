@@ -30,6 +30,13 @@
 #   overridable target would let anything able to set the surveyor's environment point
 #   the guard at a program of its choosing.
 #
+# CODEX. openai/codex (rust-v0.155.0 onward) puts the same `agent_type` field on its
+# PreToolUse stdin for a thread-spawned subagent, set to the role it was spawned with, and
+# sends shell calls as tool_name "Bash" with tool_input.command. A Codex hook entry that
+# runs this script therefore scopes the guard the same way, and the test pins that shape.
+# Codex hooks are runtime-local (~/.codex/hooks.json, hash-trusted), so attaching it there
+# is a runtime change, not something this repository can do.
+#
 # The overlay keeps its frontmatter hook as well; on that type the guard therefore runs
 # twice per call, which is idempotent (two denials or two admissions of the same input).
 
