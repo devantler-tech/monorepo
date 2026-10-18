@@ -349,12 +349,18 @@ jq -s . <(issue 18 devantler "🙋 Ask: Merge #12 /lgtm" \
 run needs-you --repo "$repo"
 expect_rc 0 "an ask with active syntax is shown"
 expect_in "$tmp/out" "### 1. Ask [#18](https://github.com/example-org/example-repo/issues/18)" "the heading carries only text the script writes"
-if grep -nE '/approve|/lgtm|Closes #|<img|^```|Not a heading|example\.com' "$tmp/out" | grep -vE '^[0-9]+:    ' | grep -q .; then
+# Lines carrying copied active syntax, then those of them not indented as code; no pipe into grep -q.
+active_lines="$(grep -nE '/approve|/lgtm|Closes #|<img|^```|Not a heading|example\.com' "$tmp/out" || true)"
+unindented="$(grep -vE '^[0-9]+:    ' <<<"$active_lines" || true)"
+if [ -z "$active_lines" ]; then
+  bad "the active-syntax lines are missing from the digest"
+elif [ -n "$unindented" ]; then
   bad "copied text reached the digest outside a code block"
 else
   pass "every copied line is indented as code"
 fi
-if awk '/^\*\*Question\*\*$/ { q = 1; next } q && /^\*\*Options\*\*$/ { print "ok"; exit }' "$tmp/out" | grep -q ok; then
+next_section="$(awk '/^\*\*Question\*\*$/ { q = 1; next } q && /^\*\*Options\*\*$/ { print "ok"; exit }' "$tmp/out")"
+if [ "$next_section" = ok ]; then
   pass "a fence in the text does not swallow the next section"
 else
   bad "a fence in the text swallowed the next section"
