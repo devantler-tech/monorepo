@@ -112,8 +112,10 @@ changed and why.
 
 ### Making it unmistakable
 
-A digest comes from `github-actions[bot]` (Phase 1) or from the platform's own mail address
-(Phase 2), and its subject begins with `🙋`. One mail rule separates it, for example: *subject
+In Phase 1 a digest is a GitHub notification email about an issue that `github-actions[bot]` opened
+and assigned, so its sender is GitHub's notification address; in Phase 2 it comes from the platform's
+own mail address. Either way its subject begins with `🙋`, so the rule matches the subject, not the
+sender. One mail rule separates it, for example: *subject
 contains "🙋 Maintainer" → move to a "Maintainer" mailbox*.
 
 ## Cost
