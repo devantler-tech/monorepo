@@ -571,7 +571,7 @@ private-hostname|It runs on $(printf '%s.%s' build internal) now.
 spend-heading|## Money
 spend-wording|Cloud spend increased substantially after the migration.
 spend-wording|Cloud costs decreased substantially after the migration.
-money|The new plan is 20 20 12 61 79 80 81 98 702 701 703 33 100 204 250 395 398 399 400printf '%s %s' DKK 1200) a year.
+money|The new plan is $(printf '%s %s' DKK 1200) a year.
 EOF
 
 # Only the template's exact rule line is left out of the scan; the same line with anything added is not.
