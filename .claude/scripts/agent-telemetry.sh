@@ -361,19 +361,28 @@ run_safety_early_and_emit() (
   overall=0
   files=()
   pids=()
+  # Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0, and the
+  # trap's own successful cleanup then becomes the emitter's status, which the
+  # callers would read as a complete safety reading. Completion is recorded
+  # explicitly, so reaching the end is the only way a zero status leaves.
+  emit_finished=0
   # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
   scopes_cleanup() {
-    local p
-    for p in "${pids[@]}"; do
+    local rc=$? p
+    for p in ${pids[@]+"${pids[@]}"}; do
       [ -n "$p" ] && kill -TERM -- "-$p" 2>/dev/null
     done
     # Wait for each scope GROUP to empty, not only for the job process: the
     # controller inside it is still stopping its worker and watchdog.
-    for p in "${pids[@]}"; do
+    for p in ${pids[@]+"${pids[@]}"}; do
       [ -n "$p" ] && wait_process_group "$p"
     done
     pids=()
-    ( rm -f -- "${files[@]}" ) >/dev/null 2>&1 &
+    ( rm -f -- ${files[@]+"${files[@]}"} ) >/dev/null 2>&1 &
+    if [ "$emit_finished" != 1 ] && [ "$rc" -eq 0 ]; then
+      rc=3
+    fi
+    exit "$rc"
   }
   trap scopes_cleanup EXIT
   trap 'exit 130' HUP INT TERM
@@ -426,6 +435,7 @@ run_safety_early_and_emit() (
       *) emit_safety_unknown 'the safety worker failed; its measurements are incomplete.' "$scope"; overall=2 ;;
     esac
   done
+  emit_finished=1
   exit "$overall"
 )
 

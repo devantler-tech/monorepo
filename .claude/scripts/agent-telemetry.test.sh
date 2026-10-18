@@ -4629,6 +4629,28 @@ for pid_file in "$FIX/full-cancel-pids"/*; do
   [ -f "$pid_file" ] && kill -KILL "$(cat "$pid_file")" 2>/dev/null
 done
 
+# The emitter's EXIT trap must fail closed (.claude/scripts/AGENTS.md): Bash 3.2
+# reports a `set -u` abort to an EXIT trap as status 0. A copy of the script gets
+# an unbound-variable abort injected after the emitter has started both scopes,
+# behind a reach marker, and must not exit 0 on the system bash (3.2 on macOS).
+mkdir -p "$FIX/emit-abort"
+awk -v marker="$FIX/emit-abort/reached" '
+  /^  i=0$/ { print "  : > \"" marker "\""; print "  : \"$agtel_injected_unbound_variable\"" }
+  { print }
+' "$TARGET" > "$FIX/emit-abort/agent-telemetry.sh"
+emit_abort_rc=0
+AGENT_INSTANCES_FILE="$SCRIPT_DIR/../plugin-consumption/agent-instances.json" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  /bin/bash "$FIX/emit-abort/agent-telemetry.sh" --since-days 3650 --section safety \
+  --safety-timeout-seconds 30 >/dev/null 2>&1 || emit_abort_rc=$?
+if [ -e "$FIX/emit-abort/reached" ] && [ "$emit_abort_rc" -ne 0 ]; then
+  ok "an abort inside the safety emitter is never reported as success"
+else
+  bad "an abort inside the safety emitter is never reported as success" \
+    "reached=$([ -e "$FIX/emit-abort/reached" ] && echo yes || echo no) rc=$emit_abort_rc"
+fi
+
 # Interrupts must come from the structured flag, not prose quoting it.
 mkdir -p "$FIX/interrupt"
 cat > "$FIX/interrupt/s.jsonl" <<'EOF'
