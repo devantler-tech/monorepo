@@ -46,6 +46,7 @@ jobs:
       gnu-only-syntax-guard: ${{ steps.filter.outputs.gnu-only-syntax-guard }}
       one-verb-per-bash-call-contract: ${{ steps.filter.outputs.one-verb-per-bash-call-contract }}
       pr-sweep-enumeration-contract: ${{ steps.filter.outputs.pr-sweep-enumeration-contract }}
+      security-advisory-contract: ${{ steps.filter.outputs.security-advisory-contract }}
       retired-rule-survivors-contract: ${{ steps.filter.outputs.retired-rule-survivors-contract }}
       bash-call-timeout-budget-contract: ${{ steps.filter.outputs.bash-call-timeout-budget-contract }}
       codex-dispatch-supersession-contract: ${{ steps.filter.outputs.codex-dispatch-supersession-contract }}
@@ -67,6 +68,7 @@ jobs:
       claude-dispatch-rate: ${{ steps.filter.outputs.claude-dispatch-rate }}
       review-lane-health: ${{ steps.filter.outputs.review-lane-health }}
       silent-scheduled-workflows: ${{ steps.filter.outputs.silent-scheduled-workflows }}
+      security-advisory-sweep: ${{ steps.filter.outputs.security-advisory-sweep }}
       platform-live-health: ${{ steps.filter.outputs.platform-live-health }}
       lane-draft-count: ${{ steps.filter.outputs.lane-draft-count }}
       delivered-open-candidates: ${{ steps.filter.outputs.delivered-open-candidates }}
@@ -518,6 +520,11 @@ jobs:
               - '.claude/guides/**'
               - '.claude/scripts/pr-sweep-enumeration-contract.test.sh'
               - '.github/workflows/ci.yaml'
+            security-advisory-contract:
+              - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/security-advisory-contract.test.sh'
+              - '.github/workflows/ci.yaml'
             retired-rule-survivors-contract:
               - 'AGENTS.md'
               - '.claude/guides/**'
@@ -686,6 +693,10 @@ jobs:
             silent-scheduled-workflows:
               - '.claude/scripts/silent-scheduled-workflows.sh'
               - '.claude/scripts/silent-scheduled-workflows.test.sh'
+              - '.github/workflows/ci.yaml'
+            security-advisory-sweep:
+              - '.claude/scripts/security-advisory-sweep.sh'
+              - '.claude/scripts/security-advisory-sweep.test.sh'
               - '.github/workflows/ci.yaml'
             platform-live-health:
               - '.claude/scripts/platform-live-health.sh'
@@ -2210,6 +2221,21 @@ jobs:
       - name: Verify the PR sweep enumeration contract
         run: bash .claude/scripts/pr-sweep-enumeration-contract.test.sh
 
+  test-security-advisory-contract:
+    name: Test security advisory contract
+    needs: changes
+    if: needs.changes.outputs.security-advisory-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the security advisory contract
+        run: bash .claude/scripts/security-advisory-contract.test.sh
+
   test-retired-rule-survivors-contract:
     name: Test retired rule survivors contract
     needs: changes
@@ -2527,6 +2553,25 @@ jobs:
           persist-credentials: false
       - name: Verify the silent scheduled workflow check
         run: bash .claude/scripts/silent-scheduled-workflows.test.sh
+
+  test-security-advisory-sweep:
+    name: Test security advisory sweep
+    needs: changes
+    if: needs.changes.outputs.security-advisory-sweep == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the security advisory sweep
+        run: bash .claude/scripts/security-advisory-sweep.test.sh
 
   test-platform-live-health:
     name: Test platform live health
@@ -3088,6 +3133,7 @@ jobs:
       - test-gnu-only-syntax-guard
       - test-one-verb-per-bash-call-contract
       - test-pr-sweep-enumeration-contract
+      - test-security-advisory-contract
       - test-retired-rule-survivors-contract
       - test-bash-call-timeout-budget-contract
       - test-codex-dispatch-supersession-contract
@@ -3110,6 +3156,7 @@ jobs:
       - test-claude-dispatch-rate
       - test-review-lane-health
       - test-silent-scheduled-workflows
+      - test-security-advisory-sweep
       - test-platform-live-health
       - test-lane-draft-count
       - test-delivered-open-candidates
@@ -3181,6 +3228,7 @@ jobs:
             ${{ needs.test-gnu-only-syntax-guard.result }}
             ${{ needs.test-one-verb-per-bash-call-contract.result }}
             ${{ needs.test-pr-sweep-enumeration-contract.result }}
+            ${{ needs.test-security-advisory-contract.result }}
             ${{ needs.test-retired-rule-survivors-contract.result }}
             ${{ needs.test-bash-call-timeout-budget-contract.result }}
             ${{ needs.test-codex-dispatch-supersession-contract.result }}
@@ -3203,6 +3251,7 @@ jobs:
             ${{ needs.test-claude-dispatch-rate.result }}
             ${{ needs.test-review-lane-health.result }}
             ${{ needs.test-silent-scheduled-workflows.result }}
+            ${{ needs.test-security-advisory-sweep.result }}
             ${{ needs.test-platform-live-health.result }}
             ${{ needs.test-lane-draft-count.result }}
             ${{ needs.test-delivered-open-candidates.result }}
