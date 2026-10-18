@@ -394,13 +394,12 @@ jobs:
               - 'docs/**'
               - '.github/workflows/ci.yaml'
             maintainer-digest:
-              # The self-test reads the template, both workflows and the ask form, and the job
+              # The self-test reads the template, the workflow and the ask form, and the job
               # checks every digest file.
               - '.claude/scripts/maintainer-digest.sh'
               - '.claude/scripts/maintainer-digest.test.sh'
               - 'docs/digests/**'
               - '.github/workflows/maintainer-digest.yaml'
-              - '.github/workflows/maintainer-ask-urgent.yaml'
               - '.github/ISSUE_TEMPLATE/**'
               - '.github/workflows/ci.yaml'
             comment-disclosure-drift:

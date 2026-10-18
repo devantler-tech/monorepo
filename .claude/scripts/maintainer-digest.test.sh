@@ -6,7 +6,7 @@
 #   2. the file missing: the fallback lists every open ask with all four sections and says the summary
 #      is missing;
 #   3. an ask missing a section is reported by number and still listed;
-#   4. the urgent path assigns only for the urgent label and refuses a fourth assignment in one day;
+#   4. every GitHub object read must carry the fields its kind declares, or the run is UNKNOWN;
 #   5. the template and its rules forbid private content, and the check catches every marker kind.
 # Plus: an ask filed after the summary still goes out, an ask showing private content is held back,
 # an @mention is quieted, a digest GitHub did not assign is neither counted as sent nor closes the
@@ -176,8 +176,8 @@ complete_asks() {
 # Last week's digest, and an issue someone else gave the digest label, which must stay open.
 earlier_digests() {
   jq -n '[
-    {number: 800, title: "🙋 Maintainer digest — week 42", user: {login: "github-actions[bot]"}},
-    {number: 801, title: "Mislabelled", user: {login: "devantler"}}]'
+    {number: 800, title: "🙋 Maintainer digest — week 42", user: {login: "github-actions[bot]"}, assignees: [{login: "devantler"}], created_at: "2026-10-12T06:17:00Z"},
+    {number: 801, title: "Mislabelled", user: {login: "devantler"}, assignees: [], created_at: "2026-10-12T07:00:00Z"}]'
 }
 
 digests="$tmp/digests"
@@ -316,18 +316,16 @@ else
   bad "an empty Needs you printed: $(cat "$tmp/out")"
 fi
 
-# An urgent ask leads Needs you, ahead of older asks, so one the daily assignment cap held back is
-# the first thing the next digest shows.
+# Asks are listed oldest first, whatever order the listing returns them in.
 reset_case
 {
+  issue 11 devantler "🙋 Ask: Retire the status page" "$second_body"
   issue 10 devantler "🙋 Ask: Keep 30 days of backups" "$complete_body"
-  issue 11 devantler "🙋 Ask: Retire the status page" "$second_body" |
-    jq '.labels += [{name: "maintainer-ask-urgent"}]'
 } | jq -s . | fixture GET "$asks_path"
 run needs-you --repo "$repo"
 expect_rc 0 "two complete asks are no finding"
-expect_in "$tmp/out" "### 1. Ask [#11]" "an urgent ask is listed first"
-expect_in "$tmp/out" "### 2. Ask [#10]" "older asks follow the urgent one"
+expect_in "$tmp/out" "### 1. Ask [#10]" "the oldest ask is listed first"
+expect_in "$tmp/out" "### 2. Ask [#11]" "the newer ask follows"
 
 echo "needs-you: what an ask may put in the digest"
 reset_case
@@ -388,13 +386,51 @@ reset_case
 issue 19 devantler "🙋 Ask: No title" "$complete_body" | jq -s 'map(del(.title))' | fixture GET "$asks_path"
 run needs-you --repo "$repo"
 expect_rc 2 "an ask without its title is unknown"
+reset_case
+issue 19 devantler "🙋 Ask: No body field" "$complete_body" | jq -s 'map(del(.body))' | fixture GET "$asks_path"
+run needs-you --repo "$repo"
+expect_rc 2 "an ask whose body field is missing is unknown"
+reset_case
+issue 19 devantler "🙋 Ask: Empty body" "" | jq -s 'map(.body = null)' | fixture GET "$asks_path"
+run needs-you --repo "$repo"
+expect_rc 1 "an ask with an empty (null) body is read, and its missing sections are findings"
+expect_in "$tmp/err" "MISSING-SECTION #19 Question" "the empty ask is named"
+
+echo "send: a partial digest object is unknown, and nothing is opened or closed"
+for field in created_at assignees user number title; do
+  reset_case
+  complete_asks | fixture GET "$asks_path"
+  earlier_digests | jq --arg f "$field" '.[0] |= del(.[$f])' | fixture GET "$digests_path"
+  run send --repo "$repo" --week 2026-W43 --dir "$digests"
+  expect_rc 2 "a digest listing without $field is unknown"
+  expect_no_writes "a digest listing without $field opens and closes nothing"
+done
+for bad_value in '.created_at = "2026-10-12not-a-time"' '.created_at = "2026-02-30T06:17:00Z"' '.assignees = [{}]' '.assignees = null'; do
+  reset_case
+  complete_asks | fixture GET "$asks_path"
+  earlier_digests | jq ".[0] |= ($bad_value)" | fixture GET "$digests_path"
+  run send --repo "$repo" --week 2026-W43 --dir "$digests"
+  expect_rc 2 "a digest listing where $bad_value is unknown"
+  expect_no_writes "a digest listing where $bad_value opens and closes nothing"
+done
+
+echo "send: an incomplete response to opening the digest closes nothing"
+reset_case
+complete_asks | fixture GET "$asks_path"
+earlier_digests | fixture GET "$digests_path"
+write_week_file
+echo '{"number": 900}' | fixture POST "$api/issues"
+run send --repo "$repo" --week 2026-W43 --dir "$digests"
+expect_rc 2 "a created issue without its assignees is unknown"
+expect_not_in "$GH_STUB_LOG" "PATCH " "last week's digest stays open"
+
 
 echo "send: a backfill of an earlier week keeps the later digest open"
 reset_case
 complete_asks | fixture GET "$asks_path"
 jq -n '[
-  {number: 790, title: "🙋 Maintainer digest — week 40", user: {login: "github-actions[bot]"}, created_at: "2026-09-28T06:17:00Z"},
-  {number: 800, title: "🙋 Maintainer digest — week 42", user: {login: "github-actions[bot]"}, created_at: "2026-10-12T06:17:00Z"}]' |
+  {number: 790, title: "🙋 Maintainer digest — week 40", user: {login: "github-actions[bot]"}, assignees: [], created_at: "2026-09-28T06:17:00Z"},
+  {number: 800, title: "🙋 Maintainer digest — week 42", user: {login: "github-actions[bot]"}, assignees: [], created_at: "2026-10-12T06:17:00Z"}]' |
   fixture GET "$digests_path"
 run send --repo "$repo" --week 2026-W41 --dir "$digests"
 expect_rc 1 "the backfill is sent from the fallback"
@@ -447,7 +483,7 @@ expect_not_in "$tmp/out" "ALREADY-SENT" "a year-old digest with the same week do
 expect_in "$GH_STUB_LOG" "POST $api/issues" "this year's digest is opened"
 reset_case
 complete_asks | fixture GET "$asks_path"
-jq -n '[{number: 850, title: "🙋 Maintainer digest — week 43", user: {login: "github-actions[bot]"}, assignees: []}]' |
+jq -n '[{number: 850, title: "🙋 Maintainer digest — week 43", user: {login: "github-actions[bot]"}, assignees: [], created_at: "2026-10-19T06:17:00Z"}]' |
   fixture GET "$digests_path"
 run send --repo "$repo" --week 2026-W43 --dir "$digests"
 expect_rc 0 "a digest GitHub never assigned to him is sent again"
@@ -582,6 +618,9 @@ phone-number|Call $(printf '%s-%s-%s' 000 000 0000) when it breaks.
 phone-number|Call $(printf '%s' 0000000000) when it breaks.
 money|The cluster costs $(printf '%s %s' 120 kr) a month.
 credential|The token is ${token}.
+armoured-block|$(printf '%s%s' '-----' 'BEGIN PGP PRIVATE KEY BLOCK-----')
+armoured-block|$(printf '%s%s' '-----' 'BEGIN OPENSSH PRIVATE KEY-----')
+armoured-block|  $(printf '%s%s' '-----' 'begin certificate-----')
 credential-assignment|Set token=$(printf '%s%s' supersecret value) in the config.
 credential-assignment|Send it with Authorization: Bearer $(printf '%s%s' abcdefghij klmnopqrstuvwxyz).
 private-hostname|The app reads from postgres.database.svc on start.
@@ -650,170 +689,11 @@ run check "$tmp/numeric-identifiers.md"
 expect_rc 0 "an ISO date and an action run identifier are not national phone numbers"
 run check "$tmp/absent.md"
 expect_rc 2 "an unreadable file is unknown"
-echo "urgent"
-# Ask #42 with the given assignees and labels (by default unassigned, with both ask labels).
-urgent_case() {
-  local assignees='[]' labels='[{"name": "maintainer-ask"}, {"name": "maintainer-ask-urgent"}]'
-  local author=devantler
-  if [ "$#" -ge 1 ]; then assignees=$1; fi
-  if [ "$#" -ge 2 ]; then labels=$2; fi
-  if [ "$#" -ge 3 ]; then author=$3; fi
-  reset_case
-  jq -n --argjson assignees "$assignees" --argjson labels "$labels" --arg author "$author" \
-    '{number: 42, state: "open", user: {login: $author}, labels: $labels, assignees: $assignees}' | fixture GET "$api/issues/42"
-  # The repository's issue events, newest first: two of the bot's assignments of him today, plus
-  # four that do not count (him assigning himself, the bot assigning someone else, a label, and the
-  # bot assigning him the weekly digest it wrote) and
-  # one from yesterday, which ends the count.
-  jq -n '[
-    {event: "assigned", actor: {login: "devantler"}, assignee: {login: "devantler"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-19T10:00:00Z"},
-    {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "someone-else"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-19T10:00:00Z"},
-    {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-19T09:00:00Z"},
-    {event: "labeled", actor: {login: "devantler"}, created_at: "2026-10-19T08:00:00Z"},
-    {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-19T08:00:00Z"},
-    {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, issue: {user: {login: "github-actions[bot]"}}, created_at: "2026-10-19T06:17:00Z"},
-    {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-18T23:59:59Z"}]' |
-    fixture GET "$api/issues/events?per_page=100&page=1"
-}
-# Writes a page of 100 events from today that do not count, so the count reads the next page.
-full_page_today() {
-  jq -n '[range(100) | {event: "labeled", actor: {login: "devantler"}, created_at: "2026-10-19T11:00:00Z"}]'
-}
-urgent_args=(urgent --repo "$repo" --issue 42 --label maintainer-ask-urgent --sender devantler --today 2026-10-19)
-
-urgent_case
-run "${urgent_args[@]}"
-expect_rc 0 "an urgent ask under the daily limit is assigned"
-expect_in "$GH_STUB_LOG" "POST $api/issues/42/assignees assignees[]=devantler" "the maintainer is assigned"
-expect_in "$tmp/out" "ASSIGNED #42: urgent assignment 3 of 3 today (UTC)" "only the bot's assignments of him today count"
-expect_not_in "$GH_STUB_LOG" "DELETE" "an unassigned ask is not unassigned first"
-
-urgent_case
-jq -n '[range(3) | {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-19T08:00:00Z"}]' |
-  fixture GET "$api/issues/events?per_page=100&page=1"
-run "${urgent_args[@]}"
-expect_rc 1 "a fourth assignment in one day is refused"
-expect_in "$tmp/err" "REFUSED #42: 3 urgent asks were already assigned today (UTC), and the limit is 3" "the refusal says why"
-expect_no_writes "a refused ask is not assigned"
-
-# The count reads past a full page of today's events: an assignment on the second page, on an ask
-# whose labels may all be gone by now, still counts.
-urgent_case
-full_page_today | fixture GET "$api/issues/events?per_page=100&page=1"
-jq -n '[range(3) | {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-19T07:00:00Z"}]' |
-  fixture GET "$api/issues/events?per_page=100&page=2"
-run "${urgent_args[@]}"
-expect_rc 1 "assignments on a later page of today's events still count toward the limit"
-expect_no_writes "the limit holds across pages"
-
-# A day with more pages of events than the script reads is UNKNOWN, never a count of what it read.
-urgent_case
-for p in $(seq 1 30); do full_page_today | fixture GET "$api/issues/events?per_page=100&page=$p"; done
-run "${urgent_args[@]}"
-expect_rc 2 "more pages of events today than the script reads is unknown"
-expect_no_writes "an incomplete count assigns nobody"
-
-# Every field used by the assignment count must be present and correctly typed. A partial event
-# could hide an earlier assignment and permit a fourth notification, so it must stop before writing.
-for field in actor assignee issue created_at; do
-  urgent_case
-  jq -n --arg field "$field" '[range(3) | {event: "assigned", actor: {login: "github-actions[bot]"},
-    assignee: {login: "devantler"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-19T08:00:00Z"}]
-    | .[0] |= del(.[$field])' | fixture GET "$api/issues/events?per_page=100&page=1"
-  run "${urgent_args[@]}"
-  expect_rc 2 "an assigned event missing $field makes the count unknown"
-  expect_no_writes "an assigned event missing $field assigns nobody"
-done
-
-# Nested identity fields and timestamps must also be usable, rather than just having a parent key.
-while IFS= read -r transform; do
-  urgent_case
-  jq -n '[range(3) | {event: "assigned", actor: {login: "github-actions[bot]"},
-    assignee: {login: "devantler"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-19T08:00:00Z"}]' |
-    jq ".[0] |= ($transform)" | fixture GET "$api/issues/events?per_page=100&page=1"
-  run "${urgent_args[@]}"
-  expect_rc 2 "a malformed event ($transform) makes the count unknown"
-  expect_no_writes "a malformed event ($transform) assigns nobody"
-done <<'TRANSFORMS'
-.actor.login = ""
-.assignee.login = null
-.issue.user = {}
-.created_at = "2026-10-19not-a-time"
-.created_at = "2026-02-30T08:00:00Z"
-.event = null
-TRANSFORMS
-
-# A malformed timestamp on a full page cannot be mistaken for yesterday and end pagination.
-urgent_case
-full_page_today | jq '.[-1] |= del(.created_at)' | fixture GET "$api/issues/events?per_page=100&page=1"
-run "${urgent_args[@]}"
-expect_rc 2 "a page-ending event without its timestamp makes pagination unknown"
-expect_no_writes "unknown pagination assigns nobody"
-
-reset_case
-run urgent --repo "$repo" --issue 42 --label maintainer-ask --sender devantler --today 2026-10-19
-expect_rc 0 "another label is not a finding"
-expect_in "$tmp/out" "SKIP #42: the label added is not maintainer-ask-urgent" "another label assigns nobody"
-if [ -s "$GH_STUB_LOG" ]; then bad "another label made a call: $(cat "$GH_STUB_LOG")"; else pass "another label makes no call"; fi
-
-reset_case
-run urgent --repo "$repo" --issue 42 --label maintainer-ask-urgent --sender someone-else --today 2026-10-19
-expect_rc 1 "the urgent label from another account is refused"
-expect_in "$tmp/err" "REFUSED #42: only the maintainer's account may mark an ask urgent" "the refusal names the reason"
-if [ -s "$GH_STUB_LOG" ]; then bad "an untrusted sender made a call"; else pass "an untrusted sender makes no call"; fi
-
-urgent_case '[{"login": "devantler"}]'
-run "${urgent_args[@]}"
-expect_rc 0 "an ask already assigned to him is assigned again"
-if [ "$(grep -E '^(POST|DELETE) ' "$GH_STUB_LOG" | cut -d' ' -f1 | tr '\n' ' ')" = "DELETE POST " ]; then
-  pass "the existing assignment is removed first, so the new one emails him"
-else
-  bad "the writes were: $(grep -E '^(POST|DELETE) ' "$GH_STUB_LOG")"
-fi
-
-urgent_case '[]' '[{"name": "maintainer-ask"}, {"name": "maintainer-ask-urgent"}]' someone-else
-run "${urgent_args[@]}"
-expect_rc 1 "an urgent label on an issue another account wrote is refused"
-expect_in "$tmp/err" "only an ask the maintainer wrote" "the refusal names the untrusted author"
-expect_no_writes "an untrusted issue is not assigned"
-
-urgent_case '[]' '[{"name": "maintainer-ask-urgent"}]'
-run "${urgent_args[@]}"
-expect_rc 1 "an urgent label on an issue that is not an ask is refused"
-expect_in "$tmp/err" "only an ask the maintainer wrote" "the refusal names the missing ask label"
-expect_no_writes "a mistagged issue is not assigned"
-
-urgent_case '[]' '[{"name": "maintainer-ask"}]'
-run "${urgent_args[@]}"
-expect_rc 0 "an ask whose urgent label is gone is not a finding"
-expect_in "$tmp/out" "no longer carries maintainer-ask-urgent" "the skip says why"
-expect_no_writes "an ask without the urgent label is not assigned"
-
-urgent_case
-rm "$GH_STUB_FIX/GET$(key "$api/issues/events?per_page=100&page=1").json"
-run "${urgent_args[@]}"
-expect_rc 2 "a failed count of today's assignments is unknown"
-expect_no_writes "an unknown count assigns nobody"
-
-urgent_case
-run "${urgent_args[@]}" --dry-run
-expect_rc 0 "the dry run plans the assignment"
-expect_in "$tmp/out" "DRY-RUN would assign devantler to #42" "the dry run names the assignment"
-expect_no_writes "the dry run makes no write"
-
-urgent_case
-echo '{"number": 42, "assignees": []}' | fixture POST "$api/issues/42/assignees"
-run "${urgent_args[@]}"
-expect_rc 1 "an assignment GitHub did not record is a finding"
-expect_in "$tmp/err" "NOT-ASSIGNED #42" "the missing assignment is reported"
-
 echo "workflows, and the organization's shared issue forms"
 wf="$root/.github/workflows"
 digest_wf="$wf/maintainer-digest.yaml"
-urgent_wf="$wf/maintainer-ask-urgent.yaml"
 # Converts workflow YAML to JSON for structural assertions.
 as_json() { yq -o=json '.' "$1"; }
-as_json "$urgent_wf" >"$tmp/urgent-wf.json"
 as_json "$digest_wf" >"$tmp/digest-wf.json"
 # GitHub shows the organization's shared issue forms only in a repository with no issue templates of
 # its own, so one local form would hide all of them. Asks are filed through the API, so none is needed.
@@ -828,24 +708,13 @@ expect_json() {
   actual="$(jq -c "$2" "$1")"
   if [ "$actual" = "$3" ]; then pass "$4"; else bad "$4: $2 is $actual, expected $3"; fi
 }
-expect_json "$tmp/urgent-wf.json" '.on' '{"issues":{"types":["labeled"]}}' "the urgent workflow runs only when a label is added"
-expect_json "$tmp/urgent-wf.json" '.jobs.assign.if' "\"github.event.label.name == 'maintainer-ask-urgent'\"" "the urgent job runs only for the urgent label"
-expect_json "$tmp/urgent-wf.json" '[.permissions, .jobs.assign.permissions]' '[{},{"contents":"read","issues":"write"}]' "the urgent workflow holds only what it needs"
-expect_json "$tmp/urgent-wf.json" '[.concurrency, .jobs.assign.concurrency]' \
-  '[null,{"group":"maintainer-ask-urgent","queue":"max","cancel-in-progress":false}]' \
-  "urgent assignments run one at a time, queued, so the daily limit holds and no ask is dropped"
-expect_json "$tmp/urgent-wf.json" '[.jobs.assign.steps[].run // empty | test("maintainer-digest\\.sh urgent")] | any' 'true' "the urgent workflow runs the helper"
 expect_json "$tmp/digest-wf.json" '.on.schedule' '[{"cron":"17 6 * * 1"}]' "the digest goes every Monday at 06:17 UTC"
 expect_json "$tmp/digest-wf.json" '.on | has("workflow_dispatch")' 'true' "the digest can be sent by hand"
 expect_json "$tmp/digest-wf.json" '[.permissions, .jobs.send.permissions]' '[{},{"contents":"read","issues":"write"}]' "the digest workflow holds only what it needs"
 expect_json "$tmp/digest-wf.json" '[.jobs.send.steps[].run // empty | test("maintainer-digest\\.sh \"\\$\\{args")] | any' 'true' "the digest workflow runs the helper"
-for f in "$tmp/urgent-wf.json" "$tmp/digest-wf.json"; do
-  expect_json "$f" '[.jobs[].steps[].run // empty | test("\\$\\{\\{")] | any' 'false' "$(basename "$f"): no expression is spliced into a script"
-  expect_json "$f" '[.jobs[].steps[].uses // empty | test("^[^@]+@[0-9a-f]{40}$")] | all' 'true' "$(basename "$f"): every action is pinned to a full commit"
-done
-for f in "$digest_wf" "$urgent_wf"; do
-  expect_not_in "$f" "secrets." "$(basename "$f"): only the workflow's own token is used"
-done
+expect_json "$tmp/digest-wf.json" '[.jobs[].steps[].run // empty | test("\\$\\{\\{")] | any' 'false' "the digest workflow splices no expression into a script"
+expect_json "$tmp/digest-wf.json" '[.jobs[].steps[].uses // empty | test("^[^@]+@[0-9a-f]{40}$")] | all' 'true' "the digest workflow pins every action to a full commit"
+expect_not_in "$digest_wf" "secrets." "the digest workflow uses only its own token"
 if [ "$fails" -ne 0 ]; then
   echo "maintainer-digest.test.sh: $fails assertion(s) failed" >&2
   exit 1

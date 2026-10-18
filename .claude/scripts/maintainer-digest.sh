@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# maintainer-digest.sh — send the weekly maintainer digest, and urgent asks, by email (ADR 0009
-# phase 1, monorepo#4285).
+# maintainer-digest.sh — send the weekly maintainer digest by email (ADR 0009 phase 1,
+# monorepo#4285). Urgent asks are a follow-up (monorepo#4305).
 #
 # Why this exists. The agents act through the maintainer's own GitHub account, and GitHub never
 # emails a user about their own activity, so an ask an agent files never reaches him on its own. The
 # Slack DM that carried asks left answers unread for weeks (monorepo#3888). GitHub does email him an
-# issue that github-actions[bot] opens and assigns to him, so two workflows send for the agents:
-# maintainer-digest.yaml every Monday, and maintainer-ask-urgent.yaml when an ask is marked urgent.
-# This script is their logic, kept here so it can be tested.
+# issue that github-actions[bot] opens and assigns to him, so maintainer-digest.yaml sends one for the
+# agents every Monday. This script is its logic, kept here so it can be tested.
 #
 # Subcommands:
 #   send [--repo OWNER/REPO] [--week YYYY-Www] [--dir DIR] [--dry-run]
@@ -21,10 +20,6 @@
 #     close finishes the cleanup.
 #   needs-you [--repo OWNER/REPO]
 #     Print the Needs you section for the open asks, as `send` puts it in the digest.
-#   urgent --issue N --label NAME --sender LOGIN [--repo OWNER/REPO] [--today YYYY-MM-DD] [--dry-run]
-#     Assign the maintainer to an urgent ask, so GitHub emails him at once. At most three a UTC day,
-#     counted from the repository's issue events so removing an ask's labels does not hide one. Only an
-#     ask he wrote, labelled maintainer-ask, is assigned.
 #   check FILE...
 #     Check a digest file: its four sections in order, the note that a reply posts publicly, and no
 #     private-content marker. A finding names the file, the line and the kind, never the text found.
@@ -66,11 +61,7 @@ finish() {
 maintainer=devantler
 bot='github-actions[bot]'
 ask_label="maintainer-ask"
-urgent_label="maintainer-ask-urgent"
 digest_label="maintainer-digest"
-urgent_daily_cap=3
-# Pages of the repository's issue events read to count today's urgent assignments (100 events each).
-max_event_pages=30
 # GitHub refuses an issue body over 65,536 characters, and a byte count is never the smaller number.
 max_body_bytes=65536
 ask_sections=("Question" "Options" "Recommendation" "If unanswered")
@@ -78,8 +69,8 @@ digest_sections=("Needs you" "What shipped" "What's in progress" "How to reply")
 
 # Private-content markers: what the template's "Never include" list forbids, in a form a line can
 # match. Each kind has its grep flags and an extended regular expression.
-private_kinds=(ip-address ipv6-address email-address phone-number money credential credential-assignment private-hostname spend-heading spend-wording)
-private_flags=(-E -E -E -E -iE -E -iE -iE -iE -iE)
+private_kinds=(ip-address ipv6-address email-address phone-number money credential armoured-block credential-assignment private-hostname spend-heading spend-wording)
+private_flags=(-E -E -E -E -iE -E -iE -iE -iE -iE -iE)
 private_patterns=(
   '(^|[^0-9.])([0-9]{1,3}\.){3}[0-9]{1,3}([^0-9]|$)'
   # Eight full groups, or any "::" compressed form: groups on either side of the "::", or none.
@@ -90,7 +81,10 @@ private_patterns=(
   # longer numeric identifiers. The template still requires the author to exclude private detail.
   '(tel:|\+[0-9]{1,3}[ .-]?[0-9]{2,4}([ .-]?[0-9]{2,4}){2,}|(^|[^0-9A-Za-z])([0-9]{8}|[0-9]{10}|([0-9]{2}[ .-]){3}[0-9]{2}|[0-9]{4}[ .-][0-9]{4}|([0-9]{3}[ .-]|\([0-9]{3}\)[ .-]?)[0-9]{3}[ .-][0-9]{4})([^0-9A-Za-z]|$))'
   '(\$|€|£) ?[0-9]|(^|[^a-z])(kr|dkk|eur|usd|gbp|sek|nok)\.? ?[0-9]|[0-9][0-9.,]* ?(kr|dkk|eur|usd|gbp|sek|nok|kroner|dollars?|euros?)([^a-z]|$)'
-  '(^|[^A-Za-z0-9])(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,})|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+  '(^|[^A-Za-z0-9])(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,})'
+  # Any armoured block (a key, a certificate, a signature), whatever its label: a digest never needs
+  # one, so every opening armour line is refused rather than a list of private-key labels (monorepo#4302).
+  '-----BEGIN '
   # A secret, token, password or API key written as an assignment, the form agent-telemetry.sh redacts,
   # and an Authorization header or bearer token.
   'authorization["'"'"']?[[:space:]]*[:=]|bearer[[:space:]]+[A-Za-z0-9._~+/=-]{8,}|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,}'
@@ -114,7 +108,7 @@ finding() {
 # Prints invalid arguments and exits with the UNKNOWN status through the guarded completion path.
 usage() {
   echo "maintainer-digest.sh: $*" >&2
-  echo "usage: maintainer-digest.sh send|needs-you|urgent|check ... (see the header comment)" >&2
+  echo "usage: maintainer-digest.sh send|needs-you|check ... (see the header comment)" >&2
   finish 2
 }
 
@@ -136,31 +130,47 @@ check_repo() {
   [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || usage "--repo OWNER/REPO is required (or GITHUB_REPOSITORY)"
 }
 
-# Reads every page of an issue listing into $2 as one JSON array, leaving out pull requests. A failed
-# read, an empty response or anything but pages of issues is UNKNOWN, never an empty list.
+# The fields each kind of GitHub object must carry before the script decides anything from it,
+# declared once (monorepo#4302). Every object read is checked against its kind's whole list, so a
+# partial object is UNKNOWN by construction: no decision falls back to a default for a missing field.
+# A field is a dotted path and its shape: number, string, text (present, a string or null, as GitHub
+# writes an empty body), timestamp (a valid UTC ISO 8601 time) or logins (a list of accounts).
+required_ask='{"number":"number","title":"string","user.login":"string","html_url":"string","body":"text"}'
+required_digest='{"number":"number","title":"string","user.login":"string","created_at":"timestamp","assignees":"logins"}'
+required_created='{"number":"number","assignees":"logins"}'
+# shellcheck disable=SC2016 # A jq program, not a shell expansion.
+conforms_def='def conforms($spec):
+  . as $o | type == "object" and all($spec | to_entries[];
+    (.key | split(".")) as $p | .value as $shape
+    | ($o | getpath($p)) as $v
+    | if $shape == "number" then ($v | type) == "number"
+      elif $shape == "string" then ($v | type) == "string"
+      elif $shape == "text" then ($o | getpath($p[:-1]) | type == "object" and has($p[-1]))
+        and (($v | type) == "string" or $v == null)
+      elif $shape == "timestamp" then ($v | type) == "string"
+        and ((try ($v | fromdateiso8601 | todateiso8601) catch null) == $v)
+      elif $shape == "logins" then ($v | type) == "array" and all($v[]; type == "object" and (.login | type) == "string")
+      else false end);'
+
+# Reads every page of an issue listing into $2 as one JSON array, leaving out pull requests. Every
+# issue must carry the fields $3 (one of the required_* lists) declares. A failed read, an empty
+# response or anything but pages of complete issues is UNKNOWN, never an empty list.
 read_issues() {
-  local path=$1 out=$2
+  local path=$1 out=$2 spec=$3
   gh api --paginate "$path" >"$tmp/page.json" || unknown "could not read $path"
   [ -s "$tmp/page.json" ] || unknown "an empty response for $path"
-  # Every field a caller dereferences must be present, so a partial issue object is UNKNOWN rather
-  # than the literal text "null" in a digest. fetch_asks also checks the fields only an ask needs.
-  jq -s 'if all(.[]; type == "array") and all(.[][]; type == "object" and (.number | type) == "number"
-           and (.title | type) == "string" and (.user.login | type) == "string")
-         then [.[][] | select(has("pull_request") | not)]
-         else error("not a list of issues") end' "$tmp/page.json" >"$out" 2>/dev/null ||
-    unknown "an unexpected response for $path"
+  jq -s --argjson spec "$spec" "$conforms_def"'
+    if all(.[]; type == "array") and all(.[][]; type == "object")
+    then [.[][] | select(has("pull_request") | not)]
+         | if all(.[]; conforms($spec)) then . else error("an incomplete issue") end
+    else error("not a list of issues") end' "$tmp/page.json" >"$out" 2>/dev/null ||
+    unknown "an unexpected or incomplete response for $path"
 }
 
-# Splits the open asks into the maintainer's own and the numbers of everyone else's. His own are
-# urgent first, then oldest first, so an urgent ask the daily assignment cap held back leads the
-# next digest (ADR 0009).
+# Splits the open asks into the maintainer's own, oldest first, and the numbers of everyone else's.
 fetch_asks() {
-  read_issues "repos/$repo/issues?state=open&labels=$ask_label&per_page=100" "$tmp/asks-all.json"
-  jq -e 'all(.[]; (.html_url | type) == "string" and ((.body // "") | type) == "string")' "$tmp/asks-all.json" >/dev/null 2>&1 ||
-    unknown "an ask without its link or body"
-  jq --arg who "$maintainer" --arg urgent "$urgent_label" \
-    'map(select(.user.login == $who))
-     | sort_by([((.labels // []) | any(.name == $urgent) | not), .number])' \
+  read_issues "repos/$repo/issues?state=open&labels=$ask_label&per_page=100" "$tmp/asks-all.json" "$required_ask"
+  jq --arg who "$maintainer" 'map(select(.user.login == $who)) | sort_by(.number)' \
     "$tmp/asks-all.json" >"$tmp/asks.json" || unknown "could not sort the asks"
   jq -r --arg who "$maintainer" 'map(select(.user.login != $who) | .number) | sort | .[]' \
     "$tmp/asks-all.json" >"$tmp/untrusted.txt" || unknown "could not sort the asks"
@@ -443,7 +453,7 @@ cmd_needs_you() {
 close_earlier() {
   local keep=$1 dry=$2 n
   jq -r --arg bot "$bot" --argjson keep "$keep" --argjson end "$week_end" 'map(select(.user.login == $bot and .number != $keep
-      and ((.created_at // "1970-01-01T00:00:00Z") | fromdateiso8601) < $end) | .number) | .[]' \
+      and (.created_at | fromdateiso8601) < $end) | .number) | .[]' \
     "$tmp/digests.json" >"$tmp/earlier.txt" || unknown "could not list the earlier digests"
   while IFS= read -r n; do
     [ -n "$n" ] || continue
@@ -482,13 +492,13 @@ cmd_send() {
   title="🙋 Maintainer digest — week $week_number"
   file="$dir/$week.md"
 
-  read_issues "repos/$repo/issues?state=open&labels=$digest_label&per_page=100" "$tmp/digests.json"
+  read_issues "repos/$repo/issues?state=open&labels=$digest_label&per_page=100" "$tmp/digests.json" "$required_digest"
   # A digest GitHub did not assign to him was never emailed, so it does not count as sent. The title
   # names only the week, so a digest counts only when it was opened in the last eight days: one left
   # open from the same week a year ago must not hold back this year's.
   existing="$(jq -r --arg title "$title" --arg bot "$bot" --arg who "$maintainer" '
-    map(select(.title == $title and .user.login == $bot and any(.assignees[]?; .login == $who)
-      and ((.created_at // "1970-01-01T00:00:00Z") | fromdateiso8601) > (now - 8 * 86400)) | .number)
+    map(select(.title == $title and .user.login == $bot and any(.assignees[]; .login == $who)
+      and (.created_at | fromdateiso8601) > (now - 8 * 86400)) | .number)
     | first // empty' "$tmp/digests.json")"
   if [ -n "$existing" ]; then
     echo "ALREADY-SENT #$existing: this week's digest is already open, so nothing is sent"
@@ -538,131 +548,19 @@ cmd_send() {
     '{title: $title, body: $body, assignees: [$who], labels: [$label]}' >"$tmp/payload.json"
   gh api -X POST "repos/$repo/issues" --input "$tmp/payload.json" >"$tmp/created.json" ||
     unknown "could not open the digest issue"
-  number="$(jq -r 'if (.number | type) == "number" then .number else empty end' "$tmp/created.json" 2>/dev/null)" ||
-    unknown "an unexpected response when opening the digest issue"
-  [ -n "$number" ] || unknown "an unexpected response when opening the digest issue"
+  # An incomplete response cannot show whether he was assigned, so the earlier digests stay open.
+  jq -e --argjson spec "$required_created" "$conforms_def"' conforms($spec)' "$tmp/created.json" >/dev/null 2>&1 ||
+    unknown "an unexpected or incomplete response when opening the digest issue"
+  number="$(jq -r '.number' "$tmp/created.json")" || unknown "an unexpected response when opening the digest issue"
   echo "SENT #$number: \"$title\" from ${reason:+the fallback because }${reason:-$file}"
   # GitHub drops an assignee it cannot assign without an error, and then no email goes out. Last
   # week's digest then stays open: it is still the newest one he received.
-  if ! jq -e --arg who "$maintainer" 'any(.assignees[]?; .login == $who)' "$tmp/created.json" >/dev/null; then
+  if ! jq -e --arg who "$maintainer" 'any(.assignees[]; .login == $who)' "$tmp/created.json" >/dev/null; then
     finding "NOT-ASSIGNED #$number: GitHub did not assign $maintainer, so the digest was not emailed"
     assigned=0
   fi
   [ "$assigned" -eq 0 ] || close_earlier 0 0
   finish "$found"
-}
-
-# Assigns an eligible urgent ask within the repository-wide daily cap, or previews that action.
-cmd_urgent() {
-  local issue="" label="" sender="" today="" dry_run=0 used=0 k p more already
-  repo="${GITHUB_REPOSITORY:-}"
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --repo) need_value "$@"; repo=$2; shift 2 ;;
-      --issue) need_value "$@"; issue=$2; shift 2 ;;
-      --label) need_value "$@"; label=$2; shift 2 ;;
-      --sender) need_value "$@"; sender=$2; shift 2 ;;
-      --today) need_value "$@"; today=$2; shift 2 ;;
-      --dry-run) dry_run=1; shift ;;
-      *) usage "unknown urgent option: $1" ;;
-    esac
-  done
-  check_repo
-  [[ "$issue" =~ ^[1-9][0-9]*$ ]] || usage "--issue must be an issue number"
-  [ -n "$label" ] || usage "--label is required"
-  [ -n "$sender" ] || usage "--sender is required"
-  [ -n "$today" ] || today="$(date -u +%Y-%m-%d)"
-  [[ "$today" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || usage "--today must look like 2026-10-19"
-
-  if [ "$label" != "$urgent_label" ]; then
-    echo "SKIP #$issue: the label added is not $urgent_label, so nobody is assigned"
-    finish 0
-  fi
-  if [ "$sender" != "$maintainer" ]; then
-    finding "REFUSED #$issue: only the maintainer's account may mark an ask urgent"
-    finish 1
-  fi
-
-  gh api "repos/$repo/issues/$issue" >"$tmp/issue.json" || unknown "could not read #$issue"
-  jq -e --argjson n "$issue" 'type == "object" and .number == $n' "$tmp/issue.json" >/dev/null 2>&1 ||
-    unknown "an unexpected response for #$issue"
-  if jq -e 'has("pull_request")' "$tmp/issue.json" >/dev/null; then
-    finding "REFUSED #$issue: a pull request is not an ask"
-    finish 1
-  fi
-  # Only one of his own asks may be assigned, the same rule fetch_asks applies: a mistagged issue, or
-  # one another account wrote, would otherwise be emailed to him and spend a daily urgent slot.
-  if ! jq -e --arg who "$maintainer" --arg l "$ask_label" '.user.login == $who and any(.labels[]?; .name == $l)' \
-    "$tmp/issue.json" >/dev/null; then
-    finding "REFUSED #$issue: only an ask the maintainer wrote, labelled $ask_label, may be marked urgent"
-    finish 1
-  fi
-  if ! jq -e '.state == "open"' "$tmp/issue.json" >/dev/null; then
-    echo "SKIP #$issue: the ask is closed"
-    finish 0
-  fi
-  if ! jq -e --arg l "$urgent_label" 'any(.labels[]?; .name == $l)' "$tmp/issue.json" >/dev/null; then
-    echo "SKIP #$issue: the ask no longer carries $urgent_label"
-    finish 0
-  fi
-
-  # Today's assignments are counted from the repository's issue-event feed, newest first, so an ask
-  # whose labels were all taken off after it fired still counts. Only assignments on an issue he wrote
-  # count: the weekly digest, which the bot opens and assigns to him, never uses an urgent slot. Pages are read until one ends before
-  # today; more than max_event_pages of them today cannot be counted, which is UNKNOWN.
-  p=1
-  while :; do
-    [ "$p" -le "$max_event_pages" ] || unknown "more than $max_event_pages pages of issue events today, so the count is incomplete"
-    gh api "repos/$repo/issues/events?per_page=100&page=$p" >"$tmp/events.json" ||
-      unknown "could not read page $p of the issue events"
-    [ -s "$tmp/events.json" ] || unknown "an empty response for page $p of the issue events"
-    k="$(jq --arg bot "$bot" --arg who "$maintainer" --arg day "$today" '
-      def nonempty_string: type == "string" and length > 0;
-      def login: type == "object" and (.login | nonempty_string);
-      def utc_timestamp:
-        . as $stamp | type == "string"
-        and ((try (fromdateiso8601 | todateiso8601) catch null) == $stamp);
-      def complete_event:
-        type == "object" and (.event | nonempty_string) and (.created_at | utc_timestamp)
-        and (if .event == "assigned" then
-               (.actor | login) and (.assignee | login) and (.issue.user | login)
-             else true end);
-      if type == "array" and all(.[]; complete_event) then
-        [.[] | select(.event == "assigned" and .actor.login == $bot and .assignee.login == $who
-                      and .issue.user.login == $who
-                      and (.created_at | startswith($day)))] | length
-      else error("not a complete list of events") end' "$tmp/events.json" 2>/dev/null)" ||
-      unknown "an unexpected response for page $p of the issue events"
-    used=$((used + k))
-    more="$(jq -r --arg day "$today" 'if length == 100 and (.[-1].created_at >= $day) then 1 else 0 end' \
-      "$tmp/events.json")" || unknown "an unexpected response for page $p of the issue events"
-    [ "$more" = 1 ] || break
-    p=$((p + 1))
-  done
-  if [ "$used" -ge "$urgent_daily_cap" ]; then
-    finding "REFUSED #$issue: $used urgent asks were already assigned today (UTC), and the limit is $urgent_daily_cap"
-    finish 1
-  fi
-
-  already="$(jq --arg who "$maintainer" 'any(.assignees[]?; .login == $who)' "$tmp/issue.json")"
-  if [ "$dry_run" -eq 1 ]; then
-    [ "$already" != true ] ||
-      echo "DRY-RUN would first remove the existing assignment, because assigning him again would not email him"
-    echo "DRY-RUN would assign $maintainer to #$issue: urgent assignment $((used + 1)) of $urgent_daily_cap today (UTC)"
-    finish 0
-  fi
-  if [ "$already" = true ]; then
-    gh api -X DELETE "repos/$repo/issues/$issue/assignees" -f "assignees[]=$maintainer" >/dev/null ||
-      unknown "could not remove the existing assignment on #$issue"
-  fi
-  gh api -X POST "repos/$repo/issues/$issue/assignees" -f "assignees[]=$maintainer" >"$tmp/assigned.json" ||
-    unknown "could not assign #$issue"
-  if ! jq -e --arg who "$maintainer" 'any(.assignees[]?; .login == $who)' "$tmp/assigned.json" >/dev/null 2>&1; then
-    finding "NOT-ASSIGNED #$issue: GitHub did not assign $maintainer, so no email went out"
-    finish 1
-  fi
-  echo "ASSIGNED #$issue: urgent assignment $((used + 1)) of $urgent_daily_cap today (UTC)"
-  finish 0
 }
 
 [ "$#" -gt 0 ] || usage "a subcommand is required"
@@ -671,7 +569,6 @@ shift
 case "$subcommand" in
   send) cmd_send "$@" ;;
   needs-you) cmd_needs_you "$@" ;;
-  urgent) cmd_urgent "$@" ;;
   check) cmd_check "$@" ;;
   *) usage "unknown subcommand: $subcommand" ;;
 esac
