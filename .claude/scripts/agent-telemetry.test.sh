@@ -555,6 +555,17 @@ JSON
 cat > "$FIX/outcomes/bin/gh" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
+  # An archived repository must never be queried (monorepo#4139).
+  'pr list --repo devantler-tech/retired '*|'api'*'devantler-tech/retired'*)
+    exit 94 ;;
+  # A repository with no commits, and one whose reads fail for another reason.
+  'pr list --repo devantler-tech/empty-repo '*) printf '[]\n' ;;
+  'api repos/devantler-tech/empty-repo/'*)
+    printf '%s\n' '{"message":"Git Repository is empty.","status":"409"}'
+    printf '%s\n' 'gh: Git Repository is empty. (HTTP 409)' >&2; exit 1 ;;
+  'pr list --repo devantler-tech/broken-repo '*) exit 1 ;;
+  'api repos/devantler-tech/broken-repo/'*)
+    printf '%s\n' 'gh: Server Error (HTTP 500)' >&2; exit 1 ;;
   'pr list '*)
     # A GraphQL outage: the listing command itself fails (monorepo#4267).
     [ -z "${OUTCOMES_PR_LIST_FAIL:-}" ] || exit 1
@@ -576,6 +587,15 @@ case "$*" in
   'api repos/devantler-tech/monorepo/commits -X GET '*)
     [ -z "${OUTCOMES_COMMITS_FAIL:-}" ] || exit 1
     printf '0\n' ;;
+  'api --paginate orgs/devantler-tech/repos?type=all&per_page=100 --jq '*)
+    # The live org inventory (monorepo#4139). Default: the monorepo plus an
+    # archived repository, so every other case keeps its one-repository totals.
+    [ -z "${OUTCOMES_ORG_FAIL:-}" ] || exit 1
+    if [ -n "${OUTCOMES_ORG_REPOS:-}" ]; then
+      jq -r "$5" "$OUTCOMES_ORG_REPOS"
+    else
+      printf '%s\n' '[{"full_name":"devantler-tech/monorepo","archived":false},{"full_name":"devantler-tech/retired","archived":true}]' | jq -r "$5"
+    fi ;;
   'api repos/'*) printf '0\n' ;;
   *) exit 93 ;;
 esac
@@ -597,6 +617,7 @@ outcomes_run() {
   OUTCOMES_PR_LIST_FAIL="${OUTCOMES_PR_LIST_FAIL:-}" OUTCOMES_REST_FAIL="${OUTCOMES_REST_FAIL:-}" \
   OUTCOMES_REST_PAGE1="${OUTCOMES_REST_PAGE1:-$FIX/outcomes/rest-prs.json}" \
   OUTCOMES_REST_PAGE2="${OUTCOMES_REST_PAGE2:-}" OUTCOMES_COMMITS_FAIL="${OUTCOMES_COMMITS_FAIL:-}" \
+  OUTCOMES_ORG_FAIL="${OUTCOMES_ORG_FAIL:-}" OUTCOMES_ORG_REPOS="${OUTCOMES_ORG_REPOS:-}" \
   AGENT_CI_CLASSIFIER="$FIX/outcomes/classifier" \
   AGENT_CI_DESIRED_STATE="$FIX/outcomes/desired-state.json" \
   MONOREPO_DIR="$FIX/outcomes/repo" CLAUDE_PROJECTS_DIR="$FIX/outcomes/no-corpus" \
@@ -716,9 +737,69 @@ cat > "$FIX/outcomes/repo/.gitmodules" <<'EOF'
   path = applications/outside
   url = https://github.com/example-corp/outside.git
 EOF
-OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-failing.tsv" outcomes_run); RC=$?
+OUT=$(OUTCOMES_ORG_FAIL=1 OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-failing.tsv" outcomes_run); RC=$?
 nocheck "outcomes omit repositories outside the portfolio owner" "$OUT" 'example-corp/outside'
+check "outcomes without the live inventory say so" "$OUT" 'repository inventory: UNKNOWN (live org listing failed)'
 rm -f "$FIX/outcomes/repo/.gitmodules"
+# The census is the live org, not the checkout (monorepo#4139): a repository with
+# no submodule is counted, an archived one is never queried, and a failed or
+# malformed listing leaves the portfolio verdicts UNKNOWN while the submodule cohort
+# (the series before #4139) is still counted.
+OUT=$(outcomes_run); RC=$?
+check "outcomes inventory comes from the live org" "$OUT" 'repository inventory: live org, 1 non-archived repositories'
+nocheck "outcomes never query an archived repository" "$OUT" 'devantler-tech/retired'
+nocheck "outcomes live inventory leaves no repository UNKNOWN" "$OUT" 'UNKNOWN (query or provenance)'
+nocheck "outcomes live inventory is not reported unavailable" "$OUT" 'inventory unavailable'
+check "outcomes live inventory keeps the cohort series" "$OUT" 'submodule cohort (the series before monorepo#4139): 1'
+printf '%s\n' '[{"full_name":"devantler-tech/monorepo","archived":false},{"full_name":"devantler-tech/no-submodule","archived":false},{"full_name":"devantler-tech/retired","archived":true}]' \
+  > "$FIX/outcomes/org-repos.json"
+OUT=$(OUTCOMES_ORG_REPOS="$FIX/outcomes/org-repos.json" outcomes_run); RC=$?
+check "outcomes count a live org repository that has no submodule" "$OUT" 'devantler-tech/no-submodule                1'
+check "outcomes total includes the repository without a submodule" "$OUT" 'total: 2'
+check "outcomes inventory counts only non-archived repositories" "$OUT" 'live org, 2 non-archived repositories'
+check "outcomes keep the submodule cohort series beside the wider total" "$OUT" 'submodule cohort (the series before monorepo#4139): 1'
+nocheck "outcomes complete cohort is not labelled active-only" "$OUT" 'ACTIVE ONLY'
+printf '%s\n' '[{"full_name":"devantler-tech/monorepo","archived":true},{"full_name":"devantler-tech/no-submodule","archived":false}]' \
+  > "$FIX/outcomes/org-repos.json"
+OUT=$(OUTCOMES_ORG_REPOS="$FIX/outcomes/org-repos.json" outcomes_run); RC=$?
+nocheck "outcomes never re-add an archived monorepo to the live inventory" "$OUT" 'devantler-tech/monorepo                    1'
+check "outcomes count only the live repositories when the monorepo is archived" "$OUT" 'total: 1'
+check "outcomes label a cohort missing an archived repository active-only" "$OUT" 'submodule cohort (the series before monorepo#4139): 0 — ACTIVE ONLY, 1 cohort repositories not in the live inventory were not queried'
+printf '%s\n' '[{"full_name":"devantler-tech/monorepo","archived":false},{"full_name":"devantler-tech/empty-repo","archived":false}]' \
+  > "$FIX/outcomes/org-repos.json"
+OUT=$(OUTCOMES_ORG_REPOS="$FIX/outcomes/org-repos.json" outcomes_run); RC=$?
+check "outcomes report a repository with no commits as EMPTY" "$OUT" 'devantler-tech/empty-repo                  EMPTY (no commits, nothing on main)'
+check "outcomes an empty repository keeps the red-main count measured" "$OUT" 'repos RED on main: 0'
+check "outcomes an empty repository keeps the revert total complete" "$OUT" '(0 = nothing needed reverting anywhere in the portfolio)'
+printf '%s\n' '[{"full_name":"devantler-tech/monorepo","archived":false},{"full_name":"devantler-tech/broken-repo","archived":false}]' \
+  > "$FIX/outcomes/org-repos.json"
+OUT=$(OUTCOMES_ORG_REPOS="$FIX/outcomes/org-repos.json" outcomes_run); RC=$?
+check "outcomes any other head failure stays UNKNOWN" "$OUT" 'devantler-tech/broken-repo                 UNKNOWN (head query failed)'
+check "outcomes any other head failure keeps the red-main count UNKNOWN" "$OUT" 'repos RED on main: QUERY-UNKNOWN'
+check "outcomes any other revert failure keeps the total incomplete" "$OUT" 'FAILED — this total is INCOMPLETE'
+nocheck "outcomes a failing repository is never reported EMPTY" "$OUT" 'EMPTY (no commits'
+check "outcomes a failed repository outside the cohort makes the wider total UNKNOWN" "$OUT" 'merged PRs: UNKNOWN (1 repository queries incomplete)'
+check "outcomes a failed repository outside the cohort keeps the cohort series" "$OUT" 'submodule cohort (the series before monorepo#4139): 1'
+OUT=$(OUTCOMES_ORG_FAIL=1 outcomes_run); RC=$?
+if [ "$RC" = 2 ]; then ok "outcomes failed org listing exits 2 (UNKNOWN)"; else bad "outcomes failed org listing exits 2 (UNKNOWN)" "rc=$RC"; fi
+check "outcomes failed org listing leaves the inventory UNKNOWN" "$OUT" 'repository inventory: UNKNOWN (live org listing failed)'
+check "outcomes failed org listing prints no portfolio merge total" "$OUT" 'merged PRs: UNKNOWN (live repository inventory unavailable)'
+nocheck "outcomes failed org listing never claims a portfolio total" "$OUT" '── total: 1'
+check "outcomes failed org listing still counts the submodule cohort" "$OUT" 'submodule cohort (the series before monorepo#4139): 1'
+check "outcomes failed org listing keeps the red-main verdict UNKNOWN" "$OUT" 'repos RED on main: QUERY-UNKNOWN'
+check "outcomes failed org listing keeps the revert total incomplete" "$OUT" 'live repository inventory unavailable — this total is INCOMPLETE'
+for listing in '[{"full_name":"devantler-tech/monorepo"}]' \
+               '[{"full_name":"devantler-tech/monorepo","archived":"false"}]' \
+               '[{"full_name":7,"archived":false}]' \
+               '[{"full_name":"devantler-tech/two words","archived":false}]' \
+               '[{"full_name":"example-corp/outside","archived":false}]' \
+               '[]' '{"message":"API rate limit exceeded"}'; do
+  printf '%s\n' "$listing" > "$FIX/outcomes/org-repos.json"
+  OUT=$(OUTCOMES_ORG_REPOS="$FIX/outcomes/org-repos.json" outcomes_run); RC=$?
+  check "outcomes malformed org listing $listing leaves the inventory UNKNOWN" "$OUT" 'repository inventory: UNKNOWN (live org listing failed)'
+  nocheck "outcomes malformed org listing $listing is never queried" "$OUT" 'two words'
+  nocheck "outcomes malformed org listing $listing never admits another owner" "$OUT" 'example-corp/outside'
+done
 for field in author isCrossRepository headRefName; do
   jq "[.[0] | del(.$field)]" "$FIX/outcomes/prs.json" > "$FIX/outcomes/missing.json"
   OUT=$(OUTCOMES_PRS="$FIX/outcomes/missing.json" outcomes_run); RC=$?
@@ -751,6 +832,7 @@ nocheck "outcomes GraphQL-only outage does not mark the measured revert total in
 OUT=$(OUTCOMES_PR_LIST_FAIL=1 OUTCOMES_REST_FAIL=1 outcomes_run); RC=$?
 check "outcomes GraphQL and REST failure stays UNKNOWN" "$OUT" 'merged PRs: UNKNOWN'
 nocheck "outcomes GraphQL and REST failure never names a REST source" "$OUT" 'REST fallback'
+check "outcomes a failed cohort repository makes the cohort series UNKNOWN" "$OUT" 'submodule cohort (the series before monorepo#4139): UNKNOWN (1 repository queries incomplete)'
 for field in user head base merged_at updated_at; do
   jq "[.[0] | del(.$field)]" "$FIX/outcomes/rest-prs.json" > "$FIX/outcomes/rest-missing.json"
   OUT=$(OUTCOMES_PR_LIST_FAIL=1 OUTCOMES_REST_PAGE1="$FIX/outcomes/rest-missing.json" outcomes_run); RC=$?

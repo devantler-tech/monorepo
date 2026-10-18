@@ -6580,18 +6580,68 @@ if want outcomes; then
     # PORTFOLIO-WIDE, not monorepo-only. Quality is the signal these counts feed,
     # and both agents ship most of their work in the product repos — measuring
     # only the monorepo scored the definition work and ignored the products.
-    # Repos come from the submodule list, so the set follows the portfolio map
-    # instead of being hard-coded here and going stale.
+    # The census is the LIVE org, not the checkout (work-selection guide, "The
+    # census is the live org"; monorepo#4139): every non-archived repository,
+    # whether or not it is a submodule. The submodule list missed repositories
+    # without a checkout (2 of 25 on 2026-10-18), so their merges, reverts and
+    # red main never reached this section. One REST listing (no GraphQL).
+    # A failed or malformed listing leaves the portfolio inventory UNKNOWN. The
+    # section then counts only the submodule cohort, whose archive state it has
+    # not read, so every portfolio verdict below stays UNKNOWN or INCOMPLETE.
     echo "  AGENT-authored merged PRs since ${SINCE_ISO} (registered instance identities):"
+    # The submodule cohort is kept as its own total so the series measured
+    # before monorepo#4139 stays comparable; a wider denominator is not a gain.
     # Portable extraction: BSD sed rejects the non-greedy `+?` a single-pass
     # regex would need, so strip in stages instead of relying on a GNU-only form.
-    REPOS=$(git -C "$MONOREPO" config --file .gitmodules --get-regexp '\.url$' 2>/dev/null \
-            | awk '{print $2}' \
-            | sed -E 's|\.git$||' \
-            | sed -E 's|^.*[:/]([^/]+)/([^/]+)$|\1/\2|' \
-            | grep -i '^devantler-tech/' | sort -u)
-    REPOS=$(printf 'devantler-tech/monorepo\n%s\n' "$REPOS" | grep -v '^$' | sort -u)
+    COHORT_REPOS=$(git -C "$MONOREPO" config --file .gitmodules --get-regexp '\.url$' 2>/dev/null \
+                   | awk '{print $2}' \
+                   | sed -E 's|\.git$||' \
+                   | sed -E 's|^.*[:/]([^/]+)/([^/]+)$|\1/\2|' \
+                   | grep -i "^${PORTFOLIO_ORG}/" | sort -u)
+    COHORT_REPOS=$(printf '%s/monorepo\n%s\n' "$PORTFOLIO_ORG" "$COHORT_REPOS" | grep -v '^$' | sort -u)
+    REPO_INVENTORY=live
+    if ! REPOS=$(gh api --paginate "orgs/${PORTFOLIO_ORG}/repos?type=all&per_page=100" --jq '
+           .[] | if (.archived | type) != "boolean" or (.full_name | type) != "string"
+                 then error("malformed repository listing") else . end
+               | select(.archived == false) | .full_name' 2>/dev/null) \
+       || [ -z "$REPOS" ] \
+       || grep -Evq "^${PORTFOLIO_ORG}/[A-Za-z0-9._-]+\$" <<<"$REPOS"; then
+      REPO_INVENTORY=submodules
+      REPOS=$COHORT_REPOS
+      main_rc=2
+    fi
+    # The live listing is used as read: re-adding the monorepo here would bring
+    # it back if it were ever archived.
+    REPOS=$(sort -u <<<"$REPOS")
+    COHORT_TOTAL=0; COHORT_FAIL=0
+    # Cohort repositories the live listing left out (archived, or gone) are not
+    # queried, so the cohort series is then active-only and says so. (awk, not
+    # `grep -vxF -f`: BSD grep misreports that set difference.)
+    COHORT_EXCLUDED=$(awk 'NR == FNR { seen[$0] = 1; next } $0 != "" && !($0 in seen) { n++ } END { print n + 0 }' \
+                      <(printf '%s\n' "$REPOS") <(printf '%s\n' "$COHORT_REPOS"))
+    EMPTY_REPOS=' '
+    # GitHub answers HTTP 409 "Git Repository is empty." for a repository with no
+    # commits. Such a repository has no main to break and nothing to revert, so it
+    # is reported EMPTY rather than turning the portfolio verdict UNKNOWN. Any
+    # other failure stays UNKNOWN.
+    repo_is_empty() {
+      empty_err=$(gh api "repos/$1/commits?per_page=1" 2>&1 >/dev/null) && return 1
+      case "$empty_err" in *'Git Repository is empty.'*'(HTTP 409)'*) return 0 ;; esac
+      return 1
+    }
+    if [ "$REPO_INVENTORY" = live ]; then
+      echo "    repository inventory: live org, $(printf '%s\n' "$REPOS" | grep -c .) non-archived repositories"
+    else
+      echo "    repository inventory: UNKNOWN (live org listing failed) — counting the submodule cohort only, archive state unread; no portfolio total follows"
+    fi
     TOTAL=0; APIFAIL=0; REPO_COUNT=0; REST_USED=0
+    # A failed repository read leaves the cohort incomplete only when that
+    # repository is in the cohort, so the pre-#4139 series survives an
+    # unrelated failure elsewhere in the wider census.
+    merged_fail() {
+      APIFAIL=$((APIFAIL + 1))
+      if grep -qxF -- "$1" <<<"$COHORT_REPOS"; then COHORT_FAIL=$((COHORT_FAIL + 1)); fi
+    }
     # REST fallback for ONE repository's merged agent PRs (monorepo#4267). `gh pr
     # list` spends the GraphQL budget; when that budget is gone every repository
     # read UNKNOWN and the merged-PR floor of every open hypothesis went blank
@@ -6663,7 +6713,7 @@ if want outcomes; then
         if c=$(rest_merged_count "$r"); then
           REST_USED=$((REST_USED + 1))
         else
-          printf '    %-42s UNKNOWN (query or provenance)\n' "$r"; APIFAIL=$((APIFAIL+1)); continue
+          printf '    %-42s UNKNOWN (query or provenance)\n' "$r"; merged_fail "$r"; continue
         fi
       elif ! c=$(printf '%s' "$prs_json" \
             | jq -er --arg since "$SINCE_ISO" --argjson registry "$registry" '
@@ -6683,18 +6733,28 @@ if want outcomes; then
                        . as $instance | ($pr.headRefName | startswith($instance.namespace + "/"))
                        and $pr.author.login == $instance.authors.cli))] | length
               ' 2>/dev/null); then
-        printf '    %-42s UNKNOWN (query or provenance)\n' "$r"; APIFAIL=$((APIFAIL+1)); continue
+        printf '    %-42s UNKNOWN (query or provenance)\n' "$r"; merged_fail "$r"; continue
       fi
-      case "$c" in ''|*[!0-9]*) printf '    %-42s UNPARSEABLE RESULT\n' "$r"; APIFAIL=$((APIFAIL+1)); continue ;; esac
+      case "$c" in ''|*[!0-9]*) printf '    %-42s UNPARSEABLE RESULT\n' "$r"; merged_fail "$r"; continue ;; esac
       [ "$c" -gt 0 ] && printf '    %-42s %s\n' "$r" "$c"
       TOTAL=$((TOTAL + c))
+      if grep -qxF -- "$r" <<<"$COHORT_REPOS"; then COHORT_TOTAL=$((COHORT_TOTAL + c)); fi
     done <<EOF
 $REPOS
 EOF
     if [ "$APIFAIL" -gt 0 ]; then
       echo "    merged PRs: UNKNOWN (${APIFAIL} repository queries incomplete)"
-    else
+    elif [ "$REPO_INVENTORY" = live ]; then
       echo "    ────────────────────────────────────────── total: ${TOTAL}"
+    else
+      echo "    merged PRs: UNKNOWN (live repository inventory unavailable)"
+    fi
+    if [ "$COHORT_FAIL" -eq 0 ] && [ "$COHORT_EXCLUDED" -gt 0 ]; then
+      echo "    submodule cohort (the series before monorepo#4139): ${COHORT_TOTAL} — ACTIVE ONLY, ${COHORT_EXCLUDED} cohort repositories not in the live inventory were not queried"
+    elif [ "$COHORT_FAIL" -eq 0 ]; then
+      echo "    submodule cohort (the series before monorepo#4139): ${COHORT_TOTAL}"
+    else
+      echo "    submodule cohort (the series before monorepo#4139): UNKNOWN (${COHORT_FAIL} repository queries incomplete)"
     fi
     # Name the source whenever the fallback answered, so a reader comparing slots
     # can see which counts came from a different query (monorepo#4267).
@@ -6819,6 +6879,8 @@ EOF
     }
     REDS=0
     REDS_UNKNOWN=0
+    # Without the live inventory, a repository outside the cohort may be red.
+    [ "$REPO_INVENTORY" = live ] || REDS_UNKNOWN=1
     while IFS= read -r r; do
       [ -n "$r" ] || continue
       if [ "$CI_CLASSIFIER_READY" -ne 1 ]; then
@@ -6828,6 +6890,11 @@ EOF
       fi
       head_sha=$(gh api "repos/$r/commits/main" --jq '.sha' 2>/dev/null)
       if ! grep -qE '^[0-9a-fA-F]{40}$' <<<"$head_sha"; then
+        if repo_is_empty "$r"; then
+          printf '    %-42s %s\n' "$r" "EMPTY (no commits, nothing on main)"
+          EMPTY_REPOS="${EMPTY_REPOS}${r} "
+          continue
+        fi
         printf '    %-42s %s\n' "$r" "UNKNOWN (head query failed)"
         REDS_UNKNOWN=1
         continue
@@ -6954,6 +7021,9 @@ EOF
       [ -n "$r" ] || continue
       if ! rcraw=$(gh api "repos/$r/commits" -X GET -f since="${SINCE_ISO}T00:00:00Z" --paginate \
              --jq '[.[]|select(.commit.message|test("^Revert";"i"))]|length' 2>/dev/null); then
+        # Only a repository the CI pass above PROVED empty is skipped; any other
+        # failure keeps this total incomplete.
+        case "$EMPTY_REPOS" in *" $r "*) continue ;; esac
         printf '    %-42s QUERY FAILED (auth/rate-limit/network)\n' "$r"; RFAIL=$((RFAIL+1)); continue
       fi
       rc=$(printf '%s' "$rcraw" | awk '{s+=$1} END{print s+0}')
@@ -6964,7 +7034,10 @@ EOF
 $REPOS
 EOF
     echo "    ────────────────────────────────────────── total: ${RTOTAL}"
-    if [ "$RFAIL" -gt 0 ]; then
+    if [ "$REPO_INVENTORY" != live ]; then
+      echo "    ⚠️  live repository inventory unavailable — this total is INCOMPLETE."
+      echo "        Do NOT read it as 'nothing reverted'."
+    elif [ "$RFAIL" -gt 0 ]; then
       echo "    ⚠️  ${RFAIL} revert quer(y|ies) FAILED — this total is INCOMPLETE."
       echo "        Do NOT read it as 'nothing reverted'."
     else
