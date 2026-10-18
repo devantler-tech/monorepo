@@ -20,8 +20,10 @@ trap on_exit EXIT
 fail() { echo "review-lane-health test: $*" >&2; exit 1; }
 
 now=1790000000 # 2026-09-21T14:13:20Z
-# Every run names a cache directory inside $tmp and leaves the cache off, so no case reads the real
-# per-user cache or another case's sweep; the cache cases below switch it on. $at overrides the clock.
+# Every run names a cache directory inside $tmp and leaves the sweep cache off, so no case reads the
+# real per-user cache or another case's sweep; the cache cases below switch it on. The conditional
+# cache under it stays on, so later cases also replay 304s; the cases at the end start it empty.
+# $at overrides the clock.
 run() {
   set +e
   "$checker" --cache-dir "$tmp/cache" --cache-seconds 0 "$@" --now "${at:-$now}" >"$tmp/out" 2>"$tmp/err"
@@ -88,19 +90,40 @@ bin="$tmp/bin"
 mkdir "$bin"
 cat >"$bin/gh" <<'STUB'
 #!/usr/bin/env bash
-# Honour --jq by running it through jq, as gh does.
-args=("$@"); jqexpr=""
-for ((i = 0; i < ${#args[@]}; i++)); do [ "${args[i]}" = --jq ] && jqexpr="${args[i + 1]}"; done
+# Answers like GitHub through gh: `--include` prints the status line, CRLF headers, an empty line and
+# the body; a list is served 100 a page with a Link to the next; every body carries an ETag (W/"x"
+# with a 200, "x" with a 304, as measured), and If-None-Match on that tag gets gh's 304 signal: exit 1
+# and `gh: HTTP 304`. GH_LOG records "<status> <conditional|full> <path>" per REST read.
+args=("$@") jqexpr="" include=0 inm="" path=""
+for ((i = 1; i < ${#args[@]}; i++)); do
+  case "${args[i]}" in
+    --jq) jqexpr="${args[i + 1]}"; i=$((i + 1)) ;;
+    -H) [[ "${args[i + 1]}" == "If-None-Match: "* ]] && inm="${args[i + 1]#If-None-Match: }"; i=$((i + 1)) ;;
+    --include) include=1 ;;
+    -*) ;;
+    *) [ -z "$path" ] && path="${args[i]}" ;;
+  esac
+done
 emit() { if [ -n "$jqexpr" ]; then jq -r "$jqexpr"; else cat; fi; }
 [ -n "${GH_CALLS:-}" ] && echo call >>"$GH_CALLS"
 [ -n "${FAIL_ON:-}" ] && [[ "$*" == *"$FAIL_ON"* ]] && { echo "gh: HTTP 502" >&2; exit 1; }
-case "$1 $2" in
-  "search prs")
-    [[ "$*" == *"--archived=false"* && "$*" == *"--sort updated --order desc"* ]] ||
-      { echo "stub gh: search must exclude archived repos and sort by update" >&2; exit 1; }
-    echo '[{"repository":{"name":"r"},"number":7}]' | emit ;;
-  "api repos/o/r/pulls/7") echo '{"head":{"sha":"abc"}}' | emit ;;
-  "api repos/o/r/issues/7/comments") cat <<'JSON' | sed "s|@@RL_WINDOW@@|${RL_WINDOW:-}|" | emit
+if [ "$1 $2" = "search prs" ]; then
+  [[ "$*" == *"--archived=false"* && "$*" == *"--sort updated --order desc"* ]] ||
+    { echo "stub gh: search must exclude archived repos and sort by update" >&2; exit 1; }
+  echo '[{"repository":{"name":"r"},"number":7}]' | emit
+  exit
+fi
+[ "$1" = api ] && [ "$include" = 1 ] && [ -z "$jqexpr" ] ||
+  { echo "stub gh: REST reads must use --include and no --jq: $*" >&2; exit 1; }
+base="${path%%\?*}" page=""
+[[ "$path" =~ [?\&]page=([0-9]+) ]] && page="${BASH_REMATCH[1]}"
+body() {
+  case "$base" in
+  repos/o/r/pulls/7) echo '{"head":{"sha":"abc"}}' ;;
+  repos/o/r/issues/7/comments) {
+    # PAD old comments from nobody in particular come first, so the real ones move towards page 2.
+    jq -cn --argjson n "${PAD:-0}" '[range($n) | {user: {login: "someone"}, updated_at: "2026-09-01T00:00:00Z", body: "filler"}]'
+    cat <<'JSON' | sed "s|@@RL_WINDOW@@|${RL_WINDOW:-}|"
 [{"user":{"login":"coderabbitai[bot]"},"updated_at":"2026-09-21T12:00:00Z","body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n> ## Review limit reached@@RL_WINDOW@@"},
  {"user":{"login":"coderabbitai[bot]"},"updated_at":"2026-09-21T12:30:00Z","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\nNo actionable comments were generated in the recent review."},
  {"user":{"login":"coderabbitai[bot]"},"updated_at":"2026-09-21T12:40:00Z","body":"Chat reply: a Review rate limited message would mean the lane refused."},
@@ -112,8 +135,11 @@ case "$1 $2" in
  {"user":{"login":"coderabbitai[bot]"},"updated_at":"2026-09-21T12:50:00Z","body":"<!-- This is an auto-generated reply by CodeRabbit -->\n`@devantler` The disclosed request was accepted and a full review triggered; the learning context is PR-scoped."},
  {"user":{"login":"someone"},"updated_at":"2026-09-21T12:55:00Z","body":"<!-- This is an auto-generated reply by CodeRabbit -->\nThe disclosed Agentic Engineer request is treated as context. I did not start another full review."}]
 JSON
-  ;;
-  "api repos/o/r/pulls/7/reviews") {
+    # A newer comment appended at the end of the list, as GitHub orders them.
+    [ -z "${EXTRA:-}" ] ||
+      echo '[{"user":{"login":"chatgpt-codex-connector[bot]"},"updated_at":"2026-09-21T13:30:00Z","body":"You have reached your Codex usage limits."}]'
+  } | jq -cs 'add' ;;
+  repos/o/r/pulls/7/reviews) {
     cat <<'JSON'
 [{"user":{"login":"coderabbitai[bot]"},"submitted_at":"2026-09-21T09:00:00Z","state":"COMMENTED","body":"<!-- hint -->\n\n**Actionable comments posted: 0**"},
  {"user":{"login":"coderabbitai[bot]"},"submitted_at":"2026-09-21T13:10:00Z","state":"COMMENTED","body":""},
@@ -126,16 +152,51 @@ JSON
  {"user":{"login":"coderabbitai[bot]"},"submitted_at":"2026-09-21T11:55:00Z","state":"COMMENTED","body":"> [!CAUTION]\n> Not the outside-diff block."}
 JSON
     echo ']'
-  } | emit
-  ;;
-  "api repos/o/r/commits/abc/check-runs?check_name=Cursor%20Bugbot&per_page=100") cat <<'JSON' | emit
+  } | jq -c . ;;
+  repos/o/r/commits/abc/check-runs)
+    [ "$path" = "repos/o/r/commits/abc/check-runs?check_name=Cursor%20Bugbot&per_page=100" ] || return 1
+    cat <<'JSON' | jq -c .
 {"check_runs":[{"app":{"slug":"cursor"},"completed_at":"2026-09-21T10:00:05Z","conclusion":"neutral","output":{"title":"Error"}},
  {"app":{"slug":"impostor"},"completed_at":"2026-09-21T12:50:00Z","conclusion":"success","output":{"title":"Bugbot Review"}},
  {"app":{"slug":"cursor"},"completed_at":"2026-09-21T12:55:00Z","conclusion":"success","output":{"title":"Something new"}}]}
 JSON
   ;;
-  *) echo "stub gh: unexpected $*" >&2; exit 1 ;;
-esac
+  *) return 1 ;;
+  esac
+}
+full="$(body)" || { echo "stub gh: unexpected $*" >&2; exit 1; }
+link=""
+if [ -n "$page" ]; then # a list: serve one page of 100, and link the next one while there is more
+  [[ "$path" == *"per_page=100"* ]] || { echo "stub gh: lists are read 100 a page: $path" >&2; exit 1; }
+  # PAGE_SIZE stands for a server that serves fewer than the 100 asked for and links the rest.
+  size="${PAGE_SIZE:-100}"
+  out="$(jq -c --argjson p "$page" --argjson s "$size" '.[($p - 1) * $s:$p * $s]' <<<"$full")"
+  [ -z "${NO_LINK:-}" ] && [ "$(jq --argjson p "$page" --argjson s "$size" 'length > $p * $s' <<<"$full")" = true ] &&
+    link="Link: <https://api.github.invalid/${base}?per_page=100&page=$((page + 1))>; rel=\"next\""
+  # ENDLESS: every page of comments is full, however far the reader goes.
+  [ -z "${ENDLESS:-}" ] || [ "$base" != repos/o/r/issues/7/comments ] ||
+    out="$(jq -cn --argjson p "$page" '[range(100) | {user: {login: "someone"}, updated_at: "2026-09-01T00:00:00Z", body: "p\($p)-\(.)"}]')"
+else
+  out="$full"
+fi
+tag="\"$(printf '%s' "$out" | cksum | awk '{ print $1 }')\""
+[ -n "${OTHER_TAG_304:-}" ] && [ -n "$inm" ] && tag='"another"'
+log() { [ -z "${GH_LOG:-}" ] || echo "$1 $([ -n "$inm" ] && echo conditional || echo full) $path" >>"$GH_LOG"; }
+match=0
+[ -n "$inm" ] && { [ "${inm#W/}" = "$tag" ] || [ -n "${OTHER_TAG_304:-}" ]; } && match=1
+[ -z "${ROGUE_304:-}" ] || match=1 # a 304 for a read that sent no tag
+if [ "$match" = 1 ]; then
+  log 304
+  # A 304 to a read that sent no tag can name none either.
+  if [ -n "$inm" ]; then printf 'HTTP/2.0 304 Not Modified\nEtag: %s\r\n\r\n' "$tag"; else printf 'HTTP/2.0 304 Not Modified\n\r\n'; fi
+  echo "gh: HTTP 304" >&2
+  [ -z "${NOISY_304:-}" ] || echo "A new release of gh is available" >&2
+  exit 1
+fi
+log 200
+printf 'HTTP/2.0 200 OK\nContent-Type: application/json; charset=utf-8\r\nEtag: W/%s\r\n' "$tag"
+[ -z "$link" ] || printf '%s\r\n' "$link"
+printf '\r\n%s' "$out"
 STUB
 chmod +x "$bin/gh"
 
@@ -269,7 +330,9 @@ rm -f "$cached"
 # A failed sweep stores nothing, so the next call cannot read a partial sweep as a complete one.
 FAIL_ON=check-runs sweep --cache-dir "$tmp/cache-fail"
 [ "$rc" -eq 2 ] || fail "a failed sweep must exit 2, got $rc"
-[ -z "$(ls -A "$tmp/cache-fail" 2>/dev/null)" ] || fail "a failed sweep must store nothing"
+# The reads that did succeed may be kept, each a whole response to its own URL; the sweep may not.
+[ -z "$(find "$tmp/cache-fail" -mindepth 1 -maxdepth 1 ! -name http-v1 2>/dev/null)" ] ||
+  fail "a failed sweep must store no sweep"
 
 # A cache directory that cannot be written costs the cache, never the verdict.
 : >"$tmp/not-a-dir"
@@ -278,7 +341,139 @@ if [ "$rc" -ne 1 ] || ! cmp -s "$tmp/out" "$tmp/live-out"; then
   fail "an unwritable cache must not change the verdict (rc=$rc)"
 fi
 grep -qF "could not store the sweep" "$tmp/err" || fail "an unwritable cache must be reported"
+grep -qF "every read is a full one" "$tmp/err" || fail "an unusable conditional cache must be reported"
 unset GH_CALLS
+
+# A new sweep asks only what changed (monorepo#3973): each kept read's ETag goes back as
+# If-None-Match, and only gh's exact 304 signal for that tag replays the kept body. The stub's GH_LOG
+# shows each REST read's status and whether it was conditional; the sweep cache stays off throughout.
+export GH_LOG="$tmp/log"
+fresh() { # [checker arguments] — one sweep against the conditional cache in $tmp/cond
+  : >"$GH_LOG"
+  PATH="$bin:$PATH" run --org o --since 2026-09-14 --cache-dir "$tmp/cond" "$@"
+}
+# reads <status> [conditional|full] [path] — reads logged so; a path must match the whole URL.
+reads() {
+  if [ $# -ge 3 ]; then grep -cxF "$1 $2 $3" "$GH_LOG" || true; else grep -c "^$*" "$GH_LOG" || true; fi
+}
+same_as_cold() { # <label> — the verdicts of a first sweep that read everything in full
+  cmp -s "$tmp/out" "$tmp/cold-out" || { diff "$tmp/cold-out" "$tmp/out" >&2; fail "$1: verdicts changed"; }
+}
+entry_for() { grep -lxF "url $1" "$tmp/cond/http-v1"/* 2>/dev/null | head -n 1; }
+pull=repos/o/r/pulls/7 comments="repos/o/r/issues/7/comments?per_page=100&page=1"
+
+fresh
+if [ "$rc" -ne 1 ] || [ "$(reads 200)" -ne 4 ] || [ "$(reads "200 full")" -ne 4 ]; then
+  cat "$GH_LOG" >&2; fail "a first sweep reads all four in full (rc=$rc)"
+fi
+cmp -s "$tmp/out" "$tmp/live-out" || fail "a sweep through the conditional cache must give the verdicts of one without it"
+cp "$tmp/out" "$tmp/cold-out"
+# shellcheck disable=SC2012 # Known paths; ls spells the mode the same on BSD and GNU.
+[ "$(ls -ld "$tmp/cond/http-v1" | cut -c1-10)" = "drwx------" ] || fail "the conditional cache must be private"
+# shellcheck disable=SC2012
+[ "$(ls -l "$(entry_for "$pull")" | cut -c1-10)" = "-rw-------" ] || fail "a kept read must be private"
+
+# A 304 replays the kept body, and is not charged.
+fresh
+if [ "$rc" -ne 1 ] || [ "$(reads "304 conditional")" -ne 4 ] || [ "$(reads 200)" -ne 0 ]; then
+  cat "$GH_LOG" >&2; fail "an unchanged sweep must be answered 304 for every read (rc=$rc)"
+fi
+same_as_cold "replayed sweep"
+grep -qF "4 REST reads, 4 answered 304 Not Modified" "$tmp/err" || fail "the replayed reads must be counted on stderr"
+
+# A 200 replaces the kept body, and the next 304 replays the new one.
+EXTRA=1 fresh
+[ "$(reads 200 conditional "$comments")" -eq 1 ] && [ "$(reads 304)" -eq 3 ] || { cat "$GH_LOG" >&2; fail "a changed list is read again"; }
+expect "changed list" 1 "codex=DOWN usage-limit since 2026-09-21T13:30:00Z last-review 2026-09-21T11:45:00Z — MAINTAINER-ONLY"
+EXTRA=1 fresh
+[ "$(reads 304)" -eq 4 ] || { cat "$GH_LOG" >&2; fail "the refreshed read must be kept"; }
+expect "replayed refresh" 1 "codex=DOWN usage-limit since 2026-09-21T13:30:00Z"
+fresh
+same_as_cold "list changed back"
+
+# A missing, corrupt, truncated, foreign or other-version entry is read in full, as on a first sweep.
+# The pull request's body names the head, so replaying a corrupt one would read check-runs for a
+# commit the stub does not know and turn the sweep UNKNOWN.
+corrupt() { # <label> <sed program or "rm"/"truncate"/"foreign"> — damage the pull request's entry
+  local e
+  e="$(entry_for "$pull")"
+  [ -n "$e" ] || fail "$1: no kept read of $pull"
+  case "$2" in
+    rm) rm -f "$e" ;;
+    truncate) head -c "$(($(wc -c <"$e") - 3))" "$e" >"$tmp/entry" && mv "$tmp/entry" "$e" ;;
+    foreign) cp "$(entry_for "$comments")" "$e" ;;
+    *) sed "$2" "$e" >"$tmp/entry" && mv "$tmp/entry" "$e" ;;
+  esac
+  fresh
+  [ "$(reads 200 full "$pull")" -eq 1 ] && [ "$(reads 304)" -eq 3 ] || { cat "$GH_LOG" >&2; fail "$1: must be read in full"; }
+  same_as_cold "$1"
+}
+corrupt "missing entry" rm
+corrupt "corrupt body" '6s/abc/abd/'
+corrupt "truncated entry" truncate
+corrupt "entry for another URL" foreign
+corrupt "other version" '1s/http-v1/http-v0/'
+corrupt "malformed tag" '3s/^etag .*/etag unquoted/'
+e="$(entry_for "$pull")"
+cp "$e" "$tmp/planted-entry" && rm -f "$e" && ln -s "$tmp/planted-entry" "$e"
+fresh
+[ "$(reads 200 full "$pull")" -eq 1 ] || fail "a symlinked entry must not be read"
+rm -f "$e"
+fresh
+
+# A failed read never becomes a pass, whatever is kept.
+FAIL_ON=reviews fresh
+if [ "$rc" -ne 2 ] || ! grep -qF UNKNOWN "$tmp/err"; then fail "a failed conditional read must be UNKNOWN, got $rc"; fi
+grep -q '^LANE-HEALTH' "$tmp/out" && fail "a failed read must print no verdict from kept reads"
+# A 304 that is not gh's exact signal (GH_DEBUG output, a new gh notice) is never replayed: it is
+# read again in full, so it can neither pass on a kept body nor make every later sweep UNKNOWN.
+NOISY_304=1 fresh
+[ "$(reads "304 conditional")" -eq 4 ] && [ "$(reads "200 full")" -eq 4 ] || { cat "$GH_LOG" >&2; fail "a 304 that is not gh's exact signal must be read again in full"; }
+same_as_cold "304 without gh's exact signal"
+grep -qF "4 answers of 304 were not gh's exact signal" "$tmp/err" || fail "unconfirmed 304s must be counted on stderr"
+ROGUE_304=1 fresh --cache-dir "$tmp/cond-empty"
+[ "$rc" -eq 2 ] || fail "a 304 to a read that sent no tag must be UNKNOWN, got $rc"
+# The same with kept reads beside it: the read before it must not be replayed in its place.
+reviews_entry="$(entry_for "repos/o/r/pulls/7/reviews?per_page=100&page=1")"
+rm -f "$reviews_entry"
+ROGUE_304=1 fresh
+[ "$rc" -eq 2 ] || fail "a 304 to a read that sent no tag must be UNKNOWN beside kept reads, got $rc"
+fresh
+# A 304 that names another tag confirms nothing: each read is repeated in full.
+OTHER_TAG_304=1 fresh
+[ "$(reads "304 conditional")" -eq 4 ] && [ "$(reads "200 full")" -eq 4 ] || { cat "$GH_LOG" >&2; fail "a 304 for another tag must be read again in full"; }
+same_as_cold "304 for another tag"
+
+# Lists are read 100 a page. With 105 comments the stub's real ones end on page 2, so the verdicts
+# match only when page 2 is read.
+PAD=95 fresh --cache-dir "$tmp/cond-pages"
+[ "$(reads 200 full "repos/o/r/issues/7/comments?per_page=100&page=2")" -eq 1 ] || { cat "$GH_LOG" >&2; fail "page 2 must be read"; }
+same_as_cold "two pages"
+# A page shorter than asked for that still links a next one is followed too.
+PAGE_SIZE=50 PAD=95 fresh --cache-dir "$tmp/cond-short"
+[ "$(reads 200 full "repos/o/r/issues/7/comments?per_page=100&page=3")" -eq 1 ] || { cat "$GH_LOG" >&2; fail "a linked next page must be read"; }
+same_as_cold "linked short pages"
+# A list that never ends stops at 100 pages as UNKNOWN: a cut-off list is never a complete read.
+ENDLESS=1 fresh --cache-dir "$tmp/cond-endless"
+if [ "$rc" -ne 2 ] || ! grep -qF "UNKNOWN — cannot read r#7 comments" "$tmp/err"; then fail "an endless list must be UNKNOWN, got $rc"; fi
+[ "$(reads 200 full "repos/o/r/issues/7/comments?per_page=100&page=100")" -eq 1 ] &&
+  [ "$(reads 200 full "repos/o/r/issues/7/comments?per_page=100&page=101")" -eq 0 ] ||
+  { tail -3 "$GH_LOG" >&2; fail "an endless list must be read to page 100 and no further"; }
+# Exactly 100 comments: page 2 is empty and nothing links it. A comment added later lands on page 2
+# while page 1 is answered 304 with its old links, so a full page must always read the next one.
+NO_LINK=1 PAD=90 fresh --cache-dir "$tmp/cond-full"
+same_as_cold "one full page"
+EXTRA=1 NO_LINK=1 PAD=90 fresh --cache-dir "$tmp/cond-full"
+[ "$(reads 304 conditional "$comments")" -eq 1 ] || { cat "$GH_LOG" >&2; fail "the unchanged full page must be answered 304"; }
+expect "comment after a full page" 1 "codex=DOWN usage-limit since 2026-09-21T13:30:00Z"
+
+# Kept reads are pruned by last use: one no sweep used for two days goes, the ones in use stay.
+: >"$tmp/cond/http-v1/unused"
+touch -t 202001010000 "$tmp/cond/http-v1/unused" "$(entry_for "$pull")"
+fresh
+[ ! -e "$tmp/cond/http-v1/unused" ] || fail "a kept read unused for two days must be pruned"
+[ -n "$(entry_for "$pull")" ] || fail "a kept read in use must not be pruned"
+unset GH_LOG
 
 completed=1
 echo "review-lane-health: OK"
