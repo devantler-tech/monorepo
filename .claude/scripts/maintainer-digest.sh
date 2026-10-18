@@ -84,7 +84,7 @@ private_patterns=(
   '(^|[^0-9A-Za-z:])(([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|([0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4}){0,6})?::([0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4}){0,6})?)([^0-9A-Za-z:]|$)'
   '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}'
   '(tel:|\+[0-9]{1,3}[ .-]?[0-9]{2,4}([ .-]?[0-9]{2,4}){2,})'
-  '(\$|€|£) ?[0-9]|[0-9][0-9.,]* ?(kr|dkk|eur|usd|gbp|sek|nok|kroner|dollars?|euros?)([^a-z]|$)'
+  '(\$|€|£) ?[0-9]|(^|[^a-z])(kr|dkk|eur|usd|gbp|sek|nok)\.? ?[0-9]|[0-9][0-9.,]* ?(kr|dkk|eur|usd|gbp|sek|nok|kroner|dollars?|euros?)([^a-z]|$)'
   '(^|[^A-Za-z0-9])(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,})|-----BEGIN [A-Z ]*PRIVATE KEY-----'
   # A secret, token, password or API key written as an assignment, the form agent-telemetry.sh redacts,
   # and an Authorization header or bearer token.
@@ -93,7 +93,7 @@ private_patterns=(
   '^#{1,6}[[:space:]].*(spend|money|costs?|invoice|billing|savings?)'
   # Spend findings belong in the private digest, so spend wording in ordinary prose is refused too. This
   # list is a backstop for a digest the agent writes from the template, not the guarantee.
-  '(^|[^a-z])(spend(ing|s)?|invoices?|billing|budgets?|expenses?|savings?)([^a-z]|$)'
+  '(^|[^a-z])(spend(ing|s)?|costs?|invoices?|billing|budgets?|expenses?|savings?)([^a-z]|$)'
 )
 # The template's own "Never include" line names spend findings to forbid them. Only that exact, fixed
 # line is left out of the scan: it carries no data, and any other wording is still scanned.
@@ -569,7 +569,8 @@ cmd_urgent() {
   fi
 
   # Today's assignments are counted from the repository's issue-event feed, newest first, so an ask
-  # whose labels were all taken off after it fired still counts. Pages are read until one ends before
+  # whose labels were all taken off after it fired still counts. Only assignments on an issue he wrote
+  # count: the weekly digest, which the bot opens and assigns to him, never uses an urgent slot. Pages are read until one ends before
   # today; more than max_event_pages of them today cannot be counted, which is UNKNOWN.
   p=1
   while :; do
@@ -580,6 +581,7 @@ cmd_urgent() {
     k="$(jq --arg bot "$bot" --arg who "$maintainer" --arg day "$today" '
       if type == "array" then
         [.[] | select(.event == "assigned" and .actor.login == $bot and .assignee.login == $who
+                      and .issue.user.login == $who
                       and ((.created_at // "") | startswith($day)))] | length
       else error("not a list of events") end' "$tmp/events.json" 2>/dev/null)" ||
       unknown "an unexpected response for page $p of the issue events"

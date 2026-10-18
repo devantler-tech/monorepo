@@ -518,6 +518,8 @@ private-hostname|The app reads from postgres.database.svc on start.
 private-hostname|It runs on $(printf '%s.%s' build internal) now.
 spend-heading|## Money
 spend-wording|Cloud spend increased substantially after the migration.
+spend-wording|Cloud costs decreased substantially after the migration.
+money|The new plan is 20 20 12 61 79 80 81 98 702 701 703 33 100 204 250 395 398 399 400printf '%s %s' DKK 1200) a year.
 EOF
 
 # Only the template's exact rule line is left out of the scan; the same line with anything added is not.
@@ -588,15 +590,17 @@ urgent_case() {
   jq -n --argjson assignees "$assignees" --argjson labels "$labels" --arg author "$author" \
     '{number: 42, state: "open", user: {login: $author}, labels: $labels, assignees: $assignees}' | fixture GET "$api/issues/42"
   # The repository's issue events, newest first: two of the bot's assignments of him today, plus
-  # three that do not count (him assigning himself, the bot assigning someone else, a label) and
+  # four that do not count (him assigning himself, the bot assigning someone else, a label, and the
+  # bot assigning him the weekly digest it wrote) and
   # one from yesterday, which ends the count.
   jq -n '[
-    {event: "assigned", actor: {login: "devantler"}, assignee: {login: "devantler"}, created_at: "2026-10-19T10:00:00Z"},
+    {event: "assigned", actor: {login: "devantler"}, assignee: {login: "devantler"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-19T10:00:00Z"},
     {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "someone-else"}, created_at: "2026-10-19T10:00:00Z"},
-    {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, created_at: "2026-10-19T09:00:00Z"},
+    {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-19T09:00:00Z"},
     {event: "labeled", actor: {login: "devantler"}, created_at: "2026-10-19T08:00:00Z"},
-    {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, created_at: "2026-10-19T08:00:00Z"},
-    {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, created_at: "2026-10-18T23:59:59Z"}]' |
+    {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-19T08:00:00Z"},
+    {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, issue: {user: {login: "github-actions[bot]"}}, created_at: "2026-10-19T06:17:00Z"},
+    {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-18T23:59:59Z"}]' |
     fixture GET "$api/issues/events?per_page=100&page=1"
 }
 # Writes a page of 100 events from today that do not count, so the count reads the next page.
@@ -613,7 +617,7 @@ expect_in "$tmp/out" "ASSIGNED #42: urgent assignment 3 of 3 today (UTC)" "only 
 expect_not_in "$GH_STUB_LOG" "DELETE" "an unassigned ask is not unassigned first"
 
 urgent_case
-jq -n '[range(3) | {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, created_at: "2026-10-19T08:00:00Z"}]' |
+jq -n '[range(3) | {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-19T08:00:00Z"}]' |
   fixture GET "$api/issues/events?per_page=100&page=1"
 run "${urgent_args[@]}"
 expect_rc 1 "a fourth assignment in one day is refused"
@@ -624,7 +628,7 @@ expect_no_writes "a refused ask is not assigned"
 # whose labels may all be gone by now, still counts.
 urgent_case
 full_page_today | fixture GET "$api/issues/events?per_page=100&page=1"
-jq -n '[range(3) | {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, created_at: "2026-10-19T07:00:00Z"}]' |
+jq -n '[range(3) | {event: "assigned", actor: {login: "github-actions[bot]"}, assignee: {login: "devantler"}, issue: {user: {login: "devantler"}}, created_at: "2026-10-19T07:00:00Z"}]' |
   fixture GET "$api/issues/events?per_page=100&page=2"
 run "${urgent_args[@]}"
 expect_rc 1 "assignments on a later page of today's events still count toward the limit"
