@@ -34,7 +34,9 @@ command -v jq >/dev/null || { echo "maintainer-digest.test.sh: jq is required" >
 command -v yq >/dev/null || { echo "maintainer-digest.test.sh: yq is required" >&2; exit 1; }
 
 fails=0
+# Reports a passing fixture assertion.
 pass() { echo "  ok   $1"; }
+# Records an assertion failure without stopping the remaining cases.
 bad() {
   echo "  FAIL $1" >&2
   fails=$((fails + 1))
@@ -51,6 +53,7 @@ cat >"$bin/gh" <<'STUB'
 # Serves a GET from the fixture named after its path and records every call as one line. A GET with
 # no fixture fails, as an unreachable API would. Writes answer with a fixture when one exists.
 set -eo pipefail
+# Maps an API path to the fixture filename used by this stub process.
 key() { printf '%s' "$1" | tr '/?&=:' '_____'; }
 [ "${1:-}" = api ] || { echo "gh stub: only gh api is expected: $*" >&2; exit 1; }
 shift
@@ -81,10 +84,12 @@ esac
 STUB
 chmod +x "$bin/gh"
 
+# Uses the same path encoding as the stub when the harness writes a response fixture.
 key() { printf '%s' "$1" | tr '/?&=:' '_____'; }
 # Writes stdin as the response to METHOD PATH.
 fixture() { cat >"$GH_STUB_FIX/$1$(key "$2").json"; }
 
+# Clears prior fixtures, captured payloads and calls so every case observes only its own requests.
 reset_case() {
   rm -rf "$GH_STUB_FIX" "$GH_STUB_DIR" "$GH_STUB_LOG"
   mkdir -p "$GH_STUB_FIX" "$GH_STUB_DIR"
@@ -92,23 +97,29 @@ reset_case() {
 }
 
 rc=0
+# Runs the real helper against the local stub and retains stdout, stderr and exit status.
 run() {
   rc=0
   env -u GITHUB_REPOSITORY PATH="$bin:$PATH" "$BASH" "$script" "$@" >"$tmp/out" 2>"$tmp/err" || rc=$?
 }
 
+# Compares the helper's captured status with the status expected for this fixture.
 expect_rc() {
   if [ "$rc" = "$1" ]; then pass "$2: exit $1"; else bad "$2: exit $rc, expected $1: $(cat "$tmp/err")"; fi
 }
+# Requires an exact text fragment in a captured file.
 expect_in() {
   if grep -Fq -- "$2" "$1"; then pass "$3"; else bad "$3: '$2' is not in $(basename "$1")"; fi
 }
+# Rejects an exact text fragment in a captured file.
 expect_not_in() {
   if grep -Fq -- "$2" "$1"; then bad "$3: '$2' is in $(basename "$1")"; else pass "$3"; fi
 }
+# Verifies that a preview or refusal made no mutating GitHub API call.
 expect_no_writes() {
   if grep -Eq '^(POST|PATCH|DELETE) ' "$GH_STUB_LOG"; then bad "$1: a write was made: $(grep -E '^(POST|PATCH|DELETE) ' "$GH_STUB_LOG")"; else pass "$1"; fi
 }
+# Extracts the submitted issue body for content and privacy assertions.
 posted_body() { jq -j '.body' "$GH_STUB_DIR/payload.json" >"$tmp/posted.md"; }
 
 # An issue as the REST API lists it: number, author, title, body.
@@ -183,6 +194,7 @@ write_week_file() {
     rest_of_week_file
   } >"$week_file"
 }
+# Supplies the non-ask sections of a complete, public-safe weekly digest fixture.
 rest_of_week_file() {
   cat <<'MD'
 ## What shipped
@@ -753,6 +765,7 @@ echo "workflows, and the organization's shared issue forms"
 wf="$root/.github/workflows"
 digest_wf="$wf/maintainer-digest.yaml"
 urgent_wf="$wf/maintainer-ask-urgent.yaml"
+# Converts workflow YAML to JSON for structural assertions.
 as_json() { yq -o=json '.' "$1"; }
 as_json "$urgent_wf" >"$tmp/urgent-wf.json"
 as_json "$digest_wf" >"$tmp/digest-wf.json"
@@ -763,6 +776,7 @@ if [ -e "$root/.github/ISSUE_TEMPLATE" ]; then
 else
   pass "the repository keeps the organization's shared issue forms"
 fi
+# Compares a compact JSON projection with its expected workflow configuration.
 expect_json() {
   local actual
   actual="$(jq -c "$2" "$1")"

@@ -57,6 +57,7 @@ on_exit() {
 }
 trap on_exit EXIT
 
+# Marks normal completion before exiting, so the EXIT trap preserves the requested status.
 finish() {
   maintainer_digest_finished=1
   exit "$1"
@@ -102,28 +103,33 @@ private_patterns=(
 template_rule_line="- spend findings, prices, money amounts or invoices: they wait for the private Money digest;"
 
 found=0
+# Reports a known finding and remembers that the completed command must not report clean.
 finding() {
   echo "$*" >&2
   found=1
 }
 
+# Prints invalid arguments and exits with the UNKNOWN status through the guarded completion path.
 usage() {
   echo "maintainer-digest.sh: $*" >&2
   echo "usage: maintainer-digest.sh send|needs-you|urgent|check ... (see the header comment)" >&2
   finish 2
 }
 
+# Stops on an unreadable or failed operation without treating it as a clean empty result.
 unknown() {
   echo "UNKNOWN: $*" >&2
   finish 2
 }
 
+# Requires an option's following argument to exist and contain a value.
 need_value() {
   if [ "$#" -lt 2 ] || [ -z "$2" ]; then
     usage "$1 needs a value"
   fi
 }
 
+# Accepts only an owner/repository pair before constructing any GitHub API path.
 check_repo() {
   [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || usage "--repo OWNER/REPO is required (or GITHUB_REPOSITORY)"
 }
@@ -180,6 +186,7 @@ section_text() {
 # Breaks each @mention with a zero-width space after the @, so a digest that repeats an ask never
 # notifies anyone or triggers a bot again. A code span would not do: bots parse the raw Markdown.
 zwsp=$'\xe2\x80\x8b'
+# Breaks mention tokens in copied text before a bot can interpret the raw digest body.
 quiet_mentions() {
   sed -E "s/(^|[^A-Za-z0-9_])@([A-Za-z0-9][A-Za-z0-9-]*(\/[A-Za-z0-9_.-]+)?)/\1@${zwsp}\2/g"
 }
@@ -391,10 +398,12 @@ compose_fallback() {
   } >"$tmp/body.md"
 }
 
+# Tests the conservative byte limit before an issue body is submitted to GitHub.
 too_long() {
   [ "$(wc -c <"$1")" -gt "$max_body_bytes" ]
 }
 
+# Checks each requested digest and preserves the distinction between findings and unreadable files.
 cmd_check() {
   local f rc any=0
   [ "$#" -gt 0 ] || usage "check needs at least one file"
@@ -411,6 +420,7 @@ cmd_check() {
   finish "$any"
 }
 
+# Fetches current asks and renders their public-safe Needs you section without making writes.
 cmd_needs_you() {
   repo="${GITHUB_REPOSITORY:-}"
   while [ "$#" -gt 0 ]; do
@@ -445,6 +455,7 @@ close_earlier() {
   done <"$tmp/earlier.txt"
 }
 
+# Sends or previews one week's digest, retiring earlier bot digests only after confirmed assignment.
 cmd_send() {
   local week="" dir="" dry_run=0 week_number week_end title file reason="" rc existing number assigned=1
   repo="${GITHUB_REPOSITORY:-}"
@@ -539,6 +550,7 @@ cmd_send() {
   finish "$found"
 }
 
+# Assigns an eligible urgent ask within the repository-wide daily cap, or previews that action.
 cmd_urgent() {
   local issue="" label="" sender="" today="" dry_run=0 used=0 k p more already
   repo="${GITHUB_REPOSITORY:-}"
