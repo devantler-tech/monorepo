@@ -6604,7 +6604,7 @@ if want outcomes; then
                  then error("malformed repository listing") else . end
                | select(.archived == false) | .full_name' 2>/dev/null) \
        || [ -z "$REPOS" ] \
-       || printf '%s\n' "$REPOS" | grep -Evq "^${PORTFOLIO_ORG}/[A-Za-z0-9._-]+\$"; then
+       || grep -Evq "^${PORTFOLIO_ORG}/[A-Za-z0-9._-]+\$" <<<"$REPOS"; then
       REPO_INVENTORY=submodules
       REPOS=$COHORT_REPOS
     fi
@@ -6722,7 +6722,7 @@ if want outcomes; then
       case "$c" in ''|*[!0-9]*) printf '    %-42s UNPARSEABLE RESULT\n' "$r"; APIFAIL=$((APIFAIL+1)); continue ;; esac
       [ "$c" -gt 0 ] && printf '    %-42s %s\n' "$r" "$c"
       TOTAL=$((TOTAL + c))
-      if printf '%s\n' "$COHORT_REPOS" | grep -qxF -- "$r"; then COHORT_TOTAL=$((COHORT_TOTAL + c)); fi
+      if grep -qxF -- "$r" <<<"$COHORT_REPOS"; then COHORT_TOTAL=$((COHORT_TOTAL + c)); fi
     done <<EOF
 $REPOS
 EOF
