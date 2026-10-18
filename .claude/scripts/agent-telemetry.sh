@@ -394,7 +394,8 @@ run_safety_early_and_emit() (
       exec >| "$out" || exit 3
       scope_rc=0
       run_safety_early "$standalone" "$scope" || scope_rc=$?
-      printf '%s\n' "$scope_rc" >| "$rcf"
+      printf '%s\n' "$scope_rc" >| "$rcf" || exit 3
+      exit 0
     ) &
     pids+=("$!")
     set +m
@@ -406,9 +407,13 @@ run_safety_early_and_emit() (
     rc=3
     report=''
     if [ -n "${pids[$i]}" ]; then
-      wait "${pids[$i]}" 2>/dev/null || true
+      # The job exits 0 only when its status file was written in full; a
+      # partial write (a lone `0` on a full disk) must not read as success.
+      job_rc=0
+      wait "${pids[$i]}" 2>/dev/null || job_rc=$?
       pids[i]=''
       rc=$(cat_builtin "$rcf") || rc=3
+      [ "$job_rc" -eq 0 ] || rc=3
       case "$rc" in 0|2|124) report=$(cat_builtin "$out") || rc=3 ;; *) rc=3 ;; esac
     fi
     i=$((i + 1))
