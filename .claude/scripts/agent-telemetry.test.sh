@@ -4452,6 +4452,205 @@ else
   bad "two finished safety scopes share one banner and one footer" "$scope_both_shape"
 fi
 
+# The two scopes run at the same time (#3830). Each scope's worker stalls once
+# for 8 s; run one after the other they need at least 16 s, together about 8 s.
+# Both must still finish with a reading, in scope order.
+mkdir -p "$FIX/safety-concurrent-shim" "$FIX/safety-concurrent-marks"
+cat > "$FIX/safety-concurrent-shim/grep" <<'EOF_SHIM'
+#!/usr/bin/env bash
+if [ "${AGENT_TELEMETRY_SAFETY_WORKER:-0}" = 1 ] \
+   && /bin/mkdir "$SAFETY_CONCURRENT_MARKS/${AGENT_TELEMETRY_SAFETY_SCOPE:-all}" 2>/dev/null; then
+  sleep 8
+fi
+exec "$SAFETY_TEST_GREP" "$@"
+EOF_SHIM
+chmod +x "$FIX/safety-concurrent-shim/grep"
+concurrent_start=$(date +%s)
+SCOPE_CONCURRENT=$(PATH="$FIX/safety-concurrent-shim:$PATH" SAFETY_TEST_GREP="$candidate_real_grep" \
+  SAFETY_CONCURRENT_MARKS="$FIX/safety-concurrent-marks" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 60 2>&1)
+concurrent_secs=$(( $(date +%s) - concurrent_start ))
+concurrent_shape="marks=$(find "$FIX/safety-concurrent-marks" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ') claude=$(grep -c 'instance scope: claude transcripts' <<<"$SCOPE_CONCURRENT") codex=$(grep -c 'instance scope: codex transcripts' <<<"$SCOPE_CONCURRENT") unknown=$(grep -c 'UNKNOWN: ' <<<"$SCOPE_CONCURRENT")"
+if [ "$concurrent_shape" = "marks=2 claude=1 codex=1 unknown=0" ] && [ "$concurrent_secs" -lt 16 ]; then
+  ok "the two safety scopes run at the same time and both keep their reading"
+else
+  bad "the two safety scopes run at the same time and both keep their reading" \
+    "$concurrent_shape elapsed=${concurrent_secs}s"
+fi
+concurrent_order=$(grep -o 'instance scope: [a-z]* transcripts' <<<"$SCOPE_CONCURRENT" | tr '\n' ' ')
+if [ "$concurrent_order" = "instance scope: claude transcripts instance scope: codex transcripts " ]; then
+  ok "concurrent safety scopes are still reported in scope order"
+else
+  bad "concurrent safety scopes are still reported in scope order" "order=$concurrent_order"
+fi
+
+# A scope whose hand-off file cannot be created is a failed worker, never a
+# clean or missing reading: an unusable temporary directory must fail closed.
+HANDOFF_FAIL=$(CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" TMPDIR="$FIX/no-such-tmp-dir" \
+  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 30 2>&1)
+handoff_fail_rc=$?
+handoff_shape="rc=$handoff_fail_rc failed=$(grep -c 'UNKNOWN: the safety worker failed' <<<"$HANDOFF_FAIL") tables=$(grep -c 'TOTAL occurrences:' <<<"$HANDOFF_FAIL")"
+if [ "$handoff_shape" = "rc=2 failed=2 tables=0" ]; then
+  ok "an unusable hand-off directory reports both safety scopes as failed"
+else
+  bad "an unusable hand-off directory reports both safety scopes as failed" "$handoff_shape"
+fi
+
+# A report that cannot be written in full must not pass for a complete one. A
+# one-block file-size limit (with SIGXFSZ ignored, so the write fails instead of
+# killing the shell) truncates every hand-off file; stdout goes to /dev/null,
+# which the limit does not touch, so only the hand-off write can fail.
+mkdir -p "$FIX/safety-short-write-empty" "$FIX/safety-short-write-tmp"
+short_write_rc=0
+(
+  trap '' XFSZ
+  ulimit -f 1
+  CLAUDE_PROJECTS_DIR="$FIX/safety-short-write-empty" CODEX_HOME="$FIX/nocodex" \
+    MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" TMPDIR="$FIX/safety-short-write-tmp" \
+    bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 30 >/dev/null 2>&1
+) || short_write_rc=$?
+if [ "$short_write_rc" -eq 2 ]; then
+  ok "a safety report truncated by a failed write exits 2, never success"
+else
+  bad "a safety report truncated by a failed write exits 2, never success" "rc=$short_write_rc"
+fi
+
+# Cancelling a safety-only run stops BOTH concurrent scans. Each scope's worker
+# records its PID and stalls; the test then sends SIGTERM to the script's own
+# PID only, not its process group, and requires every stalled worker gone and
+# no hand-off file left behind well before the deadline.
+mkdir -p "$FIX/safety-cancel-shim" "$FIX/safety-cancel-pids" "$FIX/safety-cancel-tmp"
+cat > "$FIX/safety-cancel-shim/grep" <<'EOF_SHIM'
+#!/usr/bin/env bash
+if [ "${AGENT_TELEMETRY_SAFETY_WORKER:-0}" = 1 ]; then
+  printf '%s\n' "$$" > "$SAFETY_CANCEL_PIDS/${AGENT_TELEMETRY_SAFETY_SCOPE:-all}.$$"
+  exec sleep 120
+fi
+exec "$SAFETY_TEST_GREP" "$@"
+EOF_SHIM
+chmod +x "$FIX/safety-cancel-shim/grep"
+PATH="$FIX/safety-cancel-shim:$PATH" SAFETY_TEST_GREP="$candidate_real_grep" \
+  SAFETY_CANCEL_PIDS="$FIX/safety-cancel-pids" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" TMPDIR="$FIX/safety-cancel-tmp" \
+  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 120 >/dev/null 2>&1 &
+cancel_pid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  [ "$(find "$FIX/safety-cancel-pids" -type f | wc -l | tr -d ' ')" -ge 2 ] && break
+  sleep 1
+done
+cancel_started=$(find "$FIX/safety-cancel-pids" -type f | wc -l | tr -d ' ')
+kill -TERM "$cancel_pid" 2>/dev/null
+wait "$cancel_pid" 2>/dev/null
+# The script must not return before its scans have stopped: count survivors at
+# once, before any grace period.
+cancel_alive_at_exit=0
+for pid_file in "$FIX/safety-cancel-pids"/*; do
+  [ -f "$pid_file" ] || continue
+  stalled=$(cat "$pid_file")
+  if kill -0 "$stalled" 2>/dev/null; then
+    case "$(ps -o stat= -p "$stalled" 2>/dev/null | tr -d '[:space:]')" in
+      Z*) ;;
+      *) cancel_alive_at_exit=$((cancel_alive_at_exit + 1)) ;;
+    esac
+  fi
+done
+cancel_alive=0
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  cancel_alive=0
+  for pid_file in "$FIX/safety-cancel-pids"/*; do
+    [ -f "$pid_file" ] || continue
+    stalled=$(cat "$pid_file")
+    if kill -0 "$stalled" 2>/dev/null; then
+      case "$(ps -o stat= -p "$stalled" 2>/dev/null | tr -d '[:space:]')" in
+        Z*) ;;
+        *) cancel_alive=$((cancel_alive + 1)) ;;
+      esac
+    fi
+  done
+  [ "$cancel_alive" -eq 0 ] && break
+  sleep 1
+done
+sleep 1
+cancel_left=$(find "$FIX/safety-cancel-tmp" -maxdepth 1 -name '.agtel_scope.*' | wc -l | tr -d ' ')
+if [ "$cancel_started" -ge 2 ] && [ "$cancel_alive_at_exit" -eq 0 ] \
+   && [ "$cancel_alive" -eq 0 ] && [ "$cancel_left" -eq 0 ]; then
+  ok "cancelling a safety-only run stops both concurrent scans and removes hand-off files"
+else
+  bad "cancelling a safety-only run stops both concurrent scans and removes hand-off files" \
+    "started=$cancel_started alive_at_exit=$cancel_alive_at_exit alive=$cancel_alive handoff_left=$cancel_left"
+fi
+for pid_file in "$FIX/safety-cancel-pids"/*; do
+  [ -f "$pid_file" ] && kill -KILL "$(cat "$pid_file")" 2>/dev/null
+done
+
+# The same for the default full report, which runs every section: a SIGTERM to
+# the script's PID alone must stop it, both safety scans included, instead of
+# being held until the report pipeline returns.
+mkdir -p "$FIX/full-cancel-pids" "$FIX/full-cancel-tmp"
+full_cancel_start=$(date +%s)
+PATH="$FIX/safety-cancel-shim:$PATH" SAFETY_TEST_GREP="$candidate_real_grep" \
+  SAFETY_CANCEL_PIDS="$FIX/full-cancel-pids" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" TMPDIR="$FIX/full-cancel-tmp" \
+  bash "$TARGET" --since-days 3650 --safety-timeout-seconds 120 >/dev/null 2>&1 &
+full_cancel_pid=$!
+for _ in $(seq 1 60); do
+  [ "$(find "$FIX/full-cancel-pids" -type f | wc -l | tr -d ' ')" -ge 2 ] && break
+  sleep 1
+done
+full_cancel_started=$(find "$FIX/full-cancel-pids" -type f | wc -l | tr -d ' ')
+kill -TERM "$full_cancel_pid" 2>/dev/null
+full_cancel_rc=0
+wait "$full_cancel_pid" 2>/dev/null || full_cancel_rc=$?
+full_cancel_secs=$(( $(date +%s) - full_cancel_start ))
+full_cancel_alive=0
+for pid_file in "$FIX/full-cancel-pids"/*; do
+  [ -f "$pid_file" ] || continue
+  stalled=$(cat "$pid_file")
+  if kill -0 "$stalled" 2>/dev/null; then
+    case "$(ps -o stat= -p "$stalled" 2>/dev/null | tr -d '[:space:]')" in
+      Z*) ;;
+      *) full_cancel_alive=$((full_cancel_alive + 1)) ;;
+    esac
+  fi
+done
+if [ "$full_cancel_started" -ge 2 ] && [ "$full_cancel_alive" -eq 0 ] \
+   && [ "$full_cancel_rc" -ne 0 ] && [ "$full_cancel_secs" -lt 100 ]; then
+  ok "cancelling a full report by its PID stops both concurrent safety scans"
+else
+  bad "cancelling a full report by its PID stops both concurrent safety scans" \
+    "started=$full_cancel_started alive_at_exit=$full_cancel_alive rc=$full_cancel_rc elapsed=${full_cancel_secs}s"
+fi
+for pid_file in "$FIX/full-cancel-pids"/*; do
+  [ -f "$pid_file" ] && kill -KILL "$(cat "$pid_file")" 2>/dev/null
+done
+
+# The emitter's EXIT trap must fail closed (.claude/scripts/AGENTS.md): Bash 3.2
+# reports a `set -u` abort to an EXIT trap as status 0. A copy of the script gets
+# an unbound-variable abort injected after the emitter has started both scopes,
+# behind a reach marker, and must not exit 0 on the system bash (3.2 on macOS).
+mkdir -p "$FIX/emit-abort"
+awk -v marker="$FIX/emit-abort/reached" '
+  /^  i=0$/ { print "  : > \"" marker "\""; print "  : \"$agtel_injected_unbound_variable\"" }
+  { print }
+' "$TARGET" > "$FIX/emit-abort/agent-telemetry.sh"
+emit_abort_rc=0
+AGENT_INSTANCES_FILE="$SCRIPT_DIR/../plugin-consumption/agent-instances.json" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  /bin/bash "$FIX/emit-abort/agent-telemetry.sh" --since-days 3650 --section safety \
+  --safety-timeout-seconds 30 >/dev/null 2>&1 || emit_abort_rc=$?
+if [ -e "$FIX/emit-abort/reached" ] && [ "$emit_abort_rc" -ne 0 ]; then
+  ok "an abort inside the safety emitter is never reported as success"
+else
+  bad "an abort inside the safety emitter is never reported as success" \
+    "reached=$([ -e "$FIX/emit-abort/reached" ] && echo yes || echo no) rc=$emit_abort_rc"
+fi
+
 # Interrupts must come from the structured flag, not prose quoting it.
 mkdir -p "$FIX/interrupt"
 cat > "$FIX/interrupt/s.jsonl" <<'EOF'
