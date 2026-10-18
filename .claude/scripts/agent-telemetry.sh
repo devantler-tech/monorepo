@@ -422,19 +422,28 @@ run_safety_early_and_emit() (
   exit "$overall"
 )
 
-# Stop the emitter's whole process group and wait until the group is empty, not
-# only for the outer job process: the emitter subshell is still stopping its
-# scopes after that process has gone. Bounded at about 10 s, then KILL.
-# shellcheck disable=SC2329 # Invoked indirectly by the signal trap below.
-stop_safety_emitter() {
-  local waited=0
-  kill -TERM -- "-$safety_emit_pid" 2>/dev/null
-  while kill -0 -- "-$safety_emit_pid" 2>/dev/null && [ "$waited" -lt 100 ]; do
+# Stop a background job started under `set -m`: signal its whole process group
+# and wait until the group is empty, not only for the job's own process, because
+# a subshell inside it may still be stopping its scopes after that process has
+# gone. Bounded at about 10 s, then KILL. Both entrypoints use it: the safety-only
+# emitter below and the full report at the end of this file.
+# shellcheck disable=SC2329 # Invoked indirectly by the signal traps.
+stop_process_group() {
+  local group=$1 waited=0
+  [ -n "$group" ] || return 0
+  kill -TERM -- "-$group" 2>/dev/null
+  while kill -0 -- "-$group" 2>/dev/null && [ "$waited" -lt 100 ]; do
     sleep 0.1
     waited=$((waited + 1))
   done
-  kill -KILL -- "-$safety_emit_pid" 2>/dev/null
-  wait "$safety_emit_pid" 2>/dev/null
+  kill -KILL -- "-$group" 2>/dev/null
+  wait "$group" 2>/dev/null
+  return 0
+}
+
+# shellcheck disable=SC2329 # Invoked indirectly by the signal trap below.
+stop_safety_emitter() {
+  stop_process_group "$safety_emit_pid"
   exit 143
 }
 
@@ -6950,8 +6959,24 @@ return "$main_rc"
 
 # The ONE output boundary. Nothing in main() reaches a terminal, a file, or a
 # run report without passing through here.
-main | redact
-report_rc=$?
+#
+# The top-level report runs the pipeline as a background job in its own process
+# group and waits on it, so a signal sent to this script's PID alone stops the
+# report, including both concurrent safety scans, instead of being held until the
+# foreground pipeline returns (#3830). A safety worker keeps the plain pipeline:
+# its controller already owns its process group.
+if [ "$SAFETY_WORKER" = 0 ]; then
+  set -m
+  ( main | redact ) &
+  report_pid=$!
+  set +m
+  trap 'stop_process_group "$report_pid"; rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP" "$XFREL" "$XFDENY" "$XFINJ" "$XFBUILD" "$XFA2A"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+  report_rc=0
+  wait "$report_pid" || report_rc=$?
+else
+  main | redact
+  report_rc=$?
+fi
 if [ "$SAFETY_WORKER" = 1 ]; then
   if [ -n "${AGENT_TELEMETRY_SAFETY_STATUS:-}" ]; then
     printf '%s\n' "$report_rc" > "$AGENT_TELEMETRY_SAFETY_STATUS" || exit 3

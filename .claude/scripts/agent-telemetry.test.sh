@@ -4587,6 +4587,48 @@ for pid_file in "$FIX/safety-cancel-pids"/*; do
   [ -f "$pid_file" ] && kill -KILL "$(cat "$pid_file")" 2>/dev/null
 done
 
+# The same for the default full report, which runs every section: a SIGTERM to
+# the script's PID alone must stop it, both safety scans included, instead of
+# being held until the report pipeline returns.
+mkdir -p "$FIX/full-cancel-pids" "$FIX/full-cancel-tmp"
+full_cancel_start=$(date +%s)
+PATH="$FIX/safety-cancel-shim:$PATH" SAFETY_TEST_GREP="$candidate_real_grep" \
+  SAFETY_CANCEL_PIDS="$FIX/full-cancel-pids" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" TMPDIR="$FIX/full-cancel-tmp" \
+  bash "$TARGET" --since-days 3650 --safety-timeout-seconds 120 >/dev/null 2>&1 &
+full_cancel_pid=$!
+for _ in $(seq 1 60); do
+  [ "$(find "$FIX/full-cancel-pids" -type f | wc -l | tr -d ' ')" -ge 2 ] && break
+  sleep 1
+done
+full_cancel_started=$(find "$FIX/full-cancel-pids" -type f | wc -l | tr -d ' ')
+kill -TERM "$full_cancel_pid" 2>/dev/null
+full_cancel_rc=0
+wait "$full_cancel_pid" 2>/dev/null || full_cancel_rc=$?
+full_cancel_secs=$(( $(date +%s) - full_cancel_start ))
+full_cancel_alive=0
+for pid_file in "$FIX/full-cancel-pids"/*; do
+  [ -f "$pid_file" ] || continue
+  stalled=$(cat "$pid_file")
+  if kill -0 "$stalled" 2>/dev/null; then
+    case "$(ps -o stat= -p "$stalled" 2>/dev/null | tr -d '[:space:]')" in
+      Z*) ;;
+      *) full_cancel_alive=$((full_cancel_alive + 1)) ;;
+    esac
+  fi
+done
+if [ "$full_cancel_started" -ge 2 ] && [ "$full_cancel_alive" -eq 0 ] \
+   && [ "$full_cancel_rc" -ne 0 ] && [ "$full_cancel_secs" -lt 100 ]; then
+  ok "cancelling a full report by its PID stops both concurrent safety scans"
+else
+  bad "cancelling a full report by its PID stops both concurrent safety scans" \
+    "started=$full_cancel_started alive_at_exit=$full_cancel_alive rc=$full_cancel_rc elapsed=${full_cancel_secs}s"
+fi
+for pid_file in "$FIX/full-cancel-pids"/*; do
+  [ -f "$pid_file" ] && kill -KILL "$(cat "$pid_file")" 2>/dev/null
+done
+
 # Interrupts must come from the structured flag, not prose quoting it.
 mkdir -p "$FIX/interrupt"
 cat > "$FIX/interrupt/s.jsonl" <<'EOF'
