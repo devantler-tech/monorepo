@@ -2,7 +2,7 @@
 
 # How to write the weekly digest
 
-The digest is the maintainer's weekly email about the agents' work. Every Monday at 06:00 UTC a
+The digest is the maintainer's weekly email about the agents' work. Every Monday at 06:17 UTC a
 workflow opens that week's file as an issue in this public repository and assigns it to him, and
 GitHub emails it to him. Write it for one reader who has not followed the week.
 
@@ -10,7 +10,7 @@ GitHub emails it to him. Write it for one reader who has not followed the week.
 
 - Name the file `docs/digests/<ISO year>-W<week>.md` after the Monday it is sent, for example
   `2026-W43.md`. It covers the seven days before that Monday.
-- Merge it through an ordinary reviewed pull request before 06:00 UTC on Monday. If the file is
+- Merge it through an ordinary reviewed pull request before 06:17 UTC on Monday. If the file is
   missing, too long or fails the check below, the workflow sends only the open asks and says that
   the summary is missing.
 - Copy everything below the line at the end of this guide into the file, then fill it in.
