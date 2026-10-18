@@ -367,8 +367,10 @@ run_safety_early_and_emit() (
     for p in "${pids[@]}"; do
       [ -n "$p" ] && kill -TERM -- "-$p" 2>/dev/null
     done
+    # Wait for each scope GROUP to empty, not only for the job process: the
+    # controller inside it is still stopping its worker and watchdog.
     for p in "${pids[@]}"; do
-      [ -n "$p" ] && wait "$p" 2>/dev/null
+      [ -n "$p" ] && wait_process_group "$p"
     done
     pids=()
     ( rm -f -- "${files[@]}" ) >/dev/null 2>&1 &
@@ -432,11 +434,14 @@ run_safety_early_and_emit() (
 # a subshell inside it may still be stopping its scopes after that process has
 # gone. Bounded at about 10 s, then KILL. Both entrypoints use it: the safety-only
 # emitter below and the full report at the end of this file.
+#
+# The wait is its own helper because a group must be signalled only ONCE: a
+# second TERM reaching a controller that is already running its EXIT cleanup
+# re-enters its `exit` trap and abandons that cleanup, leaving its worker alive.
 # shellcheck disable=SC2329 # Invoked indirectly by the signal traps.
-stop_process_group() {
+wait_process_group() {
   local group=$1 waited=0
   [ -n "$group" ] || return 0
-  kill -TERM -- "-$group" 2>/dev/null
   while kill -0 -- "-$group" 2>/dev/null && [ "$waited" -lt 100 ]; do
     sleep 0.1
     waited=$((waited + 1))
@@ -444,6 +449,13 @@ stop_process_group() {
   kill -KILL -- "-$group" 2>/dev/null
   wait "$group" 2>/dev/null
   return 0
+}
+
+# shellcheck disable=SC2329 # Invoked indirectly by the signal traps.
+stop_process_group() {
+  [ -n "$1" ] || return 0
+  kill -TERM -- "-$1" 2>/dev/null
+  wait_process_group "$1"
 }
 
 # shellcheck disable=SC2329 # Invoked indirectly by the signal trap below.
