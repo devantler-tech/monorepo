@@ -218,7 +218,7 @@ fixture() {
   cp "${repo_root}/docs/AGENTS.md" "${repo_root}/docs/CLAUDE.md" "${scratch}/repo/docs/"
   git -C "${scratch}/repo" init -q
   # Link targets the instruction files point at, so only the mutation under test can fail.
-  (cd "${repo_root}" && git ls-files -- .claude docs/README.md) | while IFS= read -r f; do
+  (cd "${repo_root}" && git ls-files -- .claude docs/README.md docs/digests) | while IFS= read -r f; do
     [ -e "${scratch}/repo/${f}" ] && continue
     mkdir -p "$(dirname "${scratch}/repo/${f}")"
     cp "${repo_root}/${f}" "${scratch}/repo/${f}" 2>/dev/null || true

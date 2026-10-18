@@ -101,6 +101,7 @@ jobs:
       submodule-agents-drift: ${{ steps.filter.outputs.submodule-agents-drift }}
       portfolio-map-drift: ${{ steps.filter.outputs.portfolio-map-drift }}
       agent-instructions-layout: ${{ steps.filter.outputs.agent-instructions-layout }}
+      maintainer-digest: ${{ steps.filter.outputs.maintainer-digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -391,6 +392,15 @@ jobs:
               - '**/CLAUDE.md'
               - '.claude/**'
               - 'docs/**'
+              - '.github/workflows/ci.yaml'
+            maintainer-digest:
+              # The self-test reads the template, the workflow and the ask form, and the job
+              # checks every digest file.
+              - '.claude/scripts/maintainer-digest.sh'
+              - '.claude/scripts/maintainer-digest.test.sh'
+              - 'docs/digests/**'
+              - '.github/workflows/maintainer-digest.yaml'
+              - '.github/ISSUE_TEMPLATE/**'
               - '.github/workflows/ci.yaml'
             comment-disclosure-drift:
               # AGENTS.md carries the disclosure contract this guard enforces, so a
@@ -3084,6 +3094,33 @@ jobs:
       - name: Verify the agent instructions layout
         run: bash .claude/scripts/agent-instructions-layout-contract.test.sh
 
+  test-maintainer-digest:
+    name: Test maintainer digest
+    needs: changes
+    if: needs.changes.outputs.maintainer-digest == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        # Agents run the helper on macOS, whose bash 3.2 and BSD userland differ from the Linux runners.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Lint the digest helper
+        if: matrix.os == 'ubuntu-latest'
+        run: shellcheck .claude/scripts/maintainer-digest.sh .claude/scripts/maintainer-digest.test.sh
+      - name: Verify the digest helper
+        run: bash .claude/scripts/maintainer-digest.test.sh
+      # The workflow emails a digest file as written, so every one must pass the check before it merges.
+      - name: Check every digest file
+        run: bash .claude/scripts/maintainer-digest.sh check docs/digests/*.md
+
   status:
     name: "CI - Required Checks"
     runs-on: ubuntu-latest
@@ -3178,6 +3215,7 @@ jobs:
       - test-submodule-agents-drift
       - test-portfolio-map-drift
       - test-agent-instructions-layout
+      - test-maintainer-digest
     permissions: {}
     steps:
       - name: Check job results
@@ -3273,3 +3311,4 @@ jobs:
             ${{ needs.test-submodule-agents-drift.result }}
             ${{ needs.test-portfolio-map-drift.result }}
             ${{ needs.test-agent-instructions-layout.result }}
+            ${{ needs.test-maintainer-digest.result }}
