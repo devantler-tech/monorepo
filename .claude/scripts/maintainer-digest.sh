@@ -405,7 +405,7 @@ compose_fallback() {
     printf '**The summary is missing this week:** %s, so this digest lists only the open asks.\n\n' "$1"
     cat "$tmp/needs-you.md"
     printf '\n## How to reply\n\n%s\n%s\n' \
-      "Reply to this email with an ask's number and your choice, for example \`1: B\`, or the number and your own words." \
+      "Reply to this email with an ask's number and your choice, for example \`1: B\`, or the number, a colon and your own words, for example \`3: your words\`." \
       "Your reply posts publicly, as a comment on this issue in the public $repo repository."
   } >"$tmp/body.md"
 }
