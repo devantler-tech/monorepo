@@ -182,10 +182,17 @@ worktree is refused even when the work is read-only (monorepo#4262). Shapes refu
 | A `for`/`if` loop, or a `;`/`&&` chain, that names git or a `.git/` path | one plain command per step, or a script under `.claude/scripts/` |
 | A pipeline followed by `echo "exit=${PIPESTATUS[0]}"` or `${?}` | run the command alone and read its exit status from the result |
 | `grep -E` with alternation whose pattern contains the word `git` | a plain `grep` without alternation, or a separate `grep` per term |
+| A plain `git status`, `git log`, `git fetch`, `git worktree list` or `git -C <worktree path> …` | the same command through `/usr/bin/git` |
+
+The last row is the host's token-saving hook, not the guard: it rewrites `git <subcommand>` to
+`rtk git <subcommand>` before the guard reads it, and the guard refuses a git command started by another
+program (monorepo#4296). It leaves an absolute path alone. A probe on 2026-10-18 ran `/usr/bin/git status`,
+`log`, `worktree list` and `fetch` in a worker, while `/usr/bin/git -C <shared checkout> …` was still
+refused. `git rev-parse` and `git config` are not rewritten and pass as written.
 
 Still allowed: one `ls`, `grep -rn` or `sed -n` of a path under the shared checkout's `.git/modules`,
-which names no git invocation; a single `git -C <worktree path> …`; and `submodule-init.sh`, whose git reads
-run in its own process. Do not work around a refusal by rewording the command. Stop, use the passing form,
+which names no git invocation; a single `/usr/bin/git -C <worktree path> …`; and `submodule-init.sh`,
+whose git reads run in its own process. Do not work around a refusal by rewording the command. Stop, use the passing form,
 and report the refusal.
 
 ## Git safety
