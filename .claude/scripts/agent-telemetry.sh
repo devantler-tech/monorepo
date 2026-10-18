@@ -422,12 +422,28 @@ run_safety_early_and_emit() (
   exit "$overall"
 )
 
+# Stop the emitter's whole process group and wait until the group is empty, not
+# only for the outer job process: the emitter subshell is still stopping its
+# scopes after that process has gone. Bounded at about 10 s, then KILL.
+# shellcheck disable=SC2329 # Invoked indirectly by the signal trap below.
+stop_safety_emitter() {
+  local waited=0
+  kill -TERM -- "-$safety_emit_pid" 2>/dev/null
+  while kill -0 -- "-$safety_emit_pid" 2>/dev/null && [ "$waited" -lt 100 ]; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  kill -KILL -- "-$safety_emit_pid" 2>/dev/null
+  wait "$safety_emit_pid" 2>/dev/null
+  exit 143
+}
+
 if [ "$SAFETY_WORKER" = 0 ] && [ "$SECTION" = safety ]; then
   set -m
   run_safety_early_and_emit 1 &
   safety_emit_pid=$!
   set +m
-  trap 'kill -TERM -- "-$safety_emit_pid" 2>/dev/null; wait "$safety_emit_pid" 2>/dev/null; exit 143' HUP INT TERM
+  trap stop_safety_emitter HUP INT TERM
   safety_emit_rc=0
   wait "$safety_emit_pid" || safety_emit_rc=$?
   exit "$safety_emit_rc"

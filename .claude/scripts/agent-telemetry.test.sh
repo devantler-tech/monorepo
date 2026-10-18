@@ -4545,6 +4545,19 @@ done
 cancel_started=$(find "$FIX/safety-cancel-pids" -type f | wc -l | tr -d ' ')
 kill -TERM "$cancel_pid" 2>/dev/null
 wait "$cancel_pid" 2>/dev/null
+# The script must not return before its scans have stopped: count survivors at
+# once, before any grace period.
+cancel_alive_at_exit=0
+for pid_file in "$FIX/safety-cancel-pids"/*; do
+  [ -f "$pid_file" ] || continue
+  stalled=$(cat "$pid_file")
+  if kill -0 "$stalled" 2>/dev/null; then
+    case "$(ps -o stat= -p "$stalled" 2>/dev/null | tr -d '[:space:]')" in
+      Z*) ;;
+      *) cancel_alive_at_exit=$((cancel_alive_at_exit + 1)) ;;
+    esac
+  fi
+done
 cancel_alive=0
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   cancel_alive=0
@@ -4563,11 +4576,12 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 sleep 1
 cancel_left=$(find "$FIX/safety-cancel-tmp" -maxdepth 1 -name '.agtel_scope.*' | wc -l | tr -d ' ')
-if [ "$cancel_started" -ge 2 ] && [ "$cancel_alive" -eq 0 ] && [ "$cancel_left" -eq 0 ]; then
+if [ "$cancel_started" -ge 2 ] && [ "$cancel_alive_at_exit" -eq 0 ] \
+   && [ "$cancel_alive" -eq 0 ] && [ "$cancel_left" -eq 0 ]; then
   ok "cancelling a safety-only run stops both concurrent scans and removes hand-off files"
 else
   bad "cancelling a safety-only run stops both concurrent scans and removes hand-off files" \
-    "started=$cancel_started alive=$cancel_alive handoff_left=$cancel_left"
+    "started=$cancel_started alive_at_exit=$cancel_alive_at_exit alive=$cancel_alive handoff_left=$cancel_left"
 fi
 for pid_file in "$FIX/safety-cancel-pids"/*; do
   [ -f "$pid_file" ] && kill -KILL "$(cat "$pid_file")" 2>/dev/null
