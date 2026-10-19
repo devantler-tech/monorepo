@@ -2800,6 +2800,12 @@ populate_session_cache() {
 # names are counted as not inventoried — split by whether their own parent was
 # in the walk — so the inventory never reads as complete when it covered only
 # part of the delegated set.
+# A transcript is read only when it parses as JSON throughout AND holds at least
+# one record: whitespace alone is a valid, empty JSON stream that `jq empty`
+# accepts, which would pass a blank file as read (review of #4326).
+transcript_has_records() {
+  [ -s "$1" ] && jq -n -e 'reduce inputs as $r (false; true)' "$1" >/dev/null 2>&1
+}
 claude_delegated_coverage() {
   local f id p lines ids rc parents=0 delegated=0 named=0 in_walk=0 outside=0 missing=0
   local unreadable=0 unreadable_named=0 expected='' unnamed=0 parent_outside=0 parent_gone=0
@@ -2816,9 +2822,9 @@ claude_delegated_coverage() {
     parents=$((parents + 1))
     # The key filter below reads nothing from a parent that is empty, cut short
     # or malformed, which would pass as "names no subagent". The control parses
-    # the whole parent first (about 1 s for every parent in a live day): an
-    # empty file or any line that is not JSON makes its inventory unknown.
-    if [ ! -s "$f" ] || ! jq empty "$f" >/dev/null 2>&1; then
+    # the whole parent first (about 1 s for every parent in a live day): a blank or
+    # empty file, or any line that is not JSON, makes its inventory unknown.
+    if ! transcript_has_records "$f"; then
       unreadable=$((unreadable + 1)); failed_parents="${failed_parents}${f}"$'\n'; continue
     fi
     rc=0
@@ -2837,7 +2843,7 @@ claude_delegated_coverage() {
         in_walk=$((in_walk + 1))
         # In the walk is not the same as read: an empty or unparseable helper
         # is as unknown as one that cannot be opened.
-        if [ ! -s "$p" ] || ! jq empty "$p" >/dev/null 2>&1; then unreadable_named=$((unreadable_named + 1)); fi
+        if ! transcript_has_records "$p"; then unreadable_named=$((unreadable_named + 1)); fi
       elif [ -f "$p" ]; then
         outside=$((outside + 1))
       else

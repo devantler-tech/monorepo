@@ -11075,6 +11075,21 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-emptyhelper" CODEX_HOME="$FIX/deleg-nocode
 check "delegated coverage: an empty named helper is unknown" "$OUT" \
   "UNKNOWN: 1 named delegated transcript(s) in this walk could not be read"
 if [ "$rc" -eq 2 ]; then ok "delegated coverage: an empty named helper exits 2"; else bad "delegated coverage: an empty named helper exits 2" "exit $rc"; fi
+# A parent or named helper holding only whitespace parses as zero JSON values,
+# so `jq empty` passes it; it holds no record and is unknown, never an empty
+# launch inventory or a covered helper (review of #4326 at f5d3cb3f).
+mkdir -p "$FIX/deleg-blank/proj/p/subagents"
+printf ' \n\n' > "$FIX/deleg-blank/proj/blank.jsonl"
+printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","toolUseResult":{"agentId":"b1"},"message":{"content":[{"type":"text","text":"x"}]}}' \
+  > "$FIX/deleg-blank/proj/p.jsonl"
+printf '  \n' > "$FIX/deleg-blank/proj/p/subagents/agent-b1.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-blank" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+check "delegated coverage: a whitespace-only parent is unknown" "$OUT" \
+  "UNKNOWN: 1 parent transcript(s) could not be read or parsed for the delegated inventory"
+check "delegated coverage: a whitespace-only named helper is unknown" "$OUT" \
+  "UNKNOWN: 1 named delegated transcript(s) in this walk could not be read"
+if [ "$rc" -eq 2 ]; then ok "delegated coverage: whitespace-only transcripts exit 2"; else bad "delegated coverage: whitespace-only transcripts exit 2" "exit $rc"; fi
 # A helper whose own parent failed to parse is not a "background launch": its
 # launch type is unknown because the parent could not be read.
 mkdir -p "$FIX/deleg-badparent/proj/p/subagents"
