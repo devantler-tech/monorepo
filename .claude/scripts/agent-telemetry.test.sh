@@ -10950,7 +10950,7 @@ check "delegated coverage control: the share counts the new transcript" "$OUT" \
   "claude coverage: 2 parent + 2 delegated (subagents/) transcripts; delegated share 50%"
 check "delegated coverage control: nothing missing" "$OUT" "3 named — 2 in this walk (0 of them unreadable), 1 outside the window or file cap, 0 missing on disk"
 check "delegated coverage control: every delegated transcript is inventoried" "$OUT" \
-  "claude delegated not inventoried: 0 of 2 delegated transcripts — 0 named by no parent agentId record (background or nested launches), 0 whose parent is outside the window or file cap, 0 whose parent is missing on disk"
+  "claude delegated not inventoried: 0 of 2 delegated transcripts — 0 named by no parent agentId record (background or nested launches), 0 whose parent could not be read, 0 whose parent is outside the window or file cap, 0 whose parent is missing on disk"
 nocheck "delegated coverage control: no unknown line" "$OUT" "named by a parent are missing on disk"
 if [ "$rc" -eq 0 ]; then ok "delegated coverage control: exit 0"; else bad "delegated coverage control: exit 0" "exit $rc"; fi
 # A parent that cannot be read gives no inventory: unknown and exit 2.
@@ -10979,7 +10979,7 @@ cp "$FIX/deleg/proj/p2.jsonl" "$FIX/deleg-orphan/proj/other.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-orphan" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
 check "delegated coverage: a helper with no parent on disk is counted apart" "$OUT" \
-  "0 whose parent is outside the window or file cap, 1 whose parent is missing on disk"
+  "0 whose parent could not be read, 0 whose parent is outside the window or file cap, 1 whose parent is missing on disk"
 check "delegated coverage: a helper with no parent on disk is unknown" "$OUT" \
   "UNKNOWN: 1 delegated transcript(s) have no parent transcript on disk"
 if [ "$rc" -eq 2 ]; then ok "delegated coverage: a helper with no parent on disk exits 2"; else bad "delegated coverage: a helper with no parent on disk exits 2" "exit $rc"; fi
@@ -11020,7 +11020,7 @@ cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-bg/proj/p/subagents
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-bg" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1)
 check "delegated coverage: a background launch is reported as not inventoried" "$OUT" \
-  "claude delegated not inventoried: 1 of 1 delegated transcripts — 1 named by no parent agentId record (background or nested launches), 0 whose parent is outside the window or file cap, 0 whose parent is missing on disk"
+  "claude delegated not inventoried: 1 of 1 delegated transcripts — 1 named by no parent agentId record (background or nested launches), 0 whose parent could not be read, 0 whose parent is outside the window or file cap, 0 whose parent is missing on disk"
 check "delegated coverage: text naming is not read as a record" "$OUT" "0 named — 0 in this walk"
 # A malformed record carrying an agentId key is not silently skipped (review of
 # #4326): the parent's inventory could not be built, so it is unknown and exit 2.
@@ -11063,7 +11063,39 @@ touch -t 202201010000 "$FIX/deleg-cap/proj/old/subagents/agent-c1.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-cap" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 2 --section a2a 2>&1)
 check "delegated coverage: a helper whose parent the cap left out is reported apart" "$OUT" \
-  "1 of 1 delegated transcripts — 0 named by no parent agentId record (background or nested launches), 1 whose parent is outside the window or file cap, 0 whose parent is missing on disk"
+  "1 of 1 delegated transcripts — 0 named by no parent agentId record (background or nested launches), 0 whose parent could not be read, 1 whose parent is outside the window or file cap, 0 whose parent is missing on disk"
+# A named helper in the walk that is empty or not JSON is not covered (review
+# of #4326): filesystem readability is not a successful read.
+mkdir -p "$FIX/deleg-emptyhelper/proj/p/subagents"
+printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","toolUseResult":{"agentId":"e1"},"message":{"content":[{"type":"text","text":"x"}]}}' \
+  > "$FIX/deleg-emptyhelper/proj/p.jsonl"
+: > "$FIX/deleg-emptyhelper/proj/p/subagents/agent-e1.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-emptyhelper" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+check "delegated coverage: an empty named helper is unknown" "$OUT" \
+  "UNKNOWN: 1 named delegated transcript(s) in this walk could not be read"
+if [ "$rc" -eq 2 ]; then ok "delegated coverage: an empty named helper exits 2"; else bad "delegated coverage: an empty named helper exits 2" "exit $rc"; fi
+# A helper whose own parent failed to parse is not a "background launch": its
+# launch type is unknown because the parent could not be read.
+mkdir -p "$FIX/deleg-badparent/proj/p/subagents"
+printf '%s\n' 'not json' > "$FIX/deleg-badparent/proj/p.jsonl"
+cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-badparent/proj/p/subagents/agent-x1.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-badparent" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1)
+check "delegated coverage: a helper of an unreadable parent is reported apart" "$OUT" \
+  "1 of 1 delegated transcripts — 0 named by no parent agentId record (background or nested launches), 1 whose parent could not be read"
+# A projects store that exists but cannot be listed is unknown, never "0 + 0".
+if [ "$(id -u)" -ne 0 ]; then
+  mkdir -p "$FIX/deleg-locked/proj"
+  cp "$FIX/deleg/proj/p2.jsonl" "$FIX/deleg-locked/proj/p.jsonl"
+  chmod 000 "$FIX/deleg-locked"
+  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-locked" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+  chmod 700 "$FIX/deleg-locked"
+  check "delegated coverage: an unlistable projects store is unknown" "$OUT" \
+    "claude coverage: UNKNOWN (the Claude projects store exists but cannot be listed)"
+  if [ "$rc" -eq 2 ]; then ok "delegated coverage: an unlistable projects store exits 2"; else bad "delegated coverage: an unlistable projects store exits 2" "exit $rc"; fi
+fi
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

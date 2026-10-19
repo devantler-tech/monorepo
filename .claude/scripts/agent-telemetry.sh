@@ -2803,6 +2803,13 @@ populate_session_cache() {
 claude_delegated_coverage() {
   local f id p lines ids rc parents=0 delegated=0 named=0 in_walk=0 outside=0 missing=0
   local unreadable=0 unreadable_named=0 expected='' unnamed=0 parent_outside=0 parent_gone=0
+  local failed_parents='' parent_unknown=0
+  # A projects store that exists but cannot be listed leaves the walk empty,
+  # which would print as a known "0 parent + 0 delegated".
+  if [ -d "$CLAUDE_PROJECTS" ] && { [ ! -r "$CLAUDE_PROJECTS" ] || [ ! -x "$CLAUDE_PROJECTS" ]; }; then
+    echo " claude coverage: UNKNOWN (the Claude projects store exists but cannot be listed)"
+    return 2
+  fi
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     case "$f" in */subagents/*) delegated=$((delegated + 1)); continue ;; esac
@@ -2812,15 +2819,15 @@ claude_delegated_coverage() {
     # the whole parent first (about 1 s for every parent in a live day): an
     # empty file or any line that is not JSON makes its inventory unknown.
     if [ ! -s "$f" ] || ! jq empty "$f" >/dev/null 2>&1; then
-      unreadable=$((unreadable + 1)); continue
+      unreadable=$((unreadable + 1)); failed_parents="${failed_parents}${f}"$'\n'; continue
     fi
     rc=0
     lines=$(LC_ALL=C grep -E '"agentId"[[:space:]]*:' "$f" 2>/dev/null) || rc=$?
-    if [ "$rc" -gt 1 ]; then unreadable=$((unreadable + 1)); continue; fi
+    if [ "$rc" -gt 1 ]; then unreadable=$((unreadable + 1)); failed_parents="${failed_parents}${f}"$'\n'; continue; fi
     rc=0
     ids=$(printf '%s\n' "$lines" | jq -r 'select(type == "object") | .toolUseResult? | objects
           | .agentId? | strings | select(test("^[A-Za-z0-9_-]+$"))' 2>/dev/null) || rc=$?
-    if [ "$rc" -ne 0 ]; then unreadable=$((unreadable + 1)); continue; fi
+    if [ "$rc" -ne 0 ]; then unreadable=$((unreadable + 1)); failed_parents="${failed_parents}${f}"$'\n'; continue; fi
     while IFS= read -r id; do
       [ -n "$id" ] || continue
       named=$((named + 1))
@@ -2828,7 +2835,9 @@ claude_delegated_coverage() {
       expected="${expected}${p}"$'\n'
       if grep -qxF -- "$p" <<<"$SF_CACHE"; then
         in_walk=$((in_walk + 1))
-        [ -r "$p" ] || unreadable_named=$((unreadable_named + 1))
+        # In the walk is not the same as read: an empty or unparseable helper
+        # is as unknown as one that cannot be opened.
+        if [ ! -s "$p" ] || ! jq empty "$p" >/dev/null 2>&1; then unreadable_named=$((unreadable_named + 1)); fi
       elif [ -f "$p" ]; then
         outside=$((outside + 1))
       else
@@ -2851,7 +2860,9 @@ claude_delegated_coverage() {
     case "$f" in
       */subagents/*)
         grep -qxF -- "$f" <<<"$expected" && continue
-        if grep -qxF -- "${f%/subagents/*}.jsonl" <<<"$SF_CACHE"; then
+        if grep -qxF -- "${f%/subagents/*}.jsonl" <<<"$failed_parents"; then
+          parent_unknown=$((parent_unknown + 1))
+        elif grep -qxF -- "${f%/subagents/*}.jsonl" <<<"$SF_CACHE"; then
           unnamed=$((unnamed + 1))
         elif [ -f "${f%/subagents/*}.jsonl" ]; then
           parent_outside=$((parent_outside + 1))
@@ -2861,7 +2872,7 @@ claude_delegated_coverage() {
         ;;
     esac
   done <<<"$SF_CACHE"
-  echo " claude delegated not inventoried: $((unnamed + parent_outside + parent_gone)) of ${delegated} delegated transcripts — ${unnamed} named by no parent agentId record (background or nested launches), ${parent_outside} whose parent is outside the window or file cap, ${parent_gone} whose parent is missing on disk"
+  echo " claude delegated not inventoried: $((unnamed + parent_unknown + parent_outside + parent_gone)) of ${delegated} delegated transcripts — ${unnamed} named by no parent agentId record (background or nested launches), ${parent_unknown} whose parent could not be read, ${parent_outside} whose parent is outside the window or file cap, ${parent_gone} whose parent is missing on disk"
   local status=0
   if [ "$parent_gone" -gt 0 ]; then
     echo " UNKNOWN: ${parent_gone} delegated transcript(s) have no parent transcript on disk —"
