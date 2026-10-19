@@ -2782,9 +2782,17 @@ populate_session_cache() {
 # A transcript is read only when it parses as JSON throughout, holds at least one
 # record, and every record is an object: whitespace alone is a valid, empty JSON
 # stream that `jq empty` accepts, and a bare scalar such as `null` parses but is
-# no transcript record (reviews of #4326).
-transcript_has_records() {
+# no transcript record (reviews of #4326). A transcript that is still being
+# written (this run's own session, a live subagent) can end on a half-written
+# record, so a failed read is retried once after a second; a file that is really
+# cut short fails both reads and stays unreadable.
+transcript_parses_as_records() {
   [ -s "$1" ] && jq -n -e 'reduce inputs as $r (0; if . >= 0 and ($r | type) == "object" then . + 1 else -1 end) | . > 0' "$1" >/dev/null 2>&1
+}
+transcript_has_records() {
+  transcript_parses_as_records "$1" && return 0
+  sleep 1
+  transcript_parses_as_records "$1"
 }
 
 # Delegated-transcript coverage (monorepo#4325). Most Claude runs now hand the
