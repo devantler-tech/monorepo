@@ -96,6 +96,8 @@ stashed="${root}/stashed"     # work only in a stash: kept
 hidden="${root}/hidden"       # an untracked file hidden by status.showUntrackedFiles=no: kept
 assumed="${root}/assumed"     # an edit hidden by assume-unchanged: kept
 locked="${root}/locked"       # a linked worktree protected by git worktree lock: kept
+anchor="${root}/anchor"       # a clean clone whose repository holds a worktree in another folder: kept
+borrower="${root}/borrower"   # that linked worktree, with a commit no remote has: kept
 mkdir -p "$idle/sub" "$young" "$held" || exit 2
 printf 'x\n' > "$idle/sub/file"
 printf 'x\n' > "$young/old" && printf 'x\n' > "$held/file"
@@ -116,9 +118,12 @@ lock_repo="${tmp}/lock-main"
 git clone -q "$remote" "$lock_repo" && mkdir -p "$locked" &&
   git -C "$lock_repo" worktree add -q --detach "$locked/repo" main &&
   git -C "$lock_repo" worktree lock "$locked/repo" || exit 2
+clone_into "$anchor" && mkdir -p "$borrower" &&
+  git -C "$anchor/repo" worktree add -q --detach "$borrower/repo" main &&
+  git -C "$borrower/repo" commit -q --allow-empty -m borrowed || exit 2
 printf 'codex/feature-1\n' > "${bin}/prs"
 printf '%s\n' "$held" > "${bin}/open"
-kept_work_dirs="$dirty $ahead $open_pr $side $stashed $hidden $assumed $locked"
+kept_work_dirs="$dirty $ahead $open_pr $side $stashed $hidden $assumed $locked $anchor $borrower"
 # shellcheck disable=SC2086 # A fixed list of paths without spaces.
 for d in "$idle" "$young" "$held" "$clean" "$codex_noise" $kept_work_dirs; do age "$d"; done
 printf 'x\n' > "$young/new"
@@ -140,7 +145,8 @@ grep -qF "kept ${ahead}: unpushed commits" <<<"$out" || fail "1: the unpushed cl
 grep -qF "kept ${open_pr}: open pull request on codex/feature-1" <<<"$out" ||
   fail "1: the open pull request clone was not named: $out"
 for pair in "$side|unpushed commits" "$stashed|a stash" "$hidden|uncommitted changes" \
-  "$assumed|paths hidden from status" "$locked|locked worktree"; do
+  "$assumed|paths hidden from status" "$locked|locked worktree" \
+  "$anchor|repository of a worktree outside the folder" "$borrower|unpushed commits"; do
   grep -qF "kept ${pair%%|*}: ${pair#*|}" <<<"$out" || fail "1: ${pair%%|*} was not kept as ${pair#*|}: $out"
 done
 [ "$failures" -eq 0 ] && ok '1: a dry run names every decision and removes nothing'

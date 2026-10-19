@@ -349,8 +349,8 @@ instance never sweeps worktrees another instance owns. The run's sweep cannot re
 worktree, or any other live session's, because the **live process CWD** rule below keeps it — the
 sweep itself works from inside it. Measured 2026-09-29: the only sweep was the Claude-side one, so
 ~63 Codex worktrees (~16 GB) had piled up unreaped, the disk reached 99%, and new sessions could not
-start. What that sweep leaves in the Codex app's worktree dir — task folders it emptied, and clones
-that are no registered worktree — is removed after 7 untouched days by
+start. What that sweep leaves in the Codex app's worktree dir — task folders it emptied, and standalone
+clones that are not linked worktrees — is removed after 7 untouched days by
 [`build-cache-reclaim.sh`](../scripts/build-cache-reclaim.sh) through
 [`codex-worktree-retention.sh`](../scripts/codex-worktree-retention.sh), which keeps the same kinds of
 work (maintainer decision on [#4329](https://github.com/devantler-tech/monorepo/issues/4329)).

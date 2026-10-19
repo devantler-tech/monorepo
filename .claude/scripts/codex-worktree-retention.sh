@@ -185,7 +185,7 @@ repo_slug() {
 # judge_checkout <checkout> <task dir> prints why the checkout must be kept (empty = removable),
 # or fails when it cannot be read.
 judge_checkout() {
-  local c=$1 task=$2 st flags gitdir common branch ahead slug prs
+  local c=$1 task=$2 st flags gitdir common branch ahead slug prs wts wl
   gitdir=$(git -C "$c" rev-parse --absolute-git-dir 2>/dev/null) || return 1
   common=$(git -C "$c" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
   # A linked worktree someone protected with `git worktree lock`.
@@ -210,6 +210,15 @@ judge_checkout() {
   case "$common/" in
     "$task"/*)
       if git -C "$c" rev-parse -q --verify refs/stash > /dev/null 2>&1; then printf 'a stash'; return 0; fi
+      # A linked worktree elsewhere keeps its index, HEAD and objects in this repository, so
+      # removing the clone would destroy it. A path spelled differently also keeps the folder.
+      wts=$(git -C "$c" worktree list --porcelain 2>/dev/null) || return 1
+      while IFS= read -r wl; do
+        case "$wl" in
+          "worktree $task"/*) ;;
+          'worktree '*) printf 'repository of a worktree outside the folder'; return 0 ;;
+        esac
+      done <<<"$wts"
       ahead=$(git -C "$c" rev-list --count HEAD --branches --tags --not --remotes 2>/dev/null) || return 1
       ;;
     *) ahead=$(git -C "$c" rev-list --count HEAD --not --remotes 2>/dev/null) || return 1 ;;
