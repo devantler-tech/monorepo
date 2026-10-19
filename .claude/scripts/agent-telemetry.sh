@@ -411,7 +411,9 @@ run_safety_early_and_emit() (
       scope_rc=0
       scope_start=$(date +%s)
       run_safety_early "$standalone" "$scope" || scope_rc=$?
-      printf '%s\n' "$(($(date +%s) - scope_start))" >| "$wallf" || :
+      # The " seconds" suffix marks a complete write: a short write (`1` of
+      # `12`) lacks it and reads UNKNOWN, never as a shorter time.
+      printf '%s seconds\n' "$(($(date +%s) - scope_start))" >| "$wallf" || :
       printf '%s\n' "$scope_rc" >| "$rcf" || exit 3
       exit 0
     ) &
@@ -442,6 +444,7 @@ run_safety_early_and_emit() (
       *) emit_safety_unknown 'the safety worker failed; its measurements are incomplete.' "$scope"; overall=2 ;;
     esac
     wall=$(cat_builtin "${base}.${scope}.wall") || wall=''
+    case "$wall" in *' seconds') wall=${wall% seconds} ;; *) wall='' ;; esac
     case "$wall" in
       ''|*[!0-9]*) echo "  ${scope} scope wall: UNKNOWN (no time recorded)" ;;
       *) echo "  ${scope} scope wall: ${wall} s (limit ${SAFETY_TIMEOUT_SECONDS} s)" ;;
