@@ -1314,10 +1314,34 @@ file_changed() {
   printf '%s\n' "$m"
 }
 
+# reflog_newest <reflog-file> -> seconds since the epoch of the reflog's newest entry, 0 when
+# it has none. git's reflog expiry (`git gc`, `git reflog expire`) rewrites every reflog file
+# to drop old entries, which moves the file's mtime and ctime although nobody worked there:
+# one such run at 2026-10-15 rewrote all 164 worktree reflogs on this host at once and
+# restarted the salvage clock of every abandoned worktree (#4359). An entry's own timestamp
+# survives that rewrite and moves only when HEAD moves. Fails when the newest line is not a
+# well-formed entry, so the caller can fall back to the file's time (fail closed).
+reflog_newest() {
+  local out
+  [ -s "$1" ] || { printf '0\n'; return 0; }
+  out=$(awk '
+    NF { last = $0 }
+    END {
+      if (last == "") { print 0; exit 0 }
+      head = last; t = index(head, "\t"); if (t) head = substr(head, 1, t - 1)
+      n = split(head, f, " ")
+      if (n < 4 || f[1] !~ /^[0-9a-f]+$/ || f[2] !~ /^[0-9a-f]+$/ \
+          || f[n-1] !~ /^[0-9]+$/ || f[n] !~ /^[+-][0-9][0-9][0-9][0-9]$/) exit 1
+      print f[n-1]
+    }' "$1") || return 1
+  case "$out" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s\n' "$out"
+}
+
 # work_age_h <worktree> -> whole hours since the newest work salvage would carry: every
-# staged, modified or untracked (non-ignored) path, the index, and the HEAD reflog. Editing
-# a tracked file does not touch the worktree directory's mtime, so the directory alone can
-# make a fresh edit look weeks old. Each path counts by its later of mtime and ctime, so a
+# staged, modified or untracked (non-ignored) path, the index, and the HEAD reflog's newest
+# entry. Editing a tracked file does not touch the worktree directory's mtime, so the
+# directory alone can make a fresh edit look weeks old. Each path counts by its later of mtime and ctime, so a
 # `chmod +x` is work; the index counts so that staging bytes that are already old is work
 # too. The sweep never rewrites the index itself (GIT_OPTIONAL_LOCKS=0 above), so its mtime
 # moves only with someone's git activity in that worktree (#3642). Non-zero on a read
@@ -1326,11 +1350,20 @@ work_age_h() {
   local wt=$1 admin list p m newest=0 unreadable=0
   admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] || return 1
   newest=$(changed_paths_newest "$wt") || return 1
-  for p in "$admin/index" "$admin/logs/HEAD"; do
-    [ -e "$p" ] || continue
-    m=$(file_changed "$p") || return 1
+  if [ -e "$admin/index" ]; then
+    m=$(file_changed "$admin/index") || return 1
     [ "$m" -gt "$newest" ] && newest=$m
-  done
+  fi
+  # The HEAD reflog counts by its newest entry, not its file time (reflog_newest, #4359). A
+  # commit made with a backdated GIT_COMMITTER_DATE writes a backdated entry, but it also
+  # rewrites the index, which still counts above.
+  p="$admin/logs/HEAD"
+  if [ -e "$p" ] || [ -L "$p" ]; then
+    if [ -f "$p" ] && [ ! -L "$p" ] && m=$(reflog_newest "$p"); then :; else
+      m=$(file_changed "$p") || return 1
+    fi
+    [ "$m" -gt "$newest" ] && newest=$m
+  fi
   # Work done inside a submodule touches nothing above. Salvage now removes a worktree whose
   # submodules are pristine, so use of one counts as use of the worktree (#2831): every
   # file of each submodule repository outside its object store, since a new branch writes

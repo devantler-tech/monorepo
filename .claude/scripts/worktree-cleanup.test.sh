@@ -15,6 +15,21 @@ pass=0; fail=0
 ok()   { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
 bad()  { fail=$((fail+1)); printf '  FAIL %s\n     %s\n' "$1" "${2:-}"; }
 
+# backdate_reflog <file> — set every entry's timestamp to 2020-01-01 (1577836800), keeping
+# the rest of each line byte for byte.
+backdate_reflog() {
+  local tmp
+  tmp=$(mktemp) || return 1
+  awk 'BEGIN { FS = OFS = "\t" } {
+         n = split($1, f, " ")
+         if (n >= 4 && f[n-1] ~ /^[0-9]+$/) {
+           h = f[1]; for (i = 2; i <= n; i++) h = h " " (i == n-1 ? "1577836800" : f[i]); $1 = h
+         }
+         print
+       }' "$1" > "$tmp" && cat "$tmp" > "$1"
+  rm -f "$tmp"
+}
+
 # age_tree <path> — backdate a path to 2020. For a worktree, every entry in it and the
 # admin index and HEAD reflog too: salvage measures age from the newest work, not the
 # directory alone.
@@ -24,6 +39,8 @@ age_tree() {
     if [ -d "$p" ] && admin=$(git -C "$p" rev-parse --absolute-git-dir 2>/dev/null) \
        && [ "$(git -C "$p" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$p" && pwd -P)" ]; then
       find "$p" -mindepth 1 -exec touch -h -t 202001010000 {} + 2>/dev/null
+      # The HEAD reflog counts by its newest entry's timestamp (#4359), so backdate those too.
+      [ -s "$admin/logs/HEAD" ] && backdate_reflog "$admin/logs/HEAD"
       for f in "$admin/index" "$admin/logs/HEAD"; do [ -e "$f" ] && touch -t 202001010000 "$f"; done
       # A submodule repository's files count towards the age too (work_age_h).
       if [ -d "$admin/modules" ]; then find "$admin/modules" -exec touch -h -t 202001010000 {} + 2>/dev/null; fi
@@ -3568,6 +3585,91 @@ t_a_fresh_chmod_in_an_old_worktree_is_not_salvaged() {
   rm -rf "$root"
 }
 
+t_a_reflog_rewrite_without_a_new_entry_is_not_work() {
+  # git's reflog expiry rewrites the file without adding an entry, which moves its mtime and
+  # ctime; that is not work, so the old worktree stays salvage-eligible (#4359).
+  local name="a reflog rewritten without a new entry does not restart the salvage clock"
+  local root; root=$(make_repo)
+  add_wt "$root" rewritten pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/rewritten" admin
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  echo "old edit" > "$wt/file.txt"
+  age_tree "$wt"
+  [ -s "$admin/logs/HEAD" ] || { bad "$name" "FIXTURE: no HEAD reflog entries"; rm -rf "$root"; return; }
+  local copy; copy=$(mktemp); cat "$admin/logs/HEAD" > "$copy"; rm -f "$admin/logs/HEAD"
+  cat "$copy" > "$admin/logs/HEAD"; rm -f "$copy"     # same entries, new file, time "now"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q '^SALVAGE .*rewritten' <<<"$out"; then ok "$name"; else bad "$name" "$out"; fi
+  rm -rf "$root"
+}
+
+t_an_emptied_reflog_is_not_work() {
+  # Expiry can drop every entry, leaving an empty file dated "now" (#4359).
+  local name="an emptied reflog does not restart the salvage clock"
+  local root; root=$(make_repo)
+  add_wt "$root" emptied pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/emptied" admin
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  echo "old edit" > "$wt/file.txt"
+  age_tree "$wt"
+  : > "$admin/logs/HEAD"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q '^SALVAGE .*emptied' <<<"$out"; then ok "$name"; else bad "$name" "$out"; fi
+  rm -rf "$root"
+}
+
+t_a_new_reflog_entry_is_work() {
+  # A new entry is HEAD moving, which is work even when every file time reads as old.
+  local name="a new HEAD reflog entry keeps an old worktree, not salvaged"
+  local root; root=$(make_repo)
+  add_wt "$root" newentry pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/newentry" admin head
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir); head=$(git -C "$wt" rev-parse HEAD)
+  echo "old edit" > "$wt/file.txt"
+  age_tree "$wt"
+  # Control: before the new entry, the same tree IS salvage-eligible.
+  local ctl; ctl=$(run_salvage "$root" dry-run 1)
+  grep -q '^SALVAGE .*newentry' <<<"$ctl" \
+    || { bad "$name" "FIXTURE: the aged tree is not salvage-eligible :: $ctl"; rm -rf "$root"; return; }
+  printf '%s %s t <t@t.t> %s +0000\treset: moving to HEAD\n' "$head" "$head" "$(date +%s)" >> "$admin/logs/HEAD"
+  touch -t 202001010000 "$admin/logs/HEAD"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*newentry .*uncommitted change' <<<"$out" && ! grep -q '^SALVAGED .*newentry' <<<"$out" \
+     && [ "$(cat "$wt/file.txt")" = "old edit" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_an_unparseable_reflog_counts_its_file_time() {
+  # A newest line that is not a well-formed entry cannot be dated, so the file's own time
+  # counts instead (fail closed): fresh keeps, old is still eligible.
+  local name="an unparseable HEAD reflog falls back to its file time"
+  local root; root=$(make_repo)
+  add_wt "$root" garbled pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/garbled" admin head
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir); head=$(git -C "$wt" rev-parse HEAD)
+  echo "old edit" > "$wt/file.txt"
+  age_tree "$wt"
+  # Valid object ids, so the reflog classification gate still accepts it; only the date is bad.
+  printf '%s %s t <t@t.t> yesterday +0000\tcheckout: odd\n' "$head" "$head" >> "$admin/logs/HEAD"
+  touch -t 202001010000 "$admin/logs/HEAD"
+  local ctl; ctl=$(run_salvage "$root" dry-run 1)
+  grep -q '^SALVAGE .*garbled' <<<"$ctl" \
+    || { bad "$name" "FIXTURE: an old garbled reflog is not salvage-eligible :: $ctl"; rm -rf "$root"; return; }
+  touch "$admin/logs/HEAD"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*garbled .*uncommitted change' <<<"$out" && ! grep -q '^SALVAGED .*garbled' <<<"$out" \
+     && [ "$(cat "$wt/file.txt")" = "old edit" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_an_unreadable_ctime_keeps_an_old_worktree() {
   # mtime alone cannot see a fresh chmod, so a ctime that cannot be read is a failed age
   # read, and a failed read keeps the tree (#3642).
@@ -6639,6 +6741,10 @@ t_new_work_during_the_sweep_resets_the_salvage_age
 t_a_referenced_pseudo_ref_tag_does_not_block_salvage
 t_a_fresh_tracked_edit_in_an_old_worktree_is_not_salvaged
 t_a_fresh_chmod_in_an_old_worktree_is_not_salvaged
+t_a_reflog_rewrite_without_a_new_entry_is_not_work
+t_an_emptied_reflog_is_not_work
+t_a_new_reflog_entry_is_work
+t_an_unparseable_reflog_counts_its_file_time
 t_an_unreadable_ctime_keeps_an_old_worktree
 t_a_fresh_nested_rename_in_an_old_worktree_is_not_salvaged
 t_staging_old_bytes_in_an_old_worktree_is_not_salvaged
