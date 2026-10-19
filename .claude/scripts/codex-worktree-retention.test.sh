@@ -73,7 +73,8 @@ run() {
 remote="${tmp}/remote.git"
 git init -q --bare -b main "$remote" || exit 2
 seed="${tmp}/seed"
-git init -q -b main "$seed" && git -C "$seed" commit -q --allow-empty -m init &&
+git init -q -b main "$seed" && printf 'readme\n' > "$seed/README" && git -C "$seed" add README &&
+  git -C "$seed" commit -q -m init &&
   git -C "$seed" remote add origin "$remote" && git -C "$seed" push -q origin main || exit 2
 git -C "$seed" remote set-url origin "https://github.com/devantler-tech/fixture.git" || exit 2
 # clone_into <task> clones the remote into <task>/repo, with a GitHub origin the gh stub can name.
@@ -90,6 +91,11 @@ dirty="${root}/dirty"       # an uncommitted change: kept
 ahead="${root}/ahead"       # a commit no remote has: kept
 open_pr="${root}/open-pr"   # on the branch of an open pull request: kept
 codex_noise="${root}/noise" # only Codex's own .codex/ tool folder untracked: removed
+side="${root}/side"           # unpushed work on a branch that is not checked out: kept
+stashed="${root}/stashed"     # work only in a stash: kept
+hidden="${root}/hidden"       # an untracked file hidden by status.showUntrackedFiles=no: kept
+assumed="${root}/assumed"     # an edit hidden by assume-unchanged: kept
+locked="${root}/locked"       # a linked worktree protected by git worktree lock: kept
 mkdir -p "$idle/sub" "$young" "$held" || exit 2
 printf 'x\n' > "$idle/sub/file"
 printf 'x\n' > "$young/old" && printf 'x\n' > "$held/file"
@@ -100,9 +106,21 @@ git -C "$ahead/repo" commit -q --allow-empty -m local || exit 2
 git -C "$open_pr/repo" switch -q -c codex/feature-1 || exit 2
 git -C "$open_pr/repo" update-ref refs/remotes/origin/codex/feature-1 HEAD || exit 2
 mkdir -p "$codex_noise/repo/.codex" && printf 'x\n' > "$codex_noise/repo/.codex/state"
+clone_into "$side" && clone_into "$stashed" && clone_into "$hidden" && clone_into "$assumed" || exit 2
+git -C "$side/repo" switch -q -c side && git -C "$side/repo" commit -q --allow-empty -m side &&
+  git -C "$side/repo" switch -q main || exit 2
+printf 'edit\n' >> "$stashed/repo/README" && git -C "$stashed/repo" stash -q || exit 2
+git -C "$hidden/repo" config status.showUntrackedFiles no && printf 'x\n' > "$hidden/repo/authored" || exit 2
+git -C "$assumed/repo" update-index --assume-unchanged README && printf 'edit\n' >> "$assumed/repo/README" || exit 2
+lock_repo="${tmp}/lock-main"
+git clone -q "$remote" "$lock_repo" && mkdir -p "$locked" &&
+  git -C "$lock_repo" worktree add -q --detach "$locked/repo" main &&
+  git -C "$lock_repo" worktree lock "$locked/repo" || exit 2
 printf 'codex/feature-1\n' > "${bin}/prs"
 printf '%s\n' "$held" > "${bin}/open"
-for d in "$idle" "$young" "$held" "$clean" "$dirty" "$ahead" "$open_pr" "$codex_noise"; do age "$d"; done
+kept_work_dirs="$dirty $ahead $open_pr $side $stashed $hidden $assumed $locked"
+# shellcheck disable=SC2086 # A fixed list of paths without spaces.
+for d in "$idle" "$young" "$held" "$clean" "$codex_noise" $kept_work_dirs; do age "$d"; done
 printf 'x\n' > "$young/new"
 
 # 1. A dry run reports exactly the removable folders and deletes nothing.
@@ -121,6 +139,10 @@ grep -qF "kept ${dirty}: uncommitted changes" <<<"$out" || fail "1: the dirty cl
 grep -qF "kept ${ahead}: unpushed commits" <<<"$out" || fail "1: the unpushed clone was not named: $out"
 grep -qF "kept ${open_pr}: open pull request on codex/feature-1" <<<"$out" ||
   fail "1: the open pull request clone was not named: $out"
+for pair in "$side|unpushed commits" "$stashed|a stash" "$hidden|uncommitted changes" \
+  "$assumed|paths hidden from status" "$locked|locked worktree"; do
+  grep -qF "kept ${pair%%|*}: ${pair#*|}" <<<"$out" || fail "1: ${pair%%|*} was not kept as ${pair#*|}: $out"
+done
 [ "$failures" -eq 0 ] && ok '1: a dry run names every decision and removes nothing'
 
 # 2. The checks themselves must not write: a dry run leaves an old clone old.
@@ -174,7 +196,8 @@ rc=$?
 for d in "$idle" "$clean" "$codex_noise" "${root}/registered"; do
   [ -e "$d" ] && fail "7: apply kept the removable ${d}: $out"
 done
-for d in "$young" "$held" "$dirty" "$ahead" "$open_pr"; do
+# shellcheck disable=SC2086 # A fixed list of paths without spaces.
+for d in "$young" "$held" $kept_work_dirs; do
   [ -d "$d" ] || fail "7: apply removed the kept ${d}"
 done
 [ -L "${root}/link" ] && [ -f "$target/file" ] || fail '7: a symbolic-link task folder or its target was touched'

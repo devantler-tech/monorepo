@@ -32,13 +32,16 @@
 #   * No process holds a file open, or has its working directory, at or below it. The open-file
 #     list counts only when lsof exits 0 with a non-empty list.
 #   * Every git checkout inside it (any `.git` within five levels, so populated submodules too)
-#     has no uncommitted change (Codex's own `.codex/` and `.agents/` tool folders aside), no
-#     commit that no remote-tracking branch contains, and is not on a branch that is the head of
-#     an open pull request.
+#     has no uncommitted change (untracked files always counted, whatever the repository's
+#     status.showUntrackedFiles says; Codex's own `.codex/` and `.agents/` tool folders aside), no
+#     path marked assume-unchanged or skip-worktree (status cannot see edits to those), no
+#     `git worktree lock`, no commit that no remote-tracking branch contains (for a clone whose
+#     repository lives inside the folder: on ANY local branch or tag, and no stash), and is not
+#     on a branch that is the head of an open pull request.
 #   * Immediately before removal its age, ownership and open files are read again.
 # After a removal, each git repository a removed checkout belonged to is pruned, so its worktree
 # list stops naming the deleted folder. Nothing outside <home>/worktrees is touched.
-set -uo pipefail
+set -euo pipefail
 
 MODE=${1:-dry-run}
 MIN_AGE_DAYS=${2:-7}
@@ -179,16 +182,38 @@ repo_slug() {
   printf '%s' "$url"
 }
 
-# judge_checkout <checkout> prints why the checkout must be kept (empty = removable), or fails
-# when it cannot be read.
+# judge_checkout <checkout> <task dir> prints why the checkout must be kept (empty = removable),
+# or fails when it cannot be read.
 judge_checkout() {
-  local c=$1 st branch ahead slug prs
+  local c=$1 task=$2 st flags gitdir common branch ahead slug prs
+  gitdir=$(git -C "$c" rev-parse --absolute-git-dir 2>/dev/null) || return 1
+  common=$(git -C "$c" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+  # A linked worktree someone protected with `git worktree lock`.
+  if [ -e "$gitdir/locked" ]; then printf 'locked worktree'; return 0; fi
   # --no-optional-locks: a plain status may rewrite the index, which would itself read as a recent
-  # write and keep the worktree another min_age_days.
-  st=$(git --no-optional-locks -C "$c" status --porcelain --ignore-submodules=all 2>/dev/null) || return 1
-  st=$(printf '%s\n' "$st" | grep -v -E '^\?\? \.(codex|agents)/' | sed '/^$/d')
+  # write and keep the worktree another min_age_days. --untracked-files=all overrides a
+  # repository's status.showUntrackedFiles=no, which would otherwise hide authored files.
+  st=$(git --no-optional-locks -C "$c" status --porcelain --untracked-files=all \
+    --ignore-submodules=all 2>/dev/null) || return 1
+  st=$(printf '%s\n' "$st" | { grep -v -E '^\?\? \.(codex|agents)/' || true; } | sed '/^$/d')
   if [ -n "$st" ]; then printf 'uncommitted changes'; return 0; fi
-  ahead=$(git -C "$c" rev-list --count HEAD --not --remotes 2>/dev/null) || return 1
+  # Status cannot see an edit to a path marked assume-unchanged (lower-case tag) or
+  # skip-worktree (S), so any such path keeps the checkout.
+  flags=$(git -C "$c" ls-files -v 2>/dev/null) || return 1
+  if grep -q -E '^([a-z]|S) ' <<<"$flags"; then
+    printf 'paths hidden from status'
+    return 0
+  fi
+  # A clone whose repository lives inside the task folder dies with it, so every local branch,
+  # tag and stash must exist elsewhere. A linked worktree's repository survives the removal and
+  # keeps its own refs, so only what its HEAD holds is at stake there.
+  case "$common/" in
+    "$task"/*)
+      if git -C "$c" rev-parse -q --verify refs/stash > /dev/null 2>&1; then printf 'a stash'; return 0; fi
+      ahead=$(git -C "$c" rev-list --count HEAD --branches --tags --not --remotes 2>/dev/null) || return 1
+      ;;
+    *) ahead=$(git -C "$c" rev-list --count HEAD --not --remotes 2>/dev/null) || return 1 ;;
+  esac
   case "$ahead" in '' | *[!0-9]*) return 1 ;; esac
   if [ "$ahead" -gt 0 ]; then printf 'unpushed commits'; return 0; fi
   branch=$(git -C "$c" symbolic-ref -q --short HEAD 2>/dev/null) || return 0 # detached: no branch
@@ -246,16 +271,16 @@ while IFS= read -r -d '' d; do
     kept_work=$((kept_work + 1))
     continue
   fi
-  fresh "$d"
-  rc=$?
+  rc=0
+  fresh "$d" || rc=$?
   if [ "$rc" -eq 0 ]; then kept_young=$((kept_young + 1)); continue; fi
   if [ "$rc" -eq 2 ]; then
     log "UNKNOWN: ${d} could not be read completely; kept"
     unknown=$((unknown + 1))
     continue
   fi
-  foreign "$d"
-  rc=$?
+  rc=0
+  foreign "$d" || rc=$?
   if [ "$rc" -ne 1 ]; then
     if [ "$rc" -eq 0 ]; then
       log "kept ${d}: holds files owned by another user"
@@ -282,7 +307,7 @@ while IFS= read -r -d '' d; do
   : > "$work/these-repos"
   while IFS= read -r -d '' g; do
     c=${g%/.git}
-    if ! why=$(judge_checkout "$c"); then bad=1; break; fi
+    if ! why=$(judge_checkout "$c" "$d"); then bad=1; break; fi
     if [ -n "$why" ]; then reason=$why; break; fi
     common=$(git -C "$c" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || { bad=1; break; }
     printf '%s\n' "$common" >> "$work/these-repos"
@@ -316,16 +341,16 @@ while IFS= read -r -d '' d; do
     unknown=$((unknown + 1))
     break
   fi
-  fresh "$d"
-  fresh_rc=$?
-  foreign "$d"
-  foreign_rc=$?
+  fresh_rc=0
+  fresh "$d" || fresh_rc=$?
+  foreign_rc=0
+  foreign "$d" || foreign_rc=$?
   if [ -L "$d" ] || held "$d" "$work/open.now" || [ "$fresh_rc" -ne 1 ] || [ "$foreign_rc" -ne 1 ]; then
     log "kept ${d}: changed since it was scanned"
     kept_work=$((kept_work + 1))
     continue
   fi
-  rm -rf -- "$d" 2>/dev/null
+  rm -rf -- "$d" 2>/dev/null || : # judged by what is left, below
   if [ ! -e "$d" ] && [ ! -L "$d" ]; then
     log "removed ${d} (~$((kb / 1024)) MB)"
     removed=$((removed + 1))
