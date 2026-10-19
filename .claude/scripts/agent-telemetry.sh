@@ -2802,11 +2802,21 @@ populate_session_cache() {
 # part of the delegated set.
 claude_delegated_coverage() {
   local f id p lines ids rc parents=0 delegated=0 named=0 in_walk=0 outside=0 missing=0
-  local unreadable=0 unreadable_named=0 expected='' unnamed=0 parent_outside=0
+  local unreadable=0 unreadable_named=0 expected='' unnamed=0 parent_outside=0 parent_gone=0
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     case "$f" in */subagents/*) delegated=$((delegated + 1)); continue ;; esac
     parents=$((parents + 1))
+    # The key filter below reads nothing from a parent that is empty or cut
+    # short, which would pass as "names no subagent". A transcript is appended
+    # one whole line at a time, so an empty file or one whose last line has no
+    # newline is the control: either makes this parent's inventory unknown.
+    # (A complete line that is not JSON names nothing and is left to the
+    # sections that read every record; a malformed line carrying the key is
+    # caught by the parse below.)
+    if [ ! -s "$f" ] || [ "$(tail -c 1 "$f" 2>/dev/null | wc -l | tr -d ' ')" != 1 ]; then
+      unreadable=$((unreadable + 1)); continue
+    fi
     rc=0
     lines=$(LC_ALL=C grep -E '"agentId"[[:space:]]*:' "$f" 2>/dev/null) || rc=$?
     if [ "$rc" -gt 1 ]; then unreadable=$((unreadable + 1)); continue; fi
@@ -2820,7 +2830,8 @@ claude_delegated_coverage() {
       p="${f%.jsonl}/subagents/agent-${id}.jsonl"
       expected="${expected}${p}"$'\n'
       if grep -qxF -- "$p" <<<"$SF_CACHE"; then
-        if [ -r "$p" ]; then in_walk=$((in_walk + 1)); else unreadable_named=$((unreadable_named + 1)); fi
+        in_walk=$((in_walk + 1))
+        [ -r "$p" ] || unreadable_named=$((unreadable_named + 1))
       elif [ -f "$p" ]; then
         outside=$((outside + 1))
       else
@@ -2834,24 +2845,32 @@ claude_delegated_coverage() {
   if [ "$parents" -eq 0 ]; then
     if [ "$delegated" -gt 0 ]; then
       echo " claude delegated inventory: UNKNOWN (no parent transcript in this walk to check against)"
+      return 2
     fi
     return 0
   fi
-  echo " claude delegated inventory (from the parents' agentId records): ${named} named — ${in_walk} in this walk, ${outside} outside the window or file cap, ${missing} missing on disk"
+  echo " claude delegated inventory (from the parents' agentId records): ${named} named — ${in_walk} in this walk (${unreadable_named} of them unreadable), ${outside} outside the window or file cap, ${missing} missing on disk"
   while IFS= read -r f; do
     case "$f" in
       */subagents/*)
         grep -qxF -- "$f" <<<"$expected" && continue
         if grep -qxF -- "${f%/subagents/*}.jsonl" <<<"$SF_CACHE"; then
           unnamed=$((unnamed + 1))
-        else
+        elif [ -f "${f%/subagents/*}.jsonl" ]; then
           parent_outside=$((parent_outside + 1))
+        else
+          parent_gone=$((parent_gone + 1))
         fi
         ;;
     esac
   done <<<"$SF_CACHE"
-  echo " claude delegated not inventoried: $((unnamed + parent_outside)) of ${delegated} delegated transcripts — ${unnamed} named by no parent agentId record (background or nested launches), ${parent_outside} whose parent is outside the window or file cap"
+  echo " claude delegated not inventoried: $((unnamed + parent_outside + parent_gone)) of ${delegated} delegated transcripts — ${unnamed} named by no parent agentId record (background or nested launches), ${parent_outside} whose parent is outside the window or file cap, ${parent_gone} whose parent is missing on disk"
   local status=0
+  if [ "$parent_gone" -gt 0 ]; then
+    echo " UNKNOWN: ${parent_gone} delegated transcript(s) have no parent transcript on disk —"
+    echo "          delegated coverage is incomplete, not zero."
+    status=2
+  fi
   if [ "$unreadable" -gt 0 ]; then
     echo " UNKNOWN: ${unreadable} parent transcript(s) could not be read or parsed for the delegated inventory —"
     echo "          delegated coverage is incomplete, not zero."

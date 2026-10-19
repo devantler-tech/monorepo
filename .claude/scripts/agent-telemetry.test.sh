@@ -10939,7 +10939,7 @@ OUT=$(deleg_run); rc=$?
 check "delegated coverage: parents and subagent transcripts are counted apart" "$OUT" \
   "claude coverage: 2 parent + 1 delegated (subagents/) transcripts; delegated share 33%"
 check "delegated coverage: each named subagent lands in exactly one bin" "$OUT" \
-  "(from the parents' agentId records): 3 named — 1 in this walk, 1 outside the window or file cap, 1 missing on disk"
+  "(from the parents' agentId records): 3 named — 1 in this walk (0 of them unreadable), 1 outside the window or file cap, 1 missing on disk"
 check "delegated coverage: a missing named transcript is unknown, not zero" "$OUT" \
   "UNKNOWN: 1 delegated transcript(s) named by a parent are missing on disk"
 if [ "$rc" -eq 2 ]; then ok "delegated coverage: a missing transcript exits 2"; else bad "delegated coverage: a missing transcript exits 2" "exit $rc"; fi
@@ -10948,9 +10948,9 @@ cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg/proj/p1/subagents/a
 OUT=$(deleg_run); rc=$?
 check "delegated coverage control: the share counts the new transcript" "$OUT" \
   "claude coverage: 2 parent + 2 delegated (subagents/) transcripts; delegated share 50%"
-check "delegated coverage control: nothing missing" "$OUT" "3 named — 2 in this walk, 1 outside the window or file cap, 0 missing on disk"
+check "delegated coverage control: nothing missing" "$OUT" "3 named — 2 in this walk (0 of them unreadable), 1 outside the window or file cap, 0 missing on disk"
 check "delegated coverage control: every delegated transcript is inventoried" "$OUT" \
-  "claude delegated not inventoried: 0 of 2 delegated transcripts — 0 named by no parent agentId record (background or nested launches), 0 whose parent is outside the window or file cap"
+  "claude delegated not inventoried: 0 of 2 delegated transcripts — 0 named by no parent agentId record (background or nested launches), 0 whose parent is outside the window or file cap, 0 whose parent is missing on disk"
 nocheck "delegated coverage control: no unknown line" "$OUT" "named by a parent are missing on disk"
 if [ "$rc" -eq 0 ]; then ok "delegated coverage control: exit 0"; else bad "delegated coverage control: exit 0" "exit $rc"; fi
 # A parent that cannot be read gives no inventory: unknown and exit 2.
@@ -10967,11 +10967,32 @@ fi
 mkdir -p "$FIX/deleg-orphan/proj/p9/subagents"
 cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-orphan/proj/p9/subagents/agent-a9.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-orphan" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-      bash "$TARGET" --since-days 3650 --section a2a 2>&1)
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
 check "delegated coverage: subagents only still print the share" "$OUT" \
   "claude coverage: 0 parent + 1 delegated (subagents/) transcripts; delegated share 100%"
 check "delegated coverage: no parent means the inventory is unknown" "$OUT" \
   "claude delegated inventory: UNKNOWN (no parent transcript in this walk to check against)"
+if [ "$rc" -eq 2 ]; then ok "delegated coverage: no parent exits 2"; else bad "delegated coverage: no parent exits 2" "exit $rc"; fi
+# With a parent in the walk, a helper whose own parent is gone from disk is not
+# "excluded on purpose": it is unknown and exits 2 (review of #4326).
+cp "$FIX/deleg/proj/p2.jsonl" "$FIX/deleg-orphan/proj/other.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-orphan" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+check "delegated coverage: a helper with no parent on disk is counted apart" "$OUT" \
+  "0 whose parent is outside the window or file cap, 1 whose parent is missing on disk"
+check "delegated coverage: a helper with no parent on disk is unknown" "$OUT" \
+  "UNKNOWN: 1 delegated transcript(s) have no parent transcript on disk"
+if [ "$rc" -eq 2 ]; then ok "delegated coverage: a helper with no parent on disk exits 2"; else bad "delegated coverage: a helper with no parent on disk exits 2" "exit $rc"; fi
+# An empty parent, or one whose last line was cut short, reads nothing through
+# the key filter; it is unknown, never a parent that started no subagent.
+mkdir -p "$FIX/deleg-cut/proj"
+{ cat "$FIX/deleg/proj/p2.jsonl"; printf '%s' '{"type":"user","message":{"content":[{"type":"te'; } > "$FIX/deleg-cut/proj/p.jsonl"
+: > "$FIX/deleg-cut/proj/empty.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-cut" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+check "delegated coverage: an empty or cut-short parent is unknown" "$OUT" \
+  "UNKNOWN: 2 parent transcript(s) could not be read or parsed for the delegated inventory"
+if [ "$rc" -eq 2 ]; then ok "delegated coverage: a cut-short parent exits 2"; else bad "delegated coverage: a cut-short parent exits 2" "exit $rc"; fi
 # Valid JSON may put whitespace around the colon; such a record still names a
 # subagent, so it must be inventoried rather than read as "0 named" (review of #4326).
 mkdir -p "$FIX/deleg-ws/proj"
@@ -10980,7 +11001,7 @@ printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","toolUseRes
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-ws" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1)
 check "delegated coverage: an agentId with spaced JSON is still inventoried" "$OUT" \
-  "1 named — 0 in this walk, 0 outside the window or file cap, 1 missing on disk"
+  "1 named — 0 in this walk (0 of them unreadable), 0 outside the window or file cap, 1 missing on disk"
 # A background or nested launch names its subagent only in tool-result text, so
 # no parent record names it: it is counted as not inventoried, never as covered.
 mkdir -p "$FIX/deleg-bg/proj/p/subagents"
@@ -10990,7 +11011,7 @@ cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-bg/proj/p/subagents
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-bg" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1)
 check "delegated coverage: a background launch is reported as not inventoried" "$OUT" \
-  "claude delegated not inventoried: 1 of 1 delegated transcripts — 1 named by no parent agentId record (background or nested launches), 0 whose parent is outside the window or file cap"
+  "claude delegated not inventoried: 1 of 1 delegated transcripts — 1 named by no parent agentId record (background or nested launches), 0 whose parent is outside the window or file cap, 0 whose parent is missing on disk"
 check "delegated coverage: text naming is not read as a record" "$OUT" "0 named — 0 in this walk"
 # A malformed record carrying an agentId key is not silently skipped (review of
 # #4326): the parent's inventory could not be built, so it is unknown and exit 2.
@@ -11015,6 +11036,8 @@ if [ "$(id -u)" -ne 0 ]; then
   chmod 600 "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl"
   check "delegated coverage: an unreadable named helper is unknown" "$OUT" \
     "UNKNOWN: 1 named delegated transcript(s) in this walk could not be read"
+  check "delegated coverage: the bins still reconcile with an unreadable helper" "$OUT" \
+    "3 named — 2 in this walk (1 of them unreadable), 1 outside the window or file cap, 0 missing on disk"
   if [ "$rc" -eq 2 ]; then ok "delegated coverage: an unreadable named helper exits 2"; else bad "delegated coverage: an unreadable named helper exits 2" "exit $rc"; fi
 fi
 # A helper whose own parent the file cap left out is not "named by no record":
@@ -11031,7 +11054,7 @@ touch -t 202201010000 "$FIX/deleg-cap/proj/old/subagents/agent-c1.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-cap" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 2 --section a2a 2>&1)
 check "delegated coverage: a helper whose parent the cap left out is reported apart" "$OUT" \
-  "1 of 1 delegated transcripts — 0 named by no parent agentId record (background or nested launches), 1 whose parent is outside the window or file cap"
+  "1 of 1 delegated transcripts — 0 named by no parent agentId record (background or nested launches), 1 whose parent is outside the window or file cap, 0 whose parent is missing on disk"
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
