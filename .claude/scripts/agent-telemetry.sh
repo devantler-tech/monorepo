@@ -2951,9 +2951,16 @@ echo " AGENT TELEMETRY — window ${SINCE_DAYS}d — generated $(date -u '+%Y-%m
 echo " claude sessions in window: ${SF_COUNT} (cap ${MAX_FILES})"
 # Only the report controller prints coverage, and only when it walked the Claude
 # files itself (SF_COUNT is numeric; see main). A safety worker's banner frames
-# that one section, whose own UNKNOWNs and exit status it already owns.
+# that one section, whose own UNKNOWNs and exit status it already owns. Drift and
+# outcomes never read the Claude walk, so an incomplete inventory is printed but
+# does not fail a run of only those sections.
 if [ "$SAFETY_WORKER" = 0 ] && [ "$SF_COUNT" -eq "$SF_COUNT" ] 2>/dev/null; then
-  claude_delegated_coverage || main_rc=2
+  coverage_rc=0
+  claude_delegated_coverage || coverage_rc=$?
+  case "$SECTION" in
+    drift|outcomes) ;;
+    *) [ "$coverage_rc" -eq 0 ] || main_rc=2 ;;
+  esac
 fi
 echo " NOTE: the window selects FILES by mtime, which is a correct SUPERSET but"
 echo "       not a bound — a resumed session or a bulk touch rewrites its mtime."
