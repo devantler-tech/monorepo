@@ -3861,11 +3861,16 @@ BATCHED=$(PATH="$FIX/jqbatchshim:$PATH" REAL_JQ="$real_jq" REAL_DATE="$real_date
   bash "$TARGET" --since-days 3650 --section safety 2>&1)
 batched_calls=$(grep -c '^credential-table$' "$FIX/jq-batch-trace")
 
-if [ "$REFERENCE" = "$BATCHED" ]; then
+# The wall-time lines (#4322) are measured, so two runs differ there by design;
+# every other byte must match.
+strip_safety_walls() { sed -e '/^  [a-z]* scope wall: /d' -e '/^  safety section wall: /d'; }
+REFERENCE_CMP=$(strip_safety_walls <<<"$REFERENCE")
+BATCHED_CMP=$(strip_safety_walls <<<"$BATCHED")
+if [ -n "$REFERENCE_CMP" ] && [ "$REFERENCE_CMP" = "$BATCHED_CMP" ]; then
   ok "credential batching preserves the complete safety output byte-for-byte"
 else
   bad "credential batching preserves the complete safety output byte-for-byte" \
-    "$(diff -u <(printf '%s\n' "$REFERENCE") <(printf '%s\n' "$BATCHED") | head -40)"; fi
+    "$(diff -u <(printf '%s\n' "$REFERENCE_CMP") <(printf '%s\n' "$BATCHED_CMP") | head -40)"; fi
 if grep -q '2 generic-assignment' \
    < <(sed -n '/credential-shaped/,/rotate the credential/p' <<<"$BATCHED"); then
   ok "credential batching preserves a decoded secret after an unterminated file"
@@ -4561,6 +4566,34 @@ else
   bad "the two safety scopes run at the same time and both keep their reading" \
     "$concurrent_shape elapsed=${concurrent_secs}s"
 fi
+# Each scope and the whole section report their wall-clock time, so the
+# section deadline floor can be checked instead of staying UNMEASURED. Each
+# scope stalled 8 s, so a recorded time below 8 would be invented, not measured.
+claude_wall=$(sed -n 's/^  claude scope wall: \([0-9][0-9]*\) s (limit 60 s)$/\1/p' <<<"$SCOPE_CONCURRENT")
+codex_wall=$(sed -n 's/^  codex scope wall: \([0-9][0-9]*\) s (limit 60 s)$/\1/p' <<<"$SCOPE_CONCURRENT")
+section_wall=$(sed -n 's/^  safety section wall: \([0-9][0-9]*\) s (scopes run at the same time)$/\1/p' <<<"$SCOPE_CONCURRENT")
+if [ -n "$claude_wall" ] && [ -n "$codex_wall" ] && [ -n "$section_wall" ] \
+   && [ "$claude_wall" -ge 8 ] && [ "$codex_wall" -ge 8 ] \
+   && [ "$section_wall" -ge "$claude_wall" ] && [ "$section_wall" -ge "$codex_wall" ] \
+   && [ "$section_wall" -le "$concurrent_secs" ]; then
+  ok "the safety section reports each scope's wall time and its own"
+else
+  bad "the safety section reports each scope's wall time and its own" \
+    "claude=$claude_wall codex=$codex_wall section=$section_wall elapsed=${concurrent_secs}s"
+fi
+# A safety-only report ends with its completion footer, so every timing line
+# comes before it: a reader that stops at the footer must not lose them.
+footer_line=$(grep -n ' END TELEMETRY' <<<"$SCOPE_CONCURRENT" | cut -d: -f1)
+codex_wall_line=$(grep -n '^  codex scope wall: ' <<<"$SCOPE_CONCURRENT" | cut -d: -f1)
+section_wall_line=$(grep -n '^  safety section wall: ' <<<"$SCOPE_CONCURRENT" | cut -d: -f1)
+footer_count=$(grep -c ' END TELEMETRY' <<<"$SCOPE_CONCURRENT")
+if [ "$footer_count" = 1 ] && [ -n "$codex_wall_line" ] && [ -n "$section_wall_line" ] \
+   && [ "$codex_wall_line" -lt "$footer_line" ] && [ "$section_wall_line" -lt "$footer_line" ]; then
+  ok "the safety-only footer comes after every timing line"
+else
+  bad "the safety-only footer comes after every timing line" \
+    "footers=$footer_count footer=$footer_line codex_wall=$codex_wall_line section_wall=$section_wall_line"
+fi
 concurrent_order=$(grep -o 'instance scope: [a-z]* transcripts' <<<"$SCOPE_CONCURRENT" | tr '\n' ' ')
 if [ "$concurrent_order" = "instance scope: claude transcripts instance scope: codex transcripts " ]; then
   ok "concurrent safety scopes are still reported in scope order"
@@ -4574,8 +4607,8 @@ HANDOFF_FAIL=$(CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" TMPDIR="$FIX/no-such-tmp-dir" \
   bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 30 2>&1)
 handoff_fail_rc=$?
-handoff_shape="rc=$handoff_fail_rc failed=$(grep -c 'UNKNOWN: the safety worker failed' <<<"$HANDOFF_FAIL") tables=$(grep -c 'TOTAL occurrences:' <<<"$HANDOFF_FAIL")"
-if [ "$handoff_shape" = "rc=2 failed=2 tables=0" ]; then
+handoff_shape="rc=$handoff_fail_rc failed=$(grep -c 'UNKNOWN: the safety worker failed' <<<"$HANDOFF_FAIL") tables=$(grep -c 'TOTAL occurrences:' <<<"$HANDOFF_FAIL") walls=$(grep -c 'scope wall: UNKNOWN (no time recorded)' <<<"$HANDOFF_FAIL")"
+if [ "$handoff_shape" = "rc=2 failed=2 tables=0 walls=2" ]; then
   ok "an unusable hand-off directory reports both safety scopes as failed"
 else
   bad "an unusable hand-off directory reports both safety scopes as failed" "$handoff_shape"
