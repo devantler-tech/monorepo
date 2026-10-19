@@ -1438,6 +1438,7 @@ public and private — no per-repo loop needed to enumerate):
      - Exit 0 with **empty** output → emit `board_coverage=unknown:status-field-not-found`. An empty id
        is not a failure exit (`--jq` selecting nothing still exits 0), and the items read would then
        run with `fields=`, return no field data, and make every item look status-less.
+     - An option's `name` here is an object `{html,raw}`: read `.name.raw`, never `.name`.
 
      **2. The items census**, with the id from step 1 written literally in place of
      `<status-field-id>`:
@@ -1479,8 +1480,7 @@ public and private — no per-repo loop needed to enumerate):
      rows**, so it under-counts silently: measured 2026-08-14 it returned **30** against a true
      **593**. That is the same truncation defect as the board side, on the other half of the ratio,
      and it fails in the more dangerous direction — a too-small denominator makes coverage read as
-     *complete* while real gaps stay invisible. Filter public repos explicitly, since project 5 is
-     public and a private repo's items are a maintainer decision that never counts against coverage:
+     *complete* while real gaps stay invisible. Filter public repos explicitly (the private half above):
 
      ```sh
      gh api -X GET search/issues \

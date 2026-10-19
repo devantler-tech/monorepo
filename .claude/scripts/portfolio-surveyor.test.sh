@@ -642,6 +642,12 @@ grep -Fq 'prefer `unknown` over a partial number' "${surveyor}" ||
 # a truncated denominator still reports a fake census, and it fails in the direction that HIDES gaps.
 grep -Fq 'BOARD-COVERAGE — `board_coverage=<measured: open_public=<n> on_board=<m> status_less=<k>' "${surveyor}" ||
   fail "surveyor digest has no concrete BOARD-COVERAGE row template"
+# The REST field read returns each single-select option's `name` as an object `{html,raw}`. Dispatches
+# that extended the Status-id read to option names joined `.name` and died on jq's
+# `cannot add: string ("") and object` — 13 of 110 surveyor dispatches, 2026-10-17 → 10-19.
+# shellcheck disable=SC2016
+grep -Fq 'read `.name.raw`' "${surveyor}" ||
+  fail "surveyor field read does not say a REST option name is an object read as .name.raw"
 # shellcheck disable=SC2016
 grep -Fq 'never a single-page `.length`' "${surveyor}" ||
   fail "surveyor BOARD-COVERAGE row does not forbid a single-page length as the board census"
