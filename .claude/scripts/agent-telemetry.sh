@@ -2791,8 +2791,14 @@ populate_session_cache() {
 # or a named transcript that is missing, makes delegated coverage incomplete:
 # it is named and returns 2, never read as a clean share. With no parent in the
 # walk there is no inventory to check against, so it says UNKNOWN instead.
+# The record covers foreground launches only: a background or nested launch
+# names its subagent in tool-result TEXT, which a quoted transcript reproduces,
+# so it cannot be told from an echo. Delegated transcripts no parent record
+# names are therefore counted and printed as not inventoried, so the inventory
+# never reads as complete when it covered only part of the delegated set.
 claude_delegated_coverage() {
   local f id p ids rc parents=0 delegated=0 named=0 in_walk=0 outside=0 missing=0 unreadable=0
+  local expected='' unnamed=0
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     case "$f" in */subagents/*) delegated=$((delegated + 1)); continue ;; esac
@@ -2804,6 +2810,7 @@ claude_delegated_coverage() {
       [ -n "$id" ] || continue
       named=$((named + 1))
       p="${f%.jsonl}/subagents/agent-${id}.jsonl"
+      expected="${expected}${p}"$'\n'
       if grep -qxF -- "$p" <<<"$SF_CACHE"; then
         in_walk=$((in_walk + 1))
       elif [ -f "$p" ]; then
@@ -2823,6 +2830,10 @@ claude_delegated_coverage() {
     return 0
   fi
   echo " claude delegated inventory (from the parents' agentId records): ${named} named — ${in_walk} in this walk, ${outside} outside the window or file cap, ${missing} missing on disk"
+  while IFS= read -r f; do
+    case "$f" in */subagents/*) grep -qxF -- "$f" <<<"$expected" || unnamed=$((unnamed + 1)) ;; esac
+  done <<<"$SF_CACHE"
+  echo " claude delegated not inventoried: ${unnamed} of ${delegated} delegated transcripts are named by no parent agentId record (background or nested launches)"
   local status=0
   if [ "$unreadable" -gt 0 ]; then
     echo " UNKNOWN: ${unreadable} parent transcript(s) could not be read for the delegated inventory —"

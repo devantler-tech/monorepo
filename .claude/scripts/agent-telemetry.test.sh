@@ -10949,6 +10949,8 @@ OUT=$(deleg_run); rc=$?
 check "delegated coverage control: the share counts the new transcript" "$OUT" \
   "claude coverage: 2 parent + 2 delegated (subagents/) transcripts; delegated share 50%"
 check "delegated coverage control: nothing missing" "$OUT" "3 named — 2 in this walk, 1 outside the window or file cap, 0 missing on disk"
+check "delegated coverage control: every delegated transcript is inventoried" "$OUT" \
+  "claude delegated not inventoried: 0 of 2 delegated transcripts are named by no parent agentId record"
 nocheck "delegated coverage control: no unknown line" "$OUT" "named by a parent are missing on disk"
 if [ "$rc" -eq 0 ]; then ok "delegated coverage control: exit 0"; else bad "delegated coverage control: exit 0" "exit $rc"; fi
 # A parent that cannot be read gives no inventory: unknown and exit 2.
@@ -10979,6 +10981,17 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-ws" CODEX_HOME="$FIX/deleg-nocodex" MONORE
       bash "$TARGET" --since-days 3650 --section a2a 2>&1)
 check "delegated coverage: an agentId with spaced JSON is still inventoried" "$OUT" \
   "1 named — 0 in this walk, 0 outside the window or file cap, 1 missing on disk"
+# A background or nested launch names its subagent only in tool-result text, so
+# no parent record names it: it is counted as not inventoried, never as covered.
+mkdir -p "$FIX/deleg-bg/proj/p/subagents"
+printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"agentId: abg (background)"}]}}' \
+  > "$FIX/deleg-bg/proj/p.jsonl"
+cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-bg/proj/p/subagents/agent-abg.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-bg" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1)
+check "delegated coverage: a background launch is reported as not inventoried" "$OUT" \
+  "claude delegated not inventoried: 1 of 1 delegated transcripts are named by no parent agentId record"
+check "delegated coverage: text naming is not read as a record" "$OUT" "0 named — 0 in this walk"
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
