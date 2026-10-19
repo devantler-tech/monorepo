@@ -4657,6 +4657,18 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
     # `image_payload_entry` comes from CRED_IMAGE_PAYLOAD_DEF, shared with
     # cred_mask_image_payloads so the table and the mask cannot drift apart.
     CRED_DECODE_FILTER="$CRED_IMAGE_PAYLOAD_DEF"'
+        # Most transcript keys are ASCII. Compiling the same case-insensitive
+        # regex for every field dominates the decoder on the live corpus
+        # (#3830). Substring checks are equivalent for ASCII keys; retain the
+        # original regex for every non-ASCII key, including Unicode case folds.
+        def credential_key:
+          if utf8bytelength == length then
+            ascii_downcase
+            | (contains("secret") or contains("token")
+               or contains("password") or contains("passwd")
+               or contains("apikey") or contains("api_key") or contains("api-key"))
+          else test("(secret|token|password|passwd|api[_-]?key)"; "i")
+          end;
         def decoded_strings:
           if type == "object" then
             . as $parent
@@ -4666,8 +4678,8 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
                  # Preserve the key/value association only where the generic
                  # credential regex needs it; duplicating every large text
                  # field as `key=value` would double the scan volume.
-                 | select((.key | test("(secret|token|password|passwd|api[_-]?key)"; "i"))
-                          and ((.value | type) == "string")
+                 | select(((.value | type) == "string")
+                          and (.key | credential_key)
                           and (image_payload_entry($parent) | not))
                  | "\(.key)=\(.value)"),
                 (to_entries[]
