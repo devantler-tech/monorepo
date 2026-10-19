@@ -4581,6 +4581,19 @@ else
   bad "the safety section reports each scope's wall time and its own" \
     "claude=$claude_wall codex=$codex_wall section=$section_wall elapsed=${concurrent_secs}s"
 fi
+# A safety-only report ends with its completion footer, so every timing line
+# comes before it: a reader that stops at the footer must not lose them.
+footer_line=$(grep -n ' END TELEMETRY' <<<"$SCOPE_CONCURRENT" | cut -d: -f1)
+codex_wall_line=$(grep -n '^  codex scope wall: ' <<<"$SCOPE_CONCURRENT" | cut -d: -f1)
+section_wall_line=$(grep -n '^  safety section wall: ' <<<"$SCOPE_CONCURRENT" | cut -d: -f1)
+footer_count=$(grep -c ' END TELEMETRY' <<<"$SCOPE_CONCURRENT")
+if [ "$footer_count" = 1 ] && [ -n "$codex_wall_line" ] && [ -n "$section_wall_line" ] \
+   && [ "$codex_wall_line" -lt "$footer_line" ] && [ "$section_wall_line" -lt "$footer_line" ]; then
+  ok "the safety-only footer comes after every timing line"
+else
+  bad "the safety-only footer comes after every timing line" \
+    "footers=$footer_count footer=$footer_line codex_wall=$codex_wall_line section_wall=$section_wall_line"
+fi
 concurrent_order=$(grep -o 'instance scope: [a-z]* transcripts' <<<"$SCOPE_CONCURRENT" | tr '\n' ' ')
 if [ "$concurrent_order" = "instance scope: claude transcripts instance scope: codex transcripts " ]; then
   ok "concurrent safety scopes are still reported in scope order"
