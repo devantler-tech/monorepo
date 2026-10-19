@@ -645,9 +645,21 @@ grep -Fq 'BOARD-COVERAGE — `board_coverage=<measured: open_public=<n> on_board
 # The REST field read returns each single-select option's `name` as an object `{html,raw}`. Dispatches
 # that extended the Status-id read to option names joined `.name` and died on jq's
 # `cannot add: string ("") and object` — 13 of 110 surveyor dispatches, 2026-10-17 → 10-19.
+# Scoped to the Status field-id step, where the read is prescribed: the same phrase elsewhere must not
+# satisfy it. A missing step boundary fails closed, because an empty extraction would hide removal.
 # shellcheck disable=SC2016
-grep -Fq 'read `.name.raw`' "${surveyor}" ||
-  fail "surveyor field read does not say a REST option name is an object read as .name.raw"
+status_step_rc=0
+awk '
+  index($0, "**1. The Status field id:**") { in_step = 1; seen_start = 1; next }
+  index($0, "**2. The items census**") { if (in_step) seen_end = 1; in_step = 0 }
+  in_step && index($0, "read `.name.raw`") { found = 1 }
+  END { if (!seen_start || !seen_end) exit 2; exit found ? 0 : 1 }
+' "${surveyor}" || status_step_rc=$?
+case "${status_step_rc}" in
+  0) ;;
+  1) fail "surveyor Status field-id step does not say a REST option name is an object read as .name.raw" ;;
+  *) fail "surveyor Status field-id step boundaries not found — cannot check the .name.raw rule" ;;
+esac
 # shellcheck disable=SC2016
 grep -Fq 'never a single-page `.length`' "${surveyor}" ||
   fail "surveyor BOARD-COVERAGE row does not forbid a single-page length as the board census"
