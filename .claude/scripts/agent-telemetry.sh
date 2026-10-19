@@ -2784,41 +2784,49 @@ populate_session_cache() {
 # rather than in the parent file, so a reading taken from parents alone can
 # fall for reasons that have nothing to do with behaviour. The Claude file set
 # above mixes both kinds; this prints the split, then checks it against an
-# inventory that does not come from the walk: the `agentId` each parent records
-# for the subagents it started. An expected transcript is either in this walk,
-# on disk but outside the window or the file cap (excluded on purpose), or
-# missing — and only the last is a coverage gap. A parent that cannot be read,
-# or a named transcript that is missing, makes delegated coverage incomplete:
-# it is named and returns 2, never read as a clean share. With no parent in the
-# walk there is no inventory to check against, so it says UNKNOWN instead.
+# inventory that does not come from the walk: the `toolUseResult.agentId` each
+# parent records for the subagents it started. Only the lines that carry an
+# `agentId` key are parsed (as JSON, so a quoted mention is never a record and a
+# malformed record is never silently skipped). An expected transcript is in this
+# walk, on disk but outside the window or the file cap (excluded on purpose), or
+# missing — and only the last is a coverage gap. A parent that cannot be read or
+# parsed, a named transcript in the walk that cannot be read, or a named
+# transcript that is missing makes delegated coverage incomplete: it is named
+# and returns 2, never read as a clean share. With no parent in the walk there
+# is no inventory to check against, so it says UNKNOWN instead.
 # The record covers foreground launches only: a background or nested launch
 # names its subagent in tool-result TEXT, which a quoted transcript reproduces,
 # so it cannot be told from an echo. Delegated transcripts no parent record
-# names are therefore counted and printed as not inventoried, so the inventory
-# never reads as complete when it covered only part of the delegated set.
+# names are counted as not inventoried — split by whether their own parent was
+# in the walk — so the inventory never reads as complete when it covered only
+# part of the delegated set.
 claude_delegated_coverage() {
-  local f id p ids rc parents=0 delegated=0 named=0 in_walk=0 outside=0 missing=0 unreadable=0
-  local expected='' unnamed=0
+  local f id p lines ids rc parents=0 delegated=0 named=0 in_walk=0 outside=0 missing=0
+  local unreadable=0 unreadable_named=0 expected='' unnamed=0 parent_outside=0
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     case "$f" in */subagents/*) delegated=$((delegated + 1)); continue ;; esac
     parents=$((parents + 1))
     rc=0
-    ids=$(LC_ALL=C grep -oE '"agentId"[[:space:]]*:[[:space:]]*"[A-Za-z0-9_-]*"' "$f" 2>/dev/null) || rc=$?
+    lines=$(LC_ALL=C grep -E '"agentId"[[:space:]]*:' "$f" 2>/dev/null) || rc=$?
     if [ "$rc" -gt 1 ]; then unreadable=$((unreadable + 1)); continue; fi
+    rc=0
+    ids=$(printf '%s\n' "$lines" | jq -r 'select(type == "object") | .toolUseResult? | objects
+          | .agentId? | strings | select(test("^[A-Za-z0-9_-]+$"))' 2>/dev/null) || rc=$?
+    if [ "$rc" -ne 0 ]; then unreadable=$((unreadable + 1)); continue; fi
     while IFS= read -r id; do
       [ -n "$id" ] || continue
       named=$((named + 1))
       p="${f%.jsonl}/subagents/agent-${id}.jsonl"
       expected="${expected}${p}"$'\n'
       if grep -qxF -- "$p" <<<"$SF_CACHE"; then
-        in_walk=$((in_walk + 1))
+        if [ -r "$p" ]; then in_walk=$((in_walk + 1)); else unreadable_named=$((unreadable_named + 1)); fi
       elif [ -f "$p" ]; then
         outside=$((outside + 1))
       else
         missing=$((missing + 1))
       fi
-    done < <(printf '%s\n' "$ids" | sed -n 's/^"agentId"[[:space:]]*:[[:space:]]*"\(.*\)"$/\1/p' | sort -u)
+    done < <(printf '%s\n' "$ids" | sort -u)
   done <<<"$SF_CACHE"
   local total=$((parents + delegated)) share='n/a'
   [ "$total" -gt 0 ] && share="$(awk -v d="$delegated" -v t="$total" 'BEGIN { printf "%d%%", (d * 100 / t) + 0.5 }')"
@@ -2831,12 +2839,26 @@ claude_delegated_coverage() {
   fi
   echo " claude delegated inventory (from the parents' agentId records): ${named} named — ${in_walk} in this walk, ${outside} outside the window or file cap, ${missing} missing on disk"
   while IFS= read -r f; do
-    case "$f" in */subagents/*) grep -qxF -- "$f" <<<"$expected" || unnamed=$((unnamed + 1)) ;; esac
+    case "$f" in
+      */subagents/*)
+        grep -qxF -- "$f" <<<"$expected" && continue
+        if grep -qxF -- "${f%/subagents/*}.jsonl" <<<"$SF_CACHE"; then
+          unnamed=$((unnamed + 1))
+        else
+          parent_outside=$((parent_outside + 1))
+        fi
+        ;;
+    esac
   done <<<"$SF_CACHE"
-  echo " claude delegated not inventoried: ${unnamed} of ${delegated} delegated transcripts are named by no parent agentId record (background or nested launches)"
+  echo " claude delegated not inventoried: $((unnamed + parent_outside)) of ${delegated} delegated transcripts — ${unnamed} named by no parent agentId record (background or nested launches), ${parent_outside} whose parent is outside the window or file cap"
   local status=0
   if [ "$unreadable" -gt 0 ]; then
-    echo " UNKNOWN: ${unreadable} parent transcript(s) could not be read for the delegated inventory —"
+    echo " UNKNOWN: ${unreadable} parent transcript(s) could not be read or parsed for the delegated inventory —"
+    echo "          delegated coverage is incomplete, not zero."
+    status=2
+  fi
+  if [ "$unreadable_named" -gt 0 ]; then
+    echo " UNKNOWN: ${unreadable_named} named delegated transcript(s) in this walk could not be read —"
     echo "          delegated coverage is incomplete, not zero."
     status=2
   fi

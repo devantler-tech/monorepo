@@ -10950,7 +10950,7 @@ check "delegated coverage control: the share counts the new transcript" "$OUT" \
   "claude coverage: 2 parent + 2 delegated (subagents/) transcripts; delegated share 50%"
 check "delegated coverage control: nothing missing" "$OUT" "3 named — 2 in this walk, 1 outside the window or file cap, 0 missing on disk"
 check "delegated coverage control: every delegated transcript is inventoried" "$OUT" \
-  "claude delegated not inventoried: 0 of 2 delegated transcripts are named by no parent agentId record"
+  "claude delegated not inventoried: 0 of 2 delegated transcripts — 0 named by no parent agentId record (background or nested launches), 0 whose parent is outside the window or file cap"
 nocheck "delegated coverage control: no unknown line" "$OUT" "named by a parent are missing on disk"
 if [ "$rc" -eq 0 ]; then ok "delegated coverage control: exit 0"; else bad "delegated coverage control: exit 0" "exit $rc"; fi
 # A parent that cannot be read gives no inventory: unknown and exit 2.
@@ -10959,7 +10959,7 @@ if [ "$(id -u)" -ne 0 ]; then
   OUT=$(deleg_run); rc=$?
   chmod 600 "$FIX/deleg/proj/p1.jsonl"
   check "delegated coverage: an unreadable parent is unknown" "$OUT" \
-    "UNKNOWN: 1 parent transcript(s) could not be read for the delegated inventory"
+    "UNKNOWN: 1 parent transcript(s) could not be read or parsed for the delegated inventory"
   if [ "$rc" -eq 2 ]; then ok "delegated coverage: an unreadable parent exits 2"; else bad "delegated coverage: an unreadable parent exits 2" "exit $rc"; fi
 fi
 # Subagent transcripts with no parent in the walk have nothing to be checked
@@ -10990,8 +10990,48 @@ cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-bg/proj/p/subagents
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-bg" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1)
 check "delegated coverage: a background launch is reported as not inventoried" "$OUT" \
-  "claude delegated not inventoried: 1 of 1 delegated transcripts are named by no parent agentId record"
+  "claude delegated not inventoried: 1 of 1 delegated transcripts — 1 named by no parent agentId record (background or nested launches), 0 whose parent is outside the window or file cap"
 check "delegated coverage: text naming is not read as a record" "$OUT" "0 named — 0 in this walk"
+# A malformed record carrying an agentId key is not silently skipped (review of
+# #4326): the parent's inventory could not be built, so it is unknown and exit 2.
+mkdir -p "$FIX/deleg-bad/proj"
+printf '%s\n' '{"type":"user","toolUseResult":{"agentId":"t1"' > "$FIX/deleg-bad/proj/p.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-bad" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+check "delegated coverage: a malformed agentId record is unknown" "$OUT" \
+  "UNKNOWN: 1 parent transcript(s) could not be read or parsed for the delegated inventory"
+if [ "$rc" -eq 2 ]; then ok "delegated coverage: a malformed record exits 2"; else bad "delegated coverage: a malformed record exits 2" "exit $rc"; fi
+# Only toolUseResult.agentId is a launch record: an agentId elsewhere is not counted.
+mkdir -p "$FIX/deleg-other/proj"
+printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","data":{"agentId":"o1"},"message":{"content":[{"type":"text","text":"x"}]}}' \
+  > "$FIX/deleg-other/proj/p.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-other" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1)
+check "delegated coverage: an agentId outside toolUseResult is not a launch" "$OUT" "0 named — 0 in this walk"
+# A named helper that is in the walk but cannot be read is not covered.
+if [ "$(id -u)" -ne 0 ]; then
+  chmod 000 "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl"
+  OUT=$(deleg_run); rc=$?
+  chmod 600 "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl"
+  check "delegated coverage: an unreadable named helper is unknown" "$OUT" \
+    "UNKNOWN: 1 named delegated transcript(s) in this walk could not be read"
+  if [ "$rc" -eq 2 ]; then ok "delegated coverage: an unreadable named helper exits 2"; else bad "delegated coverage: an unreadable named helper exits 2" "exit $rc"; fi
+fi
+# A helper whose own parent the file cap left out is not "named by no record":
+# its parent was never read, so it is reported apart from background launches.
+mkdir -p "$FIX/deleg-cap/proj/old/subagents"
+printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","toolUseResult":{"agentId":"c1"},"message":{"content":[{"type":"text","text":"x"}]}}' \
+  > "$FIX/deleg-cap/proj/old.jsonl"
+printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","message":{"content":[{"type":"text","text":"x"}]}}' \
+  > "$FIX/deleg-cap/proj/new.jsonl"
+cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-cap/proj/old/subagents/agent-c1.jsonl"
+touch -t 202001010000 "$FIX/deleg-cap/proj/old.jsonl"
+touch -t 202101010000 "$FIX/deleg-cap/proj/new.jsonl"
+touch -t 202201010000 "$FIX/deleg-cap/proj/old/subagents/agent-c1.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-cap" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --max-files 2 --section a2a 2>&1)
+check "delegated coverage: a helper whose parent the cap left out is reported apart" "$OUT" \
+  "1 of 1 delegated transcripts — 0 named by no parent agentId record (background or nested launches), 1 whose parent is outside the window or file cap"
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
