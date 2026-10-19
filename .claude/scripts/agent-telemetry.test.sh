@@ -11111,6 +11111,19 @@ OUT=$(OUTCOMES_CLAUDE_PROJECTS="$FIX/deleg-cut" outcomes_run); rc=$?
 check "delegated coverage: an outcomes-only run still prints the coverage UNKNOWN" "$OUT" \
   "UNKNOWN: 2 parent transcript(s) could not be read or parsed for the delegated inventory"
 if [ "$rc" -eq 0 ]; then ok "delegated coverage: an incomplete inventory does not fail an outcomes-only run"; else bad "delegated coverage: an incomplete inventory does not fail an outcomes-only run" "exit $rc"; fi
+# A launch record whose agentId is not a plain id names a subagent the
+# inventory cannot locate, so the parent is unknown rather than silently
+# reporting one launch fewer (review of #4326).
+mkdir -p "$FIX/deleg-badid/proj"
+printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","toolUseResult":{"agentId":"../x"},"message":{"content":[{"type":"text","text":"x"}]}}' \
+  > "$FIX/deleg-badid/proj/p.jsonl"
+printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","toolUseResult":{"agentId":7},"message":{"content":[{"type":"text","text":"x"}]}}' \
+  > "$FIX/deleg-badid/proj/q.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-badid" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+check "delegated coverage: a malformed agentId makes its parent unknown" "$OUT" \
+  "UNKNOWN: 2 parent transcript(s) could not be read or parsed for the delegated inventory"
+if [ "$rc" -eq 2 ]; then ok "delegated coverage: a malformed agentId exits 2"; else bad "delegated coverage: a malformed agentId exits 2" "exit $rc"; fi
 # A helper whose own parent failed to parse is not a "background launch": its
 # launch type is unknown because the parent could not be read.
 mkdir -p "$FIX/deleg-badparent/proj/p/subagents"

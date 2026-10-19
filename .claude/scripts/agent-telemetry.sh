@@ -2841,8 +2841,13 @@ claude_delegated_coverage() {
     lines=$(LC_ALL=C grep -E '"agentId"[[:space:]]*:' "$f" 2>/dev/null) || rc=$?
     if [ "$rc" -gt 1 ]; then unreadable=$((unreadable + 1)); failed_parents="${failed_parents}${f}"$'\n'; continue; fi
     rc=0
+    # A launch record whose agentId is not a plain id (a number, an empty string,
+    # a path) names a subagent this inventory cannot locate: the parent is
+    # unknown, never a known inventory with that launch silently left out.
     ids=$(printf '%s\n' "$lines" | jq -r 'select(type == "object") | .toolUseResult? | objects
-          | .agentId? | strings | select(test("^[A-Za-z0-9_-]+$"))' 2>/dev/null) || rc=$?
+          | select(has("agentId")) | .agentId
+          | if type == "string" and test("^[A-Za-z0-9_-]+$") then . else "!invalid" end' 2>/dev/null) || rc=$?
+    case "$ids" in *'!invalid'*) rc=1 ;; esac
     if [ "$rc" -ne 0 ]; then unreadable=$((unreadable + 1)); failed_parents="${failed_parents}${f}"$'\n'; continue; fi
     while IFS= read -r id; do
       [ -n "$id" ] || continue
