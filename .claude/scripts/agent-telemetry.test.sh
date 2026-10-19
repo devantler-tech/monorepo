@@ -3861,11 +3861,16 @@ BATCHED=$(PATH="$FIX/jqbatchshim:$PATH" REAL_JQ="$real_jq" REAL_DATE="$real_date
   bash "$TARGET" --since-days 3650 --section safety 2>&1)
 batched_calls=$(grep -c '^credential-table$' "$FIX/jq-batch-trace")
 
-if [ "$REFERENCE" = "$BATCHED" ]; then
+# The wall-time lines (#4322) are measured, so two runs differ there by design;
+# every other byte must match.
+strip_safety_walls() { sed -e '/^  [a-z]* scope wall: /d' -e '/^  safety section wall: /d'; }
+REFERENCE_CMP=$(strip_safety_walls <<<"$REFERENCE")
+BATCHED_CMP=$(strip_safety_walls <<<"$BATCHED")
+if [ -n "$REFERENCE_CMP" ] && [ "$REFERENCE_CMP" = "$BATCHED_CMP" ]; then
   ok "credential batching preserves the complete safety output byte-for-byte"
 else
   bad "credential batching preserves the complete safety output byte-for-byte" \
-    "$(diff -u <(printf '%s\n' "$REFERENCE") <(printf '%s\n' "$BATCHED") | head -40)"; fi
+    "$(diff -u <(printf '%s\n' "$REFERENCE_CMP") <(printf '%s\n' "$BATCHED_CMP") | head -40)"; fi
 if grep -q '2 generic-assignment' \
    < <(sed -n '/credential-shaped/,/rotate the credential/p' <<<"$BATCHED"); then
   ok "credential batching preserves a decoded secret after an unterminated file"
