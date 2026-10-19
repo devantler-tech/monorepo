@@ -2779,6 +2779,145 @@ populate_session_cache() {
   ALL_CACHE="$(printf '%s\n%s' "$SF_CACHE" "$CX_CACHE" | grep -c . >/dev/null 2>&1; printf '%s\n%s' "$SF_CACHE" "$CX_CACHE")"
 }
 
+# A transcript is read only when it parses as JSON throughout, holds at least one
+# record, and every record is an object: whitespace alone is a valid, empty JSON
+# stream that `jq empty` accepts, and a bare scalar such as `null` parses but is
+# no transcript record (reviews of #4326). A transcript that is still being
+# written (this run's own session, a live subagent) can end on a half-written
+# record, so a failed read is retried once after a second; a file that is really
+# cut short fails both reads and stays unreadable.
+transcript_parses_as_records() {
+  [ -s "$1" ] && jq -n -e 'reduce inputs as $r (0; if . >= 0 and ($r | type) == "object" then . + 1 else -1 end) | . > 0' "$1" >/dev/null 2>&1
+}
+transcript_has_records() {
+  transcript_parses_as_records "$1" && return 0
+  sleep 1
+  transcript_parses_as_records "$1"
+}
+
+# Delegated-transcript coverage (monorepo#4325). Most Claude runs now hand the
+# run to a subagent, whose records live in `<session>/subagents/agent-<id>.jsonl`
+# rather than in the parent file, so a reading taken from parents alone can
+# fall for reasons that have nothing to do with behaviour. The Claude file set
+# above mixes both kinds; this prints the split, then checks it against an
+# inventory that does not come from the walk: the `toolUseResult.agentId` each
+# parent records for the subagents it started. Only the lines that carry an
+# `agentId` key are parsed (as JSON, so a quoted mention is never a record and a
+# malformed record is never silently skipped). An expected transcript is in this
+# walk, on disk but outside the window or the file cap (excluded on purpose), or
+# missing — and only the last is a coverage gap. A parent that cannot be read or
+# parsed, a named transcript in the walk that cannot be read, or a named
+# transcript that is missing makes delegated coverage incomplete: it is named
+# and returns 2, never read as a clean share. With no parent in the walk there
+# is no inventory to check against, so it says UNKNOWN instead.
+# The record covers foreground launches only: a background or nested launch
+# names its subagent in tool-result TEXT, which a quoted transcript reproduces,
+# so it cannot be told from an echo. Delegated transcripts no parent record
+# names are counted as not inventoried — split by whether their own parent was
+# in the walk — so the inventory never reads as complete when it covered only
+# part of the delegated set.
+claude_delegated_coverage() {
+  local f id p lines ids rc parents=0 delegated=0 named=0 in_walk=0 outside=0 missing=0
+  local unreadable=0 unreadable_named=0 expected='' unnamed=0 parent_outside=0 parent_gone=0
+  local failed_parents='' parent_unknown=0
+  # A projects store that exists but cannot be listed leaves the walk empty,
+  # which would print as a known "0 parent + 0 delegated".
+  if [ -d "$CLAUDE_PROJECTS" ] && { [ ! -r "$CLAUDE_PROJECTS" ] || [ ! -x "$CLAUDE_PROJECTS" ]; }; then
+    echo " claude coverage: UNKNOWN (the Claude projects store exists but cannot be listed)"
+    return 2
+  fi
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in */subagents/*) delegated=$((delegated + 1)); continue ;; esac
+    parents=$((parents + 1))
+    # The key filter below reads nothing from a parent that is empty, cut short
+    # or malformed, which would pass as "names no subagent". The control parses
+    # the whole parent first (about 1 s for every parent in a live day): a blank or
+    # empty file, or any line that is not JSON, makes its inventory unknown.
+    if ! transcript_has_records "$f"; then
+      unreadable=$((unreadable + 1)); failed_parents="${failed_parents}${f}"$'\n'; continue
+    fi
+    rc=0
+    lines=$(LC_ALL=C grep -E '"agentId"[[:space:]]*:' "$f" 2>/dev/null) || rc=$?
+    if [ "$rc" -gt 1 ]; then unreadable=$((unreadable + 1)); failed_parents="${failed_parents}${f}"$'\n'; continue; fi
+    rc=0
+    # A launch record whose agentId is not a plain id (a number, an empty string,
+    # a path) names a subagent this inventory cannot locate: the parent is
+    # unknown, never a known inventory with that launch silently left out.
+    ids=$(printf '%s\n' "$lines" | jq -r 'select(type == "object") | .toolUseResult? | objects
+          | select(has("agentId")) | .agentId
+          | if type == "string" and test("^[A-Za-z0-9_-]+$") then . else "!invalid" end' 2>/dev/null) || rc=$?
+    case "$ids" in *'!invalid'*) rc=1 ;; esac
+    if [ "$rc" -ne 0 ]; then unreadable=$((unreadable + 1)); failed_parents="${failed_parents}${f}"$'\n'; continue; fi
+    while IFS= read -r id; do
+      [ -n "$id" ] || continue
+      named=$((named + 1))
+      p="${f%.jsonl}/subagents/agent-${id}.jsonl"
+      expected="${expected}${p}"$'\n'
+      if grep -qxF -- "$p" <<<"$SF_CACHE"; then
+        in_walk=$((in_walk + 1))
+        # In the walk is not the same as read: an empty or unparseable helper
+        # is as unknown as one that cannot be opened.
+        if ! transcript_has_records "$p"; then unreadable_named=$((unreadable_named + 1)); fi
+      elif [ -f "$p" ]; then
+        outside=$((outside + 1))
+      else
+        missing=$((missing + 1))
+      fi
+    done < <(printf '%s\n' "$ids" | sort -u)
+  done <<<"$SF_CACHE"
+  local total=$((parents + delegated)) share='n/a'
+  [ "$total" -gt 0 ] && share="$(awk -v d="$delegated" -v t="$total" 'BEGIN { printf "%d%%", (d * 100 / t) + 0.5 }')"
+  echo " claude coverage: ${parents} parent + ${delegated} delegated (subagents/) transcripts; delegated share ${share}"
+  if [ "$parents" -eq 0 ]; then
+    if [ "$delegated" -gt 0 ]; then
+      echo " claude delegated inventory: UNKNOWN (no parent transcript in this walk to check against)"
+      return 2
+    fi
+    return 0
+  fi
+  echo " claude delegated inventory (from the parents' agentId records): ${named} named — ${in_walk} in this walk (${unreadable_named} of them unreadable), ${outside} outside the window or file cap, ${missing} missing on disk"
+  while IFS= read -r f; do
+    case "$f" in
+      */subagents/*)
+        grep -qxF -- "$f" <<<"$expected" && continue
+        if grep -qxF -- "${f%/subagents/*}.jsonl" <<<"$failed_parents"; then
+          parent_unknown=$((parent_unknown + 1))
+        elif grep -qxF -- "${f%/subagents/*}.jsonl" <<<"$SF_CACHE"; then
+          unnamed=$((unnamed + 1))
+        elif [ -f "${f%/subagents/*}.jsonl" ]; then
+          parent_outside=$((parent_outside + 1))
+        else
+          parent_gone=$((parent_gone + 1))
+        fi
+        ;;
+    esac
+  done <<<"$SF_CACHE"
+  echo " claude delegated not inventoried: $((unnamed + parent_unknown + parent_outside + parent_gone)) of ${delegated} delegated transcripts — ${unnamed} named by no parent agentId record (background or nested launches), ${parent_unknown} whose parent could not be read, ${parent_outside} whose parent is outside the window or file cap, ${parent_gone} whose parent is missing on disk"
+  local status=0
+  if [ "$parent_gone" -gt 0 ]; then
+    echo " UNKNOWN: ${parent_gone} delegated transcript(s) have no parent transcript on disk —"
+    echo "          delegated coverage is incomplete, not zero."
+    status=2
+  fi
+  if [ "$unreadable" -gt 0 ]; then
+    echo " UNKNOWN: ${unreadable} parent transcript(s) could not be read or parsed for the delegated inventory —"
+    echo "          delegated coverage is incomplete, not zero."
+    status=2
+  fi
+  if [ "$unreadable_named" -gt 0 ]; then
+    echo " UNKNOWN: ${unreadable_named} named delegated transcript(s) in this walk could not be read —"
+    echo "          delegated coverage is incomplete, not zero."
+    status=2
+  fi
+  if [ "$missing" -gt 0 ]; then
+    echo " UNKNOWN: ${missing} delegated transcript(s) named by a parent are missing on disk —"
+    echo "          delegated coverage is incomplete, not zero."
+    status=2
+  fi
+  return "$status"
+}
+
 # Safety-only and default reports share one controller. Re-execution puts every
 # safety-specific setup operation, scan, report capture, and worker cleanup in
 # the same killable process group. The default report asks for section-only
@@ -2823,6 +2962,17 @@ if [ "$SAFETY_WORKER" = 0 ] || { [ "$SAFETY_STANDALONE" = 1 ] && [ "$SAFETY_SCOP
 echo "════════════════════════════════════════════════════════════════"
 echo " AGENT TELEMETRY — window ${SINCE_DAYS}d — generated $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 echo " claude sessions in window: ${SF_COUNT} (cap ${MAX_FILES})"
+# Only the report controller prints coverage, and only when it walked the Claude
+# files itself (SF_COUNT is numeric; see main). A safety worker's banner frames
+# that one section, whose own UNKNOWNs and exit status it already owns. Drift and
+# outcomes never read the Claude walk, so a run of only those sections neither
+# prints the coverage nor takes its status: a printed UNKNOWN always fails the run.
+if [ "$SAFETY_WORKER" = 0 ] && [ "$SF_COUNT" -eq "$SF_COUNT" ] 2>/dev/null; then
+  case "$SECTION" in
+    drift|outcomes) ;;
+    *) claude_delegated_coverage || main_rc=2 ;;
+  esac
+fi
 echo " NOTE: the window selects FILES by mtime, which is a correct SUPERSET but"
 echo "       not a bound — a resumed session or a bulk touch rewrites its mtime."
 echo "       DISPATCH HEALTH, RELIABILITY and SIGNATURE additionally filter each"
