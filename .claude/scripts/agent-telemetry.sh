@@ -2779,6 +2779,64 @@ populate_session_cache() {
   ALL_CACHE="$(printf '%s\n%s' "$SF_CACHE" "$CX_CACHE" | grep -c . >/dev/null 2>&1; printf '%s\n%s' "$SF_CACHE" "$CX_CACHE")"
 }
 
+# Delegated-transcript coverage (monorepo#4325). Most Claude runs now hand the
+# run to a subagent, whose records live in `<session>/subagents/agent-<id>.jsonl`
+# rather than in the parent file, so a reading taken from parents alone can
+# fall for reasons that have nothing to do with behaviour. The Claude file set
+# above mixes both kinds; this prints the split, then checks it against an
+# inventory that does not come from the walk: the `agentId` each parent records
+# for the subagents it started. An expected transcript is either in this walk,
+# on disk but outside the window or the file cap (excluded on purpose), or
+# missing — and only the last is a coverage gap. A parent that cannot be read,
+# or a named transcript that is missing, makes delegated coverage incomplete:
+# it is named and returns 2, never read as a clean share. With no parent in the
+# walk there is no inventory to check against, so it says UNKNOWN instead.
+claude_delegated_coverage() {
+  local f id p ids rc parents=0 delegated=0 named=0 in_walk=0 outside=0 missing=0 unreadable=0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in */subagents/*) delegated=$((delegated + 1)); continue ;; esac
+    parents=$((parents + 1))
+    rc=0
+    ids=$(LC_ALL=C grep -o '"agentId":"[A-Za-z0-9_-]*"' "$f" 2>/dev/null) || rc=$?
+    if [ "$rc" -gt 1 ]; then unreadable=$((unreadable + 1)); continue; fi
+    while IFS= read -r id; do
+      [ -n "$id" ] || continue
+      named=$((named + 1))
+      p="${f%.jsonl}/subagents/agent-${id}.jsonl"
+      if printf '%s\n' "$SF_CACHE" | grep -qxF -- "$p"; then
+        in_walk=$((in_walk + 1))
+      elif [ -f "$p" ]; then
+        outside=$((outside + 1))
+      else
+        missing=$((missing + 1))
+      fi
+    done < <(printf '%s\n' "$ids" | sed -n 's/^"agentId":"\(.*\)"$/\1/p' | sort -u)
+  done <<<"$SF_CACHE"
+  local total=$((parents + delegated)) share='n/a'
+  [ "$total" -gt 0 ] && share="$(awk -v d="$delegated" -v t="$total" 'BEGIN { printf "%d%%", (d * 100 / t) + 0.5 }')"
+  echo " claude coverage: ${parents} parent + ${delegated} delegated (subagents/) transcripts; delegated share ${share}"
+  if [ "$parents" -eq 0 ]; then
+    if [ "$delegated" -gt 0 ]; then
+      echo " claude delegated inventory: UNKNOWN (no parent transcript in this walk to check against)"
+    fi
+    return 0
+  fi
+  echo " claude delegated inventory (from the parents' agentId records): ${named} named — ${in_walk} in this walk, ${outside} outside the window or file cap, ${missing} missing on disk"
+  local status=0
+  if [ "$unreadable" -gt 0 ]; then
+    echo " UNKNOWN: ${unreadable} parent transcript(s) could not be read for the delegated inventory —"
+    echo "          delegated coverage is incomplete, not zero."
+    status=2
+  fi
+  if [ "$missing" -gt 0 ]; then
+    echo " UNKNOWN: ${missing} delegated transcript(s) named by a parent are missing on disk —"
+    echo "          delegated coverage is incomplete, not zero."
+    status=2
+  fi
+  return "$status"
+}
+
 # Safety-only and default reports share one controller. Re-execution puts every
 # safety-specific setup operation, scan, report capture, and worker cleanup in
 # the same killable process group. The default report asks for section-only
@@ -2823,6 +2881,8 @@ if [ "$SAFETY_WORKER" = 0 ] || { [ "$SAFETY_STANDALONE" = 1 ] && [ "$SAFETY_SCOP
 echo "════════════════════════════════════════════════════════════════"
 echo " AGENT TELEMETRY — window ${SINCE_DAYS}d — generated $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 echo " claude sessions in window: ${SF_COUNT} (cap ${MAX_FILES})"
+# Numeric only when this process walked the Claude files itself (see main).
+if [ "$SF_COUNT" -eq "$SF_COUNT" ] 2>/dev/null; then claude_delegated_coverage || main_rc=2; fi
 echo " NOTE: the window selects FILES by mtime, which is a correct SUPERSET but"
 echo "       not a bound — a resumed session or a bulk touch rewrites its mtime."
 echo "       DISPATCH HEALTH, RELIABILITY and SIGNATURE additionally filter each"

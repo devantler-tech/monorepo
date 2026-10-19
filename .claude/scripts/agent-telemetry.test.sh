@@ -10911,6 +10911,65 @@ if [ "$(id -u)" -ne 0 ]; then
   check "unreadable Codex transcript: the report names its folder as unknown" "$OUT" "UNKNOWN: the Codex folder sessions/ exists but could not be read in full"
   if [ "$rc" -eq 2 ]; then ok "unreadable Codex transcript: exit 2"; else bad "unreadable Codex transcript: exit 2" "exit $rc"; fi
 fi
+# Delegated-transcript coverage (monorepo#4325): the banner splits the Claude file
+# set into parents and subagent transcripts, and checks the split against the
+# subagents each parent names. Named transcripts land in three bins — in the walk,
+# on disk but outside the window, and missing — and only a missing one (or an
+# unreadable parent) is a gap, which is named and exits 2.
+mkdir -p "$FIX/deleg/proj/p1/subagents" "$FIX/deleg-nocodex"
+cat > "$FIX/deleg/proj/p1.jsonl" <<'JSONL'
+{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","toolUseResult":{"agentId":"a1","status":"completed"},"message":{"content":[{"type":"text","text":"x"}]}}
+{"type":"user","timestamp":"2026-08-01T10:01:00.000Z","toolUseResult":{"agentId":"a1","status":"completed"},"message":{"content":[{"type":"text","text":"x"}]}}
+{"type":"user","timestamp":"2026-08-01T10:02:00.000Z","toolUseResult":{"agentId":"a2","status":"completed"},"message":{"content":[{"type":"text","text":"x"}]}}
+{"type":"user","timestamp":"2026-08-01T10:03:00.000Z","toolUseResult":{"agentId":"a3","status":"completed"},"message":{"content":[{"type":"text","text":"quoted \"agentId\":\"zz\" is text, not a record"}]}}
+JSONL
+cat > "$FIX/deleg/proj/p2.jsonl" <<'JSONL'
+{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","message":{"content":[{"type":"text","text":"no subagents"}]}}
+JSONL
+printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","message":{"content":[{"type":"text","text":"go"}]}}' \
+  > "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl"
+cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg/proj/p1/subagents/agent-a2.jsonl"
+# Older than the 3650-day window: on disk, so excluded on purpose rather than missing.
+touch -t 200001010000 "$FIX/deleg/proj/p1/subagents/agent-a2.jsonl"
+deleg_run() {
+  CLAUDE_PROJECTS_DIR="$FIX/deleg" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+    bash "$TARGET" --since-days 3650 --section a2a 2>&1
+}
+OUT=$(deleg_run); rc=$?
+check "delegated coverage: parents and subagent transcripts are counted apart" "$OUT" \
+  "claude coverage: 2 parent + 1 delegated (subagents/) transcripts; delegated share 33%"
+check "delegated coverage: each named subagent lands in exactly one bin" "$OUT" \
+  "(from the parents' agentId records): 3 named — 1 in this walk, 1 outside the window or file cap, 1 missing on disk"
+check "delegated coverage: a missing named transcript is unknown, not zero" "$OUT" \
+  "UNKNOWN: 1 delegated transcript(s) named by a parent are missing on disk"
+if [ "$rc" -eq 2 ]; then ok "delegated coverage: a missing transcript exits 2"; else bad "delegated coverage: a missing transcript exits 2" "exit $rc"; fi
+# CONTROL: once the named transcript exists, the gap and its exit status go away.
+cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg/proj/p1/subagents/agent-a3.jsonl"
+OUT=$(deleg_run); rc=$?
+check "delegated coverage control: the share counts the new transcript" "$OUT" \
+  "claude coverage: 2 parent + 2 delegated (subagents/) transcripts; delegated share 50%"
+check "delegated coverage control: nothing missing" "$OUT" "3 named — 2 in this walk, 1 outside the window or file cap, 0 missing on disk"
+nocheck "delegated coverage control: no unknown line" "$OUT" "named by a parent are missing on disk"
+if [ "$rc" -eq 0 ]; then ok "delegated coverage control: exit 0"; else bad "delegated coverage control: exit 0" "exit $rc"; fi
+# A parent that cannot be read gives no inventory: unknown and exit 2.
+if [ "$(id -u)" -ne 0 ]; then
+  chmod 000 "$FIX/deleg/proj/p1.jsonl"
+  OUT=$(deleg_run); rc=$?
+  chmod 600 "$FIX/deleg/proj/p1.jsonl"
+  check "delegated coverage: an unreadable parent is unknown" "$OUT" \
+    "UNKNOWN: 1 parent transcript(s) could not be read for the delegated inventory"
+  if [ "$rc" -eq 2 ]; then ok "delegated coverage: an unreadable parent exits 2"; else bad "delegated coverage: an unreadable parent exits 2" "exit $rc"; fi
+fi
+# Subagent transcripts with no parent in the walk have nothing to be checked
+# against: the share still prints, the inventory says UNKNOWN (never "0 named").
+mkdir -p "$FIX/deleg-orphan/proj/p9/subagents"
+cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-orphan/proj/p9/subagents/agent-a9.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-orphan" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1)
+check "delegated coverage: subagents only still print the share" "$OUT" \
+  "claude coverage: 0 parent + 1 delegated (subagents/) transcripts; delegated share 100%"
+check "delegated coverage: no parent means the inventory is unknown" "$OUT" \
+  "claude delegated inventory: UNKNOWN (no parent transcript in this walk to check against)"
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
