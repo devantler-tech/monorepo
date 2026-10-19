@@ -31,7 +31,7 @@
 #   * Nothing inside it (file, directory or link) was written within min_age_days.
 #   * No process holds a file open, or has its working directory, at or below it. The open-file
 #     list counts only when lsof exits 0 with a non-empty list.
-#   * Every git checkout inside it (any `.git` within five levels, so populated submodules too)
+#   * Every git checkout inside it (any `.git` at any depth, so populated submodules too)
 #     has no uncommitted change (untracked files always counted, whatever the repository's
 #     status.showUntrackedFiles says; Codex's own `.codex/` and `.agents/` tool folders aside), no
 #     path marked assume-unchanged or skip-worktree (status cannot see edits to those), no
@@ -305,8 +305,9 @@ while IFS= read -r -d '' d; do
     kept_open=$((kept_open + 1))
     continue
   fi
-  # Every checkout inside, at most five levels down, so populated submodules are judged too.
-  if ! find "$d" -maxdepth 5 -name .git -prune -print0 > "$work/git.nul" 2>/dev/null; then
+  # Every checkout inside, at any depth, so populated submodules (some sit six levels down in a
+  # monorepo worktree) are judged too.
+  if ! find "$d" -name .git -prune -print0 > "$work/git.nul" 2>/dev/null; then
     log "UNKNOWN: checkouts under ${d} could not be listed; kept"
     unknown=$((unknown + 1))
     continue
