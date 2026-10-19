@@ -71,7 +71,7 @@ run() {
 
 # A remote and a helper that makes a clean clone of it inside a task folder.
 remote="${tmp}/remote.git"
-git init -q --bare "$remote" || exit 2
+git init -q --bare -b main "$remote" || exit 2
 seed="${tmp}/seed"
 git init -q -b main "$seed" && git -C "$seed" commit -q --allow-empty -m init &&
   git -C "$seed" remote add origin "$remote" && git -C "$seed" push -q origin main || exit 2
@@ -178,8 +178,8 @@ for d in "$young" "$held" "$dirty" "$ahead" "$open_pr"; do
   [ -d "$d" ] || fail "7: apply removed the kept ${d}"
 done
 [ -L "${root}/link" ] && [ -f "$target/file" ] || fail '7: a symbolic-link task folder or its target was touched'
-git -C "$wt_repo" worktree list --porcelain | grep -qF "$wt" &&
-  fail "7: the removed worktree is still registered in its repository"
+wt_list=$(git -C "$wt_repo" worktree list --porcelain) || fail '7: the worktree list could not be read'
+grep -qF "$wt" <<<"$wt_list" && fail "7: the removed worktree is still registered in its repository"
 grep -qF 'removed=4 ' <<<"$out" || fail "7: apply did not count four removals: $out"
 
 # 8. No Codex worktrees at all is a clean no-op.

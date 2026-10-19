@@ -99,8 +99,11 @@ ROOT=$CODEX_HOME_DIR/worktrees
 
 # "Absent" is believed only when the parent directory can be searched.
 if [ ! -e "$ROOT" ] && [ ! -L "$ROOT" ]; then
-  root_parent=$(dirname -- "$ROOT")
-  if [ -d "$root_parent" ] && [ -x "$root_parent" ]; then
+  # The worktrees folder or the whole Codex home may be missing; judge from the nearest one that
+  # should exist.
+  root_parent=$CODEX_HOME_DIR
+  if [ ! -e "$root_parent" ] && [ ! -L "$root_parent" ]; then root_parent=$(dirname -- "$root_parent"); fi
+  if [ -d "$root_parent" ] && [ ! -L "$root_parent" ] && [ -x "$root_parent" ]; then
     log "no Codex worktrees at ${ROOT}; nothing to do"
     retention_finished=1
     exit 0
