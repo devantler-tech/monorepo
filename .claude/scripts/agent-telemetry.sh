@@ -386,12 +386,17 @@ run_safety_early_and_emit() (
   }
   trap scopes_cleanup EXIT
   trap 'exit 130' HUP INT TERM
+  # Wall-clock seconds for the whole section and for each scope (#3830): the
+  # deadline floor is checked against these, and without them it could only
+  # ever be UNMEASURED. A missing or malformed scope time prints UNKNOWN.
+  section_start=$(date +%s)
   base="${TMPDIR:-/tmp}/.agtel_scope.${BASHPID:-$$}.${RANDOM}${RANDOM}${RANDOM}"
   for scope in $SAFETY_SCOPES; do
     out="${base}.${scope}.report"
     rcf="${base}.${scope}.rc"
-    files+=("$out" "$rcf")
-    if ! (set -C; umask 077; : > "$out" && : > "$rcf") 2>/dev/null; then
+    wallf="${base}.${scope}.wall"
+    files+=("$out" "$rcf" "$wallf")
+    if ! (set -C; umask 077; : > "$out" && : > "$rcf" && : > "$wallf") 2>/dev/null; then
       pids+=('')
       continue
     fi
@@ -404,7 +409,9 @@ run_safety_early_and_emit() (
       trap - EXIT HUP INT TERM
       exec >| "$out" || exit 3
       scope_rc=0
+      scope_start=$(date +%s)
       run_safety_early "$standalone" "$scope" || scope_rc=$?
+      printf '%s\n' "$(($(date +%s) - scope_start))" >| "$wallf" || :
       printf '%s\n' "$scope_rc" >| "$rcf" || exit 3
       exit 0
     ) &
@@ -434,7 +441,13 @@ run_safety_early_and_emit() (
       124) emit_safety_unknown "safety scan exceeded the ${SAFETY_TIMEOUT_SECONDS}s time limit." "$scope"; overall=2 ;;
       *) emit_safety_unknown 'the safety worker failed; its measurements are incomplete.' "$scope"; overall=2 ;;
     esac
+    wall=$(cat_builtin "${base}.${scope}.wall") || wall=''
+    case "$wall" in
+      ''|*[!0-9]*) echo "  ${scope} scope wall: UNKNOWN (no time recorded)" ;;
+      *) echo "  ${scope} scope wall: ${wall} s (limit ${SAFETY_TIMEOUT_SECONDS} s)" ;;
+    esac
   done
+  echo "  safety section wall: $(($(date +%s) - section_start)) s (scopes run at the same time)"
   emit_finished=1
   exit "$overall"
 )
