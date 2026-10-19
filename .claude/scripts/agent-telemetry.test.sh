@@ -11090,6 +11090,20 @@ check "delegated coverage: a whitespace-only parent is unknown" "$OUT" \
 check "delegated coverage: a whitespace-only named helper is unknown" "$OUT" \
   "UNKNOWN: 1 named delegated transcript(s) in this walk could not be read"
 if [ "$rc" -eq 2 ]; then ok "delegated coverage: whitespace-only transcripts exit 2"; else bad "delegated coverage: whitespace-only transcripts exit 2" "exit $rc"; fi
+# A record that parses but is not an object (a bare `null`, an array) is no
+# transcript record either, so such a parent or named helper stays unknown.
+mkdir -p "$FIX/deleg-scalar/proj/p/subagents"
+printf 'null\n' > "$FIX/deleg-scalar/proj/scalar.jsonl"
+printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","toolUseResult":{"agentId":"s1"},"message":{"content":[{"type":"text","text":"x"}]}}' \
+  > "$FIX/deleg-scalar/proj/p.jsonl"
+printf '[]\n' > "$FIX/deleg-scalar/proj/p/subagents/agent-s1.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-scalar" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+check "delegated coverage: a parent holding a bare scalar is unknown" "$OUT" \
+  "UNKNOWN: 1 parent transcript(s) could not be read or parsed for the delegated inventory"
+check "delegated coverage: a named helper holding a non-object is unknown" "$OUT" \
+  "UNKNOWN: 1 named delegated transcript(s) in this walk could not be read"
+if [ "$rc" -eq 2 ]; then ok "delegated coverage: non-object transcripts exit 2"; else bad "delegated coverage: non-object transcripts exit 2" "exit $rc"; fi
 # A helper whose own parent failed to parse is not a "background launch": its
 # launch type is unknown because the parent could not be read.
 mkdir -p "$FIX/deleg-badparent/proj/p/subagents"

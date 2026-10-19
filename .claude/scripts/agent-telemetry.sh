@@ -2779,6 +2779,14 @@ populate_session_cache() {
   ALL_CACHE="$(printf '%s\n%s' "$SF_CACHE" "$CX_CACHE" | grep -c . >/dev/null 2>&1; printf '%s\n%s' "$SF_CACHE" "$CX_CACHE")"
 }
 
+# A transcript is read only when it parses as JSON throughout, holds at least one
+# record, and every record is an object: whitespace alone is a valid, empty JSON
+# stream that `jq empty` accepts, and a bare scalar such as `null` parses but is
+# no transcript record (reviews of #4326).
+transcript_has_records() {
+  [ -s "$1" ] && jq -n -e 'reduce inputs as $r (0; if . >= 0 and ($r | type) == "object" then . + 1 else -1 end) | . > 0' "$1" >/dev/null 2>&1
+}
+
 # Delegated-transcript coverage (monorepo#4325). Most Claude runs now hand the
 # run to a subagent, whose records live in `<session>/subagents/agent-<id>.jsonl`
 # rather than in the parent file, so a reading taken from parents alone can
@@ -2800,12 +2808,6 @@ populate_session_cache() {
 # names are counted as not inventoried — split by whether their own parent was
 # in the walk — so the inventory never reads as complete when it covered only
 # part of the delegated set.
-# A transcript is read only when it parses as JSON throughout AND holds at least
-# one record: whitespace alone is a valid, empty JSON stream that `jq empty`
-# accepts, which would pass a blank file as read (review of #4326).
-transcript_has_records() {
-  [ -s "$1" ] && jq -n -e 'reduce inputs as $r (false; true)' "$1" >/dev/null 2>&1
-}
 claude_delegated_coverage() {
   local f id p lines ids rc parents=0 delegated=0 named=0 in_walk=0 outside=0 missing=0
   local unreadable=0 unreadable_named=0 expected='' unnamed=0 parent_outside=0 parent_gone=0
