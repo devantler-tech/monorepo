@@ -208,6 +208,8 @@ jobs:
               - '.claude/scripts/build-cache-reclaim.test.sh'
               - '.claude/scripts/codex-transcript-retention.sh'
               - '.claude/scripts/codex-transcript-retention.test.sh'
+              - '.claude/scripts/codex-worktree-retention.sh'
+              - '.claude/scripts/codex-worktree-retention.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -1314,6 +1316,11 @@ jobs:
       # here on the same two platforms.
       - name: Self-test Codex transcript retention
         run: bash .claude/scripts/codex-transcript-retention.test.sh
+      # The Codex worktree step (monorepo#4329) runs through its own helper too; each kept
+      # fixture (recent, in use, uncommitted, unpushed, open pull request) differs from a
+      # removable one in exactly one dimension.
+      - name: Self-test Codex worktree retention
+        run: bash .claude/scripts/codex-worktree-retention.test.sh
 
   test-disk-preflight:
     name: Test disk pre-flight
