@@ -4429,6 +4429,9 @@ case " $* " in
     : > "$SAFETY_CONTROLLER_CLEANUP_STARTED"
     sleep 60 ;;
 esac
+# Never exec this shim again: that would loop sleep-then-exec forever as an
+# orphan once the asynchronous cleanup outlives the test.
+[ "$SAFETY_TEST_RMDIR" != "$0" ] || exit 97
 exec "$SAFETY_TEST_RMDIR" "$@"
 EOF
 chmod +x "$FIX/safety-controller-cleanup-shim/rmdir"
@@ -4438,9 +4441,13 @@ mkdir -p "$FIX/safety-controller-clean-corpus"
 printf '%s\n' '{"type":"user","message":{"content":[{"type":"text","text":"ordinary controller cleanup record"}]}}' \
   > "$FIX/safety-controller-clean-corpus/s.jsonl"
 rm -f "$FIX/safety-controller-cleanup-started"
+# Resolve the real rmdir BEFORE the shim is on PATH: bash applies the PATH
+# prefix assignment while expanding the later ones, so resolving it inline
+# names the shim itself.
+safety_test_rmdir=$(command -v rmdir)
 controller_cleanup_start=$(date +%s)
 CONTROLLER_CLEANUP_BOUNDED=$(PATH="$FIX/safety-controller-cleanup-shim:$PATH" \
-  SAFETY_TEST_RMDIR="$(command -v rmdir)" \
+  SAFETY_TEST_RMDIR="$safety_test_rmdir" \
   SAFETY_CONTROLLER_CLEANUP_STARTED="$FIX/safety-controller-cleanup-started" \
   CLAUDE_PROJECTS_DIR="$FIX/safety-controller-clean-corpus" CODEX_HOME="$FIX/nocodex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
