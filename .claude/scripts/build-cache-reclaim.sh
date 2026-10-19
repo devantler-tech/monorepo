@@ -68,6 +68,8 @@
 #   BUILD_CACHE_RECLAIM_RUN_TREE_KEEP         colon-separated name patterns (2) never
 #                                             considers, added to the built-in keep-list
 #   BUILD_CACHE_RECLAIM_LOOSE_FILE_MIN_MB     smallest loose file (2a) considers; default 10
+#   BUILD_CACHE_RECLAIM_LOOSE_FILE_CTIME      `off` drops the change-time half of the idle rule
+#                                             for (2a); test suite only, default on
 #   BUILD_CACHE_RECLAIM_LINT_BUDGET_GB        budget for (3); default 2
 #   GOLANGCI_LINT_CACHE                       golangci-lint's own cache-dir override
 #   BUILD_CACHE_RECLAIM_GO_TMPDIR             temp dir for (4); default `getconf
@@ -99,7 +101,9 @@
 # SAFETY — this deletes, so every rule below fails closed:
 #   * Under the temp root only directories this user owns are considered, never a name on
 #     the keep-list, a tree holding a mount point, or one with a socket, FIFO or device
-#     inside (2), and only plain files this user owns with a single link (2a). Elsewhere only a tree carrying a Go or golangci-lint cache README marker
+#     inside (2), and only plain files this user owns with a single link, whose contents AND
+#     inode are older than the threshold, and never a disk-image file (2a). Elsewhere only a
+#     tree carrying a Go or golangci-lint cache README marker
 #     (2b), named go-mod-* and laid out like a Go module cache (2c), or shaped exactly like
 #     a Go work dir (4) or a browser test profile (4b) is.
 #   * A tree younger than its age threshold is KEPT. The one exception is a marked Go build
@@ -201,6 +205,20 @@ fi
 # top level is more likely a pid or state file some long-running tool reads by name.
 LOOSE_FILE_MIN_MB=$(uint_setting BUILD_CACHE_RECLAIM_LOOSE_FILE_MIN_MB \
   "${BUILD_CACHE_RECLAIM_LOOSE_FILE_MIN_MB:-10}") || exit 2
+# A loose file is idle only when BOTH its contents and its inode are old. Many tools set an old
+# modification time on a file they have just created (tar x, cp -p, curl -R, mv of an old file),
+# and a tree has its own directory's time to show that, but a lone file does not. Nothing can set
+# a change time back, so it is the second signal. `off` exists only for the test suite, which
+# cannot age a change time and checks this rule on its own case.
+LOOSE_AGE_ARGS=(-mmin "+$((RUN_TREE_MIN_AGE_HOURS * 60))")
+case "${BUILD_CACHE_RECLAIM_LOOSE_FILE_CTIME:-on}" in
+  on) LOOSE_AGE_ARGS+=(-cmin "+$((RUN_TREE_MIN_AGE_HOURS * 60))") ;;
+  off) ;;
+  *)
+    printf 'build-cache-reclaim: BUILD_CACHE_RECLAIM_LOOSE_FILE_CTIME must be on or off\n' >&2
+    exit 2
+    ;;
+esac
 # A browser test profile is live only while its browser runs, so it is aged in hours like a
 # Go work dir. The per-run limit bounds the time one sweep spends on a large backlog.
 BROWSER_PROFILE_MIN_AGE_HOURS=$(uint_setting BUILD_CACHE_RECLAIM_BROWSER_PROFILE_MIN_AGE_HOURS \
@@ -1162,8 +1180,10 @@ loose_file_open() {
   dir=$(cd -- "${file%/*}" 2>/dev/null && pwd -P) || return 0
   [ -n "$dir" ] || return 0
   canon="${dir%/}/${file##*/}"
+  # A row may carry a suffix after the path (" (host:/export)" on a network mount), so a
+  # row that starts with the path and a space names it too.
   printf '%s\n' "$LSOF_SNAPSHOT" |
-    awk -v p="$canon" '$0 == p { found = 1 } END { exit !found }'
+    awk -v p="$canon" '$0 == p || index($0, p " ") == 1 { found = 1 } END { exit !found }'
 }
 
 # loose_file_still_idle <file>: 0 only when, asked again just before removal, the path is
@@ -1176,7 +1196,7 @@ loose_file_still_idle() {
   [ -n "$OWN_UID" ] || return 1
   # No -H: a path that became a symlink is type l, never type f.
   again=$(find "$file" -maxdepth 0 -type f -user "$OWN_UID" -links 1 \
-    -mmin "+$((RUN_TREE_MIN_AGE_HOURS * 60))" -print 2>/dev/null) || return 1
+    "${LOOSE_AGE_ARGS[@]}" -print 2>/dev/null) || return 1
   [ "$again" = "$file" ] || return 1
   errfile=$(mktemp 2>/dev/null) || return 1
   rows=$("$LSOF_BIN" -Fn -- "$file" 2>"$errfile" | sed -n 's/^n//p')
@@ -1316,14 +1336,14 @@ EOF
     # since removing one name frees nothing and surprises whoever holds the other.
     loose_size_args=()
     if [ "$LOOSE_FILE_MIN_MB" -gt 0 ]; then
-      # 512-byte blocks, rounded up, on BSD and GNU find alike: more than this many blocks
-      # is at least LOOSE_FILE_MIN_MB MiB.
-      loose_size_args=(-size "+$((LOOSE_FILE_MIN_MB * 2048 - 1))")
+      # Bytes, with the `c` suffix BSD and GNU find both read the same way: more than one
+      # byte short of LOOSE_FILE_MIN_MB MiB is at least that size.
+      loose_size_args=(-size "+$((LOOSE_FILE_MIN_MB * 1048576 - 1))c")
     fi
     if ! loose_files=$(find -H "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type f \
       -user "$run_tree_uid" -links 1 ! -name "*[!${SAFE_NAME_CHARS}]*" \
       ${loose_size_args[@]+"${loose_size_args[@]}"} \
-      -mmin "+$((RUN_TREE_MIN_AGE_HOURS * 60))" 2>/dev/null); then
+      "${LOOSE_AGE_ARGS[@]}" 2>/dev/null); then
       unknown=$((unknown + 1))
       log "UNKNOWN (scan failed) $TMPDIR_ROOT: loose files not examined"
     else
@@ -1337,6 +1357,15 @@ EOF
         [ "$loose_file" = "${TMPDIR_ROOT%/}/${loose_name}" ] || continue
         if run_tree_kept_name "$loose_name"; then continue; fi
         loose_files_seen=$((loose_files_seen + 1))
+        # A file backing an attached disk image or loop device is held in the kernel, where
+        # lsof cannot see it, so it reads as idle. Image formats are never removed here.
+        case "$loose_name" in
+          *.dmg | *.img | *.iso | *.raw | *.sparseimage | *.vmdk | *.qcow2 | *.vhd | *.vhdx)
+            kept=$((kept + 1))
+            log "KEEP  (disk image)     $loose_file"
+            continue
+            ;;
+        esac
         sweep_loose_file "$loose_file"
       done <<EOF
 $loose_files

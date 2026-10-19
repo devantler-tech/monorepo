@@ -2531,8 +2531,13 @@ make_loose() {
 run_lf() {
   BUILD_CACHE_RECLAIM_TMPDIR="$lf_root" \
     BUILD_CACHE_RECLAIM_LOOSE_FILE_MIN_MB="${LF_MIN_MB:-1}" \
+    BUILD_CACHE_RECLAIM_LOOSE_FILE_CTIME="${LF_CTIME:-off}" \
     GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" \
     bash "$impl" "$@" 2>&1
+}
+# lf_would_reap <output>: the dry-run summary's `would reap` count.
+lf_would_reap() {
+  sed -n 's/.*summary: would reap=\([0-9][0-9]*\) .*/\1/p' <<<"$1" | tail -n 1
 }
 lf_idle="${lf_root}/ksail-idle.bin"
 lf_young="${lf_root}/ksail-young.bin"
@@ -2543,6 +2548,7 @@ lf_hard="${lf_root}/ksail-hard.bin"
 lf_hard_other="${lf_outside}/hard-other.bin"
 lf_unsafe="${lf_root}/ksail unsafe.bin"
 lf_keep="${lf_root}/claude-kept.bin"
+lf_image="${lf_root}/khoist-disk.dmg"
 make_loose "$lf_idle" 2 "$lf_old" || fail 'fixture: 27 idle file'
 make_loose "$lf_young" 2 || fail 'fixture: 27 young file'
 make_loose "$lf_open" 2 "$lf_old" || fail 'fixture: 27 open file'
@@ -2552,23 +2558,28 @@ make_loose "$lf_hard" 2 "$lf_old" || fail 'fixture: 27 hard-linked file'
 ln "$lf_hard" "$lf_hard_other" || fail 'fixture: 27 second hard link'
 make_loose "$lf_unsafe" 2 "$lf_old" || fail 'fixture: 27 unsafe name'
 make_loose "$lf_keep" 2 "$lf_old" || fail 'fixture: 27 keep-list name'
-# A holder that keeps the file open for the whole run, as a build writing a capture would.
-sleep 120 3<"$lf_open" &
+make_loose "$lf_image" 2 "$lf_old" || fail 'fixture: 27 disk image'
+# A holder that keeps the file open for the whole run, as a build writing a capture would. Both
+# live processes are killed explicitly below, so they are given far longer than two runs take.
+sleep 1200 3<"$lf_open" &
 lf_holder=$!
 # A running executable: the snapshot lists it among the open paths even with no descriptor.
 lf_exe="${lf_root}/ksail-running"
 { cp "$(command -v sleep)" "$lf_exe" && chmod u+x "$lf_exe"; } || fail 'fixture: 27 executable'
-"$lf_exe" 120 &
+"$lf_exe" 1200 &
 lf_exe_pid=$!
-touch -t "$lf_old" "$lf_exe" 2>/dev/null
+touch -t "$lf_old" "$lf_exe" || fail 'fixture: 27 aging the executable'
 sleep 1
 
 out=$(run_lf dry-run 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$lf_idle" ] || fail '27: a dry run removed a loose file'
 grep -qF "WOULD REAP 2 MB  ${lf_idle}" <<<"$out" ||
   fail "27: a dry run did not list the idle loose file; it said: $(grep -F 'loose files' <<<"$out")"
-grep -qE 'summary: would reap=[1-9]' <<<"$out" ||
-  fail "27: the dry-run summary did not count the loose file; it said: $(grep -F 'summary' <<<"$out")"
+lf_with=$(lf_would_reap "$out")
+lf_without=$(lf_would_reap "$(LF_MIN_MB=10 run_lf dry-run 3 "$NEVER_CLEAN_BUDGET")")
+[ -n "$lf_with" ] && [ -n "$lf_without" ] && [ "$lf_with" -eq "$((lf_without + 1))" ] ||
+  fail "27: the dry-run summary did not count the loose file (with=${lf_with:-?} without=${lf_without:-?})"
+grep -qF "KEEP  (disk image)     ${lf_image}" <<<"$out" || fail '27: a disk-image file was not reported as kept'
 
 out=$(LF_MIN_MB=0 run_lf apply 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$lf_idle" ] && fail "27: an idle loose file was not removed; it said: $(grep -F 'ksail-idle' <<<"$out")"
@@ -2580,13 +2591,23 @@ out=$(LF_MIN_MB=0 run_lf apply 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$lf_hard" ] || fail '27: a loose file with a second hard link was removed'
 [ -e "$lf_unsafe" ] || fail '27: a loose file with a name outside the safe set was removed'
 [ -e "$lf_keep" ] || fail '27: a loose file with a keep-list name was removed'
+[ -e "$lf_image" ] || fail '27: a disk-image file was removed'
 kill "$lf_holder" "$lf_exe_pid" 2>/dev/null
 wait "$lf_holder" "$lf_exe_pid" 2>/dev/null
+# Liveness ablation: with both processes gone, the same two files are removed, so the running
+# process was the only thing keeping them.
+LF_MIN_MB=0 run_lf apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$lf_open" ] && fail '27: the open file was not removed once nothing held it (the liveness ablation did not run)'
+[ -e "$lf_exe" ] && fail '27: the executable was not removed once it stopped (the liveness ablation did not run)'
 
 # Size ablation: below the minimum size an idle loose file is never considered.
 make_loose "$lf_idle" 2 "$lf_old" || fail 'fixture: 27 idle file for the size case'
 LF_MIN_MB=10 run_lf apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
 [ -e "$lf_idle" ] || fail '27: a loose file below the minimum size was removed'
+# Change-time ablation: the fixture was created moments ago with an old modification time, as
+# `tar x` or `cp -p` leaves one, and the default rule must keep it for its new inode.
+LF_CTIME=on run_lf apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$lf_idle" ] || fail '27: a just-created file with an old modification time was removed'
 LF_MIN_MB=1 run_lf apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
 [ -e "$lf_idle" ] && fail '27: the size case removed nothing at 1 MB (the ablation partner did not run)'
 rm -rf -- "$lf_root" "$lf_outside"
