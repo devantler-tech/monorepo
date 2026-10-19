@@ -11104,12 +11104,12 @@ check "delegated coverage: a parent holding a bare scalar is unknown" "$OUT" \
 check "delegated coverage: a named helper holding a non-object is unknown" "$OUT" \
   "UNKNOWN: 1 named delegated transcript(s) in this walk could not be read"
 if [ "$rc" -eq 2 ]; then ok "delegated coverage: non-object transcripts exit 2"; else bad "delegated coverage: non-object transcripts exit 2" "exit $rc"; fi
-# Drift and outcomes never read the Claude walk, so an incomplete delegated
-# inventory is printed but does not fail them (review of #4326): the same
-# outcomes fixture exits 0 with a cut-short parent in the corpus.
+# Drift and outcomes never read the Claude walk, so a run of only those sections
+# skips the coverage entirely (reviews of #4326): the outcomes fixture exits 0
+# with a cut-short parent in the corpus and prints no coverage line, so no
+# printed UNKNOWN ever sits beside a clean exit.
 OUT=$(OUTCOMES_CLAUDE_PROJECTS="$FIX/deleg-cut" outcomes_run); rc=$?
-check "delegated coverage: an outcomes-only run still prints the coverage UNKNOWN" "$OUT" \
-  "UNKNOWN: 2 parent transcript(s) could not be read or parsed for the delegated inventory"
+if grep -q "claude coverage:" <<<"$OUT"; then bad "delegated coverage: an outcomes-only run prints no coverage" "$OUT"; else ok "delegated coverage: an outcomes-only run prints no coverage"; fi
 if [ "$rc" -eq 0 ]; then ok "delegated coverage: an incomplete inventory does not fail an outcomes-only run"; else bad "delegated coverage: an incomplete inventory does not fail an outcomes-only run" "exit $rc"; fi
 # A launch record whose agentId is not a plain id names a subagent the
 # inventory cannot locate, so the parent is unknown rather than silently
