@@ -10970,6 +10970,15 @@ check "delegated coverage: subagents only still print the share" "$OUT" \
   "claude coverage: 0 parent + 1 delegated (subagents/) transcripts; delegated share 100%"
 check "delegated coverage: no parent means the inventory is unknown" "$OUT" \
   "claude delegated inventory: UNKNOWN (no parent transcript in this walk to check against)"
+# Valid JSON may put whitespace around the colon; such a record still names a
+# subagent, so it must be inventoried rather than read as "0 named" (review of #4326).
+mkdir -p "$FIX/deleg-ws/proj"
+printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","toolUseResult": {"agentId" : "w1"},"message":{"content":[{"type":"text","text":"x"}]}}' \
+  > "$FIX/deleg-ws/proj/p.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-ws" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1)
+check "delegated coverage: an agentId with spaced JSON is still inventoried" "$OUT" \
+  "1 named — 0 in this walk, 0 outside the window or file cap, 1 missing on disk"
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

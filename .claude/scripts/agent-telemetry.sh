@@ -2798,7 +2798,7 @@ claude_delegated_coverage() {
     case "$f" in */subagents/*) delegated=$((delegated + 1)); continue ;; esac
     parents=$((parents + 1))
     rc=0
-    ids=$(LC_ALL=C grep -o '"agentId":"[A-Za-z0-9_-]*"' "$f" 2>/dev/null) || rc=$?
+    ids=$(LC_ALL=C grep -oE '"agentId"[[:space:]]*:[[:space:]]*"[A-Za-z0-9_-]*"' "$f" 2>/dev/null) || rc=$?
     if [ "$rc" -gt 1 ]; then unreadable=$((unreadable + 1)); continue; fi
     while IFS= read -r id; do
       [ -n "$id" ] || continue
@@ -2811,7 +2811,7 @@ claude_delegated_coverage() {
       else
         missing=$((missing + 1))
       fi
-    done < <(printf '%s\n' "$ids" | sed -n 's/^"agentId":"\(.*\)"$/\1/p' | sort -u)
+    done < <(printf '%s\n' "$ids" | sed -n 's/^"agentId"[[:space:]]*:[[:space:]]*"\(.*\)"$/\1/p' | sort -u)
   done <<<"$SF_CACHE"
   local total=$((parents + delegated)) share='n/a'
   [ "$total" -gt 0 ] && share="$(awk -v d="$delegated" -v t="$total" 'BEGIN { printf "%d%%", (d * 100 / t) + 0.5 }')"
