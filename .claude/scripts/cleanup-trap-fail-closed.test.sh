@@ -371,6 +371,8 @@ surveyor-vocabulary-coverage.test.sh|
 build-cache-reclaim.test.sh|
 codex-transcript-retention.sh|dry-run 14
 codex-transcript-retention.test.sh|
+codex-worktree-retention.sh|dry-run 7
+codex-worktree-retention.test.sh|
 worktree-cleanup.test.sh|
 agent-role-delivery-contract.test.sh|
 maintainer-digest.sh|

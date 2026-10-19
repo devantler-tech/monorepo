@@ -19,6 +19,9 @@ export BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPTS=off
 # Every case but 26 keeps the Codex worktree root off too, so no apply run can reach a real cache
 # beside the machine's own Codex worktrees.
 export BUILD_CACHE_RECLAIM_CODEX_WORKTREES=off
+# Every case but 25b keeps the Codex worktree retention off, so no run can delete a real task
+# worktree of the machine running the suite.
+export BUILD_CACHE_RECLAIM_CODEX_WORKTREES_RETENTION=off
 
 failures=0
 fail() {
@@ -2311,7 +2314,7 @@ chmod +x "${c_bin}/lsof"
 out=$(BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPTS=on CODEX_TRANSCRIPT_RETENTION_HOME="$c_home" \
   CODEX_TRANSCRIPT_RETENTION_LSOF="${c_bin}/lsof" run dry-run 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$c_old" ] || fail '25: a dry-run removed a Codex transcript'
-grep -qF 'codex transcripts: summary: age>14d candidates=1 would remove=1' <<<"$out" ||
+grep -qF 'codex transcripts: summary: age>7d candidates=1 would remove=1' <<<"$out" ||
   fail "25: the dry-run did not report the old transcript: $out"
 c_mb=$(sed -n 's/^build-cache-reclaim: summary: .* would reclaim=~\([0-9][0-9]*\) MB.*/\1/p' <<<"$out")
 [ -n "$c_mb" ] && [ "$c_mb" -ge 3 ] ||
@@ -2327,6 +2330,32 @@ BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPTS=on CODEX_TRANSCRIPT_RETENTION_HOME="$c_hom
 rc=$?
 [ "$rc" -eq 2 ] || fail "25: an unreadable open-file list in the transcript step exited ${rc}, not 2"
 [ -e "$c_old" ] || fail '25: a transcript was removed although the open-file list failed'
+
+# 25b. Codex task worktrees past the retention are reclaimed through their own helper, in the
+# sweep's mode, and an UNKNOWN from it reaches this sweep's exit (monorepo#4329). The helper's
+# own suite proves which worktrees it keeps; this proves the wiring.
+w_home="${fixture_root}/codex-wt-home"
+w_old="${w_home}/worktrees/old1"
+mkdir -p "$w_old" || fail 'fixture: codex worktree'
+printf '#!/bin/sh\nprintf "p1\\nn/dev/null\\n"\n' > "${c_bin}/lsof.ok" && chmod +x "${c_bin}/lsof.ok" ||
+  fail 'fixture: codex worktree lsof'
+dd if=/dev/zero of="${w_old}/blob" bs=1048576 count=2 2>/dev/null || fail 'fixture: codex worktree blob'
+w_stamp=$(date -v-30d +%Y%m%d%H%M 2>/dev/null || date -d '30 days ago' +%Y%m%d%H%M)
+touch -t "$w_stamp" "${w_old}/blob" "$w_old"
+out=$(BUILD_CACHE_RECLAIM_CODEX_WORKTREES_RETENTION=on CODEX_WORKTREE_RETENTION_HOME="$w_home" \
+  CODEX_WORKTREE_RETENTION_LSOF="${c_bin}/lsof.ok" run dry-run 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$w_old" ] || fail '25b: a dry-run removed a Codex worktree'
+grep -qF 'codex worktrees: summary: age>7d examined=1 would remove=1' <<<"$out" ||
+  fail "25b: the dry-run did not report the old worktree: $out"
+out=$(BUILD_CACHE_RECLAIM_CODEX_WORKTREES_RETENTION=on CODEX_WORKTREE_RETENTION_HOME="$w_home" \
+  CODEX_WORKTREE_RETENTION_LSOF="${c_bin}/lsof.ok" run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$w_old" ] && fail "25b: apply kept a 30-day-old idle Codex worktree: $out"
+mkdir -p "$w_old" && touch -t "$w_stamp" "$w_old"
+BUILD_CACHE_RECLAIM_CODEX_WORKTREES_RETENTION=on CODEX_WORKTREE_RETENTION_HOME="$w_home" \
+  CODEX_WORKTREE_RETENTION_LSOF="${c_bin}/lsof" run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+rc=$?
+[ "$rc" -eq 2 ] || fail "25b: an unreadable open-file list in the worktree step exited ${rc}, not 2"
+[ -d "$w_old" ] || fail '25b: a worktree was removed although the open-file list failed'
 
 # --- 26. caches beside Codex app worktrees are swept too (monorepo#4248) ----------------------
 # The Codex app puts each task's worktree at <root>/<id>/<repo>, and a cache a run left beside it, at

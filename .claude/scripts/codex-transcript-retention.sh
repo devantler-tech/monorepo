@@ -7,15 +7,15 @@
 # its low-space threshold (monorepo#4136). The maintainer chose, on 2026-10-15, to let the
 # clean-up helper apply a retention to them (option 2 of the ask recorded on #4136).
 #
-# The default age is 14 days, not shorter: the Agent Improver measures the Codex lane over
-# 14-day windows read from exactly these files, so a shorter cut would silently shrink the
-# evidence it scores the lane on. Values below 7 are refused, so a typo cannot reach a
-# transcript a live thread may still resume.
+# The default age is 7 days: the maintainer shortened it from 14 on 2026-10-19 (option A of
+# monorepo#4329). The Agent Improver reads the Codex lane from exactly these files, so its
+# Codex evidence now reaches back 7 days, not 14. Values below 7 are refused, so a typo cannot
+# reach a transcript a live thread may still resume.
 #
 # Usage:
 #   codex-transcript-retention.sh [dry-run|apply] [min_age_days]
 #
-# Defaults: dry-run, 14 days.
+# Defaults: dry-run, 7 days.
 #
 # Exit: 0 every root was read; 2 a usage error, or a root or the open-file list that could not
 # be read (logged as UNKNOWN -- nothing is removed from a root that is UNKNOWN, and the summary
@@ -40,12 +40,12 @@
 #   * A root that is a symbolic link (dangling or not), or that holds a path with a line
 #     break, or whose listing fails at any stage, is reported UNKNOWN and left untouched.
 #   * Nothing else in the Codex home is touched: not the thread database, not the logs, not
-#     the worktrees (those carry work in progress and are swept by the Codex lane's own
-#     worktree clean-up, which keeps anything uncommitted or unpushed).
+#     the worktrees (codex-worktree-retention.sh applies their own retention, which keeps
+#     anything in use, uncommitted, unpushed or on an open pull request's branch).
 set -uo pipefail
 
 MODE=${1:-dry-run}
-MIN_AGE_DAYS=${2:-14}
+MIN_AGE_DAYS=${2:-7}
 MIN_ALLOWED_DAYS=7
 
 log() { printf 'codex-transcript-retention: %s\n' "$*"; }
