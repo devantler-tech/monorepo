@@ -2807,14 +2807,11 @@ claude_delegated_coverage() {
     [ -n "$f" ] || continue
     case "$f" in */subagents/*) delegated=$((delegated + 1)); continue ;; esac
     parents=$((parents + 1))
-    # The key filter below reads nothing from a parent that is empty or cut
-    # short, which would pass as "names no subagent". A transcript is appended
-    # one whole line at a time, so an empty file or one whose last line has no
-    # newline is the control: either makes this parent's inventory unknown.
-    # (A complete line that is not JSON names nothing and is left to the
-    # sections that read every record; a malformed line carrying the key is
-    # caught by the parse below.)
-    if [ ! -s "$f" ] || [ "$(tail -c 1 "$f" 2>/dev/null | wc -l | tr -d ' ')" != 1 ]; then
+    # The key filter below reads nothing from a parent that is empty, cut short
+    # or malformed, which would pass as "names no subagent". The control parses
+    # the whole parent first (about 1 s for every parent in a live day): an
+    # empty file or any line that is not JSON makes its inventory unknown.
+    if [ ! -s "$f" ] || ! jq empty "$f" >/dev/null 2>&1; then
       unreadable=$((unreadable + 1)); continue
     fi
     rc=0
@@ -2933,8 +2930,12 @@ if [ "$SAFETY_WORKER" = 0 ] || { [ "$SAFETY_STANDALONE" = 1 ] && [ "$SAFETY_SCOP
 echo "════════════════════════════════════════════════════════════════"
 echo " AGENT TELEMETRY — window ${SINCE_DAYS}d — generated $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 echo " claude sessions in window: ${SF_COUNT} (cap ${MAX_FILES})"
-# Numeric only when this process walked the Claude files itself (see main).
-if [ "$SF_COUNT" -eq "$SF_COUNT" ] 2>/dev/null; then claude_delegated_coverage || main_rc=2; fi
+# Only the report controller prints coverage, and only when it walked the Claude
+# files itself (SF_COUNT is numeric; see main). A safety worker's banner frames
+# that one section, whose own UNKNOWNs and exit status it already owns.
+if [ "$SAFETY_WORKER" = 0 ] && [ "$SF_COUNT" -eq "$SF_COUNT" ] 2>/dev/null; then
+  claude_delegated_coverage || main_rc=2
+fi
 echo " NOTE: the window selects FILES by mtime, which is a correct SUPERSET but"
 echo "       not a bound — a resumed session or a bulk touch rewrites its mtime."
 echo "       DISPATCH HEALTH, RELIABILITY and SIGNATURE additionally filter each"

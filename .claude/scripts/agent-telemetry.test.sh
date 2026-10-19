@@ -10993,6 +10993,15 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-cut" CODEX_HOME="$FIX/deleg-nocodex" MONOR
 check "delegated coverage: an empty or cut-short parent is unknown" "$OUT" \
   "UNKNOWN: 2 parent transcript(s) could not be read or parsed for the delegated inventory"
 if [ "$rc" -eq 2 ]; then ok "delegated coverage: a cut-short parent exits 2"; else bad "delegated coverage: a cut-short parent exits 2" "exit $rc"; fi
+# A malformed line in the MIDDLE of an otherwise complete parent is caught too:
+# the whole parent is parsed before its launch records are read.
+mkdir -p "$FIX/deleg-mid/proj"
+{ printf '%s\n' 'not json at all'; cat "$FIX/deleg/proj/p2.jsonl"; } > "$FIX/deleg-mid/proj/p.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-mid" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+check "delegated coverage: a malformed line mid-parent is unknown" "$OUT" \
+  "UNKNOWN: 1 parent transcript(s) could not be read or parsed for the delegated inventory"
+if [ "$rc" -eq 2 ]; then ok "delegated coverage: a malformed line mid-parent exits 2"; else bad "delegated coverage: a malformed line mid-parent exits 2" "exit $rc"; fi
 # Valid JSON may put whitespace around the colon; such a record still names a
 # subagent, so it must be inventoried rather than read as "0 named" (review of #4326).
 mkdir -p "$FIX/deleg-ws/proj"
