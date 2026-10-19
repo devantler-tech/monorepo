@@ -2514,6 +2514,83 @@ grep -qF 'Codex worktree caches: 1 never considered for a name outside the safe 
 rm -rf -- "${cx_root}/c1" "$cx_victim_cwd"
 rm -rf -- "$cx_root" "$cx_tmp" "$cx_go_tmp" "${fixture_root}/cx-gitdirs"
 
+# --- 27. loose files directly under the temp root are swept too (monorepo#4311) --------------
+# The per-run listing asked only for directories, so idle binaries and tarballs at the top level
+# were never reclaimed. Each fixture below differs from the reapable one in exactly one keep rule
+# and must survive the SAME apply run that removes it. A dedicated temp root keeps the files the
+# earlier cases leave in fixture_root out of this sweep.
+lf_root="${fixture_root}/lf-root"
+lf_outside="${fixture_root}/lf-outside"
+mkdir -p "$lf_root" "$lf_outside" || fail 'fixture: 27 roots'
+lf_old=$(stamp_hours_ago 48)
+# make_loose <path> <MiB> [stamp]: a plain file of that size, aged to the stamp when given.
+make_loose() {
+  dd if=/dev/zero of="$1" bs=1048576 count="$2" 2>/dev/null || return 1
+  [ -z "${3:-}" ] || touch -h -t "$3" "$1"
+}
+run_lf() {
+  BUILD_CACHE_RECLAIM_TMPDIR="$lf_root" \
+    BUILD_CACHE_RECLAIM_LOOSE_FILE_MIN_MB="${LF_MIN_MB:-1}" \
+    GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" \
+    bash "$impl" "$@" 2>&1
+}
+lf_idle="${lf_root}/ksail-idle.bin"
+lf_young="${lf_root}/ksail-young.bin"
+lf_open="${lf_root}/ksail-open.bin"
+lf_link="${lf_root}/ksail-link.bin"
+lf_link_target="${lf_outside}/link-target.bin"
+lf_hard="${lf_root}/ksail-hard.bin"
+lf_hard_other="${lf_outside}/hard-other.bin"
+lf_unsafe="${lf_root}/ksail unsafe.bin"
+lf_keep="${lf_root}/claude-kept.bin"
+make_loose "$lf_idle" 2 "$lf_old" || fail 'fixture: 27 idle file'
+make_loose "$lf_young" 2 || fail 'fixture: 27 young file'
+make_loose "$lf_open" 2 "$lf_old" || fail 'fixture: 27 open file'
+make_loose "$lf_link_target" 2 "$lf_old" || fail 'fixture: 27 symlink target'
+{ ln -s "$lf_link_target" "$lf_link" && touch -h -t "$lf_old" "$lf_link"; } || fail 'fixture: 27 symlink'
+make_loose "$lf_hard" 2 "$lf_old" || fail 'fixture: 27 hard-linked file'
+ln "$lf_hard" "$lf_hard_other" || fail 'fixture: 27 second hard link'
+make_loose "$lf_unsafe" 2 "$lf_old" || fail 'fixture: 27 unsafe name'
+make_loose "$lf_keep" 2 "$lf_old" || fail 'fixture: 27 keep-list name'
+# A holder that keeps the file open for the whole run, as a build writing a capture would.
+sleep 120 3<"$lf_open" &
+lf_holder=$!
+# A running executable: the snapshot lists it among the open paths even with no descriptor.
+lf_exe="${lf_root}/ksail-running"
+{ cp "$(command -v sleep)" "$lf_exe" && chmod u+x "$lf_exe"; } || fail 'fixture: 27 executable'
+"$lf_exe" 120 &
+lf_exe_pid=$!
+touch -t "$lf_old" "$lf_exe" 2>/dev/null
+sleep 1
+
+out=$(run_lf dry-run 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$lf_idle" ] || fail '27: a dry run removed a loose file'
+grep -qF "WOULD REAP 2 MB  ${lf_idle}" <<<"$out" ||
+  fail "27: a dry run did not list the idle loose file; it said: $(grep -F 'loose files' <<<"$out")"
+grep -qE 'summary: would reap=[1-9]' <<<"$out" ||
+  fail "27: the dry-run summary did not count the loose file; it said: $(grep -F 'summary' <<<"$out")"
+
+out=$(LF_MIN_MB=0 run_lf apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$lf_idle" ] && fail "27: an idle loose file was not removed; it said: $(grep -F 'ksail-idle' <<<"$out")"
+[ -e "$lf_young" ] || fail '27: a recently written loose file was removed'
+[ -e "$lf_open" ] || fail '27: a loose file held open by a running process was removed'
+[ -e "$lf_exe" ] || fail '27: the executable of a running process was removed'
+[ -L "$lf_link" ] || fail '27: a symlink under the temp root was removed'
+[ -e "$lf_link_target" ] || fail '27: the target of a symlink under the temp root was removed'
+[ -e "$lf_hard" ] || fail '27: a loose file with a second hard link was removed'
+[ -e "$lf_unsafe" ] || fail '27: a loose file with a name outside the safe set was removed'
+[ -e "$lf_keep" ] || fail '27: a loose file with a keep-list name was removed'
+kill "$lf_holder" "$lf_exe_pid" 2>/dev/null
+wait "$lf_holder" "$lf_exe_pid" 2>/dev/null
+
+# Size ablation: below the minimum size an idle loose file is never considered.
+make_loose "$lf_idle" 2 "$lf_old" || fail 'fixture: 27 idle file for the size case'
+LF_MIN_MB=10 run_lf apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$lf_idle" ] || fail '27: a loose file below the minimum size was removed'
+LF_MIN_MB=1 run_lf apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$lf_idle" ] && fail '27: the size case removed nothing at 1 MB (the ablation partner did not run)'
+rm -rf -- "$lf_root" "$lf_outside"
+
 reclaim_test_finished=1
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
