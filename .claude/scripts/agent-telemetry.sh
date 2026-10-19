@@ -2804,7 +2804,7 @@ claude_delegated_coverage() {
       [ -n "$id" ] || continue
       named=$((named + 1))
       p="${f%.jsonl}/subagents/agent-${id}.jsonl"
-      if printf '%s\n' "$SF_CACHE" | grep -qxF -- "$p"; then
+      if grep -qxF -- "$p" <<<"$SF_CACHE"; then
         in_walk=$((in_walk + 1))
       elif [ -f "$p" ]; then
         outside=$((outside + 1))
