@@ -53,15 +53,17 @@ and a maintainer decision, so a bootstrap or import PR stays a draft on that nam
 green it is. Engineering around it — CI, pins, docs, tests that need no credentials — is ordinary
 work.
 
-## First advance slices
+## Current state
 
-1. **An `AGENTS.md` with a `## Maintenance` section** (validate command, release flow, protected
-   files), so this card can shrink to the thin pointer every other product has. Until it exists,
-   read the repository's own CI workflow for the validate command and never claim one from memory.
-2. **Dependency automation**, so its pins are maintained like the rest of the portfolio.
+The repository carries its own `AGENTS.md`; its `## Maintenance` section names the validate command
+(`scripts/test.sh`) and the import-before-apply rules, and wins over this card. Dependency automation
+is configured — Dependabot for GitHub Actions, Renovate for the OpenTofu provider — but Renovate has
+never run here ([monorepo#4098](https://github.com/devantler-tech/monorepo/issues/4098)), so provider bumps are
+manual until it does ([cloudflare#22](https://github.com/devantler-tech/cloudflare/issues/22)).
 
 ## Roadmap & enhancement
 
-The roadmap lives in **GitHub Issues** on `devantler-tech/cloudflare`, under the ownership epic
-above. Advance it with [`product-engineering`](../../product-engineering/SKILL.md); what may be
-published about that work follows the visibility rule above.
+The roadmap lives in **GitHub Issues** on `devantler-tech/cloudflare` — its `roadmap` epic is
+[cloudflare#21](https://github.com/devantler-tech/cloudflare/issues/21), a sub-issue of the ownership epic above.
+Advance it with [`product-engineering`](../../product-engineering/SKILL.md); what may be published about that work
+follows the visibility rule above.
