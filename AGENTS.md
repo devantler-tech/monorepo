@@ -46,8 +46,8 @@ Populate a submodule with `.claude/scripts/submodule-init.sh <path>` — never a
 | Wedding app | `devantler-tech/wedding-app` | `applications/wedding-app` | `AGENTS.md` |
 | AS Coaching | `devantler-tech/ascoachingogvaner` | `applications/ascoachingogvaner` | `AGENTS.md` |
 | UniFi network | `devantler-tech/unifi` | `applications/unifi` | `AGENTS.md` |
-| FleetDM device config | `devantler-tech/fleet-gitops` | `applications/fleet-gitops` | — (the repo carries no `AGENTS.md` yet; see its [product card](.claude/skills/products/fleet-gitops/SKILL.md)) |
-| Cloudflare bootstrap owner | `devantler-tech/cloudflare` | — (not a submodule yet) | — (the repo carries no `AGENTS.md` yet; see its [product card](.claude/skills/products/cloudflare/SKILL.md)) |
+| FleetDM device config | `devantler-tech/fleet-gitops` | `applications/fleet-gitops` | `AGENTS.md` |
+| Cloudflare bootstrap owner | `devantler-tech/cloudflare` | — (not a submodule yet) | `AGENTS.md` |
 | 🌊 Project Board (org project 5) | — (not a repo; [org project 5](https://github.com/orgs/devantler-tech/projects/5)) | — | [product card](.claude/skills/products/project-board/SKILL.md) |
 
 `AGENTS.md` means the product's own file at `<Path>/AGENTS.md`, or
