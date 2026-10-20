@@ -1,6 +1,6 @@
 ---
 name: maintain-khoist
-description: Product card for devantler-tech/khoist (KHoist, formerly data-product-controller), the cloud-native control plane and open API for portable, composable data products. Use when the Agentic Engineer selects KHoist.
+description: Product card for devantler-tech/khoist (KHoist), the cloud-native control plane and open API for portable, composable data products. Use when the Agentic Engineer selects KHoist.
 ---
 
 # Maintain: KHoist

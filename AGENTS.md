@@ -25,7 +25,7 @@ Populate a submodule with `.claude/scripts/submodule-init.sh <path>` — never a
 | Product | Repo | Path | Instructions |
 |---|---|---|---|
 | KSail (Go CLI) | `devantler-tech/ksail` | `applications/ksail` | `AGENTS.md` |
-| KHoist (data products) | `devantler-tech/khoist` (renamed from `data-product-controller`) | `applications/khoist` | `AGENTS.md` |
+| KHoist (data products) | `devantler-tech/khoist` | `applications/khoist` | `AGENTS.md` |
 | Platform (GitOps) | `devantler-tech/platform` | `platform` | `AGENTS.md` |
 | AWS config tenant | `devantler-tech/aws` | `applications/aws` | `AGENTS.md` |
 | Portfolio aggregator | `devantler-tech/monorepo` | repo root | this file |
