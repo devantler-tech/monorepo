@@ -12,8 +12,9 @@ The canonical maintenance procedure lives in the **`## Maintenance`** section of
 Shared cross-repository rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md). This card is a
 thin pointer by design so the product contract remains authoritative for every engineering tool.
 
-**Validate before every PR:** `kubectl kustomize deploy/ > /dev/null` — what CI runs. Crossplane CRD
-semantics are validated on-cluster, never here. **No credential or provider config belongs in this
+**Validate before every PR:** `kubectl kustomize deploy/ > /dev/null`. CI also checks every managed
+resource against the Crossplane provider schemas the platform pins, offline, and fails on an unknown
+field or kind. It warns when this repository's provider pin drifts from the platform's. **No credential or provider config belongs in this
 repository**: authentication is provisioned platform-side, so anything credential-shaped in a manifest
 is a bug to remove, never a value to rotate.
 
