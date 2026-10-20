@@ -58,11 +58,12 @@ work.
 The repository carries its own `AGENTS.md`; its `## Maintenance` section names the validate command
 (`scripts/test.sh`) and the import-before-apply rules, and wins over this card. Dependency automation
 is configured — Dependabot for GitHub Actions, Renovate for the OpenTofu provider — but Renovate has
-never run here (monorepo#4098), so provider bumps are manual until it does (cloudflare#22).
+never run here ([monorepo#4098](https://github.com/devantler-tech/monorepo/issues/4098)), so provider bumps are
+manual until it does ([cloudflare#22](https://github.com/devantler-tech/cloudflare/issues/22)).
 
 ## Roadmap & enhancement
 
 The roadmap lives in **GitHub Issues** on `devantler-tech/cloudflare` — its `roadmap` epic is
-cloudflare#21, a sub-issue of the ownership epic above. Advance it with
-[`product-engineering`](../../product-engineering/SKILL.md); what may be published about that work
+[cloudflare#21](https://github.com/devantler-tech/cloudflare/issues/21), a sub-issue of the ownership epic above.
+Advance it with [`product-engineering`](../../product-engineering/SKILL.md); what may be published about that work
 follows the visibility rule above.
