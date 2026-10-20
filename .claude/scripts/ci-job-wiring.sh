@@ -183,7 +183,7 @@ done < <(comm -23 "$tmp/outputs" "$tmp/referenced")
 
 read_set status_needs '[.jobs.status.needs] | flatten | .[] | select(. != null)'
 # Read job-results from exactly the aggregate step: another step's input proves nothing.
-aggregate='[.jobs.status.steps[] | select((.uses // "") | test("^devantler-tech/actions/aggregate-job-checks@"))]'
+aggregate='[.jobs.status.steps[] | select((.uses // "") | test("^devantler-tech/[.]github/actions/aggregate-job-checks@"))]'
 aggregate_steps="$(yq -r "$aggregate | length" "$workflow")"
 [[ "$aggregate_steps" == 1 ]] ||
   defect "status: expected exactly one aggregate-job-checks step, found $aggregate_steps"
