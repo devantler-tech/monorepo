@@ -1408,7 +1408,7 @@ public and private — no per-repo loop needed to enumerate):
    Flag repos with **no open
    `roadmap` issue at all** (strategy-review candidates) — **product repos only** (the ones the
    monorepo `AGENTS.md` portfolio map names): strategy reviews are per *product*, so org/infra
-   repos outside the map (`maintenance`)
+   repos outside the map
    are never strategy-review candidates, however empty their issue lists.
 5b. **Board coverage (org project 5) — measure with pagination, or report `unknown`.** The digest
    carries a `board_coverage=` row. Live miss (2026-07-20, #2326): a survey emitted
@@ -1524,7 +1524,7 @@ public and private — no per-repo loop needed to enumerate):
 
 Portfolio repos. The
 **authoritative set is the org's live non-archived repo list**: the monorepo `AGENTS.md` portfolio
-map names the *products*, and org/infra repos outside that map (e.g. `maintenance`) are in scope
+map names the *products*, and org/infra repos outside that map are in scope
 too. Reconcile each run with one bounded call —
 `gh repo list devantler-tech --no-archived --limit 100 --json name` — and when that live set
 disagrees with **the list below**, survey the live set and flag the drift in the digest rather than
@@ -1534,7 +1534,7 @@ set, and a product row the map itself marks **archived** — e.g. `reusable-work
 intentional tombstone, never drift.) The list:
 `ksail`, `khoist`, `platform`, `monorepo`, `.github`, `go-template`, `dotnet-template`,
 `platform-tenant-template`, `platform-template`, `actions`, `homebrew-tap`, `agent-skills`,
-`agent-plugins`, `provider-upjet-unifi`, `kyverno-policies`, `maintenance`, `fleet-gitops`, `aws`,
+`agent-plugins`, `provider-upjet-unifi`, `kyverno-policies`, `fleet-gitops`, `aws`,
 `cloudflare`, `world-at-ruin`, `wedding-app`, `ascoachingogvaner`, `unifi`, `business-site`.
 Archived repos (currently `reusable-workflows`, `data-product`, `doggy-countdown`) are
 read-only: skip them entirely —

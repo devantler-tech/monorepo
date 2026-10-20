@@ -3837,23 +3837,35 @@ echo "portfolio surveyor contract: round-10 admitted-call-shape assertions passe
 # strategy-review sweep and the live-set reconciliation note — and a stale name in either changes
 # survey behaviour, so every statement is checked, not only the first. Statements are matched across
 # line breaks, because the reconciliation note wraps its list.
-_exclusion_lists="$(tr '\n' ' ' <"${surveyor}" | grep -o 'outside th[a-z]* map ([^)]*)' || true)"
+_exclusion_lists="$(tr '\n' ' ' <"${surveyor}" | grep -o 'repos outside th[a-z]* map[^.]*\.' || true)"
 _exclusion_count="$(printf '%s\n' "${_exclusion_lists}" | grep -c 'outside th' || true)"
 [ "${_exclusion_count}" -ge 2 ] ||
   fail "expected at least two strategy-review exclusion statements in the overlay, found ${_exclusion_count} (round 11)"
-for _repo in $(printf '%s\n' "${_exclusion_lists}" | grep -o '`[^`]*`' | tr -d '`' | LC_ALL=C sort -u); do
-  if grep -Eq "^\| [^|]+ \| \`devantler-tech/${_repo}\` \|" "${constitution}"; then
-    fail "the overlay excludes \`${_repo}\` from strategy reviews, but the Portfolio map lists it as a product (round 11)"
-  fi
-done
-# CONTROL: every statement still names at least one genuine non-product repo, so the loop is never
-# vacuous — `maintenance` is the org repo that stays outside the map by design.
-while IFS= read -r _statement; do
-  grep -Fq '`maintenance`' <<<"${_statement}" ||
-    fail "a strategy-review exclusion statement no longer names maintenance — the round-11 check would be vacuous for it: ${_statement}"
-done <<<"${_exclusion_lists}"
+_portfolio_map=$(sed -n '/^## Portfolio map$/,/^## Stack map$/p' "${constitution}")
+[ -n "${_portfolio_map}" ] || fail 'missing canonical Portfolio map (round 11)'
+nonproduct_exclusions_ok() {
+  local repo
+  for repo in $(printf '%s\n' "$1" | grep -o '`[^`]*`' | tr -d '`' | LC_ALL=C sort -u); do
+    if grep -Fq "\`devantler-tech/${repo}\`" <<<"${_portfolio_map}"; then return 1; fi
+  done
+}
+nonproduct_exclusions_ok "${_exclusion_lists}" ||
+  fail 'a strategy-review exclusion names a mapped product (round 11)'
+# No live public non-product remains after retirement. Synthetic controls exercise
+# the actual predicate without requiring a retired or private repository in prose.
+_control_product=$(sed -n 's/^| [^|]* | `devantler-tech\/\([^`]*\)` |.*/\1/p' <<<"${_portfolio_map}" | head -n 1)
+[ -n "${_control_product}" ] || fail 'missing mapped-product control (round 11)'
+nonproduct_exclusions_ok "\`synthetic-infra-fixture\`" || fail 'non-product control was rejected (round 11)'
+if nonproduct_exclusions_ok "\`${_control_product}\`"; then
+  fail 'mapped-product negative control was accepted (round 11)'
+fi
+_fallback_inventory=$(sed -n '/^Portfolio repos\./,/^Archived repos/p' "${surveyor}")
+[ -n "${_fallback_inventory}" ] || fail 'missing fallback inventory (round 11)'
+if grep -Fq "\`maintenance\`" <<<"${_fallback_inventory}"; then
+  fail 'retired maintenance remains in the surveyor fallback inventory (round 11)'
+fi
 echo "portfolio surveyor contract: round-11 product-vs-infra exclusion assertions passed (${_exclusion_count} statements)"
-unset _exclusion_lists _exclusion_count _repo _statement
+unset _exclusion_lists _exclusion_count _control_product _fallback_inventory _portfolio_map
 
 # ── Round 12: the CI classifier's flag-form argument shape must reach the loaded definition ───────
 # Measured 2026-09-05 (agent-plugins#195): over 7 days, 3 of the 19 surveyor dispatches that reached
