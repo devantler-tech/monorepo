@@ -369,7 +369,7 @@ bad_with="$(wf_q ".jobs.\"${JOB}\".steps[] | select(.uses != null and (.uses | t
 # own action-pinning requirement.
 for spec in \
   "checkout|.jobs.\"${JOB}\".steps[] | select(.uses != null and (.uses | test(\"^actions/checkout@\"))) | .uses" \
-  "aggregate action|.jobs.status.steps[] | select(.uses != null and (.uses | test(\"^devantler-tech/actions/aggregate-job-checks@\"))) | .uses"; do
+  "aggregate action|.jobs.status.steps[] | select(.uses != null and (.uses | test(\"^devantler-tech/[.]github/actions/aggregate-job-checks@\"))) | .uses"; do
   what="${spec%%|*}"; path="${spec#*|}"
   ref="$(wf_q "${path}")"
   case "${ref##*@}" in
@@ -413,9 +413,9 @@ grep -Fqx -- "${JOB}" <<< "${status_needs}" || \
 status_if="$(wf_q '.jobs.status.if')"
 [ "${status_if}" = "always()" ] || \
   fail "the status job is not 'if: always()' (got '${status_if}') — a skipped aggregate evaluates no failing dependency, so this job's entry in it would gate nothing"
-agg_results="$(wf_q '.jobs.status.steps[] | select(.uses != null and (.uses | test("^devantler-tech/actions/aggregate-job-checks@"))) | .with."job-results"')"
+agg_results="$(wf_q '.jobs.status.steps[] | select(.uses != null and (.uses | test("^devantler-tech/[.]github/actions/aggregate-job-checks@"))) | .with."job-results"')"
 present "${agg_results}" || \
-  fail "the status job has no devantler-tech/actions/aggregate-job-checks step with a job-results input — nothing evaluates the dependency results"
+  fail "the status job has no maintained aggregate-job-checks step with a job-results input — nothing evaluates the dependency results"
 # job-results is a FOLDED scalar — one line, space-separated — so match the exact token as a
 # substring. The masking form `${{ needs.<job>.result == 'failure' && 'success' || … }}` does not
 # contain it, because `result` is followed by ` ==` rather than ` }}`.
@@ -442,7 +442,7 @@ check_step_keys() { # check_step_keys <yq-path> <description> <allowed-csv>
 }
 check_step_keys ".jobs.\"${JOB}\".steps[] | select(.run != null and (.run | test(\"egress-third-party-qualifier-contract.test.sh\")))" \
   "verification step" "name,run"
-check_step_keys ".jobs.status.steps[] | select(.uses != null and (.uses | test(\"^devantler-tech/actions/aggregate-job-checks@\")))" \
+check_step_keys ".jobs.status.steps[] | select(.uses != null and (.uses | test(\"^devantler-tech/[.]github/actions/aggregate-job-checks@\")))" \
   "status job's aggregate step" "name,uses,with"
 ok
 check_research "${research}"
