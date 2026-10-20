@@ -34,10 +34,6 @@
 	path = applications/ksail
 	url = git@github.com:devantler-tech/ksail.git
 	branch = main
-[submodule "github/devantler-tech/maintenance"]
-	path = github/devantler-tech/maintenance
-	url = git@github.com:devantler-tech/maintenance.git
-	branch = main
 [submodule "applications/wedding-app"]
 	path = applications/wedding-app
 	url = git@github.com:devantler-tech/wedding-app.git

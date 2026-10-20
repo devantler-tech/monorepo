@@ -24,7 +24,7 @@ These notes govern the [Portfolio map](../../AGENTS.md#portfolio-map) table; "th
 
 > **The census is the live org, not this table.** Every non-archived `devantler-tech` repository is
 > inside every health, PR and issue census, whether or not it has a row here. The table names the
-> *products*; an infrastructure repository without a row — `devantler-tech/maintenance` today — is
+> *products*; an infrastructure repository without a row is
 > still swept for breakage, PRs and issues, and is only exempt from product work such as strategy
 > reviews. So derive a rung-0 or PR sweep from the live org list
 > (`gh api --paginate 'orgs/devantler-tech/repos?type=all&per_page=100'`, non-archived), never from
