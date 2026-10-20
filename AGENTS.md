@@ -25,7 +25,7 @@ Populate a submodule with `.claude/scripts/submodule-init.sh <path>` — never a
 | Product | Repo | Path | Instructions |
 |---|---|---|---|
 | KSail (Go CLI) | `devantler-tech/ksail` | `applications/ksail` | `AGENTS.md` |
-| Data Product Controller | `devantler-tech/data-product-controller` | `applications/data-product-controller` | `AGENTS.md` |
+| KHoist (data products) | `devantler-tech/khoist` (renamed from `data-product-controller`) | `applications/khoist` | `AGENTS.md` |
 | Platform (GitOps) | `devantler-tech/platform` | `platform` | `AGENTS.md` |
 | AWS config tenant | `devantler-tech/aws` | `applications/aws` | `AGENTS.md` |
 | Portfolio aggregator | `devantler-tech/monorepo` | repo root | this file |
@@ -76,7 +76,7 @@ no row are filed on the **default intake repo** below.
 | App hosting platform | Running an app or service so people can reach it online — deploys, dashboards, alerts, backups | `devantler-tech/platform` |
 | AWS infrastructure | Changing THIS suite's deployed AWS resources — today the EKS-based CI cluster, and anything else the platform's AWS tenant reconciles through Crossplane (not AWS setups in general) | `devantler-tech/aws` |
 | KSail | Command-line tooling for creating and operating Kubernetes clusters and their workloads | `devantler-tech/ksail` |
-| Data product controller | Creating, composing, publishing, and exploring reusable data products backed by new or existing data sources | `devantler-tech/data-product-controller` |
+| KHoist data products | Creating, composing, publishing, and exploring reusable data products backed by new or existing data sources | `devantler-tech/khoist` |
 | Repo automation | Automatic checks, releases and chores on code repositories | `devantler-tech/.github` |
 | AI assistant skills | Teaching the AI assistants new individual skills and behaviours | `devantler-tech/agent-skills` |
 | AI assistant plugin bundles | Bundling skills into installable plugins / marketplace entries for VS Code, Copilot CLI, Claude Code | `devantler-tech/agent-plugins` |

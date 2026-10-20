@@ -82,9 +82,9 @@
 	path = libraries/kyverno-policies
 	url = git@github.com:devantler-tech/kyverno-policies.git
 	branch = main
-[submodule "applications/data-product-controller"]
-	path = applications/data-product-controller
-	url = git@github.com:devantler-tech/data-product-controller.git
+[submodule "applications/khoist"]
+	path = applications/khoist
+	url = git@github.com:devantler-tech/khoist.git
 	branch = main
 [submodule "applications/aws"]
 	path = applications/aws

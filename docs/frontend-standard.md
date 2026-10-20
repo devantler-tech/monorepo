@@ -21,7 +21,7 @@ from a stale pin.
 | ascoachingogvaner `b121f61ef5787f20a10b97e96c2a9d3e495631e2` | SvelteKit 3 / Svelte 5, static adapter | [Existing-site conformance #4223](https://github.com/devantler-tech/monorepo/issues/4223) |
 | wedding-app `c2865745259ed16a498e30331f6a33be05434779` | SvelteKit 3 / Svelte 5, Node adapter, PostgreSQL | [Existing-site conformance #4223](https://github.com/devantler-tech/monorepo/issues/4223) |
 | ksail `3f499bb220cc5b9b0c0039de43d6264a65c977f8` | React 19 / MUI / xterm embedded UI; Astro 7 documentation | [Embedded UI assessment #7796](https://github.com/devantler-tech/ksail/issues/7796); keep documentation content-first unless its own evidence supports a change |
-| data-product-controller `1f4723b55ac365ec048e0cbbabfbb719f1ff0ce4` | Go server-rendered `/ui`; no application package.json | [Server-rendered UI assessment #426](https://github.com/devantler-tech/data-product-controller/issues/426) |
+| khoist (then data-product-controller) `1f4723b55ac365ec048e0cbbabfbb719f1ff0ce4` | Go server-rendered `/ui`; no application package.json | [Server-rendered UI assessment #426](https://github.com/devantler-tech/khoist/issues/426) |
 | world-at-ruin `3014d84db4bff8de4a602c6c7e5ad5cf93633a99` | Native Godot 4.7.1 game; tool-only npm package | Specialized native/game surface, outside the DOM frontend adoption; no Svelte rewrite implied |
 
 Vendor applications deployed by the platform are not portfolio-authored frontend source.
