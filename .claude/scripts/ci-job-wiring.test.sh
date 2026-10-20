@@ -54,7 +54,7 @@ jobs:
     needs: [changes, test-alpha, test-beta, unfiltered]
     runs-on: ubuntu-latest
     steps:
-      - uses: devantler-tech/actions/aggregate-job-checks@v1
+      - uses: devantler-tech/.github/actions/aggregate-job-checks@v1
         with:
           job-results: >-
             ${{ needs.changes.result }} ${{ needs.test-alpha.result }} ${{ needs.test-beta.result }} ${{ needs.unfiltered.result }}
@@ -74,6 +74,16 @@ expect_defect() { # <label> <expected message fragment> [<expected rc>]
 edit() { yq -i "$1" "$tmp/ci.yaml"; }
 
 fixture; expect_ok "fully wired fixture"
+
+fixture
+edit '.jobs.status.steps[0].uses = "devantler-tech/actions/aggregate-job-checks@v1"'
+expect_defect "retired aggregate source" "status: expected exactly one aggregate-job-checks step, found 0"
+fixture
+edit '.jobs.status.steps[0].uses = "devantler-tech/.github-other/actions/aggregate-job-checks@v1"'
+expect_defect "lookalike aggregate source" "status: expected exactly one aggregate-job-checks step, found 0"
+fixture
+edit '.jobs.status.steps += [.jobs.status.steps[0]]'
+expect_defect "duplicate maintained aggregate" "status: expected exactly one aggregate-job-checks step, found 2"
 
 # (1) paths-filter entry missing: the output points at a filter that no longer exists.
 fixture
