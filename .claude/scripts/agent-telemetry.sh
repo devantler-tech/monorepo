@@ -2744,7 +2744,9 @@ claude_unreadable_folders() {
     fi
     while IFS= read -r f; do
       [ -n "$f" ] || continue
-      if [ -e "$f" ] && [ ! -r "$f" ]; then printf '%s\n' "$d"; break; fi
+      # Open it rather than test the permission bit: an ACL or sandbox denial
+      # can pass `-r` and still fail the open the walk's readers make.
+      if [ -e "$f" ] && ! { : <"$f"; } 2>/dev/null; then printf '%s\n' "$d"; break; fi
     done <<<"$list"
   done <<<"$dirs"
 }

@@ -11181,6 +11181,30 @@ if [ "$(id -u)" -ne 0 ]; then
   check "Claude walk: a transcript that cannot be opened is named as unknown" "$OUT" \
     "UNKNOWN: the Claude projects folder ./ exists but could not be read in full"
   if [ "$rc" -eq 2 ]; then ok "Claude walk: an unopenable transcript exits 2"; else bad "Claude walk: an unopenable transcript exits 2" "exit $rc"; fi
+  # The cases above lock a helper its parent names, so delegated coverage can also
+  # exit 2 on them. A helper no parent names isolates the walk's own status.
+  mkdir -p "$FIX/walk-unnamed/proj/p/subagents"
+  cp "$FIX/deleg/proj/p2.jsonl" "$FIX/walk-unnamed/proj/p.jsonl"
+  cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/walk-unnamed/proj/p/subagents/agent-u1.jsonl"
+  walk_unnamed_run() {
+    CLAUDE_PROJECTS_DIR="$FIX/walk-unnamed" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1
+  }
+  OUT=$(walk_unnamed_run); rc=$?
+  nocheck "Claude walk: a readable unnamed helper prints no unknown line" "$OUT" "UNKNOWN"
+  if [ "$rc" -eq 0 ]; then ok "Claude walk: a readable unnamed helper exits 0"; else bad "Claude walk: a readable unnamed helper exits 0" "exit $rc"; fi
+  chmod 000 "$FIX/walk-unnamed/proj/p/subagents"
+  OUT=$(walk_unnamed_run); rc=$?
+  chmod 700 "$FIX/walk-unnamed/proj/p/subagents"
+  check "Claude walk: a locked unnamed helper folder is named as unknown" "$OUT" \
+    "UNKNOWN: the Claude projects folder ./ exists but could not be read in full"
+  if [ "$rc" -eq 2 ]; then ok "Claude walk: a locked unnamed helper folder exits 2"; else bad "Claude walk: a locked unnamed helper folder exits 2" "exit $rc"; fi
+  chmod 000 "$FIX/walk-unnamed/proj/p/subagents/agent-u1.jsonl"
+  OUT=$(walk_unnamed_run); rc=$?
+  chmod 600 "$FIX/walk-unnamed/proj/p/subagents/agent-u1.jsonl"
+  check "Claude walk: an unopenable unnamed helper is named as unknown" "$OUT" \
+    "UNKNOWN: the Claude projects folder ./ exists but could not be read in full"
+  if [ "$rc" -eq 2 ]; then ok "Claude walk: an unopenable unnamed helper exits 2"; else bad "Claude walk: an unopenable unnamed helper exits 2" "exit $rc"; fi
 fi
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
