@@ -2715,8 +2715,43 @@ codex_unreadable_folders() {
   done
 }
 
+# The same check for the Claude projects store (monorepo#4331). The walk above
+# (session_files, root_session_files) discards the errors of its `ls` and `find`,
+# so a project folder, a session's `subagents/` folder or a transcript it cannot
+# open simply drops out, and every section that reads the walk printed a clean,
+# smaller count — the delegated share read 0% with one session folder locked.
+# Names, one per line, every in-scope folder (relative to the store; `.` is the
+# store itself) that exists but could not be walked or holds a transcript that
+# cannot be opened. Scope is decided exactly as the walk decides it, so an
+# excluded folder is never entered here either.
+claude_unreadable_folders() {
+  local d dirs list f
+  [ -d "$CLAUDE_PROJECTS" ] || return 0
+  if store_root_in_scope; then
+    dirs=.
+  elif ! dirs=$(ls -1 "$CLAUDE_PROJECTS" 2>/dev/null); then
+    printf '.\n'; return 0
+  else
+    dirs=$(printf '%s\n' "$dirs" | grep -E "^($PORTFOLIO_DIR_RE)$" || true)
+  fi
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    # Listed twice before it counts, as for Codex: a session that settles while
+    # it is listed can make one `find` fail on a folder that reads fine.
+    if ! list=$(find "$CLAUDE_PROJECTS/$d" -name '*.jsonl' -mtime "-${SINCE_DAYS}" 2>/dev/null) \
+       && ! list=$(find "$CLAUDE_PROJECTS/$d" -name '*.jsonl' -mtime "-${SINCE_DAYS}" 2>/dev/null); then
+      printf '%s\n' "$d"; continue
+    fi
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      if [ -e "$f" ] && [ ! -r "$f" ]; then printf '%s\n' "$d"; break; fi
+    done <<<"$list"
+  done <<<"$dirs"
+}
+
 SF_CACHE=''
 SF_COUNT=0
+CL_UNREADABLE=''
 WINDOW_SINCE=''
 CX_CACHE=''
 CX_COUNT=0
@@ -2753,6 +2788,7 @@ ALL_CACHE=''
 # control together — invisible, and in the under-reporting direction.
 populate_session_cache() {
   [ "$SAFETY_SCOPE" = codex ] || SF_CACHE="$(session_files)"
+  [ "$SAFETY_SCOPE" = codex ] || CL_UNREADABLE="$(claude_unreadable_folders)"
   SF_COUNT=$(printf '%s' "$SF_CACHE" | grep -c . || true)
   WINDOW_SINCE=$(date -u -v-"${SINCE_DAYS}"d '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null \
                  || date -u -d "${SINCE_DAYS} days ago" '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null)
@@ -2950,6 +2986,19 @@ if [ -n "$CX_UNREADABLE" ]; then
     echo "          every Codex figure in this report is incomplete, not zero."
   done <<<"$CX_UNREADABLE"
   main_rc=2
+fi
+# The same for the Claude store (monorepo#4331). Drift and outcomes never read
+# the Claude walk, so they neither print it nor take its status (see coverage).
+if [ -n "$CL_UNREADABLE" ]; then
+  case "$SECTION" in
+    drift|outcomes) ;;
+    *)
+      while IFS= read -r cl_dir; do
+        echo " UNKNOWN: the Claude projects folder ${cl_dir}/ exists but could not be read in full —"
+        echo "          every Claude figure in this report is incomplete, not zero."
+      done <<<"$CL_UNREADABLE"
+      main_rc=2 ;;
+  esac
 fi
 # The same for a transcript whose worktree could be neither found nor confirmed
 # absent: it is left out, and the reading is incomplete rather than clean.
