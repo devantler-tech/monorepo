@@ -151,6 +151,12 @@ JSON
 ,{"user":{"login":"coderabbitai[bot]"},"submitted_at":"2026-09-21T11:50:00Z","state":"COMMENTED","body":"\n\n> [!CAUTION]\n> Some comments are outside the diff and can’t be posted inline due to platform limitations.\n>\n> <details>\n> <summary>⚠️ Outside diff range comments (1)</summary>"},
  {"user":{"login":"coderabbitai[bot]"},"submitted_at":"2026-09-21T11:55:00Z","state":"COMMENTED","body":"> [!CAUTION]\n> Not the outside-diff block."}
 JSON
+    # Bugbot's review object (monorepo#4397): only cursor[bot]'s, and only with its marker, counts.
+    [ -z "${BUGBOT_REVIEW:-}" ] || cat <<'JSON'
+,{"user":{"login":"cursor[bot]"},"submitted_at":"2026-09-21T11:00:00Z","state":"COMMENTED","body":"<!-- BUGBOT_REVIEW -->\n✅ Bugbot reviewed your changes and found no new issues!"},
+ {"user":{"login":"cursor[bot]"},"submitted_at":"2026-09-21T11:30:00Z","state":"COMMENTED","body":"A note with no review marker."},
+ {"user":{"login":"someone"},"submitted_at":"2026-09-21T12:00:00Z","state":"COMMENTED","body":"<!-- BUGBOT_REVIEW --> copied marker"}
+JSON
     echo ']'
   } | jq -c . ;;
   repos/o/r/commits/abc/check-runs)
@@ -228,6 +234,10 @@ window "seconds wording" '\\n> **Next included review available in 40 seconds.**
 window "explicit zero seconds" '\\n> available in 2 minutes and 0 seconds.' "until=2026-09-21T12:02:00Z elapsed"
 window "hours minutes and seconds" '\\n> available in 1 hour, 5 minutes and 7 seconds.' "until=2026-09-21T13:05:07Z elapsed"
 window "zero whole minutes" '\\n> available in 0 minutes.' "until=2026-09-21T12:01:00Z elapsed"
+
+BUGBOT_REVIEW=1 PATH="$bin:$PATH" run --org o --since 2026-09-14
+grep -qF "bugbot=OK last-review 2026-09-21T11:00:00Z" "$tmp/out" ||
+  fail "a Bugbot review object newer than a usage-limit notice is a completed review (monorepo#4397)"
 
 CAUTION_REVIEW=1 PATH="$bin:$PATH" run --org o --since 2026-09-14
 expect "outside-diff review" 1 "cr=LIMITED rate-limit at 2026-09-21T12:00:00Z last-review 2026-09-21T11:50:00Z"
