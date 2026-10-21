@@ -20,8 +20,10 @@
 #   1. Merge policy names the post-merge confirmation read, with a vocabulary that actually works;
 #   2. it states that `merged` is not a field — the specific improvisation measured;
 #   3. it states the all-or-nothing property of `--json`, at the point of use;
-#   4. NEGATIVE CONTROL: no `--json` field list in ANY definition surface contains a bare `merged`, so
-#      the invalid field cannot be reintroduced by a later edit. This is the assertion with teeth —
+#   1b. it names the merge-queue membership read as a complete GraphQL command, because no `gh pr`
+#      field reports it (monorepo#4403);
+#   4. NEGATIVE CONTROL: no `--json` field list in ANY definition surface contains a bare `merged` or
+#      `isInMergeQueue`, so neither invalid field can be reintroduced by a later edit. This is the assertion with teeth —
 #      (1)-(3) can be satisfied by prose, (4) constrains every future prescription.
 
 set -euo pipefail
@@ -94,6 +96,15 @@ assert_prose 'adding `mergedAt` or `mergeCommit` only when you need the timestam
 # per-subcommand, so `gh search prs` rejects `mergedAt` and a loose field list can be misapplied.
 assert_prose 'gh pr view <n> --repo devantler-tech/<repo> --json state,mergedAt' \
   "Merge policy prescribes a bare field list rather than the whole post-merge command"
+
+# The same passage treats "the PR is in the merge queue" as a successful merge, so it must also name
+# the read that establishes it. Unprescribed, runs asked `gh pr view --json` for `isInMergeQueue`, a
+# GraphQL-only field, and lost the whole read: 48 errored results on 31 days from 2026-07-28 to
+# 2026-10-21 (monorepo#4403). Pin the complete command and the statement that no `gh pr` field has it.
+assert_prose "gh api graphql -f query='{repository(owner:\"devantler-tech\",name:\"<repo>\"){pullRequest(number:<n>){state mergedAt isInMergeQueue mergeQueueEntry{state position}}}}'" \
+  "Merge policy does not prescribe the merge-queue membership read as a complete GraphQL command"
+assert_prose 'no `gh pr view` or `gh pr list` field reports merge-queue membership' \
+  "Merge policy does not state that isInMergeQueue is unavailable to gh pr --json — the measured improvisation"
 
 # ── 2. the specific improvisation is named as invalid ──
 assert_prose 'there is NO `merged` field' \
@@ -191,7 +202,7 @@ bad_lists_in() {
     fields="${list#--json }"
     fields="${fields%%[\` \"]*}"
     case ",${fields}," in
-      *,merged,*) out="${out}--json ${fields}"$'\n' ;;
+      *,merged,* | *,isInMergeQueue,*) out="${out}--json ${fields}"$'\n' ;;
     esac
   done < <(normalise_and_extract "$1")
   printf '%s' "${out}"
@@ -223,6 +234,7 @@ continued:  gh pr view <n> --json \
 wrap-after-flag: `gh pr view <n> --json
 state,merged,body`
 json-escape: "bootstrapPrompt": "gh pr view <n> --json\nstate,merged,author"
+queue:      `gh pr view <n> --json state,isInMergeQueue,mergeStateStatus`
 FIXTURE
 
 cat > "${self_test_dir}/good.md" <<'FIXTURE'
@@ -273,8 +285,8 @@ json_good_flagged="$(bad_lists_in "${self_test_dir}/good.json" | grep -c . || tr
   fail "extractor self-test: flagged ${json_good_flagged} valid JSON form(s)"
 
 bad_caught="$(bad_lists_in "${self_test_dir}/bad.md" | grep -c . || true)"
-[ "${bad_caught}" -ge 10 ] ||
-  fail "extractor self-test: caught only ${bad_caught}/10 known-bad \`--json\` forms — the negative control is not working, so its OK would be meaningless"
+[ "${bad_caught}" -ge 11 ] ||
+  fail "extractor self-test: caught only ${bad_caught}/11 known-bad \`--json\` forms — the negative control is not working, so its OK would be meaningless"
 
 good_flagged="$(bad_lists_in "${self_test_dir}/good.md" | grep -c . || true)"
 [ "${good_flagged}" -eq 0 ] ||
@@ -492,11 +504,12 @@ case "${this_job}" in
   *) fail "ci.yaml's test-merge-confirmation-read job does not initialise libraries/agent-plugins — the consumed definitions could not be scanned" ;;
 esac
 if [ -n "${offenders}" ]; then
-  printf 'merge-confirmation read: FAIL — an invalid `merged` field is prescribed:\n%s' "${offenders}" >&2
+  printf 'merge-confirmation read: FAIL — an invalid `merged` or `isInMergeQueue` field is prescribed:\n%s' "${offenders}" >&2
   echo "  \`merged\` exists on none of gh pr view / gh pr list / gh search prs, and one unknown" >&2
-  echo "  field voids the WHOLE request — use state / mergedAt / mergeCommit instead." >&2
+  echo "  field voids the WHOLE request — use state / mergedAt / mergeCommit instead. No gh pr field" >&2
+  echo "  reports merge-queue membership: use the GraphQL read Merge policy names." >&2
   exit 1
 fi
 
 test_run_finished=1
-echo "merge-confirmation read: OK — self-test caught ${bad_caught}/10 markdown + ${json_bad_caught}/2 escaped-JSON bad forms, flagged ${good_flagged}+${json_good_flagged} valid; no invalid \`merged\` field in ${lists_seen} --json list(s) across ${scanned} surfaces (${plugin_surfaces} of them consumed plugin definitions)"
+echo "merge-confirmation read: OK — self-test caught ${bad_caught}/11 markdown + ${json_bad_caught}/2 escaped-JSON bad forms, flagged ${good_flagged}+${json_good_flagged} valid; no invalid \`merged\` or \`isInMergeQueue\` field in ${lists_seen} --json list(s) across ${scanned} surfaces (${plugin_surfaces} of them consumed plugin definitions)"
