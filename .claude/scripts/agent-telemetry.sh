@@ -4656,22 +4656,29 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
   if [ -n "$CX_CACHE" ] && [ -n "$WINDOW_SINCE" ]; then
     cx_cut=0 cx_cut_bytes=0 cx_linked=0 cx_kept=''
     if CXTAIL=$(mktemp -d "${TMPDIR:-/tmp}/.agtel_cxtail.XXXXXXXX"); then
+      # Pin every selected transcript first, through a hard link (#4391): Codex
+      # moves a run's transcript from sessions/ to archived_sessions/ when the
+      # run settles, and a reader still holding the old path then fails, which
+      # makes the credential stage UNKNOWN. All links are taken in one fast pass
+      # before any window cut, so a transcript that settles while an earlier,
+      # larger one is being cut is already pinned; the cut, the tail copy and a
+      # full read then all go through the link. A link costs no bytes and still
+      # sees appends. When linking fails (another volume, say) the original path
+      # is used, and a transcript that is genuinely gone still reads as UNKNOWN.
+      cx_i=0
+      while IFS= read -r cx_f; do
+        [ -n "$cx_f" ] || continue
+        cx_i=$((cx_i + 1))
+        mkdir "$CXTAIL/$cx_i" && ln "$cx_f" "$CXTAIL/$cx_i/.pin" 2>/dev/null || true
+      done <<<"$CX_CACHE"
       cx_i=0
       while IFS= read -r cx_f; do
         [ -n "$cx_f" ] || continue
         cx_i=$((cx_i + 1))
         cx_off='' cx_lines='' cx_checkout=''
         cx_dest="$CXTAIL/$cx_i/$(basename "$cx_f")"
-        # Pin the transcript first, through a hard link (#4391): Codex moves a
-        # run's transcript from sessions/ to archived_sessions/ when the run
-        # settles, and a reader still holding the old path then fails, which
-        # makes the credential stage UNKNOWN. The link is taken before the
-        # window cut reads the file, so neither the cut, the tail copy nor a
-        # full read can lose it; it costs no bytes and still sees appends. When
-        # linking fails (another volume, say) the original path is used, and a
-        # transcript that is genuinely gone still reads as UNKNOWN.
         cx_src="$cx_f" cx_pin=''
-        if mkdir "$CXTAIL/$cx_i" && ln "$cx_f" "$CXTAIL/$cx_i/.pin" 2>/dev/null; then
+        if [ -f "$CXTAIL/$cx_i/.pin" ]; then
           cx_src="$CXTAIL/$cx_i/.pin" cx_pin=1
         fi
         read -r cx_off cx_lines cx_checkout < <(codex_window_cut "$cx_src" "$WINDOW_SINCE")

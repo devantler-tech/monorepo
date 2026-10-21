@@ -2565,6 +2565,22 @@ for cxmove_tool in awk grep; do
       "UNKNOWN: the credential scan did not complete"
   fi
 done
+# Two transcripts: the second settles while the FIRST is being window-cut. It is
+# still read, because every transcript is pinned before any cut starts.
+cxmove_fixture
+cp "$FIX/cxmove/sessions/m.jsonl" "$FIX/cxmove/sessions/n.jsonl"
+OUT=$(PATH="$FIX/cxmove-grep:$PATH" CXMOVE_TEST_MOVED="$FIX/cxmove-moved" \
+  CXMOVE_TEST_SRC="$FIX/cxmove/sessions/n.jsonl" CXMOVE_TEST_DST="$FIX/cxmove/archived_sessions/n.jsonl" \
+  TMPDIR="$FIX/cxmove-tmp" CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxmove" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" bash "$TARGET" --since-days 1 --section safety 2>&1)
+if [ ! -e "$FIX/cxmove-moved" ]; then
+  bad "a second transcript moved during the first one's cut is still read" "the shim never moved it"
+else
+  check "a second transcript moved during the first one's cut is read through its pin" "$OUT" \
+    "(2 through a hard link"
+  nocheck "a second transcript moved during the first one's cut keeps the credential scan complete" "$OUT" \
+    "UNKNOWN: the credential scan did not complete"
+fi
 # Negative control: when linking fails the original path is kept, and the same
 # move reproduces the race, so the credential stage still fails closed.
 cxmove_shim "$FIX/cxmove-noln" awk
