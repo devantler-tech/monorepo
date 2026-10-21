@@ -27,6 +27,11 @@
 # whichever lane the session belongs to (#3713).
 set -uo pipefail
 
+# Resolve each target from its own metadata, never the launching shell's Git state.
+# Children inherit the cleared environment, including the per-repository cleanup.
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX GIT_NAMESPACE GIT_CEILING_DIRECTORIES
+
 # Positional arguments keep their old meaning and order; --lane may appear anywhere. An empty
 # positional still means its default, as it did before the lane selector existed.
 LANE=claude; P1=""; P2=""; P3=""; npos=0
@@ -318,8 +323,13 @@ nested_failed() {
   NESTED_FAILED=2
 }
 
-sweep() { # <repo_path> [worktree_root, empty = worktree-cleanup.sh's default] [salvage_age_hours] [abort|continue]
-  local path=$1 wt_root=${2:-} salvage=${3:-$SALVAGE_AGE_HOURS} on_fail=${4:-abort} label toplevel expected
+# repository_sweep_ready <repo_path> [abort|continue] — identity must be established
+# before either nested or ordinary worktree enumeration (#4303). A shared Codex root
+# exists even for an uninitialised child, where Git otherwise walks up to its parent.
+# Returns 0 for the requested repository or 1 when it must be skipped. Unreadable
+# metadata exits 2 in abort mode; continue mode records that failure and returns 1.
+repository_sweep_ready() {
+  local path=$1 on_fail=${2:-abort} toplevel expected
   # NOTE: no early return for a missing .claude/worktrees. The per-repo script reports a
   # missing root itself, and the wrapper is the only way it is ever invoked. A path that is
   # not a repository at all is handled by the toplevel check below (it resolves to the
@@ -332,11 +342,11 @@ sweep() { # <repo_path> [worktree_root, empty = worktree-cleanup.sh's default] [
   # let the scheduled wrapper print "done" and exit 0 with that repo never swept. A nested
   # pass (on_fail=continue) records the failure instead, for the reason given further down.
   toplevel=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null) || {
-    if [ "$on_fail" = continue ]; then nested_failed "cannot resolve repository at $path"; return 0; fi
+    if [ "$on_fail" = continue ]; then nested_failed "cannot resolve repository at $path"; return 1; fi
     printf 'worktree-cleanup-all: ABORTING — cannot resolve repository at %s\n' "$path" >&2
     exit 2; }
   expected=$(cd "$path" && pwd -P) || {
-    if [ "$on_fail" = continue ]; then nested_failed "cannot resolve physical path of $path"; return 0; fi
+    if [ "$on_fail" = continue ]; then nested_failed "cannot resolve physical path of $path"; return 1; fi
     printf 'worktree-cleanup-all: ABORTING — cannot resolve physical path of %s\n' "$path" >&2
     exit 2; }
   if [ "$toplevel" != "$expected" ]; then
@@ -354,8 +364,14 @@ sweep() { # <repo_path> [worktree_root, empty = worktree-cleanup.sh's default] [
       printf '\n### SKIP %s (broken isolation: toplevel=%s)\n' "$path" "$toplevel"
       printf '###      remedy: repair this submodule in place — sessions editing here collide in one tree\n'
     fi
-    return 0
+    return 1
   fi
+  return 0
+}
+
+sweep() { # <repo_path> [worktree_root, empty = worktree-cleanup.sh's default] [salvage_age_hours] [abort|continue]
+  local path=$1 wt_root=${2:-} salvage=${3:-$SALVAGE_AGE_HOURS} on_fail=${4:-abort} label
+  repository_sweep_ready "$path" "$on_fail" || return 0
   # "$ROOT" is QUOTED: unquoted it is a glob pattern, so a root path containing
   # [, * or ? would strip the wrong prefix (or none) and mislabel the manifest.
   local rel=${path#"$ROOT"/}
@@ -570,6 +586,10 @@ sweep_nested_submodule_worktrees() {
         *) printf '\n### SKIP %s (escapes its session worktree: %s)\n' "${sub#"$ROOT"/}" "$sub_real"
            continue ;;
       esac
+      # An aliased child can enumerate another repository before sweep() gets
+      # its chance to refuse it. Keep the parent until its recovery refs can
+      # be inspected and handed off through the child's own repository.
+      repository_sweep_ready "$sub_real" continue || { retain_parent "$wt_real"; continue; }
       # Sweep only a repository that has a linked worktree to sweep. The emptied
       # .claude/worktrees stays behind after a reap, and would otherwise cost a full per-repo
       # pass (lsof, worktree list) on every later run.
@@ -616,6 +636,7 @@ sweep_nested_submodule_worktrees() {
 # worktrees nested in the submodules of that root's session worktrees, which only this lane's
 # sweep can reach (#3673, #3713), then the root itself, which can then reconsider the parents.
 sweep_root() {
+  repository_sweep_ready "$1" || return 0
   sweep_nested_submodule_worktrees "$1" "${2:-}"
   sweep "$1" "${2:-}"
 }
