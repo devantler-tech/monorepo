@@ -918,15 +918,18 @@ injection_matching_lines() {
 # definition text. Provenance makes every occurrence inspectable while the
 # scorecard's existing count remains fail-closed and unchanged.
 emit_injection_hits() {
-  local f="$1" len="$2" session line raw record phrase phrase_locale
+  local f="$1" len="$2" session line raw record phrase phrase_locale line_base
   session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
   [ -n "$session" ] || session=unknown
+  # A Codex tail read from a window cut (#3830) starts after its skipped lines.
+  line_base=$(cx_line_base "$f")
 
   phrase_locale=$(injection_locale "$f" "$len")
   injection_matching_lines "$f" "$len" "$phrase_locale" \
     | while LC_ALL=C IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
         line=$(printf '%s' "$line" | cut -c1-12)
+        line=$((line + line_base))
         record=$(printf '%s' "$raw" | jq -r '.type // "malformed"' 2>/dev/null \
                  | tr -cd 'A-Za-z0-9_-' | cut -c1-32)
         [ -n "$record" ] || record=malformed
@@ -1074,15 +1077,18 @@ injection_snapshot_drift() {
 # both. Classify the matched STRING path, never the whole record. If parsing or
 # reconciliation is uncertain, retain every raw occurrence as other content.
 emit_injection_classes() {
-  local f="$1" len="$2" session line raw runtime_phrases phrase_locale
+  local f="$1" len="$2" session line raw runtime_phrases phrase_locale line_base
   session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
   [ -n "$session" ] || session=unknown
+  # A Codex tail read from a window cut (#3830) starts after its skipped lines.
+  line_base=$(cx_line_base "$f")
 
   phrase_locale=$(injection_locale "$f" "$len")
   injection_matching_lines "$f" "$len" "$phrase_locale" \
     | while LC_ALL=C IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
         line=$(printf '%s' "$line" | cut -c1-12)
+        line=$((line + line_base))
         # Runtime-supplied developer context as STRINGS rather than a bare
         # count, so every occurrence keeps the phrase it came from and the
         # report can name WHICH phrase was fleet chatter. Any path this filter
@@ -1175,9 +1181,11 @@ emit_injection_classes() {
 # rather than shared because the table consumes normalised values and this
 # consumes raw matches; keep the two prefix sets in step.
 emit_credential_hits() {
-  local f="$1" session line raw record match shape m _pass _c
+  local f="$1" session line raw record match shape m _pass _c line_base
   session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
   [ -n "$session" ] || session=unknown
+  # A Codex tail read from a window cut (#3830) starts after its skipped lines.
+  line_base=$(cx_line_base "$f")
 
   # -a is LOAD-BEARING: a single NUL byte anywhere in the file makes grep treat
   # it as binary and emit nothing at all. The table and concentration scans both
@@ -1221,6 +1229,7 @@ emit_credential_hits() {
     | while IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
         line=$(printf '%s' "$line" | cut -c1-12)
+        line=$((line + line_base))
         record=$(printf '%s' "$raw" | jq -r '.type // "malformed"' 2>/dev/null \
                  | tr -cd 'A-Za-z0-9_-' | cut -c1-32)
         [ -n "$record" ] || record=malformed
@@ -2768,6 +2777,21 @@ CX_GONE=0
 CX_UNCHECKED=0
 CX_UNREADABLE=''
 ALL_CACHE=''
+# Set by the safety worker for each Codex transcript it reads from a window cut
+# (#3830): the tail path and the source lines before it, and the tails whose
+# skipped history held a checkout. One per line.
+CX_LINE_BASE=''
+CX_PRE_CHECKOUT=''
+# The checkout-then-build detector's checkout predicate. Shared with
+# codex_window_cut, which asks it of the history a cut skips.
+BUILD_CHECKOUT_RE='(gh pr checkout|git fetch .*(pull/|refs/pull|fork)|git checkout .*(pull/|refs/pull))'
+
+# The source line a window-cut tail's line N came from: N plus the lines skipped.
+cx_line_base() {
+  local base
+  base=$(printf '%s' "$CX_LINE_BASE" | awk -F '\t' -v f="$1" '$1 == f { print $2; exit }')
+  printf '%s\n' "${base:-0}"
+}
 
 # ── The window cutoff, computed ONCE for every section that bounds by record ──
 # The file set above is mtime-selected. That is a correct SUPERSET for windowing
@@ -2822,80 +2846,49 @@ populate_session_cache() {
   ALL_CACHE="$(printf '%s\n%s' "$SF_CACHE" "$CX_CACHE" | grep -c . >/dev/null 2>&1; printf '%s\n%s' "$SF_CACHE" "$CX_CACHE")"
 }
 
-# The byte offset of a Codex transcript's first record inside the window
-# (monorepo#3830). The file set is mtime-selected, so one long-running Codex
-# session that is still being appended to pulls its whole history into every
-# daily run: measured 2026-10-20, two such files were 97% of the 3.0 GB Codex
-# scope while only 176 MB of records carried an in-window timestamp, and the
-# safety scan never finished inside its deadline.
+# Where a Codex transcript's records enter the window (monorepo#3830). The file
+# set is mtime-selected, so one long-running Codex session that is still being
+# appended to pulled its whole history into every daily run: measured
+# 2026-10-20, two such files were 97% of the 3.0 GB Codex scope while only
+# 176 MB of records carried an in-window timestamp, and the safety scan never
+# finished inside its deadline.
 #
-# Every Codex record starts `{"timestamp":"…"` and the timestamps never decrease
-# within a file, so the first in-window record is found by binary search on the
-# byte offset and only the tail from there needs scanning. Prints the offset, or
-# nothing when the whole file must be read — FAIL CLOSED: a probed record that
-# does not lead with a usable timestamp, a timestamp that goes backwards anywhere
-# in the tail, or a tail with no in-window record all mean "read everything".
-# The history before the cut is NOT proven in order: reading it all is the cost
-# this avoids (about 50 s per 2 GB with the host tools, measured 2026-10-21), so
-# it is checked only at the search probes. That is why the caller reports those
-# bytes as not rescanned rather than counting them as covered.
+# Every Codex record starts `{"timestamp":"…"`. One anchored `grep -b` pass
+# lists every record's byte offset and timestamp (about 1 s per 2 GB on the
+# agent host; an awk walk of the same bytes took 49 s), and the whole file is
+# PROVEN before anything is skipped: every line leads with a timestamp, every
+# timestamp passes the shared `usable_ts` parse, and none goes backwards. Both
+# reads use the same pinned length, so a record appended meanwhile is simply
+# outside it. Anything else prints nothing and the caller reads the whole file.
 #
-# `<start> <ts>` of the first record of file $1 starting at or after byte $2 (the
-# record straddling $2 is skipped unless $2 is 0); `EOF` or `BAD` otherwise.
-codex_record_at() {
-  tail -c +"$(($2 + 1))" "$1" 2>/dev/null | LC_ALL=C awk -v off="$2" '
-    NR == 1 && off > 0 { pos = off + length($0) + 1; next }
-    {
-      if (NR == 1) pos = 0
-      if (substr($0, 1, 14) != "{\"timestamp\":\"") { print "BAD"; done = 1; exit }
-      ts = substr($0, 15); ts = substr(ts, 1, index(ts, "\"") - 1)
-      if (ts !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9](\.[0-9]+)?Z$/) { print "BAD"; done = 1; exit }
-      print pos, ts; done = 1; exit
-    }
-    END { if (!done) print "EOF" }'
-}
-codex_window_offset() {
-  local f="$1" since="$2" size lo hi mid probe pos lo_ts hi_ts='' ts
+# Prints `<byte offset> <lines before it> <checkout before it: 0|1>` for the
+# first in-window record. The last field says whether the skipped history holds
+# a raw match for the checkout-then-build detector's checkout predicate, which
+# needs the checkout and the build in the same transcript (see BUILD_CHECKOUT_RE).
+codex_window_cut() {
+  local f="$1" since="$2" size undated cut checkout
   [ -n "$since" ] && [ -f "$f" ] || return 0
   size=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
-  case "$size" in ''|*[!0-9]*) return 0 ;; esac
-  probe=$(codex_record_at "$f" 0)
-  case "$probe" in BAD|EOF|'') return 0 ;; esac
-  # The first record is already in the window: the whole file is in scope.
-  [ "${probe#* }" \< "$since" ] || return 0
-  lo=0; hi=$size; lo_ts=${probe#* }
-  while [ $((hi - lo)) -gt 1048576 ]; do
-    mid=$(( (lo + hi) / 2 ))
-    probe=$(codex_record_at "$f" "$mid")
-    case "$probe" in
-      BAD|'') return 0 ;;
-      EOF) hi=$mid ;;
-      *)
-        # Every probe must sit between its neighbours in time as well as in
-        # position. Probes cannot prove the prefix ordered (only reading it can),
-        # but one that disagrees proves it is not, and then everything is read.
-        ts=${probe#* }
-        if [ "$ts" \< "$lo_ts" ] || { [ -n "$hi_ts" ] && [ "$hi_ts" \< "$ts" ]; }; then return 0; fi
-        if [ "$ts" \< "$since" ]; then lo=$mid; lo_ts=$ts; else hi=$mid; hi_ts=$ts; fi ;;
-    esac
-  done
-  # Walk forward from the last probe known to sit before the window, and check
-  # the WHOLE tail on the way: every record timestamp-led and in order.
-  pos=$(tail -c +"$((lo + 1))" "$f" 2>/dev/null | LC_ALL=C awk -v off="$lo" -v since="$since" '
-    BEGIN { at = off; cut = -1; prev = "" }
-    {
-      start = at; at += length($0) + 1
-      if (NR == 1 && off > 0) next
-      if (substr($0, 1, 14) != "{\"timestamp\":\"") { bad = 1; exit }
-      ts = substr($0, 15); ts = substr(ts, 1, index(ts, "\"") - 1)
-      if (ts !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9](\.[0-9]+)?Z$/) { bad = 1; exit }
-      if (prev != "" && ts < prev) { bad = 1; exit }
-      prev = ts
-      if (cut < 0 && !(ts < since)) cut = start
-    }
-    END { if (!bad && cut > 0) print cut }') || return 0
-  case "$pos" in ''|*[!0-9]*) return 0 ;; esac
-  printf '%s\n' "$pos"
+  case "$size" in ''|*[!0-9]*|0) return 0 ;; esac
+  # grep exits 1 when it counts zero lines, which is the passing case here.
+  undated=$(head -c "$size" "$f" 2>/dev/null | LC_ALL=C grep -c -v '^{"timestamp":"')
+  [ "$undated" = 0 ] || return 0
+  cut=$(head -c "$size" "$f" 2>/dev/null | LC_ALL=C grep -bo '^{"timestamp":"[^"]*' \
+    | jq -nRr --arg since "$since" "$JQ_SHAPE_DEFS"'
+        reduce (inputs | (capture("^(?<o>[0-9]+):[{]\"timestamp\":\"(?<t>[^\"]*)$") // {o: null}))
+          as $r ({n: 0, prev: "", bad: false, cut: null, lines: null};
+            if .bad then .
+            elif $r.o == null or ($r.t | usable_ts | not) or $r.t < .prev then .bad = true
+            else (if .cut == null and $r.t >= $since then .cut = ($r.o | tonumber) | .lines = .n else . end)
+                 | .prev = $r.t | .n += 1
+            end)
+        | select((.bad | not) and .cut != null and .cut > 0) | "\(.cut) \(.lines)"') || return 0
+  case "$cut" in [1-9]*' '[0-9]*) ;; *) return 0 ;; esac
+  # A counting grep reads to the end: `grep -q` would stop at the first match,
+  # and the SIGPIPE to `head` would then read as "no checkout" under pipefail.
+  checkout=$(head -c "${cut%% *}" "$f" 2>/dev/null | LC_ALL=C grep -cE "$BUILD_CHECKOUT_RE")
+  case "$checkout" in 0) ;; [1-9]*) checkout=1 ;; *) return 0 ;; esac
+  printf '%s %s\n' "$cut" "$checkout"
 }
 
 # A transcript is read only when it parses as JSON throughout, holds at least one
@@ -4652,11 +4645,14 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
   echo "         window line below); this is a superset of the record-time window."
   echo "  instance scope: ${SAFETY_SCOPE} transcripts."
   # Codex transcripts are read from their first in-window record (#3830; see
-  # codex_window_offset). Each tail is copied under its own basename, so the
+  # codex_window_cut). Each tail is copied under its own basename, so the
   # session identity every detector derives from the path is unchanged, into a
-  # private directory the EXIT and signal traps remove. The copy holds nothing the
-  # source transcript does not already hold at rest under the same account.
-  # Every failure to cut or copy keeps the whole file: never a silent skip.
+  # private directory the EXIT and signal traps remove, and the controller's
+  # cleanup too when it has to kill this worker. The copy holds nothing the source
+  # transcript does not already hold at rest under the same account. Every failure
+  # to cut or copy keeps the whole file: never a silent skip. Each tail records how
+  # many lines it skipped, so provenance `line=` still names the source line, and
+  # whether its skipped history held a checkout (see BUILD_CHECKOUT_RE).
   if [ -n "$CX_CACHE" ] && [ -n "$WINDOW_SINCE" ]; then
     cx_cut=0 cx_cut_bytes=0 cx_kept=''
     if CXTAIL=$(mktemp -d "${TMPDIR:-/tmp}/.agtel_cxtail.XXXXXXXX"); then
@@ -4664,12 +4660,15 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
       while IFS= read -r cx_f; do
         [ -n "$cx_f" ] || continue
         cx_i=$((cx_i + 1))
-        cx_off=$(codex_window_offset "$cx_f" "$WINDOW_SINCE")
+        cx_off='' cx_lines='' cx_checkout=''
+        read -r cx_off cx_lines cx_checkout < <(codex_window_cut "$cx_f" "$WINDOW_SINCE")
         cx_dest="$CXTAIL/$cx_i/$(basename "$cx_f")"
-        if [ -n "$cx_off" ] && mkdir "$CXTAIL/$cx_i" \
+        if [ -n "$cx_off" ] && [ -n "$cx_lines" ] && [ -n "$cx_checkout" ] && mkdir "$CXTAIL/$cx_i" \
            && tail -c +"$((cx_off + 1))" "$cx_f" > "$cx_dest" 2>/dev/null \
            && [ -s "$cx_dest" ]; then
           cx_kept="${cx_kept}${cx_dest}"$'\n'
+          CX_LINE_BASE="${CX_LINE_BASE}${cx_dest}"$'\t'"${cx_lines}"$'\n'
+          [ "$cx_checkout" = 0 ] || CX_PRE_CHECKOUT="${CX_PRE_CHECKOUT}${cx_dest}"$'\n'
           cx_cut=$((cx_cut + 1)); cx_cut_bytes=$((cx_cut_bytes + cx_off))
         else
           cx_kept="${cx_kept}${cx_f}"$'\n'
@@ -4681,7 +4680,7 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
     fi
     echo "  codex record window: ${cx_cut} of ${CX_COUNT} transcript(s) read from their first record"
     echo "         at or after ${WINDOW_SINCE}; ${cx_cut_bytes} byte(s) of older history in them"
-    echo "         were NOT rescanned (only the tail read is proven in time order)."
+    echo "         were checked to be in time order but NOT rescanned."
     echo "         Every other Codex transcript is read in full."
   fi
   # Combined gate — the credential scan below is format-agnostic and must still
@@ -5523,7 +5522,9 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
       | while IFS= read -r f; do
           cmds="$(commands_in "$f" 2>/dev/null)" || { printf x >> "$XFBUILD"; continue; }
           [[ -n "$cmds" ]] || continue
-          if grep -qE '(gh pr checkout|git fetch .*(pull/|refs/pull|fork)|git checkout .*(pull/|refs/pull))' <<<"$cmds"; then
+          # A Codex tail read from a window cut also counts a checkout its skipped
+          # history held (#3830), so a build inside the window still pairs with it.
+          if grep -qE "$BUILD_CHECKOUT_RE" <<<"$cmds" || grep -qxF -- "$f" <<<"$CX_PRE_CHECKOUT"; then
             LC_ALL=C awk '
               BEGIN {
                 sq = sprintf("%c", 39)
