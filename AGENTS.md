@@ -36,7 +36,6 @@ Populate a submodule with `.claude/scripts/submodule-init.sh <path>` — never a
 | Platform-tenant template | `devantler-tech/platform-tenant-template` | `templates/platform-tenant-template` | `AGENTS.md` |
 | Platform template | `devantler-tech/platform-template` | `templates/platform-template` | `AGENTS.md` |
 | Legacy GitHub Actions | `devantler-tech/actions` | `github/devantler-tech/github-actions/actions` | `AGENTS.md` |
-| Reusable Workflows | `devantler-tech/reusable-workflows` (**archived 2026-07-10**) | — | see `devantler-tech/.github` |
 | Homebrew tap | `devantler-tech/homebrew-tap` (repo renamed from `homebrew-formulas`) | `homebrew-tap` | `AGENTS.md` |
 | Agent skills (shared lib) | `devantler-tech/agent-skills` | `libraries/agent-skills` | `AGENTS.md` |
 | Agent plugins (shared lib) | `devantler-tech/agent-plugins` (renamed from `copilot-plugins`) | `libraries/agent-plugins` | `AGENTS.md` |
@@ -53,7 +52,7 @@ Populate a submodule with `.claude/scripts/submodule-init.sh <path>` — never a
 `AGENTS.md` means the product's own file at `<Path>/AGENTS.md`, or
 `https://github.com/devantler-tech/<repo>/blob/main/AGENTS.md` when the submodule is not populated.
 Read repository visibility (`.private`) and `.archived` live from the GitHub API, never from this
-table: archived repositories — `devantler-tech/data-product` today — are outside every census. **World
+table: archived repositories are outside every census. **World
 at Ruin** and the **🌊 Project Board** are first-class products in the normal rotation; their product
 cards carry the settled decisions. Details:
 [work selection guide](.claude/guides/work-selection.md#portfolio-scope--visibility-and-archived-repositories).
