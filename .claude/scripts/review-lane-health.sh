@@ -306,7 +306,11 @@ elif .login == "chatgpt-codex-connector[bot]" then
   elif body | contains("You have reached your Codex usage limits") then "codex\t\(.at)\tfail\tusage-limit"
   else empty end
 elif .login == "cursor[bot]" then
-  if body | contains("usage limit reached") then "bugbot\t\(.at)\tfail\tusage-limit" else empty end
+  # Bugbot's review object outlives the check-run, which is read only at the current head: without
+  # it, one push after a completed review hides it and an old usage-limit notice stays the newest
+  # event, so a working lane reads DOWN (monorepo#4397).
+  if .kind == "review" and (body | contains("<!-- BUGBOT_REVIEW -->")) then "bugbot\t\(.at)\tok\t-"
+  elif body | contains("usage limit reached") then "bugbot\t\(.at)\tfail\tusage-limit" else empty end
 else empty end
 JQ
 
