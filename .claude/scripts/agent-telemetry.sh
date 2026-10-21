@@ -740,7 +740,7 @@ fi
 # Drift reads definitions and schedules, so it needs none of the transcript
 # scratch files below. Avoid fifteen unused mktemp processes on each drift run (#4160).
 ERRTMP='' RAWTMP='' INJTMP='' PROVTMP='' CONCTMP='' INJSNAP='' CREDCONC='' CREDPROV=''
-SIGTMP='' XFTMP='' XFREL='' XFDENY='' XFINJ='' XFBUILD='' XFA2A=''
+SIGTMP='' XFTMP='' XFREL='' XFDENY='' XFINJ='' XFBUILD='' XFA2A='' CXTAIL=''
 if [ "$SECTION" != drift ]; then
 # Scratch file for the error-signature pass. `mktemp` (0600, unpredictable name)
 # rather than a guessable `/tmp/.name.$$`, and removed on ANY exit including a
@@ -805,8 +805,8 @@ fi
 # Keep the same signal termination even when drift has no scratch to remove.
 # Remove on normal exit; on a SIGNAL also terminate, since a trap that only
 # cleans up leaves the script running after the scheduler asked it to stop.
-trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP" "$XFREL" "$XFDENY" "$XFINJ" "$XFBUILD" "$XFA2A"' EXIT
-trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP" "$XFREL" "$XFDENY" "$XFINJ" "$XFBUILD" "$XFA2A"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+trap '[ -z "$CXTAIL" ] || rm -rf "$CXTAIL"; rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP" "$XFREL" "$XFDENY" "$XFINJ" "$XFBUILD" "$XFA2A"' EXIT
+trap '[ -z "$CXTAIL" ] || rm -rf "$CXTAIL"; rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP" "$XFREL" "$XFDENY" "$XFINJ" "$XFBUILD" "$XFA2A"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
 
 # extraction_canary <failure-file> <reads> <walk>
 # States how many of a walk's per-file extractions failed (#2916). Each failed
@@ -2817,6 +2817,74 @@ populate_session_cache() {
   ALL_CACHE="$(printf '%s\n%s' "$SF_CACHE" "$CX_CACHE" | grep -c . >/dev/null 2>&1; printf '%s\n%s' "$SF_CACHE" "$CX_CACHE")"
 }
 
+# The byte offset of a Codex transcript's first record inside the window
+# (monorepo#3830). The file set is mtime-selected, so one long-running Codex
+# session that is still being appended to pulls its whole history into every
+# daily run: measured 2026-10-20, two such files were 97% of the 3.0 GB Codex
+# scope while only 176 MB of records carried an in-window timestamp, and the
+# safety scan never finished inside its deadline.
+#
+# Every Codex record starts `{"timestamp":"…"` and the timestamps never decrease
+# within a file, so the first in-window record is found by binary search on the
+# byte offset and only the tail from there needs scanning. Prints the offset, or
+# nothing when the whole file must be read — FAIL CLOSED: a probed record that
+# does not lead with a usable timestamp, a timestamp that goes backwards anywhere
+# in the tail, or a tail with no in-window record all mean "read everything".
+# What the tail cannot check is the history before the cut, which is why the
+# caller reports those bytes rather than dropping them silently.
+#
+# `<start> <ts>` of the first record of file $1 starting at or after byte $2 (the
+# record straddling $2 is skipped unless $2 is 0); `EOF` or `BAD` otherwise.
+codex_record_at() {
+  tail -c +"$(($2 + 1))" "$1" 2>/dev/null | LC_ALL=C awk -v off="$2" '
+    NR == 1 && off > 0 { pos = off + length($0) + 1; next }
+    {
+      if (NR == 1) pos = 0
+      if (substr($0, 1, 14) != "{\"timestamp\":\"") { print "BAD"; done = 1; exit }
+      ts = substr($0, 15); ts = substr(ts, 1, index(ts, "\"") - 1)
+      if (ts !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9](\.[0-9]+)?Z$/) { print "BAD"; done = 1; exit }
+      print pos, ts; done = 1; exit
+    }
+    END { if (!done) print "EOF" }'
+}
+codex_window_offset() {
+  local f="$1" since="$2" size lo hi mid probe pos
+  [ -n "$since" ] && [ -f "$f" ] || return 0
+  size=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
+  case "$size" in ''|*[!0-9]*) return 0 ;; esac
+  probe=$(codex_record_at "$f" 0)
+  case "$probe" in BAD|EOF|'') return 0 ;; esac
+  # The first record is already in the window: the whole file is in scope.
+  [ "${probe#* }" \< "$since" ] || return 0
+  lo=0; hi=$size
+  while [ $((hi - lo)) -gt 1048576 ]; do
+    mid=$(( (lo + hi) / 2 ))
+    probe=$(codex_record_at "$f" "$mid")
+    case "$probe" in
+      BAD|'') return 0 ;;
+      EOF) hi=$mid ;;
+      *) if [ "${probe#* }" \< "$since" ]; then lo=$mid; else hi=$mid; fi ;;
+    esac
+  done
+  # Walk forward from the last probe known to sit before the window, and check
+  # the WHOLE tail on the way: every record timestamp-led and in order.
+  pos=$(tail -c +"$((lo + 1))" "$f" 2>/dev/null | LC_ALL=C awk -v off="$lo" -v since="$since" '
+    BEGIN { at = off; cut = -1; prev = "" }
+    {
+      start = at; at += length($0) + 1
+      if (NR == 1 && off > 0) next
+      if (substr($0, 1, 14) != "{\"timestamp\":\"") { bad = 1; exit }
+      ts = substr($0, 15); ts = substr(ts, 1, index(ts, "\"") - 1)
+      if (ts !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9](\.[0-9]+)?Z$/) { bad = 1; exit }
+      if (prev != "" && ts < prev) { bad = 1; exit }
+      prev = ts
+      if (cut < 0 && !(ts < since)) cut = start
+    }
+    END { if (!bad && cut > 0) print cut }') || return 0
+  case "$pos" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s\n' "$pos"
+}
+
 # A transcript is read only when it parses as JSON throughout, holds at least one
 # record, and every record is an object: whitespace alone is a valid, empty JSON
 # stream that `jq empty` accepts, and a bare scalar such as `null` parses but is
@@ -4567,9 +4635,41 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
   echo
   echo "── SAFETY (guardrails) ──────────────────────────────────────────"
   echo "  scope: entire contents of capped files modified within ${SINCE_DAYS} day(s)."
-  echo "         Older records in resumed sessions are included; this is a superset"
-  echo "         of the record-time window, not a record-time-bounded scan."
+  echo "         Older records in resumed sessions are included (Codex: see the record"
+  echo "         window line below); this is a superset of the record-time window."
   echo "  instance scope: ${SAFETY_SCOPE} transcripts."
+  # Codex transcripts are read from their first in-window record (#3830; see
+  # codex_window_offset). Each tail is copied under its own basename, so the
+  # session identity every detector derives from the path is unchanged, into a
+  # private directory the EXIT and signal traps remove. The copy holds nothing the
+  # source transcript does not already hold at rest under the same account.
+  # Every failure to cut or copy keeps the whole file: never a silent skip.
+  if [ -n "$CX_CACHE" ] && [ -n "$WINDOW_SINCE" ]; then
+    cx_cut=0 cx_cut_bytes=0 cx_kept=''
+    if CXTAIL=$(mktemp -d "${TMPDIR:-/tmp}/.agtel_cxtail.XXXXXXXX"); then
+      cx_i=0
+      while IFS= read -r cx_f; do
+        [ -n "$cx_f" ] || continue
+        cx_i=$((cx_i + 1))
+        cx_off=$(codex_window_offset "$cx_f" "$WINDOW_SINCE")
+        cx_dest="$CXTAIL/$cx_i/$(basename "$cx_f")"
+        if [ -n "$cx_off" ] && mkdir "$CXTAIL/$cx_i" \
+           && tail -c +"$((cx_off + 1))" "$cx_f" > "$cx_dest" 2>/dev/null \
+           && [ -s "$cx_dest" ]; then
+          cx_kept="${cx_kept}${cx_dest}"$'\n'
+          cx_cut=$((cx_cut + 1)); cx_cut_bytes=$((cx_cut_bytes + cx_off))
+        else
+          cx_kept="${cx_kept}${cx_f}"$'\n'
+        fi
+      done <<<"$CX_CACHE"
+      CX_CACHE="${cx_kept%$'\n'}"
+    else
+      CXTAIL=''
+    fi
+    echo "  codex record window: ${cx_cut} of ${CX_COUNT} transcript(s) read from their first record"
+    echo "         at or after ${WINDOW_SINCE}; ${cx_cut_bytes} byte(s) of older history in them"
+    echo "         were NOT rescanned. Every other Codex transcript is read in full."
+  fi
   # Combined gate — the credential scan below is format-agnostic and must still
   # run when only the Codex corpus has files, or a Codex-only leak reports clean.
   if [ $((SF_COUNT + CX_COUNT)) -eq 0 ]; then

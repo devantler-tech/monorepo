@@ -2379,6 +2379,55 @@ if grep -qF 'aws-access-key-id' <<<"$OUT"; then
   ok "Codex-only credential leak is still caught"
 else bad "Codex-only credential leak is still caught" "missed"; fi
 
+# CLASS: a long-running Codex session is read from its first IN-WINDOW record
+# (#3830). Its history before the window is skipped and counted, never dropped
+# silently; any record out of timestamp order makes the whole file read again.
+# The fixture is over 1 MiB so the binary search, not only the forward walk, runs.
+mkdir -p "$FIX/cxtail/sessions"
+cxtail_fixture() { # $1 = timestamp of the newest OLD record
+  { printf '{"timestamp":"2000-01-01T00:00:00.000Z","type":"session_meta","payload":{"cwd":"%s"}}\n' "$FIX/monorepo"
+    printf '%s\n' '{"timestamp":"2000-01-01T00:00:01.000Z","type":"response_item","payload":{"type":"function_call_output","output":"__SLACK__"}}'
+    cxtail_pad=$(printf '%0900d' 0) cxtail_i=0
+    while [ "$cxtail_i" -lt 1500 ]; do
+      printf '{"timestamp":"2000-01-01T00:00:02.000Z","type":"event_msg","payload":{"pad":"%s"}}\n' "$cxtail_pad"
+      cxtail_i=$((cxtail_i + 1))
+    done
+    printf '{"timestamp":"%s","type":"event_msg","payload":{"pad":"x"}}\n' "$1"
+    printf '{"timestamp":"%s","type":"response_item","payload":{"type":"function_call_output","output":"__AWS__"}}\n' \
+      "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
+  } > "$FIX/cxtail/sessions/r.jsonl"
+  subst "$FIX/cxtail/sessions/r.jsonl"
+}
+cxtail_run() { CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxtail" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days "$1" --section safety 2>&1; }
+cxtail_fixture 2000-01-01T00:00:03.000Z
+OUT=$(cxtail_run 1)
+check "a long-running Codex transcript is read from its first in-window record" "$OUT" \
+  "codex record window: 1 of 1 transcript(s) read from their first record"
+if grep -qE '; [1-9][0-9]{6,} byte\(s\) of older history in them' <<<"$OUT"; then
+  ok "the skipped Codex history is counted in bytes, not dropped silently"
+else bad "the skipped Codex history is counted in bytes" "$(grep -A1 'record window' <<<"$OUT")"; fi
+check "the in-window Codex credential is still caught after the cut" "$OUT" "aws-access-key-id"
+nocheck "Codex history before the window is not rescanned" "$OUT" "slack-token"
+# Negative control: a window wide enough to hold the old records reads them all.
+OUT=$(cxtail_run 10000)
+check "a window that holds the whole Codex file reads it in full" "$OUT" \
+  "codex record window: 0 of 1 transcript(s) read from their first record"
+check "the full read still catches the older Codex credential" "$OUT" "slack-token"
+# Fail closed: one record in the tail goes backwards, so the file is read in full.
+cxtail_fixture 2000-01-01T00:00:03.000Z
+printf '%s\n' '{"timestamp":"2000-01-01T00:00:04.000Z","type":"event_msg","payload":{"pad":"y"}}' \
+  >> "$FIX/cxtail/sessions/r.jsonl"
+OUT=$(cxtail_run 1)
+check "an out-of-order Codex tail is read in full" "$OUT" \
+  "codex record window: 0 of 1 transcript(s) read from their first record"
+check "the out-of-order file's older credential is caught" "$OUT" "slack-token"
+# Fail closed: a record that does not lead with its timestamp keeps the full read.
+cxtail_fixture 2000-01-01T00:00:03.000Z
+printf '%s\n' '{"type":"event_msg","payload":{"pad":"z"}}' >> "$FIX/cxtail/sessions/r.jsonl"
+OUT=$(cxtail_run 1)
+check "a Codex record without a leading timestamp keeps the full read" "$OUT" \
+  "codex record window: 0 of 1 transcript(s) read from their first record"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxonly" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
 if grep -qE 'sleep/poll calls \.\. [1-9]' <<<"$OUT"; then
