@@ -524,6 +524,81 @@ t_skips_broken_isolation() {
   rm -rf "$root"
 }
 
+t_nested_pass_validates_repository_identity() {
+  # #4303: Codex supplies the monorepo's shared worktree root to every child.
+  # Without a root-identity check BEFORE enumeration, an empty or aliased child
+  # walks the parent's registrations even though the later ordinary sweep skips it.
+  local state root shim real_git out rc expected enumerated
+  for state in uninitialised aliased unreadable initialised; do
+    root=$(make_root)
+    case "$state" in
+      uninitialised) rm -rf "$root/repo/nested/.git" ;;
+      aliased) git -C "$root/repo/nested" config core.worktree "$root/repo" ;;
+      unreadable)
+        rm -rf "$root/repo/nested/.git"
+        printf 'gitdir: %s\n' "$root/missing-gitdir" > "$root/repo/nested/.git"
+        ;;
+    esac
+    mkdir -p "$root/repo/.codex/worktrees"
+    shim="$root/git-shim"; mkdir -p "$shim"; real_git=$(command -v git)
+    # Observe the dangerous boundary, but retain real Git's enumeration and all
+    # production eligibility/identity checks instead of stubbing their verdicts.
+    cat > "$shim/git" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = -C ] && [ "\${2:-}" = '$root/repo/nested' ] \\
+   && [ "\${3:-}" = worktree ] && [ "\${4:-}" = list ]; then
+  printf 'enumerated\n' >> '$root/child-enumeration'
+fi
+exec '$real_git' "\$@"
+EOF
+    chmod +x "$shim/git"
+    out=$(PATH="$shim:$PATH" HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
+      bash "$SUT" dry-run 24 --lane codex 2>&1); rc=$?
+    expected=0; enumerated=no
+    [ "$state" != unreadable ] || expected=2
+    [ "$state" != initialised ] || enumerated=yes
+    if [ "$rc" -eq "$expected" ] \
+       && { if [ "$enumerated" = yes ]; then [ -s "$root/child-enumeration" ];
+            else [ ! -e "$root/child-enumeration" ]; fi; }; then
+      ok "nested pass checks $state repository identity before enumeration"
+    else
+      bad "nested pass checks $state repository identity before enumeration" \
+        "rc=$rc expected=$expected enumeration=$([ -e "$root/child-enumeration" ] && echo yes || echo no) $out"
+    fi
+    rm -rf "$root"
+  done
+}
+
+t_nested_pass_validates_session_submodule_identity() {
+  # The same identity boundary applies before listing a session's child repo,
+  # not only before entering the shared Codex root for a main-checkout child.
+  local root sess child shim real_git out rc
+  root=$(make_root)
+  add_session_with_nested "$root" pushed || { bad "nested child identity" "FIXTURE"; rm -rf "$root"; return; }
+  sess="$root/repo/.claude/worktrees/sess"; child="$sess/nested"
+  git -C "$child" config core.worktree "$sess"
+  shim="$root/git-shim"; mkdir -p "$shim"; real_git=$(command -v git)
+  cat > "$shim/git" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = -C ] && [ "\${2:-}" = '$child' ] \\
+   && [ "\${3:-}" = worktree ] && [ "\${4:-}" = list ]; then
+  printf 'enumerated\n' >> '$root/child-enumeration'
+fi
+exec '$real_git' "\$@"
+EOF
+  chmod +x "$shim/git"
+  out=$(PATH="$shim:$PATH" HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
+    bash "$SUT" dry-run 24 2>&1); rc=$?
+  if [ "$rc" -eq 0 ] && [ ! -e "$root/child-enumeration" ] \
+     && grep -q 'nested .*broken isolation' <<< "$out" \
+     && [ -d "$child/.claude/worktrees/inner" ]; then
+    ok "nested pass skips an aliased session submodule before enumeration"
+  else
+    bad "nested pass skips an aliased session submodule before enumeration" "rc=$rc $out"
+  fi
+  rm -rf "$root"
+}
+
 t_aborts_and_exits_nonzero_on_sweep_failure() {
   # An infrastructure failure in one repo must stop the run and surface a nonzero exit,
   # not be swallowed by the `| tail` pipeline and the trailing success banner.
@@ -1157,6 +1232,8 @@ t_sweeps_root_and_submodules
 t_rewrites_session_worktree_root
 t_skips_uninitialised_submodule
 t_skips_broken_isolation
+t_nested_pass_validates_repository_identity
+t_nested_pass_validates_session_submodule_identity
 t_aborts_and_exits_nonzero_on_sweep_failure
 t_per_repo_manifest_isolation
 t_validates_args_even_with_no_worktree_dirs
