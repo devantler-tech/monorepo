@@ -653,6 +653,24 @@ else
   echo "ok   anything but --input - is a usage error"
 fi
 
+# The Agent Improver's Kata census (monorepo#4429). A run checked only its own lane's ledger, so
+# #4030, delivered from the other lane, stayed DUE through 39 Claude Improver dispatches. The guide
+# must name the one search that lists every open Kata and the pipeline that classifies each, and
+# that pipeline must project exactly what this helper's own USAGE line reads.
+kata_guide="${here}/../guides/improvement-katas.md"
+census_search="gh api -X GET search/issues -f q='org:devantler-tech is:issue is:open type:Kata'"
+usage_projection="$(grep -o "\-\-jq '{body:[^']*}'" "${tool}" | head -n 1)"
+census_pipeline="gh api repos/devantler-tech/<repo>/issues/<n> ${usage_projection} | .claude/scripts/kata-measure-date.sh --input -"
+for pinned in "${census_search}" "${census_pipeline}" 'never an empty census'; do
+  checks=$((checks + 1))
+  if [ -n "${usage_projection}" ] && grep -qF -- "${pinned}" "${kata_guide}"; then
+    echo "ok   the Kata guide's Improver census names: ${pinned}"
+  else
+    echo "FAIL the Kata guide's Improver census must name: ${pinned}" >&2
+    failures=$((failures + 1))
+  fi
+done
+
 kata_measure_date_test_finished=1
 if [ "${failures}" -gt 0 ]; then
   echo "kata-measure-date.test.sh: ${failures} of ${checks} checks FAILED" >&2

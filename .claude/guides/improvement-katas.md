@@ -54,6 +54,15 @@ remain started work wherever the card sits: the registered dates, floors and his
 with it. An explicit one-time maintainer exception is recorded on the affected delivery and
 outcome issues with scope and recovery; it does not change limits or authorize unrelated starts.
 
+Every Agent Improver run reads the Kata census before new intake, whichever lane delivered the
+Kata: neither lane's native ledger lists the other's Katas, so #4030 stayed DUE through 39 Claude
+Improver dispatches (monorepo#4429). List them with
+`gh api -X GET search/issues -f q='org:devantler-tech is:issue is:open type:Kata' --jq '.items[].html_url'`
+and classify each with
+`gh api repos/devantler-tech/<repo>/issues/<n> --jq '{body:(.body // ""),sub_issues:.sub_issues_summary}' | .claude/scripts/kata-measure-date.sh --input -`.
+A `DUE` Kata the Agent Improver owns is this run's finishing work. A failed search, an
+`incomplete_results` search or a helper exit 2 is UNKNOWN, never an empty census.
+
 At Measure on, record expected versus actual, eligibility and attribution, protected floors,
 coverage/UNKNOWNs, learning and the next obstacle. A missed date remains overdue until that
 readback exists. If volume, deployment or liveness is insufficient, record Inconclusive and the
