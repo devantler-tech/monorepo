@@ -2569,6 +2569,9 @@ done
 # still read, because every transcript is pinned before any cut starts.
 cxmove_fixture
 cp "$FIX/cxmove/sessions/m.jsonl" "$FIX/cxmove/sessions/n.jsonl"
+# The walk reads newest first, so an older mtime makes n.jsonl the SECOND file:
+# m.jsonl is cut first, and n.jsonl moves before the loop reaches it.
+touch -t "$(date -v-1H +%Y%m%d%H%M 2>/dev/null || date -d "1 hour ago" +%Y%m%d%H%M)" "$FIX/cxmove/sessions/n.jsonl"
 OUT=$(PATH="$FIX/cxmove-grep:$PATH" CXMOVE_TEST_MOVED="$FIX/cxmove-moved" \
   CXMOVE_TEST_SRC="$FIX/cxmove/sessions/n.jsonl" CXMOVE_TEST_DST="$FIX/cxmove/archived_sessions/n.jsonl" \
   TMPDIR="$FIX/cxmove-tmp" CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxmove" \
