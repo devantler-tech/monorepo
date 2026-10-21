@@ -103,5 +103,7 @@ yq -o=json '.' "$action" | jq -e '
 ' >/dev/null || fail "candidate collection must remain an API-only data read before the actual checker"
 jq -e '. == {version:1,"timeout-minutes":10}' "$root/.github/pr-admission.json" >/dev/null ||
   fail "shared admission must retain a bounded product-owned execution budget"
+[[ "$(yq -r '.jobs.validate."timeout-minutes"' "$workflow")" == "$(jq -r '."timeout-minutes"' "$root/.github/pr-admission.json")" ]] ||
+  fail "the workflow timeout must match the shared admission budget"
 completed=1
 echo "ci-aggregate-contract: OK"
