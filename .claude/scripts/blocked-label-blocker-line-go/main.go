@@ -70,7 +70,9 @@ read this way: it outranks every other issue whatever its age, while an older
 issue of another type may simply be queued behind older ones.
 
 Sources (exactly one): --org <org> (every open issue, label or not, and every
-                       open pull request, for the issues it mentions) or
+                       open pull request, for the issues it mentions;
+                       --parked-digest reads only pull requests and their
+                       named in-scope upstream blockers) or
          --input <file>|- (a JSON array; a record without a "labels" array is
                        read as blocked-labelled, the shape of earlier payloads;
                        one with a "pull_request" key is a pull request; and an
@@ -931,13 +933,16 @@ func load(o options, stdin io.Reader) ([]issue, error) {
 		}
 		return inputIssues(raw)
 	}
-	// Two reads, each complete or the whole result UNKNOWN: the issues to
-	// judge, then the pull requests that show which of them are in flight.
+	// Issue reports need both complete sets. The PR-only digest does not
+	// consume issue findings: unrelated backlog churn must not blind it (#4395).
 	var records []issue
 	for _, read := range []struct {
 		endpoint string
 		typed    bool
 	}{{searchEndpoint(o.org), true}, {pullEndpoint(o.org), false}} {
+		if o.parkedDigest && read.typed {
+			continue
+		}
 		raw, err := forgeRead(read.endpoint)
 		if err != nil {
 			return nil, errors.New("forge read failed -- UNKNOWN, never zero")
