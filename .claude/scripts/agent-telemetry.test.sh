@@ -2379,6 +2379,144 @@ if grep -qF 'aws-access-key-id' <<<"$OUT"; then
   ok "Codex-only credential leak is still caught"
 else bad "Codex-only credential leak is still caught" "missed"; fi
 
+# CLASS: a long-running Codex session is read from its first IN-WINDOW record
+# (#3830). Its history before the window is skipped and counted, never dropped
+# silently; any record out of timestamp order makes the whole file read again.
+# The fixture is over 1 MiB so the binary search, not only the forward walk, runs.
+mkdir -p "$FIX/cxtail/sessions"
+cxtail_fixture() { # $1 = timestamp of the newest OLD record
+  { printf '{"timestamp":"2000-01-01T00:00:00.000Z","type":"session_meta","payload":{"cwd":"%s"}}\n' "$FIX/monorepo"
+    printf '%s\n' '{"timestamp":"2000-01-01T00:00:01.000Z","type":"response_item","payload":{"type":"function_call_output","output":"__SLACK__"}}'
+    cxtail_pad=$(printf '%0900d' 0) cxtail_i=0
+    while [ "$cxtail_i" -lt 1500 ]; do
+      printf '{"timestamp":"2000-01-01T00:00:02.000Z","type":"event_msg","payload":{"pad":"%s"}}\n' "$cxtail_pad"
+      cxtail_i=$((cxtail_i + 1))
+    done
+    printf '{"timestamp":"%s","type":"event_msg","payload":{"pad":"x"}}\n' "$1"
+    printf '{"timestamp":"%s","type":"response_item","payload":{"type":"function_call_output","output":"__AWS__"}}\n' \
+      "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
+  } > "$FIX/cxtail/sessions/r.jsonl"
+  subst "$FIX/cxtail/sessions/r.jsonl"
+}
+cxtail_run() { CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxtail" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days "$1" --section safety 2>&1; }
+cxtail_fixture 2000-01-01T00:00:03.000Z
+OUT=$(cxtail_run 1)
+check "a long-running Codex transcript is read from its first in-window record" "$OUT" \
+  "codex record window: 1 of 1 transcript(s) read from their first record"
+if grep -qE '; [1-9][0-9]{6,} byte\(s\) of older history in them' <<<"$OUT"; then
+  ok "the skipped Codex history is counted in bytes, not dropped silently"
+else bad "the skipped Codex history is counted in bytes" "$(grep -A1 'record window' <<<"$OUT")"; fi
+check "the in-window Codex credential is still caught after the cut" "$OUT" "aws-access-key-id"
+nocheck "Codex history before the window is not rescanned" "$OUT" "slack-token"
+# Negative control: a window wide enough to hold the old records reads them all.
+OUT=$(cxtail_run 10000)
+check "a window that holds the whole Codex file reads it in full" "$OUT" \
+  "codex record window: 0 of 1 transcript(s) read from their first record"
+check "the full read still catches the older Codex credential" "$OUT" "slack-token"
+# Fail closed: one record in the tail goes backwards, so the file is read in full.
+cxtail_fixture 2000-01-01T00:00:03.000Z
+printf '%s\n' '{"timestamp":"2000-01-01T00:00:04.000Z","type":"event_msg","payload":{"pad":"y"}}' \
+  >> "$FIX/cxtail/sessions/r.jsonl"
+OUT=$(cxtail_run 1)
+check "an out-of-order Codex tail is read in full" "$OUT" \
+  "codex record window: 0 of 1 transcript(s) read from their first record"
+check "the out-of-order file's older credential is caught" "$OUT" "slack-token"
+# Fail closed: a record that does not lead with its timestamp keeps the full read.
+cxtail_fixture 2000-01-01T00:00:03.000Z
+printf '%s\n' '{"type":"event_msg","payload":{"pad":"z"}}' >> "$FIX/cxtail/sessions/r.jsonl"
+OUT=$(cxtail_run 1)
+check "a Codex record without a leading timestamp keeps the full read" "$OUT" \
+  "codex record window: 0 of 1 transcript(s) read from their first record"
+# Fail closed: the WHOLE file is proven in time order before anything is skipped.
+# Here a record dated inside the window sits early in the history and the clock
+# then goes back; the tail alone looks ordered, so only a check of the skipped
+# history can see that record, and its credential must still be read.
+{ printf '{"timestamp":"2000-01-01T00:00:00.000Z","type":"session_meta","payload":{"cwd":"%s"}}\n' "$FIX/monorepo"
+  printf '{"timestamp":"%s","type":"response_item","payload":{"type":"function_call_output","output":"__SLACK__"}}\n' \
+    "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
+  cxtail_pad=$(printf '%0900d' 0) cxtail_i=0
+  while [ "$cxtail_i" -lt 1500 ]; do
+    printf '{"timestamp":"2000-01-01T00:00:02.000Z","type":"event_msg","payload":{"pad":"%s"}}\n' "$cxtail_pad"
+    cxtail_i=$((cxtail_i + 1))
+  done
+  printf '{"timestamp":"%s","type":"event_msg","payload":{"pad":"x"}}\n' "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
+} > "$FIX/cxtail/sessions/r.jsonl"
+subst "$FIX/cxtail/sessions/r.jsonl"
+OUT=$(cxtail_run 1)
+check "an in-window record hidden in out-of-order history keeps the full read" "$OUT" \
+  "codex record window: 0 of 1 transcript(s) read from their first record"
+check "the hidden in-window credential is caught" "$OUT" "slack-token"
+# Fail closed: a timestamp shaped right but naming no real time keeps the full read.
+cxtail_fixture 2000-99-99T99:99:99.000Z
+OUT=$(cxtail_run 1)
+check "an impossible Codex timestamp keeps the full read" "$OUT" \
+  "codex record window: 0 of 1 transcript(s) read from their first record"
+# Provenance names the SOURCE line, not the line inside the tail copy: the
+# in-window credential is line 1504 of the transcript (meta, the old credential,
+# 1500 padding records, the last old record, then it).
+cxtail_fixture 2000-01-01T00:00:03.000Z
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxtail" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 1 --section safety --credential-provenance 2>&1)
+check "a cut Codex transcript still reports provenance" "$OUT" \
+  "codex record window: 1 of 1 transcript(s) read from their first record"
+check "provenance of a cut Codex transcript names the source line" "$OUT" "session=r.jsonl line=1504 "
+# A checkout in the skipped history still pairs with a build inside the window.
+cxtail_build_fixture() { # $1 = the command run before the window
+  { printf '{"timestamp":"2000-01-01T00:00:00.000Z","type":"session_meta","payload":{"cwd":"%s"}}\n' "$FIX/monorepo"
+    printf '{"timestamp":"2000-01-01T00:00:01.000Z","type":"response_item","payload":{"type":"function_call","arguments":"{\\"command\\":\\"%s\\"}"}}\n' "$1"
+    cxtail_pad=$(printf '%0900d' 0) cxtail_i=0
+    while [ "$cxtail_i" -lt 1500 ]; do
+      printf '{"timestamp":"2000-01-01T00:00:02.000Z","type":"event_msg","payload":{"pad":"%s"}}\n' "$cxtail_pad"
+      cxtail_i=$((cxtail_i + 1))
+    done
+    printf '{"timestamp":"%s","type":"response_item","payload":{"type":"function_call","arguments":"{\\"command\\":\\"npm ci --cxtail-build\\"}"}}\n' \
+      "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
+  } > "$FIX/cxtail/sessions/r.jsonl"
+}
+cxtail_build_fixture "gh pr checkout 77"
+OUT=$(cxtail_run 1)
+check "a build after the cut is still judged against the cut file" "$OUT" \
+  "codex record window: 1 of 1 transcript(s) read from their first record"
+check "a checkout before the window still pairs with a build inside it" "$OUT" "npm ci --cxtail-build"
+# Control: the same build with no checkout anywhere is not a candidate.
+cxtail_build_fixture "git status"
+OUT=$(cxtail_run 1)
+nocheck "a build with no checkout before the window is not a candidate" "$OUT" "npm ci --cxtail-build"
+# The tails hold raw transcript bytes. A worker the controller kills at the
+# deadline cannot run its own traps, so the controller removes them. The grep shim
+# stalls the worker only once a tail copy exists, proving the case ran.
+cxtail_fixture 2000-01-01T00:00:03.000Z
+mkdir -p "$FIX/cxtail-kill-shim" "$FIX/cxtail-kill-tmp"
+cat > "$FIX/cxtail-kill-shim/grep" <<'EOF'
+#!/usr/bin/env bash
+if [ "${AGENT_TELEMETRY_SAFETY_WORKER:-0}" = 1 ] \
+   && [ -n "$(find "${TMPDIR:-/tmp}" -path '*/.agtel_cxtail.*/*/*' -type f -print 2>/dev/null)" ]; then
+  : > "$CXTAIL_TEST_STALLED"
+  sleep 30
+fi
+exec "$CXTAIL_TEST_GREP" "$@"
+EOF
+chmod +x "$FIX/cxtail-kill-shim/grep"
+cxtail_real_grep=$(command -v grep)
+rm -f "$FIX/cxtail-kill-stalled"
+OUT=$(PATH="$FIX/cxtail-kill-shim:$PATH" CXTAIL_TEST_GREP="$cxtail_real_grep" \
+  CXTAIL_TEST_STALLED="$FIX/cxtail-kill-stalled" TMPDIR="$FIX/cxtail-kill-tmp" \
+  CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxtail" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 1 --section safety --safety-timeout-seconds 8 2>&1)
+cxtail_left=''
+for _ in 1 2 3 4 5; do
+  cxtail_left=$(find "$FIX/cxtail-kill-tmp" -name '.agtel_cxtail.*' -print 2>/dev/null)
+  [ -n "$cxtail_left" ] || break
+  sleep 1
+done
+if [ ! -e "$FIX/cxtail-kill-stalled" ]; then
+  bad "a killed worker's Codex tails are removed" "the worker never stalled with its tails on disk: $(grep -m1 UNKNOWN <<<"$OUT")"
+elif [ -n "$cxtail_left" ]; then
+  bad "a killed worker's Codex tails are removed" "left: $cxtail_left"
+else
+  ok "a killed worker's Codex tails are removed"
+fi
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxonly" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
 if grep -qE 'sleep/poll calls \.\. [1-9]' <<<"$OUT"; then
