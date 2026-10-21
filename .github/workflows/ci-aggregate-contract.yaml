@@ -12,33 +12,20 @@ jobs:
   validate:
     name: Validate CI aggregate execution
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
-      # Read one candidate file through GitHub's API. Never check out or run
-      # candidate code: the inline checker below comes from the ruleset source.
-      - name: Read candidate CI workflow
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CANDIDATE_REPOSITORY: ${{ github.repository }}
-          CANDIDATE_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          gh api "repos/$CANDIDATE_REPOSITORY/contents/.github/workflows/ci.yaml?ref=$CANDIDATE_SHA" \
-            --jq '.content | @base64d' >"$RUNNER_TEMP/candidate-ci.yaml"
+      - name: Check out only the reviewed admission implementation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: trusted
+          persist-credentials: false
 
-      - name: Require the aggregate to always run
-        env:
-          CI_WORKFLOW: ${{ runner.temp }}/candidate-ci.yaml
-        run: |
-          set -euo pipefail
-          condition="$(yq -r '.jobs.status.if // ""' "$CI_WORKFLOW")"
-          # Match literal GitHub syntax without interpolating it in this workflow.
-          # shellcheck disable=SC2016
-          case "$condition" in
-            'always()' | '${''{ always() }}') ;;
-            *)
-              echo 'CI aggregate must use jobs.status.if: always()' >&2
-              exit 1
-              ;;
-          esac
+      - name: Run reviewed aggregate admission
+        # actionlint 1.7.12 cannot parse $/; the checkout is bound to workflow_sha.
+        uses: ./trusted/.github/actions/pr-admission # zizmor: ignore[self-repository]
+        with:
+          candidate-sha: ${{ github.sha }}
