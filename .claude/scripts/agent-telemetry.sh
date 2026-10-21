@@ -4661,30 +4661,35 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
         [ -n "$cx_f" ] || continue
         cx_i=$((cx_i + 1))
         cx_off='' cx_lines='' cx_checkout=''
-        read -r cx_off cx_lines cx_checkout < <(codex_window_cut "$cx_f" "$WINDOW_SINCE")
         cx_dest="$CXTAIL/$cx_i/$(basename "$cx_f")"
-        if [ -n "$cx_off" ] && [ -n "$cx_lines" ] && [ -n "$cx_checkout" ] && mkdir "$CXTAIL/$cx_i" \
-           && tail -c +"$((cx_off + 1))" "$cx_f" > "$cx_dest" 2>/dev/null \
+        # Pin the transcript first, through a hard link (#4391): Codex moves a
+        # run's transcript from sessions/ to archived_sessions/ when the run
+        # settles, and a reader still holding the old path then fails, which
+        # makes the credential stage UNKNOWN. The link is taken before the
+        # window cut reads the file, so neither the cut, the tail copy nor a
+        # full read can lose it; it costs no bytes and still sees appends. When
+        # linking fails (another volume, say) the original path is used, and a
+        # transcript that is genuinely gone still reads as UNKNOWN.
+        cx_src="$cx_f" cx_pin=''
+        if mkdir "$CXTAIL/$cx_i" && ln "$cx_f" "$CXTAIL/$cx_i/.pin" 2>/dev/null; then
+          cx_src="$CXTAIL/$cx_i/.pin" cx_pin=1
+        fi
+        read -r cx_off cx_lines cx_checkout < <(codex_window_cut "$cx_src" "$WINDOW_SINCE")
+        if [ -n "$cx_off" ] && [ -n "$cx_lines" ] && [ -n "$cx_checkout" ] && [ -d "$CXTAIL/$cx_i" ] \
+           && tail -c +"$((cx_off + 1))" "$cx_src" > "$cx_dest" 2>/dev/null \
            && [ -s "$cx_dest" ]; then
+          [ -z "$cx_pin" ] || rm -f "$cx_src"
           cx_kept="${cx_kept}${cx_dest}"$'\n'
           CX_LINE_BASE="${CX_LINE_BASE}${cx_dest}"$'\t'"${cx_lines}"$'\n'
           [ "$cx_checkout" = 0 ] || CX_PRE_CHECKOUT="${CX_PRE_CHECKOUT}${cx_dest}"$'\n'
           cx_cut=$((cx_cut + 1)); cx_cut_bytes=$((cx_cut_bytes + cx_off))
+        elif [ -n "$cx_pin" ] && rm -f "$cx_dest" && mv "$cx_src" "$cx_dest"; then
+          # Read in full under its own basename, still through the pinned link.
+          cx_kept="${cx_kept}${cx_dest}"$'\n'
+          cx_linked=$((cx_linked + 1))
         else
-          # Read in full, through a hard link (#4391): Codex moves a run's
-          # transcript from sessions/ to archived_sessions/ when the run settles,
-          # and a reader still holding the old path then fails, which makes the
-          # credential stage UNKNOWN. The link keeps the same file reachable
-          # after the rename, costs no bytes, and still sees appends. When
-          # linking fails (another volume, say) the original path is kept, and
-          # a transcript that is genuinely gone still reads as UNKNOWN.
-          rm -f "$cx_dest"
-          if mkdir -p "$CXTAIL/$cx_i" && ln "$cx_f" "$cx_dest" 2>/dev/null; then
-            cx_kept="${cx_kept}${cx_dest}"$'\n'
-            cx_linked=$((cx_linked + 1))
-          else
-            cx_kept="${cx_kept}${cx_f}"$'\n'
-          fi
+          [ -z "$cx_pin" ] || rm -f "$cx_src"
+          cx_kept="${cx_kept}${cx_f}"$'\n'
         fi
       done <<<"$CX_CACHE"
       CX_CACHE="${cx_kept%$'\n'}"
