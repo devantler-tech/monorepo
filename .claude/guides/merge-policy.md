@@ -685,6 +685,12 @@ prescription, not the field list** — field vocabularies are per-subcommand, so
 `mergedAt` outright (verified) and `state` does not mean the same thing on every surface. (Measured
 2026-07-29 by distinct sessions: 23 of 204 hit `Unknown JSON field: "merged"`, up from 8 of 211 — and
 up ~3.5× **per merge**, so not an artifact of the densified cadence.)
+**Is it in the merge queue? no `gh pr view` or `gh pr list` field reports merge-queue membership** —
+`isInMergeQueue` is GraphQL-only, so adding it to `--json` voids the whole read. Read it with
+`gh api graphql -f query='{repository(owner:"devantler-tech",name:"<repo>"){pullRequest(number:<n>){state mergedAt isInMergeQueue mergeQueueEntry{state position}}}}'`,
+which also answers `state` in the same call. (Measured 2026-10-21: 48 `Unknown JSON field:
+"isInMergeQueue"` results on 31 days since 2026-07-28, each followed by this GraphQL retry —
+[#4403](https://github.com/devantler-tech/monorepo/issues/4403).)
 **Before an ad hoc `gh <subcommand> --json <fields>` read whose exact command is not already prescribed
 by a reviewed definition or known to have succeeded in this run, discover the vocabulary from the same
 subcommand with bare `--json`** (for example, `gh pr view --json` or `gh run list --json`). That local
