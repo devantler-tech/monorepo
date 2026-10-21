@@ -4654,23 +4654,48 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
   # many lines it skipped, so provenance `line=` still names the source line, and
   # whether its skipped history held a checkout (see BUILD_CHECKOUT_RE).
   if [ -n "$CX_CACHE" ] && [ -n "$WINDOW_SINCE" ]; then
-    cx_cut=0 cx_cut_bytes=0 cx_kept=''
+    cx_cut=0 cx_cut_bytes=0 cx_linked=0 cx_kept=''
     if CXTAIL=$(mktemp -d "${TMPDIR:-/tmp}/.agtel_cxtail.XXXXXXXX"); then
+      # Pin every selected transcript first, through a hard link (#4391): Codex
+      # moves a run's transcript from sessions/ to archived_sessions/ when the
+      # run settles, and a reader still holding the old path then fails, which
+      # makes the credential stage UNKNOWN. All links are taken in one fast pass
+      # before any window cut, so a transcript that settles while an earlier,
+      # larger one is being cut is already pinned; the cut, the tail copy and a
+      # full read then all go through the link. A link costs no bytes and still
+      # sees appends. When linking fails (another volume, say) the original path
+      # is used, and a transcript that is genuinely gone still reads as UNKNOWN.
+      cx_i=0
+      while IFS= read -r cx_f; do
+        [ -n "$cx_f" ] || continue
+        cx_i=$((cx_i + 1))
+        mkdir "$CXTAIL/$cx_i" && ln "$cx_f" "$CXTAIL/$cx_i/.pin" 2>/dev/null || true
+      done <<<"$CX_CACHE"
       cx_i=0
       while IFS= read -r cx_f; do
         [ -n "$cx_f" ] || continue
         cx_i=$((cx_i + 1))
         cx_off='' cx_lines='' cx_checkout=''
-        read -r cx_off cx_lines cx_checkout < <(codex_window_cut "$cx_f" "$WINDOW_SINCE")
         cx_dest="$CXTAIL/$cx_i/$(basename "$cx_f")"
-        if [ -n "$cx_off" ] && [ -n "$cx_lines" ] && [ -n "$cx_checkout" ] && mkdir "$CXTAIL/$cx_i" \
-           && tail -c +"$((cx_off + 1))" "$cx_f" > "$cx_dest" 2>/dev/null \
+        cx_src="$cx_f" cx_pin=''
+        if [ -f "$CXTAIL/$cx_i/.pin" ]; then
+          cx_src="$CXTAIL/$cx_i/.pin" cx_pin=1
+        fi
+        read -r cx_off cx_lines cx_checkout < <(codex_window_cut "$cx_src" "$WINDOW_SINCE")
+        if [ -n "$cx_off" ] && [ -n "$cx_lines" ] && [ -n "$cx_checkout" ] && [ -d "$CXTAIL/$cx_i" ] \
+           && tail -c +"$((cx_off + 1))" "$cx_src" > "$cx_dest" 2>/dev/null \
            && [ -s "$cx_dest" ]; then
+          [ -z "$cx_pin" ] || rm -f "$cx_src"
           cx_kept="${cx_kept}${cx_dest}"$'\n'
           CX_LINE_BASE="${CX_LINE_BASE}${cx_dest}"$'\t'"${cx_lines}"$'\n'
           [ "$cx_checkout" = 0 ] || CX_PRE_CHECKOUT="${CX_PRE_CHECKOUT}${cx_dest}"$'\n'
           cx_cut=$((cx_cut + 1)); cx_cut_bytes=$((cx_cut_bytes + cx_off))
+        elif [ -n "$cx_pin" ] && rm -f "$cx_dest" && mv "$cx_src" "$cx_dest"; then
+          # Read in full under its own basename, still through the pinned link.
+          cx_kept="${cx_kept}${cx_dest}"$'\n'
+          cx_linked=$((cx_linked + 1))
         else
+          [ -z "$cx_pin" ] || rm -f "$cx_src"
           cx_kept="${cx_kept}${cx_f}"$'\n'
         fi
       done <<<"$CX_CACHE"
@@ -4681,7 +4706,8 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
     echo "  codex record window: ${cx_cut} of ${CX_COUNT} transcript(s) read from their first record"
     echo "         at or after ${WINDOW_SINCE}; ${cx_cut_bytes} byte(s) of older history in them"
     echo "         were checked to be in time order but NOT rescanned."
-    echo "         Every other Codex transcript is read in full."
+    echo "         Every other Codex transcript is read in full (${cx_linked} through a hard link"
+    echo "         that survives a move to archived_sessions/ during the scan)."
   fi
   # Combined gate — the credential scan below is format-agnostic and must still
   # run when only the Codex corpus has files, or a Codex-only leak reports clean.

@@ -2517,6 +2517,111 @@ elif [ -n "$cxtail_left" ]; then
 else
   ok "a killed worker's Codex tails are removed"
 fi
+# CLASS: Codex moves a settled run's transcript from sessions/ to
+# archived_sessions/ while the scan reads (#4391). Every selected transcript is
+# pinned through a hard link before the window cut reads it, so the move cannot
+# make the credential stage UNKNOWN. Each shim moves the transcript on its first
+# call inside the worker once the private directory exists: `grep` first runs
+# inside the window cut, `awk` only after the cut, when the readers start.
+cxmove_fixture() {
+  rm -rf "$FIX/cxmove"; mkdir -p "$FIX/cxmove/sessions" "$FIX/cxmove/archived_sessions"
+  { printf '{"timestamp":"%s","type":"session_meta","payload":{"cwd":"%s"}}\n' \
+      "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')" "$FIX/monorepo"
+    printf '{"timestamp":"%s","type":"response_item","payload":{"type":"function_call_output","output":"__AWS__"}}\n' \
+      "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
+  } > "$FIX/cxmove/sessions/m.jsonl"
+  subst "$FIX/cxmove/sessions/m.jsonl"
+  rm -f "$FIX/cxmove-moved"
+}
+# The shim directory is the first PATH entry, so dropping it reaches the real tool.
+cxmove_shim() { # $1 = shim directory, $2 = tool name
+  mkdir -p "$1"
+  cat > "$1/$2" <<'EOF2'
+#!/usr/bin/env bash
+if [ "${AGENT_TELEMETRY_SAFETY_WORKER:-0}" = 1 ] && [ ! -e "$CXMOVE_TEST_MOVED" ] \
+   && [ -n "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name '.agtel_cxtail.*' -print 2>/dev/null)" ]; then
+  mv "$CXMOVE_TEST_SRC" "$CXMOVE_TEST_DST" && : > "$CXMOVE_TEST_MOVED"
+fi
+PATH="${PATH#*:}" exec "$(basename "$0")" "$@"
+EOF2
+  chmod +x "$1/$2"
+}
+mkdir -p "$FIX/cxmove-tmp"
+cxmove_run() { PATH="$1:$PATH" CXMOVE_TEST_MOVED="$FIX/cxmove-moved" \
+  CXMOVE_TEST_SRC="$FIX/cxmove/sessions/m.jsonl" CXMOVE_TEST_DST="$FIX/cxmove/archived_sessions/m.jsonl" \
+  TMPDIR="$FIX/cxmove-tmp" CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxmove" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" bash "$TARGET" --since-days 1 --section safety 2>&1; }
+for cxmove_tool in awk grep; do
+  cxmove_shim "$FIX/cxmove-$cxmove_tool" "$cxmove_tool"
+  cxmove_fixture
+  OUT=$(cxmove_run "$FIX/cxmove-$cxmove_tool")
+  if [ ! -e "$FIX/cxmove-moved" ]; then
+    bad "a Codex transcript moved mid-scan ($cxmove_tool) is still read" "the shim never moved the transcript"
+  else
+    check "a Codex transcript moved mid-scan ($cxmove_tool) is read through its hard link" "$OUT" \
+      "(1 through a hard link"
+    check "a Codex transcript moved mid-scan ($cxmove_tool) is still read in full" "$OUT" "aws-access-key-id"
+    nocheck "a Codex transcript moved mid-scan ($cxmove_tool) keeps the credential scan complete" "$OUT" \
+      "UNKNOWN: the credential scan did not complete"
+  fi
+done
+# Two transcripts: the second settles while the FIRST is being window-cut. It is
+# still read, because every transcript is pinned before any cut starts.
+cxmove_fixture
+cp "$FIX/cxmove/sessions/m.jsonl" "$FIX/cxmove/sessions/n.jsonl"
+# The walk reads newest first, so an older mtime makes n.jsonl the SECOND file:
+# m.jsonl is cut first, and n.jsonl moves before the loop reaches it.
+touch -t "$(date -v-1H +%Y%m%d%H%M 2>/dev/null || date -d "1 hour ago" +%Y%m%d%H%M)" "$FIX/cxmove/sessions/n.jsonl"
+OUT=$(PATH="$FIX/cxmove-grep:$PATH" CXMOVE_TEST_MOVED="$FIX/cxmove-moved" \
+  CXMOVE_TEST_SRC="$FIX/cxmove/sessions/n.jsonl" CXMOVE_TEST_DST="$FIX/cxmove/archived_sessions/n.jsonl" \
+  TMPDIR="$FIX/cxmove-tmp" CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxmove" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" bash "$TARGET" --since-days 1 --section safety 2>&1)
+if [ ! -e "$FIX/cxmove-moved" ]; then
+  bad "a second transcript moved during the first one's cut is still read" "the shim never moved it"
+else
+  check "a second transcript moved during the first one's cut is read through its pin" "$OUT" \
+    "(2 through a hard link"
+  nocheck "a second transcript moved during the first one's cut keeps the credential scan complete" "$OUT" \
+    "UNKNOWN: the credential scan did not complete"
+fi
+# Negative control: when linking fails the original path is kept, and the same
+# move reproduces the race, so the credential stage still fails closed.
+cxmove_shim "$FIX/cxmove-noln" awk
+printf '#!/usr/bin/env bash\nexit 1\n' > "$FIX/cxmove-noln/ln"; chmod +x "$FIX/cxmove-noln/ln"
+cxmove_fixture
+OUT=$(cxmove_run "$FIX/cxmove-noln")
+if [ ! -e "$FIX/cxmove-moved" ]; then
+  bad "an unlinked Codex transcript moved mid-scan fails closed" "the shim never moved the transcript"
+else
+  check "an unlinked Codex transcript is counted as read by path" "$OUT" "(0 through a hard link"
+  check "an unlinked Codex transcript moved mid-scan makes the credential scan UNKNOWN" "$OUT" \
+    "UNKNOWN: the credential scan did not complete"
+fi
+# The pinned links reach raw transcript bytes too. A worker the controller kills
+# at the deadline cannot run its own traps, so the controller removes them. The
+# grep shim stalls the worker only once a pinned link exists, proving the case ran.
+cxmove_fixture
+mkdir -p "$FIX/cxmove-kill-tmp"
+rm -f "$FIX/cxmove-kill-stalled"
+OUT=$(PATH="$FIX/cxtail-kill-shim:$PATH" CXTAIL_TEST_GREP="$cxtail_real_grep" \
+  CXTAIL_TEST_STALLED="$FIX/cxmove-kill-stalled" TMPDIR="$FIX/cxmove-kill-tmp" \
+  CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxmove" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 1 --section safety --safety-timeout-seconds 8 2>&1)
+cxmove_left=''
+for _ in 1 2 3 4 5; do
+  cxmove_left=$(find "$FIX/cxmove-kill-tmp" -name '.agtel_cxtail.*' -print 2>/dev/null)
+  [ -n "$cxmove_left" ] || break
+  sleep 1
+done
+if [ ! -e "$FIX/cxmove-kill-stalled" ]; then
+  bad "a killed worker's pinned Codex links are removed" "the worker never stalled with its links on disk: $(grep -m1 UNKNOWN <<<"$OUT")"
+elif [ -n "$cxmove_left" ]; then
+  bad "a killed worker's pinned Codex links are removed" "left: $cxmove_left"
+elif [ ! -f "$FIX/cxmove/sessions/m.jsonl" ]; then
+  bad "a killed worker's pinned Codex links are removed" "the source transcript went with them"
+else
+  ok "a killed worker's pinned Codex links are removed and the transcript is kept"
+fi
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxonly" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
 if grep -qE 'sleep/poll calls \.\. [1-9]' <<<"$OUT"; then
