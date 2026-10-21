@@ -19,8 +19,7 @@ These notes govern the [Portfolio map](../../AGENTS.md#portfolio-map) table; "th
 > **Archived repositories are outside the active portfolio.** Determine `.archived` live during
 > discovery and omit archived repositories from every health, PR, issue, and automation census even
 > when stale open artifacts remain. They are read-only historical evidence while that live flag is
-> true; never infer current work from an old PR or issue. `devantler-tech/data-product` is archived,
-> so every future run must omit it while it remains archived.
+> true; never infer current work from an old PR or issue.
 
 > **The census is the live org, not this table.** Every non-archived `devantler-tech` repository is
 > inside every health, PR and issue census, whether or not it has a row here. The table names the
