@@ -524,6 +524,31 @@ t_skips_broken_isolation() {
   rm -rf "$root"
 }
 
+t_inherited_git_environment_cannot_redirect_sweeps() {
+  # The caller's Git state must not redirect either the orchestrator's first
+  # repository probe or its per-repository cleanup into unrelated metadata.
+  local root out rc foreign_head
+  root=$(make_root)
+  foreign_head=$(git --git-dir="$root/main.git" rev-parse refs/heads/main)
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
+    GIT_DIR="$root/main.git" GIT_WORK_TREE="$root/repo" \
+    GIT_COMMON_DIR="$root/main.git" GIT_INDEX_FILE="$root/foreign-index" \
+    GIT_OBJECT_DIRECTORY="$root/main.git/objects" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES="$root/sub.git/objects" \
+    GIT_PREFIX=inherited/ GIT_NAMESPACE=inherited GIT_CEILING_DIRECTORIES="$root/repo" \
+    bash "$SUT" apply 24 2>&1); rc=$?
+  if [ "$rc" -eq 0 ] \
+     && [ ! -e "$root/repo/.claude/worktrees/spent-root" ] \
+     && [ ! -e "$root/repo/nested/.claude/worktrees/spent-sub" ] \
+     && [ ! -e "$root/foreign-index" ] \
+     && [ "$(git --git-dir="$root/main.git" rev-parse refs/heads/main)" = "$foreign_head" ]; then
+    ok "inherited Git state cannot redirect root or child cleanup"
+  else
+    bad "inherited Git state cannot redirect root or child cleanup" "rc=$rc $out"
+  fi
+  rm -rf "$root"
+}
+
 t_nested_pass_validates_repository_identity() {
   # #4303: Codex supplies the monorepo's shared worktree root to every child.
   # Without a root-identity check BEFORE enumeration, an empty or aliased child
@@ -1232,6 +1257,7 @@ t_sweeps_root_and_submodules
 t_rewrites_session_worktree_root
 t_skips_uninitialised_submodule
 t_skips_broken_isolation
+t_inherited_git_environment_cannot_redirect_sweeps
 t_nested_pass_validates_repository_identity
 t_nested_pass_validates_session_submodule_identity
 t_aborts_and_exits_nonzero_on_sweep_failure

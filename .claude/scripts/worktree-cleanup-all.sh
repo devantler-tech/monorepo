@@ -27,6 +27,11 @@
 # whichever lane the session belongs to (#3713).
 set -uo pipefail
 
+# Resolve each target from its own metadata, never the launching shell's Git state.
+# Children inherit the cleared environment, including the per-repository cleanup.
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX GIT_NAMESPACE GIT_CEILING_DIRECTORIES
+
 # Positional arguments keep their old meaning and order; --lane may appear anywhere. An empty
 # positional still means its default, as it did before the lane selector existed.
 LANE=claude; P1=""; P2=""; P3=""; npos=0
@@ -321,6 +326,8 @@ nested_failed() {
 # repository_sweep_ready <repo_path> [abort|continue] — identity must be established
 # before either nested or ordinary worktree enumeration (#4303). A shared Codex root
 # exists even for an uninitialised child, where Git otherwise walks up to its parent.
+# Returns 0 for the requested repository or 1 when it must be skipped. Unreadable
+# metadata exits 2 in abort mode; continue mode records that failure and returns 1.
 repository_sweep_ready() {
   local path=$1 on_fail=${2:-abort} toplevel expected
   # NOTE: no early return for a missing .claude/worktrees. The per-repo script reports a
