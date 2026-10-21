@@ -10,7 +10,7 @@ section of its `AGENTS.md` (on the submodule's latest `main`):
 - `github/devantler-tech/.github-public/AGENTS.md` — <https://github.com/devantler-tech/.github/blob/main/AGENTS.md>
 
 Shared composite actions and reusable (`workflow_call`) workflows live in `.github/actions/`
-and `.github/.github/workflows/`. Target `.github` for new shared-CI work, not the retired
+and `.github/.github/workflows/`. Always target `.github` for new shared-CI work, not the retired
 standalone catalogue. The old `actions`
 repository only takes urgent compatibility fixes for unmigrated consumers, each linked to its
 `.github` counterpart; its retirement is tracked by [`.github#240`](https://github.com/devantler-tech/.github/issues/240).
