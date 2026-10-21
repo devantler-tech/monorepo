@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Exercise the exact trusted, inline checker against candidate workflow data.
+# Exercise the repository-owned admission action against candidate workflow data.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 workflow="$root/.github/workflows/ci-aggregate-contract.yaml"
+action="$root/.github/actions/pr-admission/action.yaml"
 tmp="$(mktemp -d)"
 completed=0
 # bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
@@ -16,11 +17,15 @@ on_exit() {
   fi
 }
 trap on_exit EXIT
-fail() { echo "ci-aggregate-contract test: $*" >&2; exit 1; }
+fail() {
+  echo "ci-aggregate-contract test: $*" >&2
+  exit 1
+}
 
 [[ -f "$workflow" ]] || fail "independent aggregate workflow is missing"
-yq -r '.jobs.validate.steps[] | select(.name == "Require the aggregate to always run") | .run' "$workflow" >"$tmp/check.sh"
-[[ -s "$tmp/check.sh" ]] || fail "inline checker is missing"
+[[ -f "$action" ]] || fail "repository-owned admission action is missing"
+yq -r '.runs.steps[] | select(.name == "Require the aggregate to always run") | .run' "$action" >"$tmp/check.sh"
+[[ -s "$tmp/check.sh" ]] || fail "admission checker is missing"
 
 check() { CI_WORKFLOW="$tmp/ci.yaml" bash "$tmp/check.sh" >"$tmp/output" 2>&1; }
 expect_success() { check || fail "expected success: $1"; }
@@ -70,7 +75,35 @@ expect_failure "malformed candidate YAML"
   fail "the control must not be path- or branch-filtered"
 [[ "$(yq -r '.jobs.validate.permissions.contents' "$workflow")" == read ]] ||
   fail "candidate access must be read-only"
-[[ "$(yq -r '[.jobs.validate.steps[] | select(has("uses"))] | length' "$workflow")" == 0 ]] ||
-  fail "the control must not check out or execute candidate actions"
+yq -o=json '.' "$workflow" | jq -e '
+  [.jobs.validate.steps[] | select(.uses != null)] as $actions |
+  ($actions | length) == 2 and
+  ($actions[0].uses | test("^actions/checkout@[0-9a-f]{40}$")) and
+  $actions[0].with == {
+    "repository":"${{ github.repository }}",
+    "ref":"${{ github.workflow_sha }}",
+    "path":"trusted",
+    "persist-credentials":false
+  } and
+  $actions[1].uses == "./trusted/.github/actions/pr-admission" and
+  $actions[1].with == {"candidate-sha":"${{ github.sha }}"} and
+  all($actions[]; .if == null and (.["continue-on-error"] // false) == false)
+' >/dev/null || fail "only the reviewed source may supply the admission action"
+yq -o=json '.' "$action" | jq -e '
+  .runs.using == "composite" and
+  (.runs.steps | length) == 2 and
+  all(.runs.steps[]; .uses == null and .shell == "bash" and .if == null and (.["continue-on-error"] // false) == false) and
+  .runs.steps[0].env == {
+    "GH_TOKEN":"${{ github.token }}",
+    "CANDIDATE_REPOSITORY":"${{ github.repository }}",
+    "CANDIDATE_SHA":"${{ inputs.candidate-sha }}"
+  } and
+  .runs.steps[1].env == {"CI_WORKFLOW":"${{ runner.temp }}/candidate-ci.yaml"} and
+  .inputs["candidate-sha"].required == true
+' >/dev/null || fail "candidate collection must remain an API-only data read before the actual checker"
+jq -e '. == {version:1,"timeout-minutes":10}' "$root/.github/pr-admission.json" >/dev/null ||
+  fail "shared admission must retain a bounded product-owned execution budget"
+[[ "$(yq -r '.jobs.validate."timeout-minutes"' "$workflow")" == "$(jq -r '."timeout-minutes"' "$root/.github/pr-admission.json")" ]] ||
+  fail "the workflow timeout must match the shared admission budget"
 completed=1
 echo "ci-aggregate-contract: OK"
