@@ -2428,6 +2428,54 @@ printf '%s\n' '{"type":"event_msg","payload":{"pad":"z"}}' >> "$FIX/cxtail/sessi
 OUT=$(cxtail_run 1)
 check "a Codex record without a leading timestamp keeps the full read" "$OUT" \
   "codex record window: 0 of 1 transcript(s) read from their first record"
+# Fail closed: the history before the cut is not read, but a search probe that
+# lands on a record OLDER than an earlier one proves it out of order. The middle
+# of this file goes back a day, where the first probe lands; the tail is ordered.
+{ printf '{"timestamp":"2000-01-02T00:00:00.000Z","type":"session_meta","payload":{"cwd":"%s"}}\n' "$FIX/monorepo"
+  cxtail_pad=$(printf '%0900d' 0) cxtail_i=0
+  while [ "$cxtail_i" -lt 3000 ]; do
+    printf '{"timestamp":"2000-01-01T00:00:01.000Z","type":"event_msg","payload":{"pad":"%s"}}\n' "$cxtail_pad"
+    cxtail_i=$((cxtail_i + 1))
+  done
+  printf '{"timestamp":"%s","type":"event_msg","payload":{"pad":"x"}}\n' "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
+} > "$FIX/cxtail/sessions/r.jsonl"
+OUT=$(cxtail_run 1)
+check "a search probe out of time order makes the Codex file read in full" "$OUT" \
+  "codex record window: 0 of 1 transcript(s) read from their first record"
+# The tails hold raw transcript bytes. A worker the controller kills at the
+# deadline cannot run its own traps, so the controller removes them. The grep shim
+# stalls the worker only once its tail directory exists, proving the case ran.
+cxtail_fixture 2000-01-01T00:00:03.000Z
+mkdir -p "$FIX/cxtail-kill-shim" "$FIX/cxtail-kill-tmp"
+cat > "$FIX/cxtail-kill-shim/grep" <<'EOF'
+#!/usr/bin/env bash
+if [ "${AGENT_TELEMETRY_SAFETY_WORKER:-0}" = 1 ] \
+   && [ -n "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name '.agtel_cxtail.*' -print 2>/dev/null)" ]; then
+  : > "$CXTAIL_TEST_STALLED"
+  sleep 30
+fi
+exec "$CXTAIL_TEST_GREP" "$@"
+EOF
+chmod +x "$FIX/cxtail-kill-shim/grep"
+cxtail_real_grep=$(command -v grep)
+rm -f "$FIX/cxtail-kill-stalled"
+OUT=$(PATH="$FIX/cxtail-kill-shim:$PATH" CXTAIL_TEST_GREP="$cxtail_real_grep" \
+  CXTAIL_TEST_STALLED="$FIX/cxtail-kill-stalled" TMPDIR="$FIX/cxtail-kill-tmp" \
+  CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxtail" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 1 --section safety --safety-timeout-seconds 8 2>&1)
+cxtail_left=''
+for _ in 1 2 3 4 5; do
+  cxtail_left=$(find "$FIX/cxtail-kill-tmp" -name '.agtel_cxtail.*' -print 2>/dev/null)
+  [ -n "$cxtail_left" ] || break
+  sleep 1
+done
+if [ ! -e "$FIX/cxtail-kill-stalled" ]; then
+  bad "a killed worker's Codex tails are removed" "the worker never stalled with its tails on disk: $(grep -m1 UNKNOWN <<<"$OUT")"
+elif [ -n "$cxtail_left" ]; then
+  bad "a killed worker's Codex tails are removed" "left: $cxtail_left"
+else
+  ok "a killed worker's Codex tails are removed"
+fi
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxonly" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
 if grep -qE 'sleep/poll calls \.\. [1-9]' <<<"$OUT"; then

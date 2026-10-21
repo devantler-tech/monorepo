@@ -249,6 +249,11 @@ run_safety_early() (
             "$cleanup_dir"/.agtel_bounded.*)
               rm -f "$path/status" "$path/report" "$path/worker-status"
               rmdir "$path" 2>/dev/null || true ;;
+            # The worker's Codex window tails (#3830) hold raw transcript bytes.
+            # Its own traps remove them, but not when this controller has to
+            # SIGKILL it at the deadline, so they are removed here as well.
+            "$cleanup_dir"/.agtel_cxtail.*)
+              rm -rf "$path" ;;
           esac
         else
           rm -f "$path"
@@ -2830,8 +2835,10 @@ populate_session_cache() {
 # nothing when the whole file must be read — FAIL CLOSED: a probed record that
 # does not lead with a usable timestamp, a timestamp that goes backwards anywhere
 # in the tail, or a tail with no in-window record all mean "read everything".
-# What the tail cannot check is the history before the cut, which is why the
-# caller reports those bytes rather than dropping them silently.
+# The history before the cut is NOT proven in order: reading it all is the cost
+# this avoids (about 50 s per 2 GB with the host tools, measured 2026-10-21), so
+# it is checked only at the search probes. That is why the caller reports those
+# bytes as not rescanned rather than counting them as covered.
 #
 # `<start> <ts>` of the first record of file $1 starting at or after byte $2 (the
 # record straddling $2 is skipped unless $2 is 0); `EOF` or `BAD` otherwise.
@@ -2848,7 +2855,7 @@ codex_record_at() {
     END { if (!done) print "EOF" }'
 }
 codex_window_offset() {
-  local f="$1" since="$2" size lo hi mid probe pos
+  local f="$1" since="$2" size lo hi mid probe pos lo_ts hi_ts='' ts
   [ -n "$since" ] && [ -f "$f" ] || return 0
   size=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
   case "$size" in ''|*[!0-9]*) return 0 ;; esac
@@ -2856,14 +2863,20 @@ codex_window_offset() {
   case "$probe" in BAD|EOF|'') return 0 ;; esac
   # The first record is already in the window: the whole file is in scope.
   [ "${probe#* }" \< "$since" ] || return 0
-  lo=0; hi=$size
+  lo=0; hi=$size; lo_ts=${probe#* }
   while [ $((hi - lo)) -gt 1048576 ]; do
     mid=$(( (lo + hi) / 2 ))
     probe=$(codex_record_at "$f" "$mid")
     case "$probe" in
       BAD|'') return 0 ;;
       EOF) hi=$mid ;;
-      *) if [ "${probe#* }" \< "$since" ]; then lo=$mid; else hi=$mid; fi ;;
+      *)
+        # Every probe must sit between its neighbours in time as well as in
+        # position. Probes cannot prove the prefix ordered (only reading it can),
+        # but one that disagrees proves it is not, and then everything is read.
+        ts=${probe#* }
+        if [ "$ts" \< "$lo_ts" ] || { [ -n "$hi_ts" ] && [ "$hi_ts" \< "$ts" ]; }; then return 0; fi
+        if [ "$ts" \< "$since" ]; then lo=$mid; lo_ts=$ts; else hi=$mid; hi_ts=$ts; fi ;;
     esac
   done
   # Walk forward from the last probe known to sit before the window, and check
@@ -4668,7 +4681,8 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
     fi
     echo "  codex record window: ${cx_cut} of ${CX_COUNT} transcript(s) read from their first record"
     echo "         at or after ${WINDOW_SINCE}; ${cx_cut_bytes} byte(s) of older history in them"
-    echo "         were NOT rescanned. Every other Codex transcript is read in full."
+    echo "         were NOT rescanned (only the tail read is proven in time order)."
+    echo "         Every other Codex transcript is read in full."
   fi
   # Combined gate — the credential scan below is format-agnostic and must still
   # run when only the Codex corpus has files, or a Codex-only leak reports clean.
