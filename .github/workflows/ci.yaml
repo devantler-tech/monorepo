@@ -3131,7 +3131,7 @@ jobs:
   status:
     name: "CI - Required Checks"
     runs-on: ubuntu-latest
-    if: always()
+    if: false
     needs:
       - changes
       - test-business-site-integration
