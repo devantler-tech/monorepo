@@ -2517,6 +2517,59 @@ elif [ -n "$cxtail_left" ]; then
 else
   ok "a killed worker's Codex tails are removed"
 fi
+# CLASS: Codex moves a settled run's transcript from sessions/ to
+# archived_sessions/ while the scan reads (#4391). A transcript read in full is
+# held through a hard link, so the move cannot make the credential stage UNKNOWN.
+# The awk shim moves the transcript on the worker's first awk call after its
+# private directory exists, which is after selection and before any reader.
+cxmove_fixture() {
+  rm -rf "$FIX/cxmove"; mkdir -p "$FIX/cxmove/sessions" "$FIX/cxmove/archived_sessions"
+  { printf '{"timestamp":"%s","type":"session_meta","payload":{"cwd":"%s"}}\n' \
+      "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')" "$FIX/monorepo"
+    printf '{"timestamp":"%s","type":"response_item","payload":{"type":"function_call_output","output":"__AWS__"}}\n' \
+      "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
+  } > "$FIX/cxmove/sessions/m.jsonl"
+  subst "$FIX/cxmove/sessions/m.jsonl"
+  rm -f "$FIX/cxmove-moved"
+}
+mkdir -p "$FIX/cxmove-shim" "$FIX/cxmove-tmp"
+cat > "$FIX/cxmove-shim/awk" <<'EOF'
+#!/usr/bin/env bash
+if [ "${AGENT_TELEMETRY_SAFETY_WORKER:-0}" = 1 ] && [ ! -e "$CXMOVE_TEST_MOVED" ] \
+   && [ -n "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name '.agtel_cxtail.*' -print 2>/dev/null)" ]; then
+  mv "$CXMOVE_TEST_SRC" "$CXMOVE_TEST_DST" && : > "$CXMOVE_TEST_MOVED"
+fi
+exec "$CXMOVE_TEST_AWK" "$@"
+EOF
+chmod +x "$FIX/cxmove-shim/awk"
+cxmove_run() { PATH="$1:$PATH" CXMOVE_TEST_AWK="$(command -v awk)" CXMOVE_TEST_MOVED="$FIX/cxmove-moved" \
+  CXMOVE_TEST_SRC="$FIX/cxmove/sessions/m.jsonl" CXMOVE_TEST_DST="$FIX/cxmove/archived_sessions/m.jsonl" \
+  TMPDIR="$FIX/cxmove-tmp" CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxmove" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" bash "$TARGET" --since-days 1 --section safety 2>&1; }
+cxmove_fixture
+OUT=$(cxmove_run "$FIX/cxmove-shim")
+if [ ! -e "$FIX/cxmove-moved" ]; then
+  bad "a Codex transcript moved mid-scan is still read" "the shim never moved the transcript"
+else
+  check "a Codex transcript moved mid-scan is read through its hard link" "$OUT" "(1 through a hard link"
+  check "a Codex transcript moved mid-scan is still read in full" "$OUT" "aws-access-key-id"
+  nocheck "a Codex transcript moved mid-scan keeps the credential scan complete" "$OUT" \
+    "UNKNOWN: the credential scan did not complete"
+fi
+# Negative control: when linking fails the original path is kept, and the same
+# move reproduces the race, so the credential stage still fails closed.
+mkdir -p "$FIX/cxmove-noln"
+cp "$FIX/cxmove-shim/awk" "$FIX/cxmove-noln/awk"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$FIX/cxmove-noln/ln"; chmod +x "$FIX/cxmove-noln/ln"
+cxmove_fixture
+OUT=$(cxmove_run "$FIX/cxmove-noln")
+if [ ! -e "$FIX/cxmove-moved" ]; then
+  bad "an unlinked Codex transcript moved mid-scan fails closed" "the shim never moved the transcript"
+else
+  check "an unlinked Codex transcript is counted as read by path" "$OUT" "(0 through a hard link"
+  check "an unlinked Codex transcript moved mid-scan makes the credential scan UNKNOWN" "$OUT" \
+    "UNKNOWN: the credential scan did not complete"
+fi
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxonly" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
 if grep -qE 'sleep/poll calls \.\. [1-9]' <<<"$OUT"; then

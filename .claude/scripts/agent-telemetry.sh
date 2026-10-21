@@ -4654,7 +4654,7 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
   # many lines it skipped, so provenance `line=` still names the source line, and
   # whether its skipped history held a checkout (see BUILD_CHECKOUT_RE).
   if [ -n "$CX_CACHE" ] && [ -n "$WINDOW_SINCE" ]; then
-    cx_cut=0 cx_cut_bytes=0 cx_kept=''
+    cx_cut=0 cx_cut_bytes=0 cx_linked=0 cx_kept=''
     if CXTAIL=$(mktemp -d "${TMPDIR:-/tmp}/.agtel_cxtail.XXXXXXXX"); then
       cx_i=0
       while IFS= read -r cx_f; do
@@ -4671,7 +4671,20 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
           [ "$cx_checkout" = 0 ] || CX_PRE_CHECKOUT="${CX_PRE_CHECKOUT}${cx_dest}"$'\n'
           cx_cut=$((cx_cut + 1)); cx_cut_bytes=$((cx_cut_bytes + cx_off))
         else
-          cx_kept="${cx_kept}${cx_f}"$'\n'
+          # Read in full, through a hard link (#4391): Codex moves a run's
+          # transcript from sessions/ to archived_sessions/ when the run settles,
+          # and a reader still holding the old path then fails, which makes the
+          # credential stage UNKNOWN. The link keeps the same file reachable
+          # after the rename, costs no bytes, and still sees appends. When
+          # linking fails (another volume, say) the original path is kept, and
+          # a transcript that is genuinely gone still reads as UNKNOWN.
+          rm -f "$cx_dest"
+          if mkdir -p "$CXTAIL/$cx_i" && ln "$cx_f" "$cx_dest" 2>/dev/null; then
+            cx_kept="${cx_kept}${cx_dest}"$'\n'
+            cx_linked=$((cx_linked + 1))
+          else
+            cx_kept="${cx_kept}${cx_f}"$'\n'
+          fi
         fi
       done <<<"$CX_CACHE"
       CX_CACHE="${cx_kept%$'\n'}"
@@ -4681,7 +4694,8 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
     echo "  codex record window: ${cx_cut} of ${CX_COUNT} transcript(s) read from their first record"
     echo "         at or after ${WINDOW_SINCE}; ${cx_cut_bytes} byte(s) of older history in them"
     echo "         were checked to be in time order but NOT rescanned."
-    echo "         Every other Codex transcript is read in full."
+    echo "         Every other Codex transcript is read in full (${cx_linked} through a hard link"
+    echo "         that survives a move to archived_sessions/ during the scan)."
   fi
   # Combined gate — the credential scan below is format-agnostic and must still
   # run when only the Codex corpus has files, or a Codex-only leak reports clean.
