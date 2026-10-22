@@ -677,7 +677,7 @@ census_contract() {
   }
   search_line="$(printf '%s\n' "${section}" | grep '^`gh api .*search/issues ' || true)"
   if [ "$(printf '%s\n' "${search_line}" | grep -c '^`gh api ' || true)" != 1 ] ||
-    ! grep -qF -- "${census_search} | jq -nr 'input | " <<<"${search_line}"; then
+    [[ "${search_line}" != "\`${census_search} | jq -nr 'input | "* ]]; then
     echo 'missing complete active-repository census command'; return 1
   fi
   grep -qxF -- "\`${census_pipeline}\`." <<<"${section}" || {
@@ -713,6 +713,11 @@ expect_contract 'including archived repositories is rejected' 1 "${guide_text/ar
 expect_contract 'a census gh cannot run (--slurp with --jq) is rejected' 1 \
   "${guide_text/-f per_page=100 | jq -nr \'input | /-f per_page=100 --jq \'}" \
   'missing complete active-repository census command'
+# The jq cases below run only the filter, so the line must BEGIN with the exact command: a
+# substring match accepts a prefix that makes gh exit before the search runs.
+expect_contract 'a census line with a prefix before the command is rejected' 1 \
+  "${guide_text/\`gh api --paginate --slurp /\`gh api --definitely-invalid gh api --paginate --slurp }" \
+  'missing complete active-repository census command'
 
 # Execute the guide's actual jq program on complete, partial and inconsistent Search API pages.
 # Slurping before this projection prevents a good first page from escaping a later failure.
@@ -735,6 +740,9 @@ expect_search 'all complete search pages are emitted' 0 "[${first},${second}]" \
 expect_search 'a partial later page emits no earlier URLs' 5 "[${first},${second/false/true}]" ''
 expect_search 'missing pages cannot look like a complete census' 5 "[${first}]" ''
 expect_search 'duplicated pages cannot hide a missing issue' 5 "[${first},${first}]" ''
+# Only the equal-totals clause rejects this: item count and IDs match the first page's total.
+expect_search 'totals that change between pages are UNKNOWN' 5 \
+  "[${first},${second/\"total_count\":2/\"total_count\":3}]" ''
 expect_search 'a search above the API result cap is UNKNOWN' 5 \
   '[{"incomplete_results":false,"total_count":1001,"items":[]}]' ''
 expect_search 'an authenticated complete empty search is empty' 0 \
