@@ -919,6 +919,61 @@ func readAnew(endpoint string) ([]byte, error) {
 	return forgeRead(endpoint)
 }
 
+// confirmZero rereads a zero search without its archived:false qualifier.
+// Search intermittently answers a complete-looking zero for that qualifier,
+// sometimes twice in a row, while the same query without it answers 33; a
+// false zero would put every parked pull request back in the queue (#4435).
+// Items the reread finds only in archived repositories still confirm zero.
+func confirmZero(org, endpoint string, typed bool) error {
+	raw, err := readAnew(unqualified(endpoint))
+	if err != nil {
+		return errors.New("forge read failed confirming a zero search -- UNKNOWN, never zero")
+	}
+	again, err := searchIssues(raw, typed)
+	if err != nil {
+		return err
+	}
+	active := 0
+	archived := make(map[string]bool)
+	for _, item := range again {
+		is, seen := archived[item.Repo]
+		if !seen {
+			if is, err = repoArchived(org, item.Repo); err != nil {
+				return err
+			}
+			archived[item.Repo] = is
+		}
+		if !is {
+			active++
+		}
+	}
+	if active != 0 {
+		return fmt.Errorf("search answered zero, then %d -- UNKNOWN", active)
+	}
+	return nil
+}
+
+// repoArchived reads whether repo is archived. A read without the flag is
+// UNKNOWN, never an active repository nor an archived one.
+func repoArchived(org, repo string) (bool, error) {
+	raw, err := forgeRead("repos/" + org + "/" + repo)
+	if err != nil {
+		return false, errors.New("forge read failed confirming a zero search -- UNKNOWN, never zero")
+	}
+	var r struct {
+		Archived *bool `json:"archived"`
+	}
+	if json.Unmarshal(raw, &r) != nil || r.Archived == nil {
+		return false, errors.New("unreadable repository -- UNKNOWN")
+	}
+	return *r.Archived, nil
+}
+
+// unqualified is endpoint without the archived:false qualifier.
+func unqualified(endpoint string) string {
+	return strings.Replace(endpoint, "+archived:false", "", 1)
+}
+
 func load(o options, stdin io.Reader) ([]issue, error) {
 	if o.input != "" {
 		var raw []byte
@@ -950,6 +1005,11 @@ func load(o options, stdin io.Reader) ([]issue, error) {
 		page, err := searchIssues(raw, read.typed)
 		if err != nil {
 			return nil, err
+		}
+		if len(page) == 0 {
+			if err := confirmZero(o.org, read.endpoint, read.typed); err != nil {
+				return nil, err
+			}
 		}
 		records = append(records, page...)
 	}
