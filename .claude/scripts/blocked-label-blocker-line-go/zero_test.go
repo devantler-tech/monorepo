@@ -9,22 +9,27 @@ import (
 
 // A zero search is confirmed without the archived:false qualifier before it is
 // believed (#4435): a zero followed by open items is UNKNOWN, and a zero the
-// unqualified read agrees with stays clean.
+// unqualified read agrees with, or finds only in archived repositories, stays
+// clean. (An org with no issue at all is UNKNOWN for its own reason, #3822.)
 func TestZeroSearchIsConfirmed(t *testing.T) {
 	pull := forgeParkedPull(t, "platform")
+	active := `{"archived":false}`
 	for _, tc := range []struct {
-		name, first, confirm string
-		confirmErr           error
-		parked               bool
-		code                 int
-		want                 string
+		name, first, confirm, repo string
+		confirmErr                 error
+		parked                     bool
+		code                       int
+		want                       string
 	}{
-		{"pull zero then items", searchPage(), searchPage(pull), nil, true, 2, "search answered zero, then 1"},
-		{"pull zero then failure", searchPage(), "", errors.New("down"), true, 2, "confirming a zero search"},
-		{"pull zero then malformed", searchPage(), "not JSON", nil, true, 2, "unreadable search page"},
-		{"pull zero then incomplete", searchPage(), `{"total_count":0,"incomplete_results":true,"items":[]}`, nil, true, 2, "incomplete_results"},
-		{"pull zero confirmed", searchPage(), searchPage(), nil, true, 0, "CHECKED labelled=0 parked=0 actionable=0"},
-		{"issue zero then items", searchPage(), searchPage(forgeIssue), nil, false, 2, "search answered zero, then 1"},
+		{"pull zero then items", searchPage(), searchPage(pull), active, nil, true, 2, "search answered zero, then 1"},
+		{"pull zero then failure", searchPage(), "", "", errors.New("down"), true, 2, "confirming a zero search"},
+		{"pull zero then malformed", searchPage(), "not JSON", "", nil, true, 2, "unreadable search page"},
+		{"pull zero then incomplete", searchPage(), `{"total_count":0,"incomplete_results":true,"items":[]}`, "", nil, true, 2, "incomplete_results"},
+		{"pull zero confirmed", searchPage(), searchPage(), "", nil, true, 0, "CHECKED labelled=0 parked=0 actionable=0"},
+		{"issue zero then items", searchPage(), searchPage(forgeIssue), active, nil, false, 2, "search answered zero, then 1"},
+		{"pull zero then only archived items", searchPage(), searchPage(pull), `{"archived":true}`, nil, true, 0, "CHECKED labelled=0 parked=0 actionable=0"},
+		{"issue zero then only archived items", searchPage(), searchPage(forgeIssue), `{"archived":true}`, nil, false, 2, "read no open Security issue"},
+		{"pull zero then unreadable repository", searchPage(), searchPage(pull), `{}`, nil, true, 2, "unreadable repository"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			original := forgeRead
@@ -44,6 +49,8 @@ func TestZeroSearchIsConfirmed(t *testing.T) {
 					return []byte(tc.first), nil
 				case unqualified(target):
 					return []byte(tc.confirm), tc.confirmErr
+				case "repos/o/platform":
+					return []byte(tc.repo), nil
 				case searchEndpoint("o"), pullEndpoint("o"):
 					return []byte(searchPage(forgeIssue)), nil
 				default:

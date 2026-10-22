@@ -923,8 +923,8 @@ func readAnew(endpoint string) ([]byte, error) {
 // Search intermittently answers a complete-looking zero for that qualifier,
 // sometimes twice in a row, while the same query without it answers 33; a
 // false zero would put every parked pull request back in the queue (#4435).
-// Open items only in archived repositories also read as UNKNOWN: fail closed.
-func confirmZero(endpoint string, typed bool) error {
+// Items the reread finds only in archived repositories still confirm zero.
+func confirmZero(org, endpoint string, typed bool) error {
 	raw, err := readAnew(unqualified(endpoint))
 	if err != nil {
 		return errors.New("forge read failed confirming a zero search -- UNKNOWN, never zero")
@@ -933,10 +933,40 @@ func confirmZero(endpoint string, typed bool) error {
 	if err != nil {
 		return err
 	}
-	if len(again) != 0 {
-		return fmt.Errorf("search answered zero, then %d -- UNKNOWN", len(again))
+	active := 0
+	archived := make(map[string]bool)
+	for _, item := range again {
+		is, seen := archived[item.Repo]
+		if !seen {
+			if is, err = repoArchived(org, item.Repo); err != nil {
+				return err
+			}
+			archived[item.Repo] = is
+		}
+		if !is {
+			active++
+		}
+	}
+	if active != 0 {
+		return fmt.Errorf("search answered zero, then %d -- UNKNOWN", active)
 	}
 	return nil
+}
+
+// repoArchived reads whether repo is archived. A read without the flag is
+// UNKNOWN, never an active repository nor an archived one.
+func repoArchived(org, repo string) (bool, error) {
+	raw, err := forgeRead("repos/" + org + "/" + repo)
+	if err != nil {
+		return false, errors.New("forge read failed confirming a zero search -- UNKNOWN, never zero")
+	}
+	var r struct {
+		Archived *bool `json:"archived"`
+	}
+	if json.Unmarshal(raw, &r) != nil || r.Archived == nil {
+		return false, errors.New("unreadable repository -- UNKNOWN")
+	}
+	return *r.Archived, nil
 }
 
 // unqualified is endpoint without the archived:false qualifier.
@@ -977,7 +1007,7 @@ func load(o options, stdin io.Reader) ([]issue, error) {
 			return nil, err
 		}
 		if len(page) == 0 {
-			if err := confirmZero(read.endpoint, read.typed); err != nil {
+			if err := confirmZero(o.org, read.endpoint, read.typed); err != nil {
 				return nil, err
 			}
 		}
