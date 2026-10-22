@@ -1,5 +1,7 @@
 # 🗂️ Devantler's Monorepo
 
+<!-- Temporary positive admission control for devantler-tech/.github#693; never merge. -->
+
 Every project I actively work on, gathered in one place.
 
 The public [Devantler Tech website](https://devantler.tech) is owned by
