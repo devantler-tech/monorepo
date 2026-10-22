@@ -919,15 +919,13 @@ func readAnew(endpoint string) ([]byte, error) {
 	return forgeRead(endpoint)
 }
 
-// zeroConfirmDelay spaces the second read of a zero search; tests set it to 0.
-var zeroConfirmDelay = 3 * time.Second
-
-// confirmZero reads a zero search once more. Search can briefly answer a
-// complete-looking zero for an org with open items, and a false zero would
-// put every parked pull request back in the queue (#4435).
+// confirmZero rereads a zero search without its archived:false qualifier.
+// Search intermittently answers a complete-looking zero for that qualifier,
+// sometimes twice in a row, while the same query without it answers 33; a
+// false zero would put every parked pull request back in the queue (#4435).
+// Open items only in archived repositories also read as UNKNOWN: fail closed.
 func confirmZero(endpoint string, typed bool) error {
-	time.Sleep(zeroConfirmDelay)
-	raw, err := readAnew(endpoint)
+	raw, err := readAnew(unqualified(endpoint))
 	if err != nil {
 		return errors.New("forge read failed confirming a zero search -- UNKNOWN, never zero")
 	}
@@ -939,6 +937,11 @@ func confirmZero(endpoint string, typed bool) error {
 		return fmt.Errorf("search answered zero, then %d -- UNKNOWN", len(again))
 	}
 	return nil
+}
+
+// unqualified is endpoint without the archived:false qualifier.
+func unqualified(endpoint string) string {
+	return strings.Replace(endpoint, "+archived:false", "", 1)
 }
 
 func load(o options, stdin io.Reader) ([]issue, error) {

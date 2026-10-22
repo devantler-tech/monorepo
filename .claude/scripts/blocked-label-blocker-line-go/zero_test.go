@@ -3,33 +3,28 @@ package main
 import (
 	"bytes"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 )
 
-func TestMain(m *testing.M) {
-	zeroConfirmDelay = 0
-	os.Exit(m.Run())
-}
-
-// A zero search is read once more before it is believed (#4435): a transient
-// zero followed by open items is UNKNOWN, and a zero read twice stays clean.
+// A zero search is confirmed without the archived:false qualifier before it is
+// believed (#4435): a zero followed by open items is UNKNOWN, and a zero the
+// unqualified read agrees with stays clean.
 func TestZeroSearchIsConfirmed(t *testing.T) {
 	pull := forgeParkedPull(t, "platform")
 	for _, tc := range []struct {
-		name    string
-		parked  bool
-		replies []string
-		errs    []error
-		code    int
-		want    string
+		name, first, confirm string
+		confirmErr           error
+		parked               bool
+		code                 int
+		want                 string
 	}{
-		{"pull zero then items", true, []string{searchPage(), searchPage(pull)}, nil, 2, "search answered zero, then 1"},
-		{"pull zero then failure", true, []string{searchPage(), ""}, []error{nil, errors.New("down")}, 2, "confirming a zero search"},
-		{"pull zero then malformed", true, []string{searchPage(), "not JSON"}, nil, 2, "unreadable search page"},
-		{"pull zero twice", true, []string{searchPage(), searchPage()}, nil, 0, "CHECKED labelled=0 parked=0 actionable=0"},
-		{"issue zero then items", false, []string{searchPage(), searchPage(forgeIssue)}, nil, 2, "search answered zero, then 1"},
+		{"pull zero then items", searchPage(), searchPage(pull), nil, true, 2, "search answered zero, then 1"},
+		{"pull zero then failure", searchPage(), "", errors.New("down"), true, 2, "confirming a zero search"},
+		{"pull zero then malformed", searchPage(), "not JSON", nil, true, 2, "unreadable search page"},
+		{"pull zero then incomplete", searchPage(), `{"total_count":0,"incomplete_results":true,"items":[]}`, nil, true, 2, "incomplete_results"},
+		{"pull zero confirmed", searchPage(), searchPage(), nil, true, 0, "CHECKED labelled=0 parked=0 actionable=0"},
+		{"issue zero then items", searchPage(), searchPage(forgeIssue), nil, false, 2, "search answered zero, then 1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			original := forgeRead
@@ -38,20 +33,17 @@ func TestZeroSearchIsConfirmed(t *testing.T) {
 			if !tc.parked {
 				target = searchEndpoint("o")
 			}
-			reads := 0
+			if unqualified(target) == target {
+				t.Fatalf("endpoint %q carries no archived:false qualifier to drop", target)
+			}
+			reads := make(map[string]int)
 			forgeRead = func(endpoint string) ([]byte, error) {
+				reads[endpoint]++
 				switch endpoint {
 				case target:
-					i := reads
-					reads++
-					if i >= len(tc.replies) {
-						return nil, errors.New("read a zero search more than twice")
-					}
-					var err error
-					if i < len(tc.errs) {
-						err = tc.errs[i]
-					}
-					return []byte(tc.replies[i]), err
+					return []byte(tc.first), nil
+				case unqualified(target):
+					return []byte(tc.confirm), tc.confirmErr
 				case searchEndpoint("o"), pullEndpoint("o"):
 					return []byte(searchPage(forgeIssue)), nil
 				default:
@@ -71,8 +63,8 @@ func TestZeroSearchIsConfirmed(t *testing.T) {
 			if code == 2 && strings.Contains(got, "CHECKED") {
 				t.Fatalf("UNKNOWN still printed a digest; out:\n%s", got)
 			}
-			if reads != 2 {
-				t.Fatalf("zero search read %d times, want 2", reads)
+			if reads[target] != 1 || reads[unqualified(target)] != 1 {
+				t.Fatalf("want one qualified and one unqualified read; reads=%v", reads)
 			}
 		})
 	}
