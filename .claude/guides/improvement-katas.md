@@ -56,12 +56,18 @@ outcome issues with scope and recovery; it does not change limits or authorize u
 
 Every Agent Improver run reads the Kata census before new intake, whichever lane delivered the
 Kata: neither lane's native ledger lists the other's Katas, so #4030 stayed DUE through 39 Claude
-Improver dispatches (monorepo#4429). List them with
-`gh api -X GET search/issues -f q='org:devantler-tech is:issue is:open type:Kata' --jq '.items[].html_url'`
+Improver dispatches (monorepo#4429). For each live, non-archived repository in the **Portfolio map**,
+list them with the command below, replacing `<repo>` with that declared repository name. Repeated
+`repo:` qualifiers may combine declared repositories within the Search API's query-size limit;
+do not expand the census to repositories outside the map.
+`gh api --paginate --slurp -X GET search/issues -f q='repo:devantler-tech/<repo> archived:false is:issue is:open type:Kata' -f per_page=100 --jq 'if type == "array" and length > 0 and all(.[]; .incomplete_results == false and (.items | type) == "array" and (.total_count | type) == "number") then .[0].total_count as $total | [.[].items[]] as $items | if $total <= 1000 and all(.[]; .total_count == $total) and ($items | length) == $total and ([$items[].id] | unique | length) == $total then $items[].html_url else error("UNKNOWN: incomplete Kata census") end else error("UNKNOWN: incomplete Kata census") end'`
 and classify each with
 `gh api repos/devantler-tech/<repo>/issues/<n> --jq '{body:(.body // ""),sub_issues:.sub_issues_summary}' | .claude/scripts/kata-measure-date.sh --input -`.
-A `DUE` Kata the Agent Improver owns is this run's finishing work. A failed search, an
-`incomplete_results` search or a helper exit 2 is UNKNOWN, never an empty census.
+A `DUE` Kata the Agent Improver owns is this run's finishing work. Complete every repository batch
+before treating the census as complete. Slurp all pages before emitting any URLs: a failed search,
+an `incomplete_results` search, a missing or duplicate page, changing result totals, a result over
+the Search API's 1,000-result cap or a helper exit 2 is UNKNOWN, never an empty census. Narrow an
+over-cap query into disjoint batches and verify each batch before using its results.
 
 At Measure on, record expected versus actual, eligibility and attribution, protected floors,
 coverage/UNKNOWNs, learning and the next obstacle. A missed date remains overdue until that

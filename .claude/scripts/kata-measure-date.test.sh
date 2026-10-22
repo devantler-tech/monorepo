@@ -658,18 +658,83 @@ fi
 # must name the one search that lists every open Kata and the pipeline that classifies each, and
 # that pipeline must project exactly what this helper's own USAGE line reads.
 kata_guide="${here}/../guides/improvement-katas.md"
-census_search="gh api -X GET search/issues -f q='org:devantler-tech is:issue is:open type:Kata'"
+census_search="gh api --paginate --slurp -X GET search/issues -f q='repo:devantler-tech/<repo> archived:false is:issue is:open type:Kata' -f per_page=100"
 usage_projection="$(grep -o "\-\-jq '{body:[^']*}'" "${tool}" | head -n 1)"
 census_pipeline="gh api repos/devantler-tech/<repo>/issues/<n> ${usage_projection} | .claude/scripts/kata-measure-date.sh --input -"
-for pinned in "${census_search}" "${census_pipeline}" 'never an empty census'; do
+mandate='Every Agent Improver run reads the Kata census before new intake, whichever lane delivered the'
+guide_text="$(cat "${kata_guide}")"
+# Check the point of use, not mentions in examples or another section. The negative fixtures
+# below exercise this checker itself: a test that only finds command names accepts a negation.
+census_contract() {
+  local section search_line
+  section="$(printf '%s\n' "$1" | awk '
+    /^## Checkpoints finish existing work$/ { inside=1; next }
+    /^## / && inside { exit }
+    inside { print }
+  ')"
+  printf '%s\n' "${section}" | grep -qxF -- "${mandate}" || {
+    echo 'missing every-run census prescription'; return 1;
+  }
+  search_line="$(printf '%s\n' "${section}" | grep '^`gh api .*search/issues ' || true)"
+  if [ "$(printf '%s\n' "${search_line}" | grep -c '^`gh api ' || true)" != 1 ] ||
+    ! printf '%s\n' "${search_line}" | grep -qF -- "${census_search} --jq '"; then
+    echo 'missing complete active-repository census command'; return 1
+  fi
+  printf '%s\n' "${section}" | grep -qxF -- "\`${census_pipeline}\`." || {
+    echo 'missing census classification pipeline'; return 1;
+  }
+  printf '%s\n' "${section}" | grep -qF 'never an empty census' || {
+    echo 'missing UNKNOWN disposition'; return 1;
+  }
+}
+expect_contract() {
+  local label="$1" want="$2" document="$3" reason="$4" result rc=0
   checks=$((checks + 1))
-  if [ -n "${usage_projection}" ] && grep -qF -- "${pinned}" "${kata_guide}"; then
-    echo "ok   the Kata guide's Improver census names: ${pinned}"
+  result="$(census_contract "${document}")" || rc=$?
+  if [ "${rc}" = "${want}" ] && { [ -z "${reason}" ] || [[ "${result}" == *"${reason}"* ]]; }; then
+    echo "ok   ${label}"
   else
-    echo "FAIL the Kata guide's Improver census must name: ${pinned}" >&2
+    echo "FAIL ${label}: want rc=${want} reason=[${reason}], got rc=${rc} [${result}]" >&2
     failures=$((failures + 1))
   fi
-done
+}
+expect_contract 'the checkpoint section prescribes the complete every-run census' 0 "${guide_text}" ''
+expect_contract 'a negated census prescription is rejected' 1 \
+  "${guide_text/Every Agent Improver run reads/Every Agent Improver run must not read}" \
+  'missing every-run census prescription'
+expect_contract 'command mentions outside checkpoints cannot satisfy the contract' 1 \
+  "${guide_text/Checkpoints finish existing work/Legacy commands that must not run}" \
+  'missing every-run census prescription'
+expect_contract 'an unpaginated census is rejected' 1 "${guide_text/--paginate /}" \
+  'missing complete active-repository census command'
+expect_contract 'including archived repositories is rejected' 1 "${guide_text/archived:false /}" \
+  'missing complete active-repository census command'
+
+# Execute the guide's actual jq program on complete, partial and inconsistent Search API pages.
+# Slurping before this projection prevents a good first page from escaping a later failure.
+census_filter="$(printf '%s\n' "${guide_text}" | sed -n "s/^\`gh api .*search\/issues .*--jq '\(.*\)'\`$/\1/p")"
+expect_search() {
+  local label="$1" want="$2" pages="$3" expected="$4" result rc=0
+  checks=$((checks + 1))
+  result="$(printf '%s\n' "${pages}" | jq -r "${census_filter}" 2>/dev/null)" || rc=$?
+  if [ -n "${census_filter}" ] && [ "${rc}" = "${want}" ] && [ "${result}" = "${expected}" ]; then
+    echo "ok   ${label}"
+  else
+    echo "FAIL ${label}: want rc=${want} [${expected}], got rc=${rc} [${result}]" >&2
+    failures=$((failures + 1))
+  fi
+}
+first='{"incomplete_results":false,"total_count":2,"items":[{"id":1,"html_url":"https://github.com/devantler-tech/monorepo/issues/1"}]}'
+second='{"incomplete_results":false,"total_count":2,"items":[{"id":2,"html_url":"https://github.com/devantler-tech/monorepo/issues/2"}]}'
+expect_search 'all complete search pages are emitted' 0 "[${first},${second}]" \
+  $'https://github.com/devantler-tech/monorepo/issues/1\nhttps://github.com/devantler-tech/monorepo/issues/2'
+expect_search 'a partial later page emits no earlier URLs' 5 "[${first},${second/false/true}]" ''
+expect_search 'missing pages cannot look like a complete census' 5 "[${first}]" ''
+expect_search 'duplicated pages cannot hide a missing issue' 5 "[${first},${first}]" ''
+expect_search 'a search above the API result cap is UNKNOWN' 5 \
+  '[{"incomplete_results":false,"total_count":1001,"items":[]}]' ''
+expect_search 'an authenticated complete empty search is empty' 0 \
+  '[{"incomplete_results":false,"total_count":0,"items":[]}]' ''
 
 kata_measure_date_test_finished=1
 if [ "${failures}" -gt 0 ]; then
