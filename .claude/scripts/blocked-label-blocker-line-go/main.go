@@ -919,6 +919,28 @@ func readAnew(endpoint string) ([]byte, error) {
 	return forgeRead(endpoint)
 }
 
+// zeroConfirmDelay spaces the second read of a zero search; tests set it to 0.
+var zeroConfirmDelay = 3 * time.Second
+
+// confirmZero reads a zero search once more. Search can briefly answer a
+// complete-looking zero for an org with open items, and a false zero would
+// put every parked pull request back in the queue (#4435).
+func confirmZero(endpoint string, typed bool) error {
+	time.Sleep(zeroConfirmDelay)
+	raw, err := readAnew(endpoint)
+	if err != nil {
+		return errors.New("forge read failed confirming a zero search -- UNKNOWN, never zero")
+	}
+	again, err := searchIssues(raw, typed)
+	if err != nil {
+		return err
+	}
+	if len(again) != 0 {
+		return fmt.Errorf("search answered zero, then %d -- UNKNOWN", len(again))
+	}
+	return nil
+}
+
 func load(o options, stdin io.Reader) ([]issue, error) {
 	if o.input != "" {
 		var raw []byte
@@ -950,6 +972,11 @@ func load(o options, stdin io.Reader) ([]issue, error) {
 		page, err := searchIssues(raw, read.typed)
 		if err != nil {
 			return nil, err
+		}
+		if len(page) == 0 {
+			if err := confirmZero(read.endpoint, read.typed); err != nil {
+				return nil, err
+			}
 		}
 		records = append(records, page...)
 	}
