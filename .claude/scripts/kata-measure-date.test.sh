@@ -672,18 +672,18 @@ census_contract() {
     /^## / && inside { exit }
     inside { print }
   ')"
-  printf '%s\n' "${section}" | grep -qxF -- "${mandate}" || {
+  grep -qxF -- "${mandate}" <<<"${section}" || {
     echo 'missing every-run census prescription'; return 1;
   }
   search_line="$(printf '%s\n' "${section}" | grep '^`gh api .*search/issues ' || true)"
   if [ "$(printf '%s\n' "${search_line}" | grep -c '^`gh api ' || true)" != 1 ] ||
-    ! printf '%s\n' "${search_line}" | grep -qF -- "${census_search} --jq '"; then
+    ! grep -qF -- "${census_search} --jq '" <<<"${search_line}"; then
     echo 'missing complete active-repository census command'; return 1
   fi
-  printf '%s\n' "${section}" | grep -qxF -- "\`${census_pipeline}\`." || {
+  grep -qxF -- "\`${census_pipeline}\`." <<<"${section}" || {
     echo 'missing census classification pipeline'; return 1;
   }
-  printf '%s\n' "${section}" | grep -qF 'never an empty census' || {
+  grep -qF 'never an empty census' <<<"${section}" || {
     echo 'missing UNKNOWN disposition'; return 1;
   }
 }
