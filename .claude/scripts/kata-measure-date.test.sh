@@ -653,10 +653,10 @@ else
   echo "ok   anything but --input - is a usage error"
 fi
 
-# The Agent Improver's Kata census (monorepo#4429). A run checked only its own lane's ledger, so
-# #4030, delivered from the other lane, stayed DUE through 39 Claude Improver dispatches. The guide
-# must name the one search that lists every open Kata and the pipeline that classifies each, and
-# that pipeline must project exactly what this helper's own USAGE line reads.
+# The Agent Improver's Kata census (monorepo#4429) must find open Katas delivered by either lane,
+# because neither lane's native ledger lists the other lane's Katas. The guide must name the one
+# search that lists every open Kata and the pipeline that classifies each, and that pipeline must
+# project exactly what this helper's own USAGE line reads.
 kata_guide="${here}/../guides/improvement-katas.md"
 census_search="gh api --paginate --slurp -X GET search/issues -f q='repo:devantler-tech/<repo> archived:false is:issue is:open type:Kata' -f per_page=100"
 usage_projection="$(grep -o "\-\-jq '{body:[^']*}'" "${tool}" | head -n 1)"
@@ -677,7 +677,7 @@ census_contract() {
   }
   search_line="$(printf '%s\n' "${section}" | grep '^`gh api .*search/issues ' || true)"
   if [ "$(printf '%s\n' "${search_line}" | grep -c '^`gh api ' || true)" != 1 ] ||
-    ! grep -qF -- "${census_search} --jq '" <<<"${search_line}"; then
+    ! grep -qF -- "${census_search} | jq -nr 'input | " <<<"${search_line}"; then
     echo 'missing complete active-repository census command'; return 1
   fi
   grep -qxF -- "\`${census_pipeline}\`." <<<"${section}" || {
@@ -709,14 +709,18 @@ expect_contract 'an unpaginated census is rejected' 1 "${guide_text/--paginate /
   'missing complete active-repository census command'
 expect_contract 'including archived repositories is rejected' 1 "${guide_text/archived:false /}" \
   'missing complete active-repository census command'
+# gh exits with a usage error when --slurp meets --jq, so that form never runs at all.
+expect_contract 'a census gh cannot run (--slurp with --jq) is rejected' 1 \
+  "${guide_text/-f per_page=100 | jq -nr \'input | /-f per_page=100 --jq \'}" \
+  'missing complete active-repository census command'
 
 # Execute the guide's actual jq program on complete, partial and inconsistent Search API pages.
 # Slurping before this projection prevents a good first page from escaping a later failure.
-census_filter="$(printf '%s\n' "${guide_text}" | sed -n "s/^\`gh api .*search\/issues .*--jq '\(.*\)'\`$/\1/p")"
+census_filter="$(printf '%s\n' "${guide_text}" | sed -n "s/^\`gh api .*search\/issues .* | jq -nr '\(.*\)'\`$/\1/p")"
 expect_search() {
   local label="$1" want="$2" pages="$3" expected="$4" result rc=0
   checks=$((checks + 1))
-  result="$(printf '%s\n' "${pages}" | jq -r "${census_filter}" 2>/dev/null)" || rc=$?
+  result="$(printf '%s\n' "${pages}" | jq -nr "${census_filter}" 2>/dev/null)" || rc=$?
   if [ -n "${census_filter}" ] && [ "${rc}" = "${want}" ] && [ "${result}" = "${expected}" ]; then
     echo "ok   ${label}"
   else
@@ -735,6 +739,7 @@ expect_search 'a search above the API result cap is UNKNOWN' 5 \
   '[{"incomplete_results":false,"total_count":1001,"items":[]}]' ''
 expect_search 'an authenticated complete empty search is empty' 0 \
   '[{"incomplete_results":false,"total_count":0,"items":[]}]' ''
+expect_search 'a failed search that printed nothing is UNKNOWN' 5 '' ''
 
 kata_measure_date_test_finished=1
 if [ "${failures}" -gt 0 ]; then
