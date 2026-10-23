@@ -240,7 +240,7 @@ func TestOrgReadFailsClosedOnTheCountRead(t *testing.T) {
 	t.Cleanup(func() { forgeRead = original })
 	forgeRead = func(endpoint string) ([]byte, error) {
 		switch endpoint {
-		case searchEndpoint("o"):
+		case searchEndpoint("o"), unqualified(searchEndpoint("o")):
 			return []byte(searchPage()), nil
 		case pullEndpoint("o"):
 			return []byte(searchPage(forgeParkedPull(t, "platform"))), nil

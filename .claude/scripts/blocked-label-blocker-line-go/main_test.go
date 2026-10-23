@@ -1148,9 +1148,9 @@ func serveForge(t *testing.T, issuePage, pullPage string, failing string) {
 	forgeRead = func(endpoint string) ([]byte, error) {
 		var page string
 		switch endpoint {
-		case searchEndpoint("o"):
+		case searchEndpoint("o"), unqualified(searchEndpoint("o")):
 			page = issuePage
-		case pullEndpoint("o"):
+		case pullEndpoint("o"), unqualified(pullEndpoint("o")):
 			page = pullPage
 		default:
 			t.Errorf("unexpected read %q", endpoint)

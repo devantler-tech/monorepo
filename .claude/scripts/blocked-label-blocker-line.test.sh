@@ -371,9 +371,10 @@ EOF
 chmod +x "$TMP/bin2/gh"
 : >"$TMP/argv.log"
 ARGV_LOG="$TMP/argv.log" PATH="$TMP/bin2:$PATH" "$CHECK" --org devantler-tech >/dev/null 2>&1
-# Both reads, the issues and the pull requests, must carry the qualifier.
-if [ "$(grep -c 'archived:false' "$TMP/argv.log")" = 2 ] && [ "$(grep -c . "$TMP/argv.log")" = 2 ] &&
-  grep -q 'is:issue' "$TMP/argv.log" && grep -q 'is:pr' "$TMP/argv.log"; then
+# Both reads, the issues and the pull requests, must carry the qualifier. Each answers zero, and
+# a zero is confirmed by one read without the qualifier before it is believed (#4435).
+if [ "$(grep -c 'archived:false' "$TMP/argv.log")" = 2 ] && [ "$(grep -c . "$TMP/argv.log")" = 4 ] &&
+  [ "$(grep -c 'is:issue' "$TMP/argv.log")" = 2 ] && [ "$(grep -c 'is:pr' "$TMP/argv.log")" = 2 ]; then
   ok "both org queries exclude archived repositories"
 else
   bad "both org queries exclude archived repositories" "argv: $(cat "$TMP/argv.log")"
