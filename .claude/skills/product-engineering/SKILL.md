@@ -375,7 +375,7 @@ at once** — the highest-leverage advance work is often cross-cutting (contract
 - **Spot generic patterns.** When the same approach has independently shown up in **2+ products** (a CI
   step, a release/`.releaserc` setup, a workflow, a lint/test config, an agent skill, a docs
   convention), it's now *generic* — it belongs in a **shared library**, not copied per repo:
-  - CI building blocks → `devantler-tech/actions` (composite actions + the reusable workflows it absorbed).
+  - CI building blocks → `devantler-tech/.github` (shared composite actions and reusable workflows).
   - Agent skills → `devantler-tech/agent-skills` (generic Copilot/agent skills, `gh skill`-installable).
   - Plugins → `devantler-tech/agent-plugins` — if a plugin-shaped pattern is ready and the
     repo doesn't exist, propose creating it (flag to the maintainer) rather than forcing it elsewhere.

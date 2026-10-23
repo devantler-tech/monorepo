@@ -131,7 +131,6 @@ jobs:
               - 'github/devantler-tech/.github-public'
               - 'github/devantler-tech/.github-public/actions/**'
               - 'github/devantler-tech/.github-public/.github/workflows/**'
-              - 'github/devantler-tech/github-actions/actions'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the guards it gates.
               - '.github/workflows/ci.yaml'
@@ -996,12 +995,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Initialize only the public source owners
+      - name: Initialize only the website source owner
         env:
           GIT_CONFIG_COUNT: "1"
           GIT_CONFIG_KEY_0: url.https://github.com/.insteadOf
           GIT_CONFIG_VALUE_0: "git@github.com:"
-        run: bash .claude/scripts/submodule-init.sh applications/business-site github/devantler-tech/github-actions/actions
+        run: bash .claude/scripts/submodule-init.sh applications/business-site
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

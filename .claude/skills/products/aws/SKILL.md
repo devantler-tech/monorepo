@@ -24,8 +24,10 @@ namespace-agnostic because the platform-side tenant injects the namespace. The
 bootstrap-credential `ExternalSecret`, `ProviderConfig`, and the Flux `OCIRepository` +
 `Kustomization` that verifies the cosign signature. A change that needs both lands as two PRs, the
 platform half first whenever the tenant must be able to consume the new artifact. The signing
-identity the platform verifies is the shared `publish-manifests.yaml` workflow path in
-`devantler-tech/actions`, so relocating that workflow is a platform verifier change as well.
+identity the platform verifies must match the consumed release's approved publication binding.
+Current publication calls the shared `publish-manifests.yaml` workflow in `devantler-tech/.github`;
+moving a publisher also requires a coordinated platform-verifier change. Preserve historical
+signing identities needed to verify earlier artifacts rather than rewriting them to a new owner.
 
 ## Roadmap & enhancement
 

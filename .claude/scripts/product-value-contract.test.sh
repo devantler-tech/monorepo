@@ -33,11 +33,15 @@ fail() {
 }
 
 # The public catalogue and maintenance instructions must agree on the shared
-# automation owner; Actions remains a real legacy product, not a .github alias.
+# automation owner; retired catalogues must not be advertised as active products.
 grep -Fq "| Shared automation and organization defaults | \`devantler-tech/.github\` |" "${repo_root}/AGENTS.md" ||
   fail "portfolio map does not name the maintained shared automation owner"
-grep -Fq "| Legacy GitHub Actions | \`devantler-tech/actions\` |" "${repo_root}/AGENTS.md" ||
-  fail "portfolio map misclassifies the legacy Actions repository"
+if grep -Fq "| Legacy GitHub Actions | \`devantler-tech/actions\` |" "${repo_root}/AGENTS.md"; then
+  fail "portfolio map still registers the retired Actions repository"
+fi
+if grep -Fq 'github/devantler-tech/github-actions/actions' "${repo_root}/.gitmodules"; then
+  fail "retired Actions checkout is still a declared portfolio dependency"
+fi
 repo_automation_row="$(grep -F '| Repo automation |' "${repo_root}/AGENTS.md")" ||
   fail "stack map is missing the automation row"
 grep -Fq "\`devantler-tech/.github\`" <<<"${repo_automation_row}" ||

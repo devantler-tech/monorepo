@@ -372,8 +372,8 @@ steps, tooling, generators, test harnesses, and one-off helpers. Concretely:
 Most runs are bottom-up (one product at a time). **Periodically (~monthly, on rotation) step back and
 look at the whole repertoire top-down** — across *every* product at once — to catch what per-product
 work misses:
-- **Sharing is earned; local ownership is the default.** `devantler-tech/actions` and organization-wide
-  `.github` automation surfaces exist only for actions and workflows whose reuse across repositories is
+- **Sharing is earned; local ownership is the default.** The `devantler-tech/.github`
+  automation surfaces exist only for actions and workflows whose reuse across repositories is
   already real. Extraction requires **all** of the following: demonstrated consumers in at least two
   repositories; one product-neutral behaviour and interface; less real duplication or drift after the
   move; and a thin local caller wherever repository-specific triggers or context remain. Product-specific
@@ -398,7 +398,7 @@ work misses:
 - **Emergent generic patterns.** Once that sharing boundary is met, an approach (a CI step, a release
   config, a workflow, a lint/test setup, an agent skill, a docs convention) that independently appears
   in 2+ products has become *generic* — extract the reusable mechanism into the right **shared library**
-  so its actual consumers inherit it instead of drifting: CI → `devantler-tech/actions` (composite actions
+  so its actual consumers inherit it instead of drifting: CI → `devantler-tech/.github` (composite actions
   + reusable workflows); agent skills →
   `devantler-tech/agent-skills`; (plugins → `devantler-tech/agent-plugins` once created); cluster
   guardrail / admission / generation policies → `devantler-tech/kyverno-policies`. Then propagate consumers
@@ -414,8 +414,8 @@ backward-compatibly. A single-product finding stays in that product's repository
 [`product-engineering`](../skills/product-engineering/SKILL.md) skill carries the how-to.
 
 **Shared libraries** (leverage points across the whole suite — see *Holistic review* and the
-`product-engineering` skill): the CI building block `devantler-tech/actions` (which
-absorbed the archived `reusable-workflows` repo), the agent extensions `devantler-tech/agent-skills` (generic,
+`product-engineering` skill): the CI building blocks in `devantler-tech/.github` (shared composite
+actions and reusable workflows), the agent extensions `devantler-tech/agent-skills` (generic,
 cross-tool agent skills) + `devantler-tech/agent-plugins` (a tool-neutral marketplace bundling those skills
 for VS Code / Copilot CLI / Claude Code), and the cluster-guardrail
 catalog `devantler-tech/kyverno-policies` (shared, tested Kyverno policies the platform and
