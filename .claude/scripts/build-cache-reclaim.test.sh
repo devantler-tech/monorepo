@@ -33,6 +33,7 @@ fixture_root=""
 go_tmp_root=""
 reclaim_test_finished=0
 # bash 3.2 can report a set -u abort inside an EXIT trap as exit 0, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap below.
 cleanup() {
   local status=$?
   [ -z "$fixture_root" ] || rm -rf -- "$fixture_root"
@@ -1331,7 +1332,10 @@ rm -rf -- "$unread2"
 broken_go="${fixture_root}/go-broken"
 mkdir -p "$broken_go" || fail 'fixture: 17r stub dir'
 cp "${quiet_ps}/ps" "${broken_go}/ps" || fail 'fixture: 17r ps'
-printf '#!/bin/sh\nexit 1\n' > "${broken_go}/go" && chmod +x "${broken_go}/go" || fail 'fixture: 17r go'
+if ! printf '#!/bin/sh\nexit 1\n' > "${broken_go}/go" || ! chmod +x "${broken_go}/go"; then
+  fail 'fixture: 17r go'
+  exit 1
+fi
 kept_idle=$(make_run_cache 'daily-ai-engineer-gocache-17r' "$go_marker" 7) || fail 'fixture: 17r'
 out=$(RUN_CACHE_PS="$broken_go" run_cache apply 3 "$NEVER_CLEAN_BUDGET")
 rc=$?
@@ -1344,7 +1348,10 @@ rm -rf -- "$kept_idle"
 # so a huge or growing unrelated README can neither stall the sweep nor get its dir reaped.
 padded=$(make_run_cache 'daily-ai-engineer-gocache-17s' '' 7) || fail 'fixture: 17s'
 { head -c 600 /dev/zero | tr '\0' 'x'; printf '\n%s\n' "$go_marker"; } > "${padded}/README"
-age_path "${padded}/README" 7 && age_path "$padded" 7 || fail 'fixture: age 17s'
+if ! age_path "${padded}/README" 7 || ! age_path "$padded" 7; then
+  fail 'fixture: age 17s'
+  exit 1
+fi
 out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$padded" ] || fail 'a README whose marker sits past the read bound was treated as a cache'
 rm -rf -- "$padded"
@@ -1353,9 +1360,11 @@ rm -rf -- "$padded"
 # once those directories exist, a new entry moves no node at depth 1 or 2.
 fuzzed=$(make_run_cache 'daily-ai-engineer-gocache-17t' "$go_marker" 7) || fail 'fixture: 17t'
 mkdir -p "${fuzzed}/fuzz/example.com/pkg/FuzzX" || fail 'fixture: 17t fuzz dirs'
-age_path "${fuzzed}/fuzz/example.com/pkg/FuzzX" 7 && age_path "${fuzzed}/fuzz/example.com/pkg" 7 &&
-  age_path "${fuzzed}/fuzz/example.com" 7 && age_path "${fuzzed}/fuzz" 7 && age_path "$fuzzed" 7 ||
+if ! age_path "${fuzzed}/fuzz/example.com/pkg/FuzzX" 7 || ! age_path "${fuzzed}/fuzz/example.com/pkg" 7 ||
+  ! age_path "${fuzzed}/fuzz/example.com" 7 || ! age_path "${fuzzed}/fuzz" 7 || ! age_path "$fuzzed" 7; then
   fail 'fixture: age 17t dirs'
+  exit 1
+fi
 printf 'corpus\n' > "${fuzzed}/fuzz/example.com/pkg/FuzzX/0123abcd"
 age_path "${fuzzed}/fuzz/example.com/pkg/FuzzX" 7 || fail 'fixture: age 17t target dir'
 out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
@@ -1368,7 +1377,10 @@ rm -rf -- "$fuzzed"
 # directory that mentions the sentence may hold work nothing can regenerate.
 quoting=$(make_run_cache 'notes-about-caches-17u' '' 7) || fail 'fixture: 17u'
 printf 'Notes on Go caches. Go writes:\n%s\n' "$go_marker" > "${quoting}/README"
-age_path "${quoting}/README" 7 && age_path "$quoting" 7 || fail 'fixture: age 17u'
+if ! age_path "${quoting}/README" 7 || ! age_path "$quoting" 7; then
+  fail 'fixture: age 17u'
+  exit 1
+fi
 out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$quoting" ] || fail 'a directory whose README merely quotes the marker was reaped as a cache'
 rm -rf -- "$quoting"
@@ -2337,8 +2349,10 @@ rc=$?
 w_home="${fixture_root}/codex-wt-home"
 w_old="${w_home}/worktrees/old1"
 mkdir -p "$w_old" || fail 'fixture: codex worktree'
-printf '#!/bin/sh\nprintf "p1\\nn/dev/null\\n"\n' > "${c_bin}/lsof.ok" && chmod +x "${c_bin}/lsof.ok" ||
+if ! printf '#!/bin/sh\nprintf "p1\\nn/dev/null\\n"\n' > "${c_bin}/lsof.ok" || ! chmod +x "${c_bin}/lsof.ok"; then
   fail 'fixture: codex worktree lsof'
+  exit 1
+fi
 dd if=/dev/zero of="${w_old}/blob" bs=1048576 count=2 2>/dev/null || fail 'fixture: codex worktree blob'
 w_stamp=$(date -v-30d +%Y%m%d%H%M 2>/dev/null || date -d '30 days ago' +%Y%m%d%H%M)
 touch -t "$w_stamp" "${w_old}/blob" "$w_old"
@@ -2559,17 +2573,37 @@ ln "$lf_hard" "$lf_hard_other" || fail 'fixture: 27 second hard link'
 make_loose "$lf_unsafe" 2 "$lf_old" || fail 'fixture: 27 unsafe name'
 make_loose "$lf_keep" 2 "$lf_old" || fail 'fixture: 27 keep-list name'
 make_loose "$lf_image" 2 "$lf_old" || fail 'fixture: 27 disk image'
+# A running executable: the snapshot lists it among the open paths even with no descriptor.
+lf_exe="${lf_root}/ksail-running"
+{ cp "$(command -v sleep)" "$lf_exe" && chmod u+x "$lf_exe"; } || {
+  fail 'fixture: 27 executable'
+  exit 1
+}
+# macOS kills this copied system executable with its original signature. Refresh
+# only our disposable copy, without a credential or any change to the system binary.
+if [ "$(uname -s)" = Darwin ]; then
+  codesign --force --sign - "$lf_exe" >/dev/null 2>&1 || {
+    fail 'fixture: 27 cannot prepare the copied executable signature'
+    exit 1
+  }
+fi
+touch -t "$lf_old" "$lf_exe" || {
+  fail 'fixture: 27 aging the executable'
+  exit 1
+}
 # A holder that keeps the file open for the whole run, as a build writing a capture would. Both
 # live processes are killed explicitly below, so they are given far longer than two runs take.
 sleep 1200 3<"$lf_open" &
 lf_holder=$!
-# A running executable: the snapshot lists it among the open paths even with no descriptor.
-lf_exe="${lf_root}/ksail-running"
-{ cp "$(command -v sleep)" "$lf_exe" && chmod u+x "$lf_exe"; } || fail 'fixture: 27 executable'
 "$lf_exe" 1200 &
 lf_exe_pid=$!
-touch -t "$lf_old" "$lf_exe" || fail 'fixture: 27 aging the executable'
 sleep 1
+if ! kill -0 "$lf_holder" 2>/dev/null || ! kill -0 "$lf_exe_pid" 2>/dev/null; then
+  kill "$lf_holder" "$lf_exe_pid" 2>/dev/null || true
+  wait "$lf_holder" "$lf_exe_pid" 2>/dev/null || true
+  fail 'fixture: 27 preservation needs both live processes before cleanup'
+  exit 1
+fi
 
 out=$(run_lf dry-run 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$lf_idle" ] || fail '27: a dry run removed a loose file'
