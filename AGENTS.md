@@ -35,7 +35,6 @@ Populate a submodule with `.claude/scripts/submodule-init.sh <path>` — never a
 | .NET template | `devantler-tech/dotnet-template` | `templates/dotnet-template` | `AGENTS.md` |
 | Platform-tenant template | `devantler-tech/platform-tenant-template` | `templates/platform-tenant-template` | `AGENTS.md` |
 | Platform template | `devantler-tech/platform-template` | `templates/platform-template` | `AGENTS.md` |
-| Legacy GitHub Actions | `devantler-tech/actions` | `github/devantler-tech/github-actions/actions` | `AGENTS.md` |
 | Homebrew tap | `devantler-tech/homebrew-tap` (repo renamed from `homebrew-formulas`) | `homebrew-tap` | `AGENTS.md` |
 | Agent skills (shared lib) | `devantler-tech/agent-skills` | `libraries/agent-skills` | `AGENTS.md` |
 | Agent plugins (shared lib) | `devantler-tech/agent-plugins` (renamed from `copilot-plugins`) | `libraries/agent-plugins` | `AGENTS.md` |

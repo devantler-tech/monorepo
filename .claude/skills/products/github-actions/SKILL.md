@@ -1,6 +1,6 @@
 ---
 name: maintain-github-actions
-description: Maintenance task menu for shared CI/CD building blocks in devantler-tech/.github; devantler-tech/actions remains for unmigrated consumers. Load-bearing for every other repo's CI, so changes are high-care and backward-compatible. Use when the daily maintainer selects github-actions.
+description: Maintenance task menu for shared CI/CD building blocks in devantler-tech/.github. Load-bearing for every consumer's CI, so changes are high-care and backward-compatible. Use when the daily maintainer selects github-actions.
 ---
 
 # Maintain: GitHub Actions (composite actions + reusable workflows)
@@ -11,9 +11,8 @@ section of its `AGENTS.md` (on the submodule's latest `main`):
 
 Shared composite actions and reusable (`workflow_call`) workflows live in `.github/actions/`
 and `.github/.github/workflows/`. Always target `.github` for new shared-CI work, not the retired
-standalone catalogue. The old `actions`
-repository only takes urgent compatibility fixes for unmigrated consumers, each linked to its
-`.github` counterpart; its retirement is tracked by [`.github#240`](https://github.com/devantler-tech/.github/issues/240).
+standalone catalogue. Do not reintroduce a dependency on a retired checkout. Final backup,
+deletion and post-deletion checks are tracked by [`.github#240`](https://github.com/devantler-tech/.github/issues/240).
 
 **Blast radius:** changes here ripple to every consumer repo — prefer additive, backward-compatible
 changes. Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md). This card

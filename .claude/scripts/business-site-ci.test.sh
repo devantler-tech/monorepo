@@ -69,6 +69,8 @@ jq -e '
   )
 ' "$tmp/jobs.json" > /dev/null || { echo 'FAIL: portfolio aggregation does not consume the source-root layout' >&2; exit 1; }
 jq -e '
+  (.catalogue.steps | any(.run == "bash .claude/scripts/submodule-init.sh applications/business-site")) and
+  (.catalogue.steps | all((.run // "") | contains("github-actions/actions") | not)) and
   (.catalogue.steps | any(.run == "bash applications/business-site/scripts/check-active-projects-drift.sh" and
     .env.SITE_ROOT == "${{ github.workspace }}/applications/business-site")) and
   (.runner.steps | all(.id != "site-pin" and (.with.repository // "") != "devantler-tech/business-site"))
