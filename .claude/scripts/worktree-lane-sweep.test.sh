@@ -69,6 +69,12 @@ case "\$(cat "$fx/mode")" in
         "\$(dirname "\${BASH_SOURCE[0]}")/worktree-cleanup.sh" "$fx/repo" \\
           "\$HOME/.claude/worktree-cleanup-manifests/monorepo-20261002T000000Z.tsv" apply 24 336
         exit 0 ;;
+  forked-cleanup) # as the real sweep runs it: captured, so inside a forked child that keeps the
+        # sweeper's command line and does not lead a process group (monorepo#3985)
+        out=\$("\$(dirname "\${BASH_SOURCE[0]}")/worktree-cleanup.sh" "$fx/repo" \\
+          "\$HOME/.claude/worktree-cleanup-manifests/monorepo-20261002T000000Z.tsv" apply 24 336 2>&1
+          printf 'rc=%s' "\$?")
+        exit 0 ;;
 esac
 exit 3
 EOF
@@ -610,6 +616,46 @@ kill -- "-$group_sweeper" 2>/dev/null
 if [ -n "$group_cleanup" ] && wait_gone "$group_cleanup"; then
   ok "the advised group signal reaches the cleanup after its sweeper is gone"
 else bad "the advised group signal reaches the cleanup after its sweeper is gone" "cleanup=$group_cleanup"; fi
+rm -f "$fx/release" "$fx/hanging"
+
+# The real sweeper runs each repository's cleanup inside a forked child that shows the sweeper's own
+# command line without leading a group (monorepo#3985). The launcher then finds two "sweepers", one
+# of them not a leader, and the advice is still the one signal to the sweeper's group.
+mode forked-cleanup
+run start --lane claude
+fork_id=$(field claude started id); fork_sup=$(field claude started pid)
+track claude
+wait_for "$fx/hanging" || bad "the forking sweep's cleanup started" "$(cat "$log" 2>&1)"
+fork_sweeper=$(live_sweeps); fork_cleanup=$(live_cleanups)
+kill -9 "$fork_sup" 2>/dev/null
+wait_gone "$fork_sup" || bad "the supervisor of the forking sweep was killed" "pid=$fork_sup"
+run start --lane claude
+if [ "$rc" -eq 1 ] && [ -n "$fork_sweeper" ] \
+   && grep -Eq "sweeper pid( [0-9]+){2,} is still running without its supervisor" <<<"$out" \
+   && grep -qF "\`kill -- -$fork_sweeper\`" <<<"$out" && [ "$(field claude started id)" = "$fork_id" ]; then
+  ok "the advice stops the whole group of a sweeper that forks around its cleanup"
+else bad "the advice stops the whole group of a sweeper that forks around its cleanup" "rc=$rc $out"; fi
+# The advised command stops the sweeper, its forked child and the cleanup together.
+kill -- "-$fork_sweeper" 2>/dev/null
+if [ -n "$fork_sweeper" ] && wait_gone "$fork_sweeper" && [ -n "$fork_cleanup" ] && wait_gone "$fork_cleanup"; then
+  ok "the advised group signal stops a forking sweeper and its cleanup"
+else bad "the advised group signal stops a forking sweeper and its cleanup" "sweeper=$fork_sweeper cleanup=$fork_cleanup"; fi
+rm -f "$fx/release" "$fx/hanging"
+
+# A sweeper in a process group it does not lead, here this test's own, shares that group with
+# unrelated processes: one signal to it would reach them too, so the advice names no command.
+mode hang
+HOME="$fx/home" bash "$fx/source/.claude/scripts/worktree-cleanup-all.sh" apply 24 --lane claude >/dev/null 2>&1 &
+shared_sweeper=$!
+wait_for "$fx/hanging" || bad "the sweeper in a shared group started" "pid=$shared_sweeper"
+run start --lane claude
+if [ "$rc" -eq 1 ] && grep -q "sweeper pid $shared_sweeper is still running without its supervisor — let it finish, then start again" <<<"$out" \
+   && ! grep -q 'kill --' <<<"$out"; then
+  ok "a sweeper sharing its process group with unrelated processes gets no group command"
+else bad "a sweeper sharing its process group with unrelated processes gets no group command" "rc=$rc $out"; fi
+touch "$fx/release"
+wait_gone "$shared_sweeper" || bad "the sweeper in a shared group ended" "pid=$shared_sweeper"
+wait "$shared_sweeper" 2>/dev/null
 rm -f "$fx/release" "$fx/hanging"
 mode ok
 run start --lane claude

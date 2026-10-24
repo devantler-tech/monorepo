@@ -363,14 +363,13 @@ lane_processes() {
   [ "$self_seen" = 1 ] || return 2
 }
 
-# leads_group <pid> — succeeds when <pid> leads its own process group, as a sweeper its supervisor
-# started does. One signal to that group then reaches the sweeper and the cleanup it is running;
-# a signal to the sweeper alone leaves that cleanup going on without it.
-leads_group() {
+# process_group <pid> — prints the process group <pid> is in, and fails when it cannot be read.
+process_group() {
   local group
   group=$(ps -o pgid= -p "$1" 2>/dev/null) || return 1
   group=${group//[[:space:]]/}
-  [ "$group" = "$1" ]
+  [ -n "$group" ] || return 1
+  printf '%s' "$group"
 }
 
 lock_is_stale() {
@@ -673,15 +672,30 @@ if [ -n "$LIVE_SUPERVISORS" ]; then
 fi
 if [ -n "$LIVE_SWEEPERS" ]; then
   # The advice stops a sweeper with the cleanup it is running, or not at all: stopped alone, it
-  # leaves that cleanup going on with nothing by the sweeper's name left to see.
+  # leaves that cleanup going on with nothing by the sweeper's name left to see. It is decided by
+  # process GROUP, never by process (monorepo#3985). A sweeper its supervisor started leads its own
+  # group, and it runs each repository's cleanup inside a forked child that shows the sweeper's own
+  # command line without leading a group, so most of the time two "sweepers" are found. One signal
+  # to each group they are in reaches them all with their cleanups, but only when every such group
+  # is led by one of them: a group led by anything else holds unrelated processes too, and then
+  # no command is advised.
   stop_groups=""
   for sweeper_pid in $LIVE_SWEEPERS; do
-    if leads_group "$sweeper_pid"; then
-      stop_groups="$stop_groups -$sweeper_pid"
-    else
+    if ! sweeper_group=$(process_group "$sweeper_pid"); then
       stop_groups=""
       break
     fi
+    case " $LIVE_SWEEPERS " in
+      *" $sweeper_group "*) ;;
+      *)
+        stop_groups=""
+        break
+        ;;
+    esac
+    case "$stop_groups " in
+      *" -$sweeper_group "*) ;;
+      *) stop_groups="$stop_groups -$sweeper_group" ;;
+    esac
   done
   if [ -n "$stop_groups" ]; then
     # shellcheck disable=SC2016  # the backticks are literal: they mark the command to run
