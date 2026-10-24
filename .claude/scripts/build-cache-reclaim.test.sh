@@ -2841,6 +2841,105 @@ LF_MIN_MB=1 run_lf apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
 [ -e "$lf_idle" ] && fail '27: the size case removed nothing at 1 MB (the ablation partner did not run)'
 rm -rf -- "$lf_root" "$lf_outside"
 
+# --- 28. the marked-cache listings admit only safe names at their expected depth (monorepo#4287) ---
+# The temp-root and session-scratchpad listings are read a line at a time. A newline in a name splits
+# it into two lines, and the second is a RELATIVE path, resolved against the directory the sweep runs
+# from. Each victim below is an idle, marked Go cache in that working directory, at exactly the
+# relative path its split would produce, and must survive. An idle marked cache with a safe name in
+# the same root must still be reaped, so every run is shown to have swept at all.
+nl_root="${fixture_root}/nl-tmp"
+nl_cwd="${fixture_root}/nl-cwd"
+mkdir -p "$nl_root" "$nl_cwd" || fail 'fixture: 28 roots'
+# make_nl_cache <dir> builds an idle Go cache at <dir>, which may lie outside the temp root.
+make_nl_cache() {
+  mkdir -p "${1}/00" || return 1
+  printf 'entry\n' > "${1}/00/a1-d"
+  printf '%s\nRun "go clean -cache" if the directory is getting too large.\n' "$go_marker" > "${1}/README"
+  age_path "${1}/00/a1-d" 7 && age_path "${1}/README" 7 && age_path "${1}/00" 7 && age_path "$1" 7
+}
+run_nl() {
+  (cd "$nl_cwd" && BUILD_CACHE_RECLAIM_TMPDIR="$nl_root" BUILD_CACHE_RECLAIM_GO_TMPDIR="$go_tmp_root" \
+    GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" PATH="${quiet_ps}:$PATH" \
+    bash "$impl" "$@" 2>&1)
+}
+
+# 28a. a temp-root child whose name holds a newline.
+nl_split="${nl_root}/"$'go-old\nnl-victim'
+make_nl_cache "$nl_split" || fail 'fixture: 28a newline-named temp-root cache'
+make_nl_cache "${nl_cwd}/nl-victim" || fail 'fixture: 28a victim in the working directory'
+make_nl_cache "${nl_root}/go-idle-28a" || fail 'fixture: 28a idle cache'
+out=$(run_nl apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${nl_cwd}/nl-victim/README" ] ||
+  fail '28a: a cache in the working directory was removed through a newline in a temp-root name'
+[ -e "${nl_split}/README" ] || fail '28a: a temp-root cache with a newline in its name was reaped'
+[ -e "${nl_root}/go-idle-28a" ] && fail '28a: the newline case reaped nothing (the ablation partner did not run)'
+grep -qF 'per-run caches: 1 never considered for a name outside the safe set' <<<"$out" ||
+  fail "28a: the temp-root cache skipped for its name was not counted; it said: $(grep -F 'never considered' <<<"$out")"
+rm -rf -- "$nl_split" "${nl_cwd}/nl-victim"
+
+# 28b. a session-scratchpad cache whose own name holds a newline.
+nl_pad="${nl_root}/claude-501/proj-n/sess-n/scratchpad"
+make_nl_cache "${nl_pad}/"$'gocache\nsc-victim' || fail 'fixture: 28b newline-named scratchpad cache'
+make_nl_cache "${nl_cwd}/sc-victim" || fail 'fixture: 28b victim in the working directory'
+make_nl_cache "${nl_pad}/go-idle-28b" || fail 'fixture: 28b idle scratchpad cache'
+out=$(run_nl apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${nl_cwd}/sc-victim/README" ] ||
+  fail '28b: a cache in the working directory was removed through a newline in a scratchpad cache name'
+[ -e "${nl_pad}/"$'gocache\nsc-victim/README' ] || fail '28b: a scratchpad cache with a newline in its name was reaped'
+[ -e "${nl_pad}/go-idle-28b" ] && fail '28b: the newline case reaped nothing (the ablation partner did not run)'
+grep -qF 'session scratchpad caches: 1 never considered for a name outside the safe set' <<<"$out" ||
+  fail "28b: the scratchpad cache skipped for its name was not counted; it said: $(grep -F 'never considered' <<<"$out")"
+rm -rf -- "${nl_root}/claude-501" "${nl_cwd}/sc-victim"
+
+# 28c. a newline in a directory ABOVE the scratchpad cache: the cache's own name is safe, so only the
+# depth check under the session root can tell that the split's second line is not a candidate.
+nl_deep="${nl_root}/claude-501/"$'proj\nsd-victim'"/sess-d/scratchpad/gocache"
+make_nl_cache "$nl_deep" || fail 'fixture: 28c cache below a newline-named project dir'
+make_nl_cache "${nl_cwd}/sd-victim/sess-d/scratchpad/gocache" || fail 'fixture: 28c victim in the working directory'
+make_nl_cache "${nl_root}/claude-501/proj-d/sess-d/scratchpad/go-idle-28c" || fail 'fixture: 28c idle scratchpad cache'
+out=$(run_nl apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${nl_cwd}/sd-victim/sess-d/scratchpad/gocache/README" ] ||
+  fail '28c: a cache in the working directory was removed through a newline above a scratchpad'
+[ -e "${nl_deep}/README" ] || fail '28c: a cache below a newline-named project dir was reaped'
+[ -e "${nl_root}/claude-501/proj-d/sess-d/scratchpad/go-idle-28c" ] &&
+  fail '28c: the depth case reaped nothing (the ablation partner did not run)'
+grep -qF 'session scratchpad caches: 1 never considered for a name outside the safe set' <<<"$out" ||
+  fail "28c: the cache below a newline-named dir was not counted; it said: $(grep -F 'never considered' <<<"$out")"
+rm -rf -- "${nl_root}/claude-501" "${nl_cwd}/sd-victim"
+
+# 28d. a fallback module cache (go-mod-*) whose name holds a newline. Budget 0, so the safe-named
+# partner is reaped and the run is shown to sweep.
+nl_mod_root="${fixture_root}/nl-mod-tmp"
+mkdir -p "$nl_mod_root" || fail 'fixture: 28d root'
+make_mod_cache "${nl_mod_root}/"$'go-mod-old\nmod-victim' || fail 'fixture: 28d newline-named module cache'
+make_mod_cache "${nl_cwd}/mod-victim" || fail 'fixture: 28d victim in the working directory'
+make_mod_cache "${nl_mod_root}/go-mod-idle28d" || fail 'fixture: 28d idle module cache'
+out=$(cd "$nl_cwd" && PATH="${cache_stubs}:$PATH" BUILD_CACHE_RECLAIM_TMPDIR="$nl_mod_root" \
+  BUILD_CACHE_RECLAIM_GO_TMPDIR="$empty_go_tmp" GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" \
+  bash "$impl" apply 3 0 2>&1)
+[ -e "${nl_cwd}/mod-victim/cache/download" ] ||
+  fail '28d: a module cache in the working directory was removed through a newline in a go-mod-* name'
+[ -e "${nl_mod_root}/"$'go-mod-old\nmod-victim/cache/download' ] ||
+  fail '28d: a module cache with a newline in its name was reaped'
+[ -e "${nl_mod_root}/go-mod-idle28d" ] && fail '28d: the newline case reaped nothing (the ablation partner did not run)'
+chmod -R u+w "$nl_mod_root" "${nl_cwd}/mod-victim" 2>/dev/null
+rm -rf -- "$nl_mod_root" "${nl_cwd}/mod-victim"
+
+# 28e. a browser test profile root child whose name holds a newline, the second line of which is a
+# well-shaped profile name: only the direct-child check can tell it is not one.
+nl_b_root="${fixture_root}/nl-browser"
+nl_b_profiles="${nl_b_root}/rod/user-data"
+mkdir -p "$nl_b_profiles" || fail 'fixture: 28e profile root'
+make_go_dir "$nl_b_profiles" $'x\n0123456789abcdef' 240 > /dev/null || fail 'fixture: 28e newline-named profile'
+make_go_dir "$nl_cwd" 0123456789abcdef 240 > /dev/null || fail 'fixture: 28e victim in the working directory'
+nl_b_idle=$(make_go_dir "$nl_b_profiles" fedcba9876543210 240) || fail 'fixture: 28e idle profile'
+out=$(cd "$nl_cwd" && run_iso "$nl_b_root" "$quiet_ps" apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${nl_cwd}/0123456789abcdef/b001/file" ] ||
+  fail '28e: a directory in the working directory was removed through a newline in a profile name'
+[ -e "${nl_b_profiles}/"$'x\n0123456789abcdef/b001/file' ] || fail '28e: a profile root child with a newline in its name was reaped'
+[ -e "$nl_b_idle" ] && fail '28e: the newline case reaped nothing (the ablation partner did not run)'
+rm -rf -- "$nl_b_root" "$nl_root" "$nl_cwd"
+
 reclaim_test_finished=1
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
