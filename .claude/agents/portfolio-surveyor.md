@@ -394,7 +394,10 @@ public and private — no per-repo loop needed to enumerate):
      pushed seconds ago. Getting this wrong is the expensive direction — it reports a live branch as
      unowned and authorises a second lane to push into it. Read the authoritative per-ref push time
      from the repository activity API instead, matching the PR's own `headRefName`:
-     `gh api -X GET "repos/<owner>/<name>/activity" -f per_page=100 -f "ref=refs/heads/<headRefName>" --jq '[.[]|select(.activity_type=="push" or .activity_type=="force_push")][0].timestamp'`
+     `gh api -X GET "repos/<owner>/<name>/activity" -f per_page=100 -f "ref=refs/heads/<headRefName>" --jq '[.[]|select(.activity_type|IN("push","force_push","branch_creation","branch_deletion"))][0]|if .==null or .activity_type=="branch_deletion" then null else .timestamp end'`
+     🔴 **A ref's creation counts; its deletion ends the reading** (monorepo#4457): Renovate recreates
+     branches, so a push from a deleted branch's earlier life is never the clock, and a newest
+     `branch_deletion` reads `null` (`pushed:unknown`).
      🔴 **Pass the ref as a GET FIELD, never concatenated into a query string.** A branch name is
      attacker-controlled data — `git check-ref-format` accepts `active&per_page=1` and
      `active#fragment` — so interpolating it raw lets the head branch inject or truncate query

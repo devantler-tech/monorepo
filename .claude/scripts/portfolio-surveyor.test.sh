@@ -364,6 +364,43 @@ grep -Fq 'ref=refs/heads/<headRefName>' "${surveyor}" ||
   fail "surveyor filters repository activity client-side, so a busy repo hides a recent head push"
 grep -Fq 'Filter by `ref` in the REQUEST, not only in the `jq`' "${surveyor}" ||
   fail "surveyor does not require server-side ref filtering on the push lookup"
+# The push-time read is run, not just found (monorepo#4457): the filter the overlay prescribes is
+# taken from it verbatim and applied to activity lists shaped like the API's, newest first. A branch
+# that was deleted and recreated must read its creation, never a push from its previous life.
+activity_line="$(grep -F '"repos/<owner>/<name>/activity"' "${surveyor}" | head -n 1)"
+activity_filter="$(sed -n "s/.*--jq '\\(.*\\)'\`.*/\\1/p" <<<"${activity_line}")"
+[ -n "${activity_filter}" ] || fail "could not extract the push-time jq filter from the surveyor overlay"
+push_time() { # push_time <activity JSON> — what the overlay's filter reads from it, or `error`
+  jq -r "${activity_filter}" <<<"$1" 2>/dev/null || printf 'error\n'
+}
+expect_push_time() { # expect_push_time <case> <activity JSON> <expected>
+  local got
+  got="$(push_time "$2")"
+  [ "${got}" = "$3" ] || fail "push-time read, $1: got '${got}', want '$3'"
+}
+if [ -n "${activity_filter}" ]; then
+  expect_push_time "a branch recreated after an old push and a deletion reads its creation" \
+    '[{"activity_type":"branch_creation","timestamp":"2026-10-23T02:33:24Z"},{"activity_type":"branch_deletion","timestamp":"2026-10-22T23:33:35Z"},{"activity_type":"push","timestamp":"2026-10-22T08:48:45Z"}]' \
+    2026-10-23T02:33:24Z
+  expect_push_time "a branch created with no push yet reads its creation" \
+    '[{"activity_type":"branch_creation","timestamp":"2026-10-23T02:33:24Z"}]' 2026-10-23T02:33:24Z
+  expect_push_time "an ordinary push after the creation reads the push" \
+    '[{"activity_type":"push","timestamp":"2026-10-23T03:00:00Z"},{"activity_type":"branch_creation","timestamp":"2026-10-23T02:33:24Z"}]' \
+    2026-10-23T03:00:00Z
+  expect_push_time "a forced push reads the forced push" \
+    '[{"activity_type":"force_push","timestamp":"2026-10-23T04:00:00Z"},{"activity_type":"push","timestamp":"2026-10-23T03:00:00Z"}]' \
+    2026-10-23T04:00:00Z
+  expect_push_time "a newest deletion reads null (pushed:unknown), never the push before it" \
+    '[{"activity_type":"branch_deletion","timestamp":"2026-10-23T05:00:00Z"},{"activity_type":"push","timestamp":"2026-10-23T03:00:00Z"}]' null
+  expect_push_time "an activity list with no push or creation reads null" \
+    '[{"activity_type":"merge_queue_merge","timestamp":"2026-10-23T05:00:00Z"}]' null
+  expect_push_time "an empty activity list reads null" '[]' null
+  expect_push_time "a response that is not an activity list is an error, never a time" '{"message":"Not Found"}' error
+  # Ablation: the push-only filter this replaced reads the previous life's push on the first case.
+  activity_filter='[.[]|select(.activity_type=="push" or .activity_type=="force_push")][0].timestamp'
+  [ "$(push_time '[{"activity_type":"branch_creation","timestamp":"2026-10-23T02:33:24Z"},{"activity_type":"push","timestamp":"2026-10-22T08:48:45Z"}]')" = 2026-10-22T08:48:45Z ] ||
+    fail "push-time ablation: the push-only filter no longer shows the defect, so the cases above prove nothing"
+fi
 # `none` is a merge blocker, so a diff with nothing to run must have its own state or the whole
 # external docs/typo class is reported permanently blocked.
 grep -Fq 'behaviour_observed=<check-name|static|none|unknown>' "${surveyor}" ||
