@@ -2821,8 +2821,6 @@ populate_session_cache() {
   [ "$SAFETY_SCOPE" = codex ] || SF_CACHE="$(session_files)"
   [ "$SAFETY_SCOPE" = codex ] || CL_UNREADABLE="$(claude_unreadable_folders)"
   SF_COUNT=$(printf '%s' "$SF_CACHE" | grep -c . || true)
-  WINDOW_SINCE=$(date -u -v-"${SINCE_DAYS}"d '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null \
-                 || date -u -d "${SINCE_DAYS} days ago" '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null)
   # awk applies the cap instead of `head`: it reads the whole walk, so no writer is
   # cut off mid-stream under pipefail.
   local cx_walk=''
@@ -3048,6 +3046,10 @@ run_safety_bounded() {
 # redact will eventually leak; here a new detector is covered by construction.
 main() {
 local main_rc=0
+# Drift's scheduler evidence uses the same record window without consuming a
+# transcript cache. Keep time initialization independent of corpus collection.
+WINDOW_SINCE=$(date -u -v-"${SINCE_DAYS}"d '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null \
+               || date -u -d "${SINCE_DAYS} days ago" '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null)
 # Select before entering the transcript admission walk (#4477). Neither drift
 # nor forge outcomes consumes these caches. Collecting them anyway both wastes
 # the walk and makes independent evidence depend on unrelated admission gaps.
