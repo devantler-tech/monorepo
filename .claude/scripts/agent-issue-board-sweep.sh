@@ -196,8 +196,19 @@ if ! found="$(gh search issues --owner "$owner" --archived=false --state open --
   exit 2
 fi
 
-# `--jq` on an empty result set prints nothing, so an empty string here means zero issues from a
-# search that SUCCEEDED. That is the only path on which an empty sweep is believed.
+# A successful filtered zero is unproven until an unfiltered, complete control agrees (#4437).
+# Count only: archived control rows must never reach board-add or membership checks.
+if [ -z "$found" ]; then
+  zero_query=$(jq -rn --arg owner "$owner" --arg author "$author" \
+    '"org:\($owner|@json) is:issue is:open author:\($author|@json)"') || exit 2
+  if ! zero_control=$(gh api search/issues --method GET -f q="$zero_query" -f per_page=1 2>"$err_file") ||
+    ! printf '%s' "$zero_control" | jq -es 'length == 1 and (.[0] |
+      .incomplete_results == false and .total_count == 0 and (.items | type == "array" and length == 0))' \
+      >/dev/null 2>&1; then
+    echo 'agent-issue-board-sweep: UNKNOWN — empty archived-filter discovery not confirmed (nothing swept)' >&2
+    exit 2
+  fi
+fi
 discovered_count=0
 [ -z "$found" ] || discovered_count="$(printf '%s\n' "$found" | grep -c .)"
 

@@ -50,6 +50,7 @@ for a in "$@"; do
 done
 if [ -n "$n" ]; then file="$fix/gql-$n$after.json"
 elif [[ "$q" == *"in:body"* ]]; then n=$(awk '{print $3}' <<<"$q"); file="$fix/mention-$n.json"
+elif [[ "$q" != *archived:false* ]] && [ -f "$fix/org-control.json" ]; then file="$fix/org-control.json"
 else file="$fix/org.json"
 fi
 [ ! -f "$file.fail" ] || { cat "$file.fail" >&2; exit 1; }
@@ -334,6 +335,26 @@ jq -n '{resources:{search:{limit:30,remaining:30,reset:2000000000}}}' >"$FIX/rat
 cat "$FIX/rate.json" >>"$FIX/rate-copy.json"
 cat "$FIX/rate-copy.json" >>"$FIX/rate.json"
 check "multiple allowance payloads are UNKNOWN" 2 "invalid search allowance" "state=" --issue o/r#1
+
+# False filtered zeros must not become a completed empty selection, and the control
+# spends the same bounded search allowance as discovery and mention lookups.
+jq -n '{resources:{search:{limit:30,remaining:30,reset:2000000000}}}' >"$FIX/rate.json"
+jq -n '{total_count:0,incomplete_results:false,items:[]}' >"$FIX/org.json"
+jq -n '{total_count:1,incomplete_results:false,items:[{number:9}]}' >"$FIX/org-control.json"
+: >"$FIX/calls"
+check 'a contradicted filtered zero is UNKNOWN' 2 'empty archived-filter discovery not confirmed' 'CANDIDATE' --oldest 1 --type Security
+if [ "$(grep -c 'type:Security' "$FIX/calls")" -eq 2 ]; then
+  echo 'ok: the zero control preserves the selected issue type'; pass=$((pass+1))
+else echo 'FAIL: the zero control lost the issue type'; fail=$((fail+1)); fi
+jq -n '{total_count:0,items:[]}' >"$FIX/org-control.json"
+check 'an incomplete control shape is UNKNOWN' 2 'empty archived-filter discovery not confirmed' 'CANDIDATE' --oldest 1
+jq -n '{total_count:0,incomplete_results:false,items:[]}' >"$FIX/org-control.json"
+check 'two complete zero reads form a valid empty selection' 0 '' 'CANDIDATE' --oldest 1
+printf 'gh: HTTP 503\n' >"$FIX/org-control.json.fail"
+check 'a failed zero control is UNKNOWN' 2 'search read failed' 'CANDIDATE' --oldest 1
+rm "$FIX/org-control.json.fail"
+jq -n '{resources:{search:{limit:30,remaining:4,reset:2000000000}}}' >"$FIX/rate.json"
+check 'the zero control cannot overspend the invocation budget' 2 'DEFERRED' 'CANDIDATE' --oldest 1
 
 echo "delivered-open-candidates: $pass passed, $fail failed"
 test_run_completed=1

@@ -359,6 +359,17 @@ else
     gh search prs --owner "$org" --updated ">=$since" --archived=false --sort updated --order desc \
       --limit "$limit" --json repository,number \
       --jq '.[] | "\(.repository.name) \(.number)"' >"$tmp/prs" || unknown "cannot search $org pull requests"
+    if [ ! -s "$tmp/prs" ]; then
+      # The archived qualifier has returned complete-looking false zeros (#4437).
+      # Confirm existence only: never collect or act on archived control rows.
+      [[ "$since" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || unknown 'zero-control date is not ISO-8601'
+      zero_query=$(jq -rn --arg org "$org" --arg since "$since" \
+        '"org:\($org|@json) is:pr updated:>=\($since)"') || unknown 'cannot construct zero control'
+      zero_control=$(gh api search/issues --method GET -f q="$zero_query" -f per_page=1) || unknown 'zero control read failed'
+      printf '%s' "$zero_control" | jq -es 'length == 1 and (.[0] |
+        .incomplete_results == false and .total_count == 0 and (.items | type == "array" and length == 0))' \
+        >/dev/null 2>&1 || unknown 'empty archived-filter discovery not confirmed'
+    fi
     while IFS= read -r pr; do
       [ -n "$pr" ] || continue
       collect_pr "${pr%% *}" "${pr##* }"

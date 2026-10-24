@@ -110,8 +110,22 @@ emit() { if [ -n "$jqexpr" ]; then jq -r "$jqexpr"; else cat; fi; }
 if [ "$1 $2" = "search prs" ]; then
   [[ "$*" == *"--archived=false"* && "$*" == *"--sort updated --order desc"* ]] ||
     { echo "stub gh: search must exclude archived repos and sort by update" >&2; exit 1; }
-  echo '[{"repository":{"name":"r"},"number":7}]' | emit
+  if [ "${ZERO_PRIMARY:-0}" = 1 ]; then echo '[]' | emit
+  else echo '[{"repository":{"name":"r"},"number":7}]' | emit; fi
   exit
+fi
+if [ "$1 $2" = 'api search/issues' ]; then
+  [[ "$*" != *archived:false* && " $* " == *" per_page=1 "* ]] || exit 64
+  [[ "$*" == *'org:"o"'* && "$*" == *is:pr* && "$*" == *'updated:>=2026-09-14'* ]] || exit 64
+  case "${ZERO_CONTROL:-zero}" in
+    fail) exit 1 ;;
+    nonzero) echo '{"total_count":1,"incomplete_results":false,"items":[{"number":8}]}' ;;
+    missing) echo '{"total_count":0,"items":[]}' ;;
+    incomplete) echo '{"total_count":0,"incomplete_results":true,"items":[]}' ;;
+    zero) echo '{"total_count":0,"incomplete_results":false,"items":[]}' ;;
+    *) exit 64 ;;
+  esac
+  exit 0
 fi
 [ "$1" = api ] && [ "$include" = 1 ] && [ -z "$jqexpr" ] ||
   { echo "stub gh: REST reads must use --include and no --jq: $*" >&2; exit 1; }
@@ -484,6 +498,17 @@ fresh
 [ ! -e "$tmp/cond/http-v1/unused" ] || fail "a kept read unused for two days must be pruned"
 [ -n "$(entry_for "$pull")" ] || fail "a kept read in use must not be pruned"
 unset GH_LOG
+
+# A successful filtered zero is still unproven until a complete unfiltered control agrees.
+for mode in nonzero missing incomplete fail; do
+  ZERO_PRIMARY=1 ZERO_CONTROL="$mode" PATH="$bin:$PATH" run --org o --since 2026-09-14 \
+    --cache-dir "$tmp/zero-$mode" --cache-seconds 900
+  [ "$rc" -eq 2 ] || fail "unconfirmed zero ($mode) must be UNKNOWN, got $rc"
+  [ ! -s "$tmp/out" ] || fail 'unconfirmed zero published lane verdicts'
+  [ ! -f "$tmp/zero-$mode/o.2026-09-14.60.v2.events" ] || fail 'unconfirmed zero cached a complete sweep'
+done
+ZERO_PRIMARY=1 ZERO_CONTROL=zero PATH="$bin:$PATH" run --org o --since 2026-09-14 --cache-dir "$tmp/zero-agreed"
+expect 'two complete zero searches' 0 'cr=NO-EVIDENCE'
 
 completed=1
 echo "review-lane-health: OK"

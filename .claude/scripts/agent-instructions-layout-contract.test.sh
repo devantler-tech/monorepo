@@ -52,6 +52,21 @@ fail() {
   exit 1
 }
 
+# Discovery completeness governs every role, including workers that read only the core.
+core_discovery_rule() {
+  local core phrase
+  core="$(awk '
+    /^### Non-negotiables$/ { inside = 1; next }
+    inside && /^#/ { exit }
+    inside { for (i = 1; i <= NF; i++) printf "%s ", $i }
+  ' "$1")" || return 1
+  for phrase in '**Empty discovery.**' 'the same scope without that filter' \
+    'failed, incomplete or nonzero control is UNKNOWN' \
+    'archived control rows never become portfolio work'; do
+    grep -Fq -- "$phrase" <<<"$core" || return 1
+  done
+}
+
 # slug <heading text> — GitHub's heading anchor: lowercase, drop everything but letters, digits,
 # spaces, hyphens and underscores, then turn each space into a hyphen. The headings here use only
 # ASCII plus punctuation such as em dashes, so the C locale is exact.
@@ -102,6 +117,8 @@ nested_agents() {
 check_layout() {
   local root="$1" agents="$1/AGENTS.md" size nested nested_list files file dir target path anchor anchor_list chain_size chain_dir
   [ -r "${agents}" ] || { echo "cannot read ${agents}"; return 1; }
+  core_discovery_rule "${agents}" ||
+    { echo "empty-discovery completeness rule is missing from the always-on Non-negotiables core"; return 1; }
   nested_list="$(nested_agents "${root}")" || { echo "cannot list the nested AGENTS.md files"; return 1; }
 
   # 1. budgets
@@ -342,6 +359,20 @@ expect_failure "dead anchor" "has no such heading"
 fixture
 sed -i.bak 's/^## Stack map$/## Stack catalogue/' "${scratch}/repo/AGENTS.md"
 expect_failure "named section moved out of the root" "'## Stack map'"
+
+fixture
+awk '
+  /^- \*\*Empty discovery\.\*\*/ { skip = 1; next }
+  skip && /^  / { next }
+  { skip = 0; print }
+' "${scratch}/repo/AGENTS.md" >"${scratch}/without-discovery.md"
+mv "${scratch}/without-discovery.md" "${scratch}/repo/AGENTS.md"
+printf '\n**Empty discovery.** Confirm the same scope without that filter; a failed, incomplete or nonzero control is UNKNOWN; archived control rows never become portfolio work.\n' >>"${scratch}/repo/.claude/guides/work-selection.md"
+expect_failure "discovery rule reachable only through a guide" "always-on Non-negotiables core"
+
+fixture
+sed -i.bak 's/^### Non-negotiables$/### General rules/' "${scratch}/repo/AGENTS.md"
+expect_failure "discovery core section missing" "always-on Non-negotiables core"
 
 layout_test_finished=1
 echo "agent-instructions layout contract: PASS"
