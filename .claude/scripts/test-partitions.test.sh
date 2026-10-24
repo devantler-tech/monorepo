@@ -124,6 +124,15 @@ rc=0; wait "$parent" || rc=$?
 safety="$here/worktree-cleanup.test.sh"
 bash "$safety" --list-cases >"$tmp/native-cases" || fail 'native registry failed'
 grep -qx 't_keeps_untracked_when_showUntrackedFiles_is_no' "$tmp/native-cases" || fail 'mixed-case native case was lost'
+# The first member of a large registry must not be rejected by a producer's
+# SIGPIPE when grep finishes early. Exercise the actual worker and real fixture.
+printf 't_reaps_spent\n' >"$tmp/one-case"
+rc=0
+"$BASH" "$safety" --run-cases "$tmp/one-case" "$tmp/one-receipt" >"$tmp/out" 2>"$tmp/err" || rc=$?
+if [ "$rc" -ne 0 ] || ! cmp -s "$tmp/one-case" "$tmp/one-receipt"; then
+  cat "$tmp/err" >&2
+  fail 'a real assigned case was rejected or not completed'
+fi
 for fault in missing duplicate unknown; do
   awk -v fault="$fault" '
     /^t_reaps_spent$/ && fault == "missing" { next }

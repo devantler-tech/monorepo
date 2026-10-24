@@ -6870,7 +6870,7 @@ if [ -n "$(printf '%s\n' "$requested" | LC_ALL=C sort | uniq -d)" ]; then
   echo 'worktree-cleanup.test: duplicate assigned case' >&2; exit 2
 fi
 while IFS= read -r name; do
-  printf '%s\n' "$registry" | grep -qxF -- "$name" || { echo 'worktree-cleanup.test: unknown assigned case' >&2; exit 2; }
+  grep -qxF -- "$name" <<<"$registry" || { echo 'worktree-cleanup.test: unknown assigned case' >&2; exit 2; }
 done <<<"$requested"
 : >"$3" || exit 2
 printf 'worktree-cleanup.sh partition contract tests\n'
