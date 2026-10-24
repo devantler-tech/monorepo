@@ -47,8 +47,8 @@
 #                             [--repo <owner/repo> --head-repo <owner/repo> --pr-author <login>]
 #                             [--instances <trusted-registry.json>]
 #       Payload mode -- what CI runs (a trusted step reads the endpoint with the token; the report then
-#       runs from the BASE branch's copy of this script, without a token, behind the default-off
-#       repository variable UNSIGNED_COMMIT_REPORT) and the seam for the self-test: <payload.json> is a JSON array of commit objects in the
+#       runs from the BASE branch's copy of this script, without a token, on every pull request)
+#       and the seam for the self-test: <payload.json> is a JSON array of commit objects in the
 #       REST `pulls/<n>/commits` shape (`sha`, `commit.verification.{verified,reason}`), or `-`.
 #       PROVENANCE: --head-repo and --pr-author carry the pull request's own provenance into this
 #       path, which is the same rule the sweep applies -- a head outside the base repository is
