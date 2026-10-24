@@ -246,6 +246,10 @@ scan="$(
           i++; continue
         }
         if (m == "M") {
+          # Substitutions inside arithmetic still execute shell code, including quoted options.
+          if (substr(line, i, 3) == "$((") { emit("$(("); push("M"); i += 3; continue }
+          if (substr(line, i, 2) == "$(") { emit("$("); push("N"); i += 2; continue }
+          if (c == "`") { emit(c); push("N"); bt[sd] = 1; i++; continue }
           # Arithmetic: `<<` is a shift and `#` is not a comment; only the closing `))` matters.
           if (c == "(") pd[sd]++
           if (c == ")") {
