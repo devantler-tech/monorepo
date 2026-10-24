@@ -294,7 +294,7 @@ good_found="$(bad_lists_in "${self_test_dir}/good.md" | grep -c . || true)"
 plugin_defs="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering"
 [ -d "${plugin_defs}" ] && [ -n "$(find "${plugin_defs}" -type f -name '*.md' 2>/dev/null | head -1)" ] ||
   fail "pinned plugin definitions are absent at ${plugin_defs}, so they cannot be scanned and an OK here would be vacuous
-  populate them:  git -c 'url.https://github.com/.insteadOf=git@github.com:' submodule update --init libraries/agent-plugins"
+  populate them:  .claude/scripts/submodule-init.sh libraries/agent-plugins"
 
 # "PINNED" is a REVISION, not a directory — and a nonempty directory is the weaker claim.
 # A shared checkout sits at whatever revision it was last left on, which is the dangerous case: it
