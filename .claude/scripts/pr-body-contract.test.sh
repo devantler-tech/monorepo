@@ -106,8 +106,45 @@ grep -Fq 'bash .claude/scripts/pr-body-contract.test.sh' "${workflow}" ||
   fail "CI does not execute the PR-body regression test"
 grep -Fq 'Enforce the routine-role PR body contract' "${workflow}" ||
   fail "required CI does not validate the published routine-role PR body"
-grep -Fq 'types: [opened, synchronize, reopened, edited, ready_for_review]' "${workflow}" ||
-  fail "required CI does not rerun for body edits and draft promotion"
+# Promotion changes draft state, which no source check or PR-body guard consumes
+# (#4481). Keep validation on every source/body change without restarting an
+# already validated head merely because it is offered for review.
+check_ci_events() {
+  local candidate="$1" events event condition
+  events=$(yq -o=json '.on.pull_request.types' "$candidate") || return 1
+  for event in opened synchronize reopened edited; do
+    if ! jq -e --arg event "$event" 'select(type == "array") | index($event) != null' <<<"$events" >/dev/null; then
+      echo "missing validation event: $event" >&2
+      return 1
+    fi
+  done
+  if jq -e 'select(type == "array") | index("ready_for_review") != null' <<<"$events" >/dev/null; then
+    echo "promotion restarts unchanged source validation" >&2
+    return 1
+  fi
+  [ "$(yq -r '.on | has("merge_group")' "$candidate")" = true ] || {
+    echo "missing merge-group validation" >&2; return 1;
+  }
+  condition=$(yq -r '.jobs.guard-pr-body-marker-collision.if' "$candidate") || return 1
+  [ "$condition" = "github.event_name == 'pull_request'" ] || {
+    echo "PR-body guard must cover every pull request, including drafts" >&2; return 1;
+  }
+}
+expect_ok "source/body changes remain validated without a promotion rerun" check_ci_events "$workflow"
+for event in opened synchronize reopened edited; do
+  cp "$workflow" "$fixture_root/ci-events.yaml"
+  CI_EVENT="$event" yq -i '.on.pull_request.types |= map(select(. != strenv(CI_EVENT)))' "$fixture_root/ci-events.yaml"
+  expect_fail "missing $event" "missing validation event: $event" check_ci_events "$fixture_root/ci-events.yaml"
+done
+cp "$workflow" "$fixture_root/ci-events.yaml"
+yq -i '.on.pull_request.types += ["ready_for_review"]' "$fixture_root/ci-events.yaml"
+expect_fail "restored promotion rerun" "promotion restarts unchanged source validation" check_ci_events "$fixture_root/ci-events.yaml"
+cp "$workflow" "$fixture_root/ci-events.yaml"
+yq -i 'del(.on.merge_group)' "$fixture_root/ci-events.yaml"
+expect_fail "missing merge group" "missing merge-group validation" check_ci_events "$fixture_root/ci-events.yaml"
+cp "$workflow" "$fixture_root/ci-events.yaml"
+yq -i '.jobs.guard-pr-body-marker-collision.if += " && !github.event.pull_request.draft"' "$fixture_root/ci-events.yaml"
+expect_fail "draft body validation skipped" "PR-body guard must cover every pull request" check_ci_events "$fixture_root/ci-events.yaml"
 grep -Fq "if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'devantler'" \
   "${workflow}" || fail "the routine-role body check is not fenced to the trusted author and repository"
 grep -Fq 'bash .claude/scripts/pr-body-contract.sh check' "${workflow}" ||
