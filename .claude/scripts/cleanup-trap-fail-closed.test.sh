@@ -258,6 +258,8 @@ memory-hygiene.sh|
 memory-rewrite.sh|--file $tmp/converted/memory.md --from $tmp/converted/replacement.md --backup-dir $tmp/converted/backups
 hypothesis-id-reserve.test.sh|
 review-lane-health.sh|--now 1
+test-partitions.sh|--suite $tmp/canonical.sh|exit:2
+test-partitions.test.sh|
 review-no-gate-guard.sh|
 claude-lane-liveness.sh|--store $tmp/converted/store.json --projects $tmp/converted/projects
 renovate-dashboard-drift.sh|
@@ -373,7 +375,7 @@ codex-transcript-retention.sh|dry-run 14
 codex-transcript-retention.test.sh|
 codex-worktree-retention.sh|dry-run 7
 codex-worktree-retention.test.sh|
-worktree-cleanup.test.sh|
+worktree-cleanup.test.sh|--run-cases $tmp/converted/memory.md $tmp/converted/cleanup-receipt
 agent-role-delivery-contract.test.sh|
 maintainer-digest.sh|
 maintainer-digest.test.sh|
