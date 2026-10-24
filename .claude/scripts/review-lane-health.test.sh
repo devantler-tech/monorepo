@@ -597,6 +597,47 @@ PATH="$tmp/multi-bin:$PATH" REVIEW_ABORT_REACHED="$state/reached" TMPDIR="$state
 [ ! -f "$state/cache/o.2026-09-14.60.v2.events" ] || fail 'unbound worker cached a sweep'
 [ -z "$(find "$state/temp" -mindepth 1 -maxdepth 1)" ] || fail 'unbound worker left scratch behind'
 
+# Observe deletion attempts on both sides of trap installation. Bash 3.2 unwinds
+# local bindings before running EXIT after an errexit abort, unlike explicit exit.
+for abort_at in early bound; do
+state="$tmp/worker-$abort_at-abort"
+mkdir -p "$state/temp" "$state/bin"
+cat >"$state/bin/rm" <<'RM'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  if [ -n "${REVIEW_FORBIDDEN_RM:-}" ] && [ "$arg" = "$REVIEW_FORBIDDEN_RM" ]; then
+    : >"$REVIEW_PARENT_DELETE_ATTEMPT"
+  fi
+done
+exec /bin/rm "$@"
+RM
+chmod +x "$state/bin/rm"
+awk -v where="$abort_at" '
+  { print }
+  (where == "early" && /^collect_worker\(\) \{$/) ||
+  (where == "bound" && /^  install_cleanup$/) {
+    seen++
+    print "  if [ \"$2\" = 1 ]; then"
+    print "    export REVIEW_FORBIDDEN_RM=\"$1\""
+    print "    : > \"$REVIEW_ABORT_REACHED\""
+    print "    false"
+    print "  fi"
+  }
+  END { if (seen != 1) exit 1 }
+' "$checker" >"$state/checker" || fail "$abort_at worker injection did not bind exactly once"
+rc=0
+PATH="$state/bin:$tmp/multi-bin:$PATH" REVIEW_ABORT_REACHED="$state/reached" \
+  REVIEW_PARENT_DELETE_ATTEMPT="$state/parent-delete-attempt" TMPDIR="$state/temp" \
+  bash "$state/checker" --org o --since 2026-09-14 --now "$now" --jobs 4 --cache-dir "$state/cache" \
+  >"$state/out" 2>"$state/err" || rc=$?
+[ -f "$state/reached" ] || fail "$abort_at worker abort fixture did not run"
+[ ! -f "$state/parent-delete-attempt" ] || fail "$abort_at worker tried to delete parent scratch"
+[ "$rc" -eq 2 ] || fail "$abort_at worker abort must report UNKNOWN, got $rc"
+[ ! -s "$state/out" ] || fail "$abort_at worker abort published a verdict"
+[ ! -f "$state/cache/o.2026-09-14.60.v2.events" ] || fail "$abort_at worker abort cached a sweep"
+[ -z "$(find "$state/temp" -mindepth 1 -maxdepth 1)" ] || fail "$abort_at worker abort left scratch behind"
+done
+
 # Interrupt the parent while its own collectors are active. It must join them before
 # removing scratch, and must never cache or classify their partial result.
 state="$tmp/parent-interrupted"

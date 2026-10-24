@@ -95,14 +95,18 @@ tmp="$(mktemp -d)"
 # cleanup then becomes the script's status. Completion is recorded explicitly, so reaching the end is
 # the only way a zero status leaves this script; an abort reports UNKNOWN (monorepo#3414).
 review_lane_health_finished=0
+review_cleanup_scope=$BASH_SUBSHELL
 sweep_pids=''
 # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
 review_lane_health_cleanup() {
   local rc=$? pid
-  # Join only our own children before removing their scratch, including on interruption.
-  for pid in $sweep_pids; do wait "$pid" || true; done
-  rm -rf "$tmp"
-  if [ "$review_lane_health_finished" != 1 ] && [ "$rc" -eq 0 ]; then
+  # Errexit can unwind a worker's locals before EXIT on Bash 3.2. Its inherited
+  # parent bindings must never authorize cleanup in a different subshell.
+  if [ "$BASH_SUBSHELL" -eq "$review_cleanup_scope" ]; then
+    for pid in $sweep_pids; do wait "$pid" || true; done
+    rm -rf "$tmp"
+  fi
+  if [ "$review_lane_health_finished" != 1 ] && [ "$rc" -ne 2 ]; then
     echo "review-lane-health: aborted before finishing; reporting UNKNOWN rather than a clean pass" >&2
     rc=2
   fi
@@ -301,6 +305,7 @@ collect_worker() {
   local tmp="$1/worker-$2" result_dir="$1/result-$2" sweep_pids=''
   local http_reads=0 http_replays=0 http_unstored=0 http_unconfirmed=0
   local review_lane_health_finished=0
+  local review_cleanup_scope=$BASH_SUBSHELL
   install_cleanup
   # A trapped signal waits for the foreground gh child before exiting, so an
   # interrupted collector cannot leave that child writing into removed scratch.
