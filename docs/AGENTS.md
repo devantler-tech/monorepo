@@ -4,10 +4,12 @@ The root [AGENTS.md](../AGENTS.md) applies. This directory owns the monorepo's
 architecture decisions in `adr/`, numbered `NNNN-title.md`; do not add website source here.
 Describe present-state architecture and rationale. Preserve dated ADR records as history.
 
-`digests/` holds the maintainer's weekly digests, one `<ISO year>-W<week>.md` file per week,
+`digests/` holds the maintainer's digests, one `YYYY-MM-DD.md` file per delivery date,
 written from [`digests/TEMPLATE.md`](digests/TEMPLATE.md) and its rules
 ([monorepo#4285](https://github.com/devantler-tech/monorepo/issues/4285)). A workflow emails each
-one, so check a digest with `.claude/scripts/maintainer-digest.sh check` before it merges.
+one every third UTC day, so check a digest with `.claude/scripts/maintainer-digest.sh check`
+before it merges. The daily workflow waits until three UTC calendar days after the newest
+bot-created, maintainer-assigned digest, including closed ones. Preserve old ISO-week files as history.
 An ask is an issue in this repository labelled `maintainer-ask` and titled `🙋 Ask: <decision>`,
 with the sections `### Question`, `### Options` (lettered `A`, `B`, …), `### Recommendation` and
 `### If unanswered`. Agents file asks through the API. There is deliberately no issue form: one local
