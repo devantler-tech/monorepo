@@ -66,7 +66,16 @@ step:
    to a run that already read it successfully, which is why it was breached four times (82KB 07-01,
    83KB 07-12, 122KB 07-16, 74KB 07-18). Pre-flight runs
    [`.claude/scripts/memory-hygiene.sh`](../scripts/memory-hygiene.sh) (read-only). It
-   requires the caller to declare `--layout legacy` or `--layout codex`; file-shape guessing is
+   requires an explicit `--dir <resolved-native-memory-dir>` as well as `--layout legacy` or
+   `--layout codex`. A bare positional directory is rejected before the check runs. Use the
+   complete command shape for the runtime (replace the metavariables with resolved facts):
+
+   ```sh
+   .claude/scripts/memory-hygiene.sh --layout legacy --dir <resolved-native-memory-dir>
+   .claude/scripts/memory-hygiene.sh --layout codex --dir <resolved-native-memory-dir> --projection-loaded-before-ms <trusted-turn-start-ms>
+   ```
+
+   The native memory directory and the trusted boundary must be resolved, never guessed. File-shape guessing is
    forbidden because a minimal Codex store missing its summary is indistinguishable from a valid
    legacy `MEMORY.md`-only store. Missing or unknown layout fails closed. Codex callers must also
    read the current request's trusted
