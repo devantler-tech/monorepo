@@ -24,8 +24,36 @@ additional `:00` starts; those slots no longer replace an Agentic Engineer tick.
 raised to use the weekly allowances (maintainer decisions 2026-10-11 and 2026-10-13,
 monorepo#4116). Weekly allowance use is re-read on 2026-10-18; a cap reached early is evidence to
 lower that lane's cadence, by changing this table first and the runtime entry to match, and nothing
-works around a cap. This table covers the two scheduled engineering
+works around a cap. On Claude, [weekly pacing](#weekly-pacing-claude-lane) lowers the cadence while
+usage runs ahead of the week. This table covers the two scheduled engineering
 roles only — spend stewardship has no dispatch slot of its own (see *Spend contract*).
+
+### Weekly pacing (Claude lane)
+
+The Claude lane shares one weekly allowance with every session on the account. It ran out before the
+reset in every week from 2026-09-12 to 2026-10-24. In the week ending 2026-10-24, the first with two
+engineer entries, it ran out after 5.3 days and 92 scheduled dispatches did no work over about 41 hours.
+Scheduled Engineer runs used 79–90% of that week's tokens (monorepo#3623, monorepo#4116).
+
+**Every `agentic-engineer-2` run reads the weekly usage before anything else.** Load
+`mcp__ccd_session_mgmt__get_usage` through ToolSearch, call it, and read the `Weekly · all models`
+window: `percentUsed` and `resetsAt`. The elapsed share of the week is
+`100 × (7 days − (resetsAt − now)) / 7 days`.
+
+- **Ahead of pace** means `percentUsed` is more than 5 points above the elapsed share. The run is
+  **paced**: it writes one run-report line,
+  `weekly_pace=paced used=<percentUsed> elapsed=<share>`, and ends. It does no pre-flight check, survey
+  or work, and it writes no memory. The one-shipped-artifact floor does not apply to a paced run.
+- **Otherwise** the run records `weekly_pace=normal used=<percentUsed> elapsed=<share>` and continues
+  as usual.
+- **A plan status other than `ok`, a missing window or a failed call** is UNKNOWN. Record
+  `weekly_pace=UNKNOWN`, and run as usual. An unreadable reading never pauses the lane.
+
+`daily-ai-assistant` is never paced, so the lane keeps an hourly run that covers rung 0 and finishes
+started work. Pacing therefore brings the lane down to the hourly cadence it had before 2026-10-13.
+This happens only while usage is ahead of the week, and the lane goes back to two runs an hour once
+the week catches up. The Agent Improver and the Codex lane are not paced: the Improver used 2–16% of
+the week's tokens, and Codex has its own allowance and no `get_usage` tool.
 
 ### Two engineer entries per lane
 
