@@ -166,7 +166,8 @@ card.
    never finished, is still running or no sweep is on record; exit `2` means its state cannot be
    read or the launcher failed. Record either in `needs_attention` and escalate when it persists;
    it does not block the run. (b) Run `disk-preflight.sh`. On `1`, run
-   `build-cache-reclaim.sh apply` once and re-check; if it is still `1`, or it is `2`, do no builds,
+   `build-cache-reclaim.sh --cache-only apply` once and re-check; this selects recognized
+   regenerable caches, with broader host retention kept separate. If it is still `1`, or it is `2`, do no builds,
    tests or cluster work this run, record it in `needs_attention`, and escalate per
    *Maintainer channels*. (c) Run `shared-checkout-freshness.sh`; a `FROZEN` verdict is a finding
    to report, never an edit to discard.
