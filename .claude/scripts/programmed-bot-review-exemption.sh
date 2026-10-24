@@ -609,6 +609,17 @@ if [[ "${repo}" == "ksail" &&
   fi
 fi
 
+# cask_exempt grants a tap cask PR its exemption and says, on stderr, what that does not prove. Exit 0
+# names who made the PR, never whether its release is published, and twice a draft cask PR was
+# promoted on exit 0 alone before its release existed (homebrew-tap#1496 for monorepo#2992, then
+# homebrew-tap#1936 for monorepo#4104). The rule that prevents it lives in the merge-policy guide, far
+# from this call, so the reminder is printed where the decision is made. Stdout stays empty and the
+# exit status is unchanged, so no caller's verdict moves.
+cask_exempt() {
+  printf '%s\n' "programmed-bot-review-exemption: exit 0 proves who made this cask pull request, not that its release is published; before promoting a draft, check its release with .claude/scripts/release-cask-ripeness.sh (merge-policy guide) and promote only on RIPE" >&2
+  exit 0
+}
+
 if [[ "${repo}" == "homebrew-tap" && "${author}" == "devantler" ]]; then
   case "${branch}" in
   goreleaser/ksail)
@@ -644,9 +655,9 @@ if [[ "${repo}" == "homebrew-tap" && "${author}" == "devantler" ]]; then
 
   if is_semver "${version}" && matches_exact_files "${expected_file}"; then
     if [[ "${component}" == "world-at-ruin" ]]; then
-      matches_war_cask_provenance "${version}" && exit 0
+      matches_war_cask_provenance "${version}" && cask_exempt
     else
-      matches_homebrew_provenance "${component}" "${version}" && exit 0
+      matches_homebrew_provenance "${component}" "${version}" && cask_exempt
     fi
   fi
 fi

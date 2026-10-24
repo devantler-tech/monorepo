@@ -1625,24 +1625,68 @@ $(lint_cache_dir)
 $goenv_caches
 EOF
 
+# count_listed <root> <find-args...>: prints how many entries `find -H <root> <find-args...>` lists,
+# counted by their NUL terminators so a newline in a name cannot change the count. Fails on a
+# failed scan, so a caller never logs a count it did not take.
+count_listed() {
+  local root=$1 listed
+  shift
+  listed=$(find -H "$root" "$@" -print0 2>/dev/null | tr -dc '\000' | wc -c | tr -d ' ') || return 1
+  printf '%s' "${listed:-0}"
+}
+
+# log_unsafe_skipped <label> <listed> <kept>: says how many listed directories were never considered
+# because a name on their path is outside the safe set, so none is a silent leftover.
+log_unsafe_skipped() {
+  [ "$2" -gt "$3" ] 2>/dev/null || return 0
+  log "$1: $(($2 - $3)) never considered for a name outside the safe set"
+}
+
 run_cache_trees=''
 if [ "$run_caches_readable" -eq 1 ] && [ -d "$TMPDIR_ROOT" ]; then
   # Read the listing on its own, so a failed scan is seen: inside a heredoc substitution its
   # status is lost, and a partial listing would end in a clean-looking summary.
   # -H follows the root itself when it is a symlink (/tmp on macOS); without it find lists
   # nothing and reports success.
-  if ! run_cache_trees=$(find -H "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null); then
-    run_cache_trees=''
+  # Only safe names are listed (monorepo#4287): this listing is read a line at a time, and a newline
+  # in a name would split it into two paths, the second relative to the working directory, where a
+  # marked idle cache could then be removed although it is outside every root this sweep may touch.
+  # Each line must also be exactly <root>/<safe name>, so nothing but such a path is a candidate.
+  if ! run_cache_listing=$(find -H "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d \
+    ! -name "*[!${SAFE_NAME_CHARS}]*" 2>/dev/null); then
     unknown=$((unknown + 1))
     log "UNKNOWN (scan failed) $TMPDIR_ROOT: per-run caches not examined"
+  else
+    run_cache_kept=0
+    while IFS= read -r tree; do
+      [ -n "$tree" ] || continue
+      run_cache_name=${tree##*/}
+      case "$run_cache_name" in
+        '' | *[!${SAFE_NAME_CHARS}]*) continue ;;
+      esac
+      [ "$tree" = "${TMPDIR_ROOT%/}/${run_cache_name}" ] || continue
+      run_cache_trees="${run_cache_trees}${tree}"$'\n'
+      run_cache_kept=$((run_cache_kept + 1))
+    done <<EOF
+$run_cache_listing
+EOF
+    if run_cache_listed=$(count_listed "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d); then
+      log_unsafe_skipped 'per-run caches' "$run_cache_listed" "$run_cache_kept"
+    fi
   fi
 fi
 # Claude Code gives each session a scratchpad at <root>/claude-<uid>/<project>/<session>/scratchpad,
 # and a run that sets GOCACHE there leaves a 3-6 GB cache one level below it, four levels deeper
 # than the listing above reaches. On 2026-10-02 two of them held 8.9 GB that this sweep never saw.
 # Only that exact depth under a claude-* root is listed; every marker and liveness guard still applies.
+# Only safe names are listed, as for the temp root, and each line must be
+# <session root>/<project>/<session>/scratchpad/<name> with every part safe: a newline in a directory
+# ABOVE the cache splits the line too, and the cache's own name would not show it (monorepo#4287).
 scratch_cache_trees=''
 if [ -n "$run_cache_trees" ]; then
+  scratch_listed=0
+  scratch_kept=0
+  scratch_counted=1
   while IFS= read -r session_root; do
     case "${session_root##*/}" in
       claude-*) ;;
@@ -1650,15 +1694,39 @@ if [ -n "$run_cache_trees" ]; then
     esac
     [ -L "$session_root" ] && continue
     if ! nested=$(find "$session_root" -mindepth 4 -maxdepth 4 -type d \
-      -path "${session_root}/*/*/scratchpad/*" 2>/dev/null); then
+      -path "${session_root}/*/*/scratchpad/*" ! -name "*[!${SAFE_NAME_CHARS}]*" 2>/dev/null); then
       unknown=$((unknown + 1))
       log "UNKNOWN (scan failed) $session_root: session scratchpad caches not examined"
       continue
     fi
-    [ -n "$nested" ] && scratch_cache_trees="${scratch_cache_trees}${nested}"$'\n'
+    while IFS= read -r scratch_tree; do
+      [ -n "$scratch_tree" ] || continue
+      case "$scratch_tree" in
+        "${session_root}"/*) scratch_rel=${scratch_tree#"${session_root}"/} ;;
+        *) continue ;;
+      esac
+      case "$scratch_rel" in
+        */*/*/*/* | *[!/${SAFE_NAME_CHARS}]*) continue ;;
+        ?*/?*/scratchpad/?*) ;;
+        *) continue ;;
+      esac
+      scratch_cache_trees="${scratch_cache_trees}${scratch_tree}"$'\n'
+      scratch_kept=$((scratch_kept + 1))
+    done <<EOF
+$nested
+EOF
+    if session_listed=$(count_listed "$session_root" -mindepth 4 -maxdepth 4 -type d \
+      -path "${session_root}/*/*/scratchpad/*"); then
+      scratch_listed=$((scratch_listed + session_listed))
+    else
+      scratch_counted=0
+    fi
   done <<EOF
 $run_cache_trees
 EOF
+  if [ "$scratch_counted" -eq 1 ]; then
+    log_unsafe_skipped 'session scratchpad caches' "$scratch_listed" "$scratch_kept"
+  fi
   run_cache_trees="${run_cache_trees}"$'\n'"${scratch_cache_trees}"
 fi
 # The Codex desktop app gives each task a directory <CODEX_HOME>/worktrees/<id>/ and puts the task's
@@ -1901,14 +1969,16 @@ reclaim_fallback_modcache() {
 if [ -d "$TMPDIR_ROOT" ]; then
   # Listed on its own, so a failed scan is seen (see the marker sweep above). -H follows the
   # root itself when it is a symlink; a symlinked CHILD is not `-type d` and is never listed.
+  # Only safe names, and only a whole <root>/<name> line, as in the marker sweep (monorepo#4287).
   if ! fallback_modcaches=$(find -H "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d \
-    -name 'go-mod-*' 2>/dev/null); then
+    -name 'go-mod-*' ! -name "*[!${SAFE_NAME_CHARS}]*" 2>/dev/null); then
     fallback_modcaches=''
     unknown=$((unknown + 1))
     log "UNKNOWN (scan failed) $TMPDIR_ROOT: fallback module caches not examined"
   fi
   while IFS= read -r tree; do
     [ -n "$tree" ] || continue
+    [ "$tree" = "${TMPDIR_ROOT%/}/${tree##*/}" ] || continue
     reclaim_fallback_modcache "$tree"
   done <<EOF
 $fallback_modcaches
@@ -2331,7 +2401,7 @@ if [ -d "$BROWSER_PROFILE_ROOT" ]; then
   browser_seen=0
   browser_deferred=0
   if ! browser_profiles=$(find "$BROWSER_PROFILE_ROOT" -mindepth 1 -maxdepth 1 -type d \
-    -mmin "+$((BROWSER_PROFILE_MIN_AGE_HOURS * 60))" 2>/dev/null); then
+    ! -name "*[!${SAFE_NAME_CHARS}]*" -mmin "+$((BROWSER_PROFILE_MIN_AGE_HOURS * 60))" 2>/dev/null); then
     unknown=$((unknown + 1))
     log "UNKNOWN (scan failed) $BROWSER_PROFILE_ROOT: browser test profiles not examined"
     browser_profiles=''
@@ -2344,6 +2414,9 @@ if [ -d "$BROWSER_PROFILE_ROOT" ]; then
       *[!0-9a-f]*) continue ;;
     esac
     [ "${#name}" -eq 16 ] || continue
+    # A newline in a name would split it into two lines, and a second line of sixteen hex digits
+    # passes the shape check while naming a directory in the working directory (monorepo#4287).
+    [ "$tree" = "${BROWSER_PROFILE_ROOT%/}/${name}" ] || continue
     if browser_profile_named "$tree"; then
       kept=$((kept + 1))
       log "KEEP  (browser running) $tree"

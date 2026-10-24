@@ -11,6 +11,16 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SUT="$SCRIPT_DIR/worktree-cleanup.sh"
 CLAIM_SUT="$SCRIPT_DIR/worktree-claim.sh"
 
+# The default entrypoint runs every registered case through the bounded driver.
+# Listing cases creates no fixture; workers each own their stat shim and scratch.
+if [ "$#" -eq 0 ]; then
+  exec "$BASH" "$SCRIPT_DIR/test-partitions.sh" --suite "$SCRIPT_DIR/worktree-cleanup.test.sh"
+fi
+case "$1:$#" in
+  --list-cases:1|--run-cases:3) ;;
+  *) echo 'worktree-cleanup.test: expected --list-cases or --run-cases MANIFEST RECEIPT' >&2; exit 2 ;;
+esac
+
 pass=0; fail=0
 ok()   { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
 bad()  { fail=$((fail+1)); printf '  FAIL %s\n     %s\n' "$1" "${2:-}"; }
@@ -68,6 +78,7 @@ path_mtime() {
 # which is how a test says "this inode changed just now". A path listed in
 # $CTIME_BROKEN answers a ctime query with a non-number, as an unreadable ctime would.
 # Every other query passes through.
+if [ "$1" = --run-cases ]; then
 REAL_STAT=$(command -v stat)
 REAL_DU=$(command -v du)
 CTIME_SHIM_DIR=$(mktemp -d)
@@ -102,6 +113,7 @@ exec '$REAL_STAT' "\${args[@]}"
 EOF
 chmod +x "$CTIME_SHIM_DIR/stat"
 export PATH="$CTIME_SHIM_DIR:$PATH"
+fi
 
 # --- fixture ----------------------------------------------------------------------
 # Builds: origin (bare) + repo with `main` pushed. Worktrees are added per-test.
@@ -6574,7 +6586,8 @@ t_salvage_carries_one_submodule_and_clears_another() {
   rm -rf "$root"
 }
 
-printf 'worktree-cleanup.sh contract tests\n'
+case_registry() {
+  cat <<'CLEANUP_CASES'
 t_reaps_spent
 t_keeps_unpushed
 t_keeps_detached_orphan
@@ -6840,6 +6853,31 @@ t_salvage_keeps_submodule_work_when_the_main_checkout_repository_is_a_partial_cl
 t_salvage_keeps_submodule_work_when_the_main_checkout_repository_rewrites_urls
 t_salvage_keeps_submodule_work_when_the_main_checkout_repository_includes_configuration
 t_salvage_keeps_submodule_work_when_the_main_checkout_worktree_configuration_rewrites_urls
+CLEANUP_CASES
+}
+registry="$(case_registry)"
+listed="$(printf '%s\n' "$registry" | LC_ALL=C sort)"
+declared="$(declare -F | awk '{print $NF}' | sed -n '/^t_[a-zA-Z0-9_]*$/p' | LC_ALL=C sort)"
+if [ "$listed" != "$declared" ] || [ -n "$(printf '%s\n' "$listed" | uniq -d)" ]; then
+  echo 'worktree-cleanup.test: case registry differs from declared cases' >&2
+  exit 2
+fi
+if [ "$1" = --list-cases ]; then printf '%s\n' "$registry"; exit 0; fi
+requested="$(cat "$2")" || exit 2
+[ -n "$requested" ] || { echo 'worktree-cleanup.test: empty assignment' >&2; exit 2; }
+[ ! -e "$3" ] && [ ! -L "$3" ] || { echo 'worktree-cleanup.test: receipt already exists' >&2; exit 2; }
+if [ -n "$(printf '%s\n' "$requested" | LC_ALL=C sort | uniq -d)" ]; then
+  echo 'worktree-cleanup.test: duplicate assigned case' >&2; exit 2
+fi
+while IFS= read -r name; do
+  grep -qxF -- "$name" <<<"$registry" || { echo 'worktree-cleanup.test: unknown assigned case' >&2; exit 2; }
+done <<<"$requested"
+: >"$3" || exit 2
+printf 'worktree-cleanup.sh partition contract tests\n'
+while IFS= read -r name; do
+  "$name"
+  printf '%s\n' "$name" >>"$3" || exit 2
+done <<<"$requested"
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 cleanup_test_finished=1
 [ "$fail" -eq 0 ]

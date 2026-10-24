@@ -242,6 +242,8 @@ jobs:
               - '.claude/scripts/worktree-cleanup-all.sh'
               - '.claude/scripts/worktree-cleanup.test.sh'
               - '.claude/scripts/worktree-cleanup-all.test.sh'
+              - '.claude/scripts/test-partitions.sh'
+              - '.claude/scripts/test-partitions.test.sh'
               - '.claude/scripts/worktree-submodule-inventory.sh'
               - '.claude/scripts/worktree-submodule-inventory.test.sh'
               - '.claude/scripts/worktree-inventory-merged-check.sh'
@@ -1413,6 +1415,8 @@ jobs:
       # nothing cannot pass the gate assertions vacuously.
       # The macos leg is load-bearing: the host ships bash 3.2, which cannot parse
       # `case` inside $( ), and the age/stat probes are BSD-flavoured there.
+      - name: Self-test complete and bounded test partitioning
+        run: bash .claude/scripts/test-partitions.test.sh
       - name: Self-test worktree-cleanup safety gates
         run: bash .claude/scripts/worktree-cleanup.test.sh
       - name: Self-test the multi-repo orchestrator

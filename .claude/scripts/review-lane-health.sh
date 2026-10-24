@@ -403,9 +403,11 @@ else
   # The stored sweep is named and headed by the arguments that decide what a sweep reads, so a sweep
   # for other arguments is never reused. Arguments that cannot be a safe file name are not cached.
   # Version the file name too: a still-running older collector must not overwrite this format.
-  cache_file="" cache_head="# review-lane-health sweep-v2 org=$org since=$since limit=$limit at="
+  # v3 excludes unconfirmed empty sweeps written by older concurrent checkouts.
+  # Conditional HTTP entries retain their independently revalidated v1 format.
+  cache_file="" cache_head="# review-lane-health sweep-v3 org=$org since=$since limit=$limit at="
   if [ "$cache_seconds" -gt 0 ] && [[ "$org" =~ ^[A-Za-z0-9._-]+$ && "$since" =~ ^[0-9-]+$ ]]; then
-    cache_file="$cache_dir/$org.$since.$limit.v2.events"
+    cache_file="$cache_dir/$org.$since.$limit.v3.events"
   fi
   # cache_usable — true only for a private regular file of this user whose first line names these
   # arguments and a sweep time within the lifetime, and whose every other line is a well-formed event.
