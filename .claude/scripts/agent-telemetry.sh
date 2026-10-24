@@ -3048,11 +3048,16 @@ run_safety_bounded() {
 # redact will eventually leak; here a new detector is covered by construction.
 main() {
 local main_rc=0
-if [ "$SAFETY_WORKER" = 0 ] && [ "$SECTION" = safety ]; then
-  SF_COUNT='bounded inside safety worker'
-else
-  populate_session_cache
-fi
+# Select before entering the transcript admission walk (#4477). Neither drift
+# nor forge outcomes consumes these caches. Collecting them anyway both wastes
+# the walk and makes independent evidence depend on unrelated admission gaps.
+case "$SECTION" in
+  drift|outcomes) ;;
+  safety)
+    if [ "$SAFETY_WORKER" = 0 ]; then SF_COUNT='bounded inside safety worker'
+    else populate_session_cache; fi ;;
+  *) populate_session_cache ;;
+esac
 # An unreadable Codex folder makes every Codex figure below incomplete: name it
 # and carry it to the exit status (.claude/scripts/AGENTS.md: a failed read is
 # exit 2, never a clean result).
@@ -3086,7 +3091,10 @@ fi
 if [ "$SAFETY_WORKER" = 0 ] || { [ "$SAFETY_STANDALONE" = 1 ] && [ "$SAFETY_SCOPE" != codex ]; }; then
 echo "════════════════════════════════════════════════════════════════"
 echo " AGENT TELEMETRY — window ${SINCE_DAYS}d — generated $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-echo " claude sessions in window: ${SF_COUNT} (cap ${MAX_FILES})"
+case "$SECTION" in
+  drift|outcomes) echo " transcripts: NOT COLLECTED (section does not use them)" ;;
+  *) echo " claude sessions in window: ${SF_COUNT} (cap ${MAX_FILES})" ;;
+esac
 # Only the report controller prints coverage, and only when it walked the Claude
 # files itself (SF_COUNT is numeric; see main). A safety worker's banner frames
 # that one section, whose own UNKNOWNs and exit status it already owns. Drift and
@@ -6972,7 +6980,8 @@ if want outcomes; then
     # A failed or malformed listing leaves the portfolio inventory UNKNOWN. The
     # section then counts only the submodule cohort, whose archive state it has
     # not read, so every portfolio verdict below stays UNKNOWN or INCOMPLETE.
-    echo "  AGENT-authored merged PRs since ${SINCE_ISO} (registered instance identities):"
+    echo "  Registered-writer merged PR activity since ${SINCE_ISO} (legacy namespace series; includes interactive sessions):"
+    echo "  Scheduled-workflow effectiveness: UNKNOWN (requires native scheduled-session and verified outcome joins)"
     # The submodule cohort is kept as its own total so the series measured
     # before monorepo#4139 stays comparable; a wider denominator is not a gain.
     # Portable extraction: BSD sed rejects the non-greedy `+?` a single-pass

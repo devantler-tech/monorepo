@@ -40,6 +40,34 @@ export PORTFOLIO_PATHS="$FIX"
 export CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant
 export CODEX_ENGINEER_ENTRIES=daily-ai-engineer
 
+# Non-corpus sections must not enter either runtime's transcript admission walk
+# (#4477). Instrument the real cache entrypoint in a disposable script copy;
+# positive controls prove the sentinel still detects sections that need it.
+mkdir -p "$FIX/section-selection/.claude/scripts" "$FIX/section-selection/empty"
+awk '{ print; if ($0 == "populate_session_cache() {")
+  print "  printf walked >> \"$TRANSCRIPT_WALK_SENTINEL\"" }' "$TARGET" \
+  > "$FIX/section-selection/.claude/scripts/agent-telemetry.sh"
+for section in drift outcomes reliability dispatch; do
+  sentinel="$FIX/section-selection/$section.walk"
+  OUT=$(HOME="$FIX" MONOREPO_DIR="$FIX/section-selection/empty" \
+    CLAUDE_PROJECTS_DIR="$FIX/section-selection/empty" \
+    CODEX_HOME="$FIX/section-selection/empty" \
+    TRANSCRIPT_WALK_SENTINEL="$sentinel" \
+    bash "$FIX/section-selection/.claude/scripts/agent-telemetry.sh" \
+      --section "$section" --instances "$SCRIPT_DIR/../plugin-consumption/agent-instances.json" 2>&1)
+  case "$section" in
+    drift|outcomes)
+      if [ -e "$sentinel" ]; then bad "$section does not enumerate transcripts" "cache entrypoint ran"
+      else ok "$section does not enumerate transcripts"; fi
+      check "$section reports the absent measurement honestly" "$OUT" 'transcripts: NOT COLLECTED (section does not use them)'
+      nocheck "$section does not publish an unmeasured zero" "$OUT" 'claude sessions in window: 0' ;;
+    *)
+      if [ -s "$sentinel" ]; then ok "$section still enumerates its required transcripts"
+      else bad "$section still enumerates its required transcripts" "sentinel was not reached"; fi ;;
+  esac
+done
+# END independent section controls
+
 # #4089: the raw phrase counter is historical evidence, not a writer-collision verdict.
 # Removing the tool-id join would make the failed-search control count as an edit.
 mkdir -p "$FIX/stale-edit" "$FIX/nocodex"
@@ -624,6 +652,9 @@ outcomes_run() {
   CODEX_HOME="$FIX/outcomes/no-codex" \
   bash "$TARGET" --section outcomes --instances "$FIX/outcomes/instances.json" "$@" 2>&1
 }
+OUT=$(outcomes_run)
+check "legacy writer activity is explicitly separated from scheduled delivery" "$OUT" 'legacy namespace series; includes interactive sessions'
+check "writer identity alone never certifies scheduled effectiveness" "$OUT" 'Scheduled-workflow effectiveness: UNKNOWN (requires native scheduled-session and verified outcome joins)'
 mkdir -p \
   "$FIX/outcomes/definition-root/.claude/scripts" \
   "$FIX/outcomes/definition-root/.claude/plugin-consumption" \
