@@ -49,6 +49,18 @@ age_tree() {
   done
 }
 
+# path_mtime <path> — the path's mtime in epoch seconds: GNU form first, BSD second, digits only.
+# Never `stat -f %m … || stat -c %Y …`: on GNU, -f means file-system status, so it prints a block
+# (free blocks and free inodes included) before failing on the `%m` operand, and the fallback's
+# mtime is appended to a reading that changes whenever anything writes to the disk (#4369).
+path_mtime() {
+  local m
+  m=$(stat -c %Y "$1" 2>/dev/null || true)
+  case "$m" in ''|*[!0-9]*) m=$(stat -f %m "$1" 2>/dev/null || true) ;; esac
+  case "$m" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s\n' "$m"
+}
+
 # Salvage age counts a path's ctime (#3642), and `touch` cannot backdate a ctime, so every
 # fixture's ctime is "now". This `stat` shim, first on PATH for the whole file, reports a
 # ctime query (`-c %Z` / `-f %c`) as the path's mtime, which makes age_tree's backdating
@@ -3546,9 +3558,9 @@ t_a_fresh_tracked_edit_in_an_old_worktree_is_not_salvaged() {
   add_wt "$root" freshedit pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   local wt="$root/repo/.claude/worktrees/freshedit"
   age_tree "$wt"
-  local dir_m; dir_m=$(stat -f %m "$wt" 2>/dev/null || stat -c %Y "$wt")
+  local dir_m; dir_m=$(path_mtime "$wt") || { bad "$name" "FIXTURE: could not read the worktree directory mtime"; rm -rf "$root"; return; }
   echo "edited just now" > "$wt/file.txt"
-  local after; after=$(stat -f %m "$wt" 2>/dev/null || stat -c %Y "$wt")
+  local after; after=$(path_mtime "$wt") || { bad "$name" "FIXTURE: could not read the worktree directory mtime"; rm -rf "$root"; return; }
   [ "$dir_m" = "$after" ] || { bad "$name" "FIXTURE: editing a tracked file moved the directory mtime"; rm -rf "$root"; return; }
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q 'KEEP .*freshedit .*uncommitted change' <<<"$out" && ! grep -q '^SALVAGED .*freshedit' <<<"$out" \
