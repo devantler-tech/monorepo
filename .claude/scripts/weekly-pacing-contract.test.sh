@@ -83,8 +83,9 @@ for needle in \
   '`percentUsed` is more than 5 points above the elapsed share' \
   'An ahead run still checks rung 0 first' \
   '`.claude/scripts/platform-live-health.sh`' \
-  '`gh run list --repo devantler-tech/<repo> --branch main --limit 1 --json conclusion`' \
-  '**When the health check exits non-zero, any latest `main` run concluded `failure`, or any read fails, the run is not paced**' \
+  "\`gh api --paginate 'repos/devantler-tech/<repo>/commits/main/check-runs?per_page=100' --jq '.total_count, (.check_runs[] | .conclusion)'\`" \
+  'The latest run of any one workflow is not enough' \
+  '**When the health check exits non-zero, any check run concluded `failure`, `timed_out`, `startup_failure` or `cancelled`, fewer conclusions came back than `total_count`, or any read fails, the run is not paced**' \
   '`weekly_pace=rung0` and runs as usual' \
   '`weekly_pace=paced used=<percentUsed> elapsed=<share>`' \
   '`weekly_pace=normal used=<percentUsed> elapsed=<share>`' \
