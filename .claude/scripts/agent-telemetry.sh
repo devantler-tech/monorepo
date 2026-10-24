@@ -1730,8 +1730,10 @@ CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{1
 # alphabet includes `-` and `_`, so only a boundary outside that alphabet
 # separates a pasted token (preceded by a quote, space, `=`, `:`, or line
 # start) from blob noise. The anchor costs no true positives and is used ONLY
-# for the leak TABLE; redact() keeps the broad unanchored CRED_RE, so
-# over-redaction is preserved even where the table refuses to count.
+# for the leak TABLE. redact() keeps its own unanchored copy of these shapes,
+# so over-redaction is preserved even where the table refuses to count; CRED_RE
+# itself is the broad detector cred_candidate_lines() selects candidates with,
+# which is why it must stay at least as wide as this table variant.
 # The five PREFIX-identified shapes, factored out because two regexes now need
 # them byte-identically (the table and the blob-evidence scan below). Parity
 # between the detector and redact() has already broken twice; a second hand-kept
