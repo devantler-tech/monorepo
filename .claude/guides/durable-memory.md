@@ -38,7 +38,7 @@ step:
    in the same project and read the same project memory. On Codex the native projection above is
    one per runtime, so both entries boot from it, but the runtime also gives every automation a
    directory of its own. **The Codex engineer's automation-scoped store is the first entry's,
-   `/Users/homelab-mac-mini/.codex/automations/daily-ai-engineer/memory.md`, for both entries.** A
+   `~/.codex/automations/daily-ai-engineer/memory.md`, for both entries.** A
    run dispatched from `agentic-engineer-2` reads and appends to that file exactly as a run of the
    first entry does, and keeps nothing under `automations/agentic-engineer-2/` beyond one line that
    points to it. A second store would split the rotation cursor, `needs_attention`, the run notes
@@ -146,17 +146,20 @@ step:
    *Portability:* this is a generic "agent native memory" pattern — a Copilot/ChatGPT port would use that
    tool's equivalent store; nothing here is Claude-only except the tool name.
    **Agent Improver scorecard store:** Claude records scorecards in
-   `/Users/homelab-mac-mini/.claude/projects/-Users-homelab-mac-mini-git-personal-monorepo/memory/agent-improver-scorecards.md`;
+   `~/.claude/projects/<checkout>/memory/agent-improver-scorecards.md`;
    Codex records them in
-   `/Users/homelab-mac-mini/.codex/automations/agent-improver/memory.md`.
+   `~/.codex/automations/agent-improver/memory.md`.
    The **open verification-hypothesis store** is
-   `/Users/homelab-mac-mini/.claude/projects/-Users-homelab-mac-mini-git-personal-monorepo/memory/agent-improver-routine.md`
+   `~/.claude/projects/<checkout>/memory/agent-improver-routine.md`
    for Claude and the `Hypotheses / next run` section of the Codex Agent Improver memory file.
+   `~` is the agent host's home directory and `<checkout>` the project directory Claude Code names
+   after this checkout's path; both are resolved on the host and never spelled out in this public
+   contract (monorepo#2462).
    🔴 **Reserve a hypothesis identifier before it is written — never mint `H<n>` by reading the newest
    one and adding one.** Two overlapping runs of one task both read the same newest identifier, and
    both opened `H80` on one signature with different baselines. Before it writes a new hypothesis, a
    run takes its identifier from
-   `.claude/scripts/hypothesis-id-reserve.sh --reservations /Users/homelab-mac-mini/.claude/hypothesis-id-reservations --owner <run token> --scan <store>`,
+   `.claude/scripts/hypothesis-id-reserve.sh --reservations "$HOME/.claude/hypothesis-id-reservations" --owner <run token> --scan <store>`,
    with one `--scan` for every file that holds identifiers: the store named above, any file it has
    been split into, and the sibling's. It reads heading lines only, so open every hypothesis under a
    heading that names it. Exit `0` prints the identifier, which is then this run's alone.
@@ -222,7 +225,7 @@ step:
    write it. The
    **spend evidence/proposal/realisation ledger** — snapshots, proposals with their confidence, open
    maintainer asks, and the projected-versus-realised record — lives in the engineer's own runtime
-   store: `/Users/homelab-mac-mini/.codex/automations/daily-ai-engineer/memory.md` for Codex, whichever
+   store: `~/.codex/automations/daily-ai-engineer/memory.md` for Codex, whichever
    engineer entry dispatched the run, and the
    runtime's native project memory for Claude. These are private runtime stores, never repository
    artifacts, and absolute financial figures live **only** here or in the private channel.
