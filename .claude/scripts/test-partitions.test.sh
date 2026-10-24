@@ -155,8 +155,11 @@ if [ "$(wc -l <"$tmp/orchestrator-cases" | tr -d ' ')" -ne 42 ] ||
   grep -Ev '^t_[a-zA-Z0-9_]+$' "$tmp/orchestrator-cases" >/dev/null; then
   fail 'orchestrator registry executed fixtures or lost case groups'
 fi
-for fault in missing-variant duplicate-variant unknown-variant; do
+for fault in missing-variant duplicate-variant unknown-variant spaced-duplicate; do
   awk -v fault="$fault" '
+    /^t_excluded_nested_submodule_retains_parent$/ && fault == "spaced-duplicate" {
+      print "t_excluded_nested_submodule_retains_parent  missing"; next
+    }
     /^t_excluded_nested_submodule_retains_parent missing$/ {
       if (fault == "missing-variant") next
       if (fault == "duplicate-variant") print

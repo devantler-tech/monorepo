@@ -9,6 +9,26 @@ set -uo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SUT="$SCRIPT_DIR/worktree-cleanup-all.sh"
 
+# The default runs every group with the existing maximum-four-process driver.
+# Parameter variants stay together, and listing creates no fixture.
+if [ "$#" -eq 0 ]; then
+  exec "$BASH" "$SCRIPT_DIR/test-partitions.sh" --suite "$SCRIPT_DIR/worktree-cleanup-all.test.sh"
+fi
+case "$1:$#" in
+  --list-cases:1|--run-cases:3) ;;
+  *) echo 'worktree-cleanup-all.test: expected --list-cases or --run-cases MANIFEST RECEIPT' >&2; exit 2 ;;
+esac
+orchestrator_test_finished=0
+on_orchestrator_exit() {
+  local rc=$?
+  if [ "$orchestrator_test_finished" != 1 ]; then
+    echo 'worktree-cleanup-all.test: aborted before finishing' >&2
+    rc=2
+  fi
+  exit "$rc"
+}
+trap on_orchestrator_exit EXIT
+
 pass=0; fail=0
 ok()  { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
 bad() { fail=$((fail+1)); printf '  FAIL %s\n     %s\n' "$1" "${2:-}"; }
@@ -1243,7 +1263,8 @@ t_unknown_submodule_eligibility_fails_closed() {
   done
 }
 
-printf 'worktree-cleanup-all.sh contract tests\n'
+case_invocations() {
+  cat <<'ORCHESTRATOR_CALLS'
 t_excluded_submodule_is_never_probed
 t_excluded_submodule_is_never_probed https://github.com/devantler-tech/fixture-unmapped.git
 t_excluded_submodule_is_never_probed https://github.com/devantler-tech/reusable-workflows.git
@@ -1291,5 +1312,60 @@ t_codex_lane_sweeps_worktrees_nested_in_its_sessions
 t_codex_nested_pass_leaves_a_live_session_alone
 t_nested_passes_never_cross_lanes
 t_rejects_a_bad_lane_or_extra_argument
+ORCHESTRATOR_CALLS
+}
+invocations="$(case_invocations)"
+registry="$(printf '%s\n' "$invocations" | awk '!seen[$1]++ {print $1}')"
+listed="$(printf '%s\n' "$registry" | LC_ALL=C sort)"
+declared="$(declare -F | awk '{print $NF}' | sed -n '/^t_[a-zA-Z0-9_]*$/p' | LC_ALL=C sort)"
+registry_failure() { echo 'worktree-cleanup-all.test: case invocation registry differs from complete declared cases and variants' >&2; exit 2; }
+# Forty-two groups cover the original forty-seven invocations. Together with
+# unique calls and the exact allowed arguments below, the census also proves
+# that no parameter variant was silently dropped, repeated or substituted.
+[ "$(printf '%s\n' "$invocations" | wc -l | tr -d ' ')" -eq 47 ] || registry_failure
+[ "$invocations" = "$(printf '%s\n' "$invocations" | awk '{print $1 (NF > 1 ? " " $2 : "")}')" ] || registry_failure
+[ -z "$(printf '%s\n' "$invocations" | LC_ALL=C sort | uniq -d)" ] || registry_failure
+[ "$listed" = "$declared" ] || registry_failure
+while read -r invocation_name invocation_argument invocation_extra; do
+  [ -z "$invocation_extra" ] || registry_failure
+  case "$invocation_name" in
+    t_excluded_submodule_is_never_probed)
+      case "$invocation_argument" in
+        ''|https://github.com/devantler-tech/fixture-unmapped.git|https://github.com/devantler-tech/reusable-workflows.git) ;;
+        *) registry_failure ;;
+      esac ;;
+    t_excluded_nested_submodule_retains_parent)
+      case "$invocation_argument" in ''|missing) ;; *) registry_failure ;; esac ;;
+    t_declared_only_excluded_submodule_is_swept)
+      case "$invocation_argument" in absent|stray|stored) ;; *) registry_failure ;; esac ;;
+    *) [ -z "$invocation_argument" ] || registry_failure ;;
+  esac
+done <<<"$invocations"
+if [ "$1" = --list-cases ]; then
+  printf '%s\n' "$registry"
+  orchestrator_test_finished=1
+  exit 0
+fi
+requested="$(cat "$2")" || exit 2
+[ -n "$requested" ] || { echo 'worktree-cleanup-all.test: empty assignment' >&2; exit 2; }
+[ ! -e "$3" ] && [ ! -L "$3" ] || { echo 'worktree-cleanup-all.test: receipt already exists' >&2; exit 2; }
+[ -z "$(printf '%s\n' "$requested" | LC_ALL=C sort | uniq -d)" ] || { echo 'worktree-cleanup-all.test: duplicate assigned case' >&2; exit 2; }
+while IFS= read -r orchestrator_case; do
+  grep -qxF -- "$orchestrator_case" <<<"$registry" || { echo 'worktree-cleanup-all.test: unknown assigned case' >&2; exit 2; }
+done <<<"$requested"
+: >"$3" || exit 2
+printf 'worktree-cleanup-all.sh partition contract tests\n'
+while IFS= read -r orchestrator_case; do
+  while read -r invocation_name invocation_argument; do
+    [ "$invocation_name" = "$orchestrator_case" ] || continue
+    if [ -n "$invocation_argument" ]; then
+      "$invocation_name" "$invocation_argument"
+    else
+      "$invocation_name"
+    fi
+  done <<<"$invocations"
+  printf '%s\n' "$orchestrator_case" >>"$3" || exit 2
+done <<<"$requested"
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
+orchestrator_test_finished=1
 [ "$fail" -eq 0 ]
