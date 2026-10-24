@@ -37,11 +37,13 @@ report() {
 }
 
 # A `gh` stub that answers the three calls the sweep makes and records its argv.
-#   search issues       answers from $GH_RESULTS (rows `<node id><TAB><url>`) the way the CLI
-#                       does: each row becomes an object holding ONLY the fields named by --json,
-#                       printed through the --jq filter it was handed. A sweep that asks for the
-#                       wrong fields therefore gets rows it cannot read (monorepo#3820), instead
-#                       of the same rows whatever it asked for. GH_EXIT fails it
+#   search issues       answers from $GH_RESULTS (rows `<node id><TAB><url>[<TAB><created at>]`)
+#                       the way the CLI does: each row becomes an object holding ONLY the fields
+#                       named by --json, printed through the --jq filter it was handed. A sweep that
+#                       asks for the wrong fields therefore gets rows it cannot read (monorepo#3820),
+#                       instead of the same rows whatever it asked for. It honours --limit and a
+#                       `--created '>=<time>'` qualifier, so a page and the next one can be told
+#                       apart (monorepo#4330), and logs each call's qualifier. GH_EXIT fails it
 #   api graphql         without --input: the board id ($GH_PROJECT_ID); GH_PROJECT_EXIT fails it
 #   api graphql --input the bulk membership read. Each requested id is looked up in $GH_MEMBERSHIP
 #                       (rows `<id><TAB><url><TAB><kind>`) and answered by kind:
@@ -67,16 +69,24 @@ case "$1 ${2:-}" in
     [ -z "${GH_SEARCH_SLEEP:-}" ] || sleep "${GH_SEARCH_SLEEP}"
     if [ -n "${GH_STDERR:-}" ]; then printf '%s\n' "${GH_STDERR}" >&2; fi
     if [ "${GH_EXIT:-0}" != 0 ]; then echo "stub: simulated search failure" >&2; exit "${GH_EXIT}"; fi
-    fields="" filter="" previous=""
+    fields="" filter="" previous="" limit="" created=""
     for arg in "$@"; do
-      case "$previous" in --json) fields="$arg" ;; --jq) filter="$arg" ;; esac
+      case "$previous" in
+        --json) fields="$arg" ;; --jq) filter="$arg" ;; --limit) limit="$arg" ;; --created) created="$arg" ;;
+      esac
       previous="$arg"
     done
+    printf '%s\n' "${created:--}" >> "${GH_CALL_LOG}.created"
     [ -s "${GH_RESULTS}" ] || exit 0
-    jq -Rn --arg fields "$fields" '
+    # Like the search API: `--created '>=<time>'` keeps issues created at or after it, and
+    # `--limit` returns at most that many of what is left, oldest first.
+    jq -Rn --arg fields "$fields" --arg limit "$limit" --arg created "$created" '
       ($fields | split(",")) as $asked
-      | [inputs | select(length > 0) | split("\t") | {id: .[0], url: .[1]}
-         | with_entries(select(.key as $k | $asked | index($k)))]' "${GH_RESULTS}" | jq -r "$filter"
+      | (if ($created | startswith(">=")) then ($created[2:] | sub("[+]00:00$"; "Z")) else null end) as $from
+      | [inputs | select(length > 0) | split("\t") | {id: .[0], url: .[1], createdAt: .[2]}
+         | select($from == null or ((.createdAt // "") >= $from))]
+      | (if $limit == "" then . else .[:($limit | tonumber)] end)
+      | map(with_entries(select(.key as $k | $asked | index($k))))' "${GH_RESULTS}" | jq -r "$filter"
     exit 0
     ;;
   "api search/issues")
@@ -194,13 +204,19 @@ id_of() {
   local repo="${1%/issues/*}"
   printf 'I_%s_%s' "${repo##*/}" "${1##*/}"
 }
+# created_at <n> — the creation time of the n-th issue of a fixture: one second after the one
+# before it, so the order and every page boundary are unambiguous.
+created_at() {
+  printf '2026-01-01T%02d:%02d:%02dZ' "$(($1 / 3600))" "$(($1 % 3600 / 60))" "$(($1 % 60))"
+}
 # results <url>... — the discovery result set, oldest first. Every issue starts absent from the
 # board, so a case that says nothing about membership exercises the per-issue path as before.
 results() {
-  local u
+  local u n=0
   : > "$GH_RESULTS"; : > "$GH_MEMBERSHIP"
   for u in "$@"; do
-    printf '%s\t%s\n' "$(id_of "$u")" "$u" >> "$GH_RESULTS"
+    n=$((n + 1))
+    printf '%s\t%s\t%s\n' "$(id_of "$u")" "$u" "$(created_at "$n")" >> "$GH_RESULTS"
     printf '%s\t%s\tabsent\n' "$(id_of "$u")" "$u" >> "$GH_MEMBERSHIP"
   done
 }
@@ -220,7 +236,7 @@ count_calls() { grep -c -x -- "$1" "$GH_CALL_LOG" || true; }
 run_sweep_without_author() {
   local script="$1"; shift
   : > "$BOARD_LOG"; : > "$GH_ARGV_LOG"; : > "$GH_ARGS_LOG"
-  : > "$GH_CALL_LOG"; : > "$GH_BULK_IDS"; : > "$GH_BULK_SIZES"
+  : > "$GH_CALL_LOG"; : > "$GH_CALL_LOG.created"; : > "$GH_BULK_IDS"; : > "$GH_BULK_SIZES"
   rc=0
   out="$(PATH="$tmp/bin:$PATH" "$script" --board-add "$tmp/board-add-stub.sh" --pace-seconds 0 "$@" 2>&1)" || rc=$?
 }
@@ -270,10 +286,10 @@ report "discovery passes the explicit author as an exact argument" \
 
 # The fields discovery asks for are pinned twice: by argument, and by a copy that asks for one
 # field fewer (no url), which must stop at rows it cannot read rather than board anything.
-report "discovery asks for exactly the node id and the url" \
-  "$([ "$(awk 'previous == "--json" { print; exit } { previous=$0 }' "$GH_ARGS_LOG")" = id,url ] && echo yes || echo no)" "$argv"
+report "discovery asks for exactly the node id, the url and the creation time" \
+  "$([ "$(awk 'previous == "--json" { print; exit } { previous=$0 }' "$GH_ARGS_LOG")" = id,url,createdAt ] && echo yes || echo no)" "$argv"
 fields_copy="$tmp/sweep-fields-ablated.sh"
-sed 's| --json id,url | --json id |' "$sweep" > "$fields_copy"
+sed 's| --json id,url,createdAt | --json id,createdAt |' "$sweep" > "$fields_copy"
 chmod +x "$fields_copy"
 if cmp -s "$sweep" "$fields_copy"; then
   report "ablation: the requested-fields edit landed" no "the sed edit matched nothing"
@@ -345,16 +361,48 @@ for valid_limit in 1 1000; do
 done
 
 # ---------------------------------------------------------------------------
-# 7c. SATURATION — a result set at the cap may be truncated, so success would hide unboarded issues.
-results "$U1" "$U2"
+# 7c. PAGES (monorepo#4330) — a page AT the --limit cap may have more behind it, so discovery reads
+#     the next page from the creation time the full one ended on, inclusive, and drops the repeat.
+results "$U1" "$U2" "$U3"
 run_sweep "$sweep" --limit 2
-report "a result set AT the --limit cap fails closed" \
-  "$([ "$rc" -eq 2 ] && grep -q 'TRUNCATED' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
-report "a saturated discovery boards nothing" "$([ ! -s "$BOARD_LOG" ] && echo yes || echo no)" "log=[$(cat "$BOARD_LOG")]"
-# Control: one BELOW the cap is a complete census and sweeps normally.
-run_sweep "$sweep" --limit 3
-report "control: one result below the cap sweeps normally" \
-  "$([ "$rc" -eq 0 ] && [ "$(wc -l < "$BOARD_LOG" | tr -d ' ')" = 2 ] && echo yes || echo no)" "rc=$rc"
+report "a page at the --limit cap is followed by the next page, and every issue is boarded once" \
+  "$([ "$rc" -eq 0 ] && [ "$(sort "$BOARD_LOG")" = "$want" ] && grep -q 'discovered=3 ' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+report "each next page starts at the creation time the full page before it ended on" \
+  "$([ "$(tr '\n' ' ' < "$GH_CALL_LOG.created")" = "- >=2026-01-01T00:00:02+00:00 >=2026-01-01T00:00:03+00:00 " ] && echo yes || echo no)" "created=[$(tr '\n' ' ' < "$GH_CALL_LOG.created")]"
+# Control: a page BELOW the cap is the whole census, so no second search is made.
+run_sweep "$sweep" --limit 4
+report "control: a page below the cap ends discovery with one search" \
+  "$([ "$rc" -eq 0 ] && [ "$(count_calls search)" = 1 ] && [ "$(wc -l < "$BOARD_LOG" | tr -d ' ')" = 3 ] && echo yes || echo no)" "rc=$rc searches=$(count_calls search)"
+# Ablation: the same script with the next page removed reads only the first page and stays silent
+# about the rest, which is the truncation this case exists to catch.
+pages_copy="$tmp/sweep-pages-ablated.sh"
+# shellcheck disable=SC2016 # The pattern names the script's own text, not an expansion.
+sed 's#^  \[ "$(printf .* -ge "$limit" \] || break$#  break#' "$sweep" > "$pages_copy"
+chmod +x "$pages_copy"
+if cmp -s "$sweep" "$pages_copy"; then
+  report "ablation: the next-page edit landed" no "the sed edit matched nothing"
+else
+  run_sweep "$pages_copy" --limit 2
+  report "ablation: without the next page, the third issue is never boarded" \
+    "$([ "$(wc -l < "$BOARD_LOG" | tr -d ' ')" = 2 ] && ! grep -qxF "$U3" "$BOARD_LOG" && echo yes || echo no)" "log=[$(tr '\n' ' ' < "$BOARD_LOG")]"
+fi
+
+# 7c2. A full page whose issues were all created in one second cannot be advanced past: the next
+#      page would start where it did. That is TRUNCATED, and nothing is boarded.
+: > "$GH_RESULTS"; : > "$GH_MEMBERSHIP"
+for u in "$U1" "$U2" "$U3"; do
+  printf '%s\t%s\t2026-01-01T00:00:01Z\n' "$(id_of "$u")" "$u" >> "$GH_RESULTS"
+  printf '%s\t%s\tabsent\n' "$(id_of "$u")" "$u" >> "$GH_MEMBERSHIP"
+done
+run_sweep "$sweep" --limit 2
+report "a full page created in one second fails closed as TRUNCATED and boards nothing" \
+  "$([ "$rc" -eq 2 ] && grep -q 'TRUNCATED' <<<"$out" && [ ! -s "$BOARD_LOG" ] && echo yes || echo no)" "rc=$rc $out"
+# A full page that names no creation time cannot place the next page either.
+: > "$GH_RESULTS"
+for u in "$U1" "$U2" "$U3"; do printf '%s\t%s\n' "$(id_of "$u")" "$u" >> "$GH_RESULTS"; done
+run_sweep "$sweep" --limit 2
+report "a full page without creation times fails closed and boards nothing" \
+  "$([ "$rc" -eq 2 ] && grep -q 'carries no creation time' <<<"$out" && [ ! -s "$BOARD_LOG" ] && echo yes || echo no)" "rc=$rc $out"
 
 # 7d. A SUCCESSFUL search that writes to stderr must not fold that text into the URL list.
 #     The CLI prints an upgrade notice on stderr about once a day, so this is routine, not exotic.
@@ -534,7 +582,7 @@ many_issues() { # many_issues <count> <kind> — a discovery set of <count> issu
   local i
   : > "$GH_RESULTS"; : > "$GH_MEMBERSHIP"
   for ((i = 1; i <= $1; i++)); do
-    printf 'I_bulk_%s\thttps://github.com/devantler-tech/bulk/issues/%s\n' "$i" "$i" >> "$GH_RESULTS"
+    printf 'I_bulk_%s\thttps://github.com/devantler-tech/bulk/issues/%s\t%s\n' "$i" "$i" "$(created_at "$i")" >> "$GH_RESULTS"
     printf 'I_bulk_%s\thttps://github.com/devantler-tech/bulk/issues/%s\t%s\n' "$i" "$i" "$2" >> "$GH_MEMBERSHIP"
   done
 }
@@ -568,6 +616,16 @@ report "it ends with the terminal summary" \
   "$(grep -q 'discovered=778 verified=778 boarded=0 wrote=0 skipped=0 failed=0 deferred=0' <<<"$out" && echo yes || echo no)" "$(tail -n 1 <<<"$out")"
 report "its local work fits the 120 s call budget many times over" \
   "$([ "$fixture_seconds" -le 60 ] && echo yes || echo no)" "${fixture_seconds}s"
+
+# 9e1. MORE THAN THE SEARCH API RETURNS FOR ONE QUERY (monorepo#4330): 1205 open issues, with the
+#      default page size and no hand-tuned --limit, are all discovered, each once, in five pages.
+many_issues 1205 present
+run_sweep "$sweep" --dry-run
+report "1205 issues are discovered by the default invocation, each exactly once" \
+  "$([ "$rc" -eq 0 ] && grep -q 'discovered=1205 verified=1205 ' <<<"$out" && [ "$(sort "$GH_BULK_IDS" | uniq -d | wc -l | tr -d ' ')" = 0 ] && [ "$(wc -l < "$GH_BULK_IDS" | tr -d ' ')" = 1205 ] && echo yes || echo no)" \
+  "rc=$rc asked=$(wc -l < "$GH_BULK_IDS" | tr -d ' ') $(tail -n 1 <<<"$out")"
+report "the default invocation reads them in five pages of at most 300" \
+  "$([ "$(count_calls search)" = 5 ] && echo yes || echo no)" "searches=$(count_calls search) created=[$(tr '\n' ' ' < "$GH_CALL_LOG.created")]"
 
 # 9e2. A discovery row the script cannot read stops the sweep: it never guesses which half is the URL.
 printf '%s\n' "$U1" > "$GH_RESULTS"

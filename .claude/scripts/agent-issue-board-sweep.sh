@@ -39,20 +39,21 @@
 #   caller that only ever follows the printed checkpoint never retries it. After the last run of a
 #   chain prints no checkpoint, run once more without --resume-from.
 #
-#   `--limit` is pinned because `gh search` defaults to 30: a lane with more open issues than
-#   that would have the remainder silently never boarded. Ordering is pinned to created-ascending
-#   so the sweep is deterministic rather than dependent on relevance ranking. The author is
-#   matched EXACTLY -- a free-text search for a marker string returns unrelated issues that merely
-#   mention it.
+#   `--limit` is the size of one discovery page, pinned because `gh search` defaults to 30.
+#   Discovery reads page after page until one comes back short of it, each starting at the
+#   creation time the previous one ended on, so no page size truncates the census and no caller
+#   needs to tune it (monorepo#4330). Ordering is pinned to created-ascending so the sweep is
+#   deterministic rather than dependent on relevance ranking. The author is matched EXACTLY -- a
+#   free-text search for a marker string returns unrelated issues that merely mention it.
 #
 # FAIL-CLOSED
 #   A failed discovery is never treated as "no issues": an empty filtered result also needs a
 #   complete, same-scope unfiltered zero. A `board-add.sh` failure on one issue does not abort the
 #   sweep -- the remaining issues are still boarded -- but the script exits non-zero so the
-#   failure is visible rather than absorbed. A result set sitting exactly AT the --limit cap is
-#   treated as truncated and fails closed, because `--limit` bounds what is fetched rather than
-#   guaranteeing an exhaustive search, and a silent shortfall would leave issues unboarded behind
-#   a clean exit. A private repository's issue is a maintainer
+#   failure is visible rather than absorbed. A full page whose issues all share one creation time
+#   cannot be advanced past, and a discovery that has not ended within its page bound may hold
+#   more; both are TRUNCATED and fail closed before any write, because a silent shortfall would
+#   leave issues unboarded behind a clean exit. A private repository's issue is a maintainer
 #   decision, and `board-add.sh` refuses it; that refusal is reported as SKIPPED and does not
 #   fail the sweep.
 #
@@ -66,7 +67,7 @@
 #   before_checkpoint on a resumed run.
 #   exit 0  bounded batch succeeded; inspect deferred and skipped for remaining issues
 #   exit 1  usage error
-#   exit 2  discovery failed or was truncated at the cap, an issue could not be boarded, the
+#   exit 2  discovery failed or was truncated, an issue could not be boarded, the
 #           checkpoint is no longer discovered, or the run was interrupted
 set -Eeuo pipefail
 
@@ -187,14 +188,65 @@ trap agent_issue_board_sweep_cleanup EXIT
 # checkpoint and summary are still printed.
 interrupted=0
 trap 'interrupted=1' INT TERM
-# Each row is `<node id><TAB><url>`: the bulk membership read asks by node id.
-# shellcheck disable=SC2016 # The jq filter is passed to gh literally.
-if ! found="$(gh search issues --owner "$owner" --archived=false --state open --author "$author" \
-                --limit "$limit" --sort created --order asc --json id,url \
-                --jq '.[] | "\(.id)\t\(.url)"' 2>"$err_file")"; then
-  echo "agent-issue-board-sweep: discovery FAILED (nothing swept) — $(tr '\n' ' ' <"$err_file")" >&2
-  exit 2
-fi
+# Each row is `<node id><TAB><url><TAB><created at>`: the bulk membership read asks by node id,
+# and the creation time places the next page.
+# discover_page [<created qualifier>] prints one page of at most --limit issues, oldest first.
+discover_page() {
+  local created_args=()
+  [ -z "${1:-}" ] || created_args=(--created "$1")
+  # shellcheck disable=SC2016 # The jq filter is passed to gh literally.
+  gh search issues --owner "$owner" --archived=false --state open --author "$author" \
+    ${created_args[@]+"${created_args[@]}"} \
+    --limit "$limit" --sort created --order asc --json id,url,createdAt \
+    --jq '.[] | "\(.id)\t\(.url)\t\(.createdAt)"' 2>"$err_file"
+}
+
+# PAGES (monorepo#4330). `--limit` is a CAP on what one search returns, never a guarantee that it
+# returned everything: a page exactly at the cap may have more issues behind it, and the search API
+# returns at most 1000 for any one query, which the agent account's open issues outgrow. So a full
+# page is followed by another that starts at the newest creation time it returned, inclusive: an
+# issue created in that same second is read twice rather than missed, and the repeat is dropped
+# below. Discovery ends at the first page short of the cap. A full page whose issues all share one
+# creation time cannot be advanced past, so it fails closed as TRUNCATED, and so does a discovery
+# that has not ended within the page bound.
+readonly MAX_DISCOVERY_PAGES=50
+found_rows=""
+created_from=""
+pages=0
+while :; do
+  pages=$((pages + 1))
+  if [ "$pages" -gt "$MAX_DISCOVERY_PAGES" ]; then
+    echo "agent-issue-board-sweep: discovery TRUNCATED: it did not end within ${MAX_DISCOVERY_PAGES} pages of ${limit} (nothing swept)" >&2
+    exit 2
+  fi
+  if ! page="$(discover_page "$created_from")"; then
+    echo "agent-issue-board-sweep: discovery FAILED (nothing swept) — $(tr '\n' ' ' <"$err_file")" >&2
+    exit 2
+  fi
+  # `--jq` on an empty result set prints nothing, so an empty page means no issue from a search
+  # that SUCCEEDED. An empty census is still confirmed by the unfiltered control below.
+  if [ -z "$page" ]; then break; fi
+  found_rows="${found_rows}${page}"$'\n'
+  [ "$(printf '%s\n' "$page" | grep -c .)" -ge "$limit" ] || break
+  page_first="$(head -n 1 <<<"$page" | cut -f3)"
+  page_last="$(tail -n 1 <<<"$page" | cut -f3)"
+  case "$page_last" in
+    [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9]Z) ;;
+    *)
+      echo "agent-issue-board-sweep: discovery returned a full page whose last row carries no creation time, so the next page cannot be placed (nothing swept)" >&2
+      exit 2
+      ;;
+  esac
+  if [ "$page_first" = "$page_last" ]; then
+    echo "agent-issue-board-sweep: discovery TRUNCATED: a full page of ${limit} issues all created at ${page_last}, so no next page can advance past it (nothing swept)" >&2
+    exit 2
+  fi
+  created_from=">=${page_last%Z}+00:00"
+done
+
+# The pages overlap by the issues created in the second one page ends on: keep each issue once, in
+# the order it was first returned, which is oldest first.
+found="$(awk -F'\t' 'NF && !seen[$1]++ { print $1 "\t" $2 }' <<<"$found_rows")"
 
 # A successful filtered zero is unproven until an unfiltered, complete control agrees (#4437).
 # Count only: archived control rows must never reach board-add or membership checks.
@@ -211,15 +263,6 @@ if [ -z "$found" ]; then
 fi
 discovered_count=0
 [ -z "$found" ] || discovered_count="$(printf '%s\n' "$found" | grep -c .)"
-
-# SATURATION. `--limit` is a CAP on results fetched, not a page size that guarantees an exhaustive
-# search, so a result set exactly at the cap means the lane may hold more issues that were never
-# returned. Reporting success there would leave them unboarded behind a clean exit, so fail closed
-# and say what to do.
-if [ "$discovered_count" -ge "$limit" ]; then
-  echo "agent-issue-board-sweep: discovery TRUNCATED at the --limit cap (${discovered_count} of at least ${limit}); use a higher --limit up to 1000; saturation at 1000 requires partitioned discovery before this sweep can proceed" >&2
-  exit 2
-fi
 
 # A row that is not `<node id><TAB><issue url>` is a discovery this script cannot read. Stopping is
 # the only safe answer: guessing which half is the URL would hand board-add.sh something else.

@@ -610,10 +610,12 @@ examine them, and an earlier run may have failed on one. **When a resumed chain 
 checkpoint, run one full pass without `--resume-from`** (#3820). `--dry-run` is the read-only path:
 discovery and the bulk read, no helper call.
 
-The default discovery cap is 300. Saturation stops before any writes and requires an explicit
-larger `--limit` (a decimal integer from 1 to 1000 without leading zeros); repeating the same default
-invocation does not advance past a saturated prefix. If 1000 is also saturated, keep the census
-incomplete until partitioned discovery is implemented. The sweep does not paginate beyond that cap.
+Discovery reads pages of `--limit` issues (default 300), oldest first, each starting at the creation
+time the previous full page ended on, until a page comes back short (#4330). So the default
+invocation covers any number of open issues, beyond the 1000 one search returns, and no caller tunes
+`--limit`. A full page whose issues were all created in one second cannot be advanced past, and a
+discovery that has not ended within 50 pages may hold more: both are TRUNCATED and stop before any
+write.
 
 The loop paces itself and stops at a small bounded batch. Three limits bind and the batch is sized
 by the tightest: ~80 content-generating requests a minute, ~500 an hour **shared across both
