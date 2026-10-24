@@ -94,6 +94,10 @@ reset_case() {
   rm -rf "$GH_STUB_FIX" "$GH_STUB_DIR" "$GH_STUB_LOG"
   mkdir -p "$GH_STUB_FIX" "$GH_STUB_DIR"
   : >"$GH_STUB_LOG"
+  printf '[]\n' | fixture GET "$digests_path"
+  for comment_parent in 10 11 12 13 14 15 16 17 18 19 20 21 800 801 850 900; do
+    printf '[]\n' | fixture GET "$api/issues/$comment_parent/comments?per_page=100"
+  done
 }
 
 rc=0
@@ -120,7 +124,7 @@ expect_no_writes() {
   if grep -Eq '^(POST|PATCH|DELETE) ' "$GH_STUB_LOG"; then bad "$1: a write was made: $(grep -E '^(POST|PATCH|DELETE) ' "$GH_STUB_LOG")"; else pass "$1"; fi
 }
 # Extracts the submitted issue body for content and privacy assertions.
-posted_body() { jq -j '.body' "$GH_STUB_DIR/payload.json" >"$tmp/posted.md"; }
+posted_body() { jq -j '.body' "$GH_STUB_DIR/payload.json" | sed '/^<!-- maintainer-digest-summaries-v1: /d' >"$tmp/posted.md"; }
 
 # An issue as the REST API lists it: number, author, title, body.
 issue() {
@@ -176,8 +180,8 @@ complete_asks() {
 # Last week's digest, and an issue someone else gave the digest label, which must stay open.
 earlier_digests() {
   jq -n '[
-    {state: "open", number: 800, title: "🙋 Maintainer digest — week 42", user: {login: "github-actions[bot]"}, assignees: [{login: "devantler"}], created_at: "2026-10-12T06:17:00Z"},
-    {state: "open", number: 801, title: "Mislabelled", user: {login: "devantler"}, assignees: [], created_at: "2026-10-12T07:00:00Z"}]'
+    {body: "", state: "open", number: 800, title: "🙋 Maintainer digest — week 42", user: {login: "github-actions[bot]"}, assignees: [{login: "devantler"}], created_at: "2026-10-12T06:17:00Z"},
+    {body: "", state: "open", number: 801, title: "Mislabelled", user: {login: "devantler"}, assignees: [], created_at: "2026-10-12T07:00:00Z"}]'
 }
 
 digests="$tmp/digests"
@@ -251,6 +255,7 @@ run send --repo "$repo" --date 2026-10-24 --dir "$digests" --dry-run
 expect_rc 0 "the dry run plans the digest"
 expect_no_writes "the dry run makes no write"
 awk '/^--- end of body ---$/ { inside = 0 } inside { print } /^--- body ---$/ { inside = 1 }' "$tmp/out" >"$tmp/dry-body.md"
+sed -i.bak '/^<!-- maintainer-digest-summaries-v1: /d' "$tmp/dry-body.md"
 if cmp -s "$tmp/dry-body.md" "$digest_file"; then pass "the planned body is exactly the dated file"; else bad "the planned body differs from the dated file"; fi
 expect_in "$tmp/out" "DRY-RUN would open \"🙋 Maintainer digest — 2026-10-24\", labelled maintainer-digest and assigned to devantler" "the plan names the title, label and assignee"
 expect_in "$tmp/out" "DRY-RUN would close the earlier digest #800" "the plan closes last week's digest"
@@ -258,6 +263,7 @@ expect_not_in "$tmp/out" "#801" "the plan leaves another account's issue alone"
 
 echo "send: the week file is missing"
 reset_case
+rm -f "$digest_file"
 {
   complete_asks
   jq -s . <(issue 12 devantler "🙋 Ask: Rename the cluster" "$incomplete_body") \
@@ -267,8 +273,8 @@ earlier_digests | fixture GET "$digests_path"
 run send --repo "$repo" --date 2026-10-27 --dir "$digests"
 expect_rc 1 "a fallback digest is a finding"
 posted_body
-expect_in "$tmp/err" "FALLBACK: no summary was written for 2026-10-27" "the fallback is reported"
-expect_in "$tmp/posted.md" "**The summary is missing for this digest:** no summary was written for 2026-10-27" "the fallback says the summary is missing"
+expect_in "$tmp/err" "FALLBACK: no pending reviewed summary is available for 2026-10-27" "the fallback is reported"
+expect_in "$tmp/posted.md" "**The summary is missing for this digest:** no pending reviewed summary is available for 2026-10-27" "the fallback says the summary is missing"
 expect_in "$tmp/posted.md" "### 1. Ask [#10](https://github.com/example-org/example-repo/issues/10)" "the first ask is numbered and linked"
 expect_in "$tmp/posted.md" "    Keep 30 days of backups" "the ask's title is shown as code"
 for text in "Should the nightly backup keep 30 days instead of 14?" "A. Keep 30 days." "B. Stay at 14 days." \
@@ -429,8 +435,8 @@ echo "send: a backfill of an earlier week keeps the later digest open"
 reset_case
 complete_asks | fixture GET "$asks_path"
 jq -n '[
-  {state: "open", number: 790, title: "🙋 Maintainer digest — week 40", user: {login: "github-actions[bot]"}, assignees: [], created_at: "2026-09-28T06:17:00Z"},
-  {state: "open", number: 800, title: "🙋 Maintainer digest — week 42", user: {login: "github-actions[bot]"}, assignees: [], created_at: "2026-10-12T06:17:00Z"}]' |
+  {body: "", state: "open", number: 790, title: "🙋 Maintainer digest — week 40", user: {login: "github-actions[bot]"}, assignees: [], created_at: "2026-09-28T06:17:00Z"},
+  {body: "", state: "open", number: 800, title: "🙋 Maintainer digest — week 42", user: {login: "github-actions[bot]"}, assignees: [], created_at: "2026-10-12T06:17:00Z"}]' |
   fixture GET "$digests_path"
 run send --repo "$repo" --date 2026-10-06 --dir "$digests"
 expect_rc 1 "the backfill is sent from the fallback"
@@ -453,8 +459,8 @@ if [ "$(wc -c <"$tmp/posted.md")" -le 65536 ]; then pass "the shortened fallback
 echo "send: this week's digest is already open"
 reset_case
 complete_asks | fixture GET "$asks_path"
-jq -n --arg at "2026-10-23T06:17:00Z" \
-  '[{state: "open", number: 850, title: "🙋 Maintainer digest — week 43", user: {login: "github-actions[bot]"}, assignees: [{login: "devantler"}], created_at: $at}]' |
+jq -n --arg at "2026-10-24T06:17:00Z" \
+  '[{body: "", state: "open", number: 850, title: "🙋 Maintainer digest — week 43", user: {login: "github-actions[bot]"}, assignees: [{login: "devantler"}], created_at: $at}]' |
   fixture GET "$digests_path"
 run send --repo "$repo" --date 2026-10-24 --dir "$digests"
 expect_rc 0 "an open digest for the week is not sent again"
@@ -463,9 +469,9 @@ expect_no_writes "nothing is opened or closed"
 # A rerun after a close failed still retires the earlier digest, and keeps this week's open.
 reset_case
 complete_asks | fixture GET "$asks_path"
-jq -n --arg at "2026-10-23T06:17:00Z" \
-  '[{state: "open", number: 850, title: "🙋 Maintainer digest — week 43", user: {login: "github-actions[bot]"}, assignees: [{login: "devantler"}], created_at: $at},
-    {state: "open", number: 801, title: "🙋 Maintainer digest — week 42", user: {login: "github-actions[bot]"}, assignees: [{login: "devantler"}], created_at: "2026-10-12T06:17:00Z"}]' |
+jq -n --arg at "2026-10-24T06:17:00Z" \
+  '[{body: "", state: "open", number: 850, title: "🙋 Maintainer digest — week 43", user: {login: "github-actions[bot]"}, assignees: [{login: "devantler"}], created_at: $at},
+    {body: "", state: "open", number: 801, title: "🙋 Maintainer digest — week 42", user: {login: "github-actions[bot]"}, assignees: [{login: "devantler"}], created_at: "2026-10-12T06:17:00Z"}]' |
   fixture GET "$digests_path"
 echo '{"number": 801, "state": "closed"}' | fixture PATCH "$api/issues/801"
 run send --repo "$repo" --date 2026-10-24 --dir "$digests"
@@ -476,14 +482,14 @@ expect_not_in "$GH_STUB_LOG" "POST " "nothing new is opened"
 # The same week's title from a year ago, left open, does not hold back this year's digest.
 reset_case
 complete_asks | fixture GET "$asks_path"
-jq -n '[{state: "open", number: 850, title: "🙋 Maintainer digest — week 43", user: {login: "github-actions[bot]"}, assignees: [{login: "devantler"}], created_at: "2025-10-20T06:17:00Z"}]' |
+jq -n '[{body: "", state: "open", number: 850, title: "🙋 Maintainer digest — week 43", user: {login: "github-actions[bot]"}, assignees: [{login: "devantler"}], created_at: "2025-10-20T06:17:00Z"}]' |
   fixture GET "$digests_path"
 run send --repo "$repo" --date 2026-10-24 --dir "$digests"
 expect_not_in "$tmp/out" "ALREADY-SENT" "a year-old digest with the same week does not count as sent"
 expect_in "$GH_STUB_LOG" "POST $api/issues" "this year's digest is opened"
 reset_case
 complete_asks | fixture GET "$asks_path"
-jq -n '[{state: "open", number: 850, title: "🙋 Maintainer digest — week 43", user: {login: "github-actions[bot]"}, assignees: [], created_at: "2026-10-24T06:17:00Z"}]' |
+jq -n '[{body: "", state: "open", number: 850, title: "🙋 Maintainer digest — week 43", user: {login: "github-actions[bot]"}, assignees: [], created_at: "2026-10-24T06:17:00Z"}]' |
   fixture GET "$digests_path"
 run send --repo "$repo" --date 2026-10-24 --dir "$digests"
 expect_rc 0 "a digest GitHub never assigned to him is sent again"
@@ -514,7 +520,7 @@ awk 'BEGIN { for (i = 0; i < 1400; i++) printf "- A line that pads the digest pa
 run send --repo "$repo" --date 2026-10-24 --dir "$digests"
 expect_rc 1 "an oversized summary is a finding"
 posted_body
-expect_in "$tmp/posted.md" "the summary for 2026-10-24 was too long to send" "the fallback says the summary was too long"
+expect_in "$tmp/posted.md" "the combined pending summaries were too long to send" "the fallback says the summary was too long"
 
 echo "send: an ask filed after the summary was written"
 reset_case
@@ -692,12 +698,12 @@ expect_rc 2 "an unreadable file is unknown"
 echo "workflows, and the organization's shared issue forms"
 wf="$root/.github/workflows"
 digest_wf="$wf/maintainer-digest.yaml"
-echo "send: every third UTC day, including closed digests and calendar boundaries"
+echo "send: daily, including closed digests and calendar boundaries"
 while IFS='|' read -r day previous state expected; do
   reset_case
   complete_asks | fixture GET "$asks_path"
   jq -n --arg at "$previous" --arg state "$state" '[{
-    number: 850, title: "🙋 Maintainer digest — 2026-10-21", state: $state,
+    body: "", number: 850, title: "🙋 Maintainer digest — 2026-10-21", state: $state,
     user: {login: "github-actions[bot]"}, assignees: [{login: "devantler"}], created_at: $at
   }]' | fixture GET "$digests_path"
   write_digest_file
@@ -705,22 +711,187 @@ while IFS='|' read -r day previous state expected; do
   run send --repo "$repo" --date "$day" --dir "$digests"
   expect_rc 0 "the $day cadence read succeeds"
   if [ "$expected" = send ]; then
-    expect_in "$GH_STUB_LOG" "POST $api/issues" "$day sends on the third day"
+    expect_in "$GH_STUB_LOG" "POST $api/issues" "$day sends with unanswered asks"
     expect_in "$tmp/out" "SENT #900" "$day records the delivery"
     if [ "$state" = closed ]; then
       expect_not_in "$GH_STUB_LOG" "PATCH $api/issues/850" "$day does not close an already closed digest"
     fi
   else
-    expect_in "$tmp/out" "ALREADY-SENT #850" "$day waits for the third day"
+    expect_in "$tmp/out" "ALREADY-SENT #850" "$day prevents a same-day duplicate"
     expect_no_writes "$day makes no early or duplicate delivery"
   fi
 done <<'CASES'
-2026-10-24|2026-10-22T06:17:00Z|open|skip
+2026-10-24|2026-10-22T06:17:00Z|open|send
 2026-10-24|2026-10-21T06:17:00Z|open|send
 2026-10-24|2026-10-24T06:17:00Z|closed|skip
 2026-11-02|2026-10-30T06:17:00Z|closed|send
 2027-01-02|2026-12-30T06:17:00Z|closed|send
 CASES
+
+echo "send: no unanswered asks means no email or cleanup"
+reset_case
+echo '[]' | fixture GET "$asks_path"
+earlier_digests | fixture GET "$digests_path"
+run send --repo "$repo" --date 2026-10-24 --dir "$digests"
+expect_rc 0 "no unanswered asks is a normal quiet day"
+expect_in "$tmp/out" "NO-ASKS" "the quiet day is reported"
+expect_no_writes "a quiet day neither sends nor retires a digest"
+
+echo "send: combine pending changelogs on the next day with an ask"
+reset_case
+complete_asks | fixture GET "$asks_path"
+echo '[]' | fixture GET "$digests_path"
+write_digest_file
+cp "$digest_file" "$digests/2026-10-25.md"
+sed 's/Backups now run every night/Restores now verify their inputs/' "$digest_file" > "$digests/2026-10-26.md"
+run send --repo "$repo" --date 2026-10-26 --dir "$digests"
+expect_rc 0 "the next ask digest combines pending summaries"
+posted_body
+expect_in "$tmp/posted.md" "Backups now run every night" "the earlier quiet day's changelog is retained"
+expect_in "$tmp/posted.md" "Restores now verify their inputs" "the newest changelog is included"
+
+echo "send: answered asks are excluded, including replies on closed digests"
+for answer_surface in direct digest; do
+  reset_case
+  complete_asks | fixture GET "$asks_path"
+  write_digest_file
+  if [ "$answer_surface" = direct ]; then
+    jq -n '[{id:1,user:{login:"devantler"},body:"A"}]' | fixture GET "$api/issues/10/comments?per_page=100"
+  else
+    jq -n --arg body "$(printf '> 🤖 Generated by the Agentic Engineer\n\n## Needs you\n\n### 1. Ask [#10](https://github.com/%s/issues/10)\n' "$repo")" \
+      '[{number:850,title:"🙋 Maintainer digest — 2026-10-21",state:"closed",body:$body,
+        user:{login:"github-actions[bot]"},assignees:[{login:"devantler"}],created_at:"2026-10-21T06:17:00Z"}]' | fixture GET "$digests_path"
+    jq -n '[{id:1,user:{login:"devantler"},body:"1: B"}]' | fixture GET "$api/issues/850/comments?per_page=100"
+  fi
+  run send --repo "$repo" --date 2026-10-24 --dir "$digests"
+  expect_rc 0 "$answer_surface answers are reconciled"
+  posted_body
+  expect_not_in "$tmp/posted.md" "Ask [#10]" "$answer_surface does not repeat the answered ask"
+  expect_in "$tmp/posted.md" "Ask [#11]" "$answer_surface keeps the unanswered ask"
+done
+
+echo "send: numbered answers work for shortened and held-back asks"
+for ask_heading in '- 1. Ask [#10](https://github.com/example-org/example-repo/issues/10)' \
+  '### 1. Held back ([#10](https://github.com/example-org/example-repo/issues/10))'; do
+  reset_case
+  complete_asks | fixture GET "$asks_path"
+  write_digest_file
+  jq -n --arg body "$(printf '> 🤖 Generated by the Agentic Engineer\n\n## Needs you\n\n%s\n' "$ask_heading")" \
+    '[{number:850,title:"🙋 Maintainer digest — 2026-10-21",state:"closed",body:$body,
+      user:{login:"github-actions[bot]"},assignees:[{login:"devantler"}],created_at:"2026-10-21T06:17:00Z"}]' | fixture GET "$digests_path"
+  jq -n '[{id:1,user:{login:"devantler"},body:"1: B"}]' | fixture GET "$api/issues/850/comments?per_page=100"
+  run send --repo "$repo" --date 2026-10-24 --dir "$digests"
+  expect_rc 0 "a numbered reply to an alternate ask heading is read"
+  posted_body
+  expect_not_in "$tmp/posted.md" "Ask [#10]" "an answered shortened or held-back ask is not repeated"
+done
+
+echo "send: agent, third-party and quoted replies are not answers"
+reset_case
+complete_asks | fixture GET "$asks_path"
+write_digest_file
+jq -n '[{id:1,user:{login:"devantler"},body:"> 🤖 Generated by the Agentic Engineer\n\nA"},
+  {id:2,user:{login:"someone-else"},body:"A"}]' | fixture GET "$api/issues/10/comments?per_page=100"
+run send --repo "$repo" --date 2026-10-24 --dir "$digests"
+expect_rc 0 "agent and third-party replies remain data"
+posted_body
+expect_in "$tmp/posted.md" "Ask [#10]" "only the maintainer can answer the ask"
+
+reset_case
+complete_asks | fixture GET "$asks_path"
+write_digest_file
+# shellcheck disable=SC2016 # Literal Markdown fences are fixture data.
+jq -n --arg body "$(printf '> A\n\n````\nA\n```\nA\n````\n')" \
+  '[{id:1,user:{login:"devantler"},body:$body}]' | fixture GET "$api/issues/10/comments?per_page=100"
+run send --repo "$repo" --date 2026-10-24 --dir "$digests"
+expect_rc 0 "quoted and fenced examples are ignored"
+posted_body
+expect_in "$tmp/posted.md" "Ask [#10]" "a quoted example does not answer the ask"
+
+reset_case
+complete_asks | fixture GET "$asks_path"
+write_digest_file
+jq -n --arg body "$(printf '> 🤖 Generated by the Agentic Engineer\n\n## Needs you\n\n### 1. Ask [#10](https://github.com/%s/issues/10)\n### 2. Ask [#11](https://github.com/%s/issues/11)\n' "$repo" "$repo")" \
+  '[{number:850,title:"🙋 Maintainer digest — 2026-10-21",state:"closed",body:$body,
+    user:{login:"github-actions[bot]"},assignees:[{login:"devantler"}],created_at:"2026-10-21T06:17:00Z"}]' | fixture GET "$digests_path"
+# shellcheck disable=SC2016 # Literal Markdown fences are fixture data.
+jq -n --arg body "$(printf '> 1: A\n````\n1: A\n```\n1: A\n````\n2: B\n')" \
+  '[{id:1,user:{login:"devantler"},body:$body}]' | fixture GET "$api/issues/850/comments?per_page=100"
+run send --repo "$repo" --date 2026-10-24 --dir "$digests"
+expect_rc 0 "a real numbered answer after fenced examples is read"
+posted_body
+expect_in "$tmp/posted.md" "Ask [#10]" "quoted and fenced numbered examples remain unanswered"
+expect_not_in "$tmp/posted.md" "Ask [#11]" "the unquoted numbered answer is honored"
+
+reset_case
+complete_asks | fixture GET "$asks_path"
+jq -n '[{user:{login:"devantler"},body:"A"}]' | fixture GET "$api/issues/10/comments?per_page=100"
+run send --repo "$repo" --date 2026-10-24 --dir "$digests"
+expect_rc 2 "an incomplete reply read is unknown"
+expect_no_writes "an incomplete reply read sends nothing"
+
+reset_case
+jq -s . <(issue 10 devantler "🙋 Ask: Keep 30 days of backups" "$complete_body") | fixture GET "$asks_path"
+jq -n '[{id:1,user:{login:"devantler"},body:"A"}]' | fixture GET "$api/issues/10/comments?per_page=100"
+run send --repo "$repo" --date 2026-10-24 --dir "$digests"
+expect_rc 0 "all asks answered is a quiet day"
+expect_in "$tmp/out" "NO-ASKS" "an answered but still-open issue does not trigger mail"
+expect_no_writes "all asks answered makes no delivery or cleanup write"
+
+reset_case
+complete_asks | fixture GET "$asks_path"
+write_digest_file
+jq -n --arg body "$(printf '> 🤖 Generated by the Agentic Engineer\n\n## Needs you\n\n### 1. Ask [#10](https://github.com/%s/issues/10)\n\n## What shipped\n\n### 2. Ask [#11](https://github.com/%s/issues/11)\n' "$repo" "$repo")" \
+  '[{number:850,title:"🙋 Maintainer digest — 2026-10-21",state:"closed",body:$body,
+    user:{login:"github-actions[bot]"},assignees:[{login:"devantler"}],created_at:"2026-10-21T06:17:00Z"}]' | fixture GET "$digests_path"
+jq -n '[{id:1,user:{login:"devantler"},body:"2: A"}]' | fixture GET "$api/issues/850/comments?per_page=100"
+run send --repo "$repo" --date 2026-10-24 --dir "$digests"
+expect_rc 0 "a number outside Needs you is not an answer mapping"
+posted_body
+expect_in "$tmp/posted.md" "Ask [#11]" "a changelog example cannot answer a different ask"
+
+echo "send: a quiet day leaves pending changes for the next ask"
+saved_delivery="$tmp/delivered-payload.json"
+reset_case
+complete_asks | fixture GET "$asks_path"
+write_digest_file
+run send --repo "$repo" --date 2026-10-24 --dir "$digests"
+expect_rc 0 "the initial summary delivery succeeds"
+cp "$GH_STUB_DIR/payload.json" "$saved_delivery"
+reset_case
+jq -n --slurpfile sent "$saved_delivery" '[{number:900,title:$sent[0].title,body:$sent[0].body,state:"closed",
+  user:{login:"github-actions[bot]"},assignees:[{login:"devantler"}],created_at:"2026-10-24T06:17:00Z"}]' | fixture GET "$digests_path"
+echo '[]' | fixture GET "$asks_path"
+sed 's/Backups now run every night/Quiet-day restore verification now runs/' "$digest_file" > "$digests/2026-10-25.md"
+run send --repo "$repo" --date 2026-10-25 --dir "$digests"
+expect_rc 0 "a quiet day succeeds without consuming the summary"
+expect_no_writes "a quiet day makes no delivery or cleanup write"
+jq -s . <(issue 11 devantler "🙋 Ask: Retire the status page" "$second_body") | fixture GET "$asks_path"
+run send --repo "$repo" --date 2026-10-26 --dir "$digests"
+expect_rc 0 "the next unanswered ask gets the pending changelog"
+posted_body
+expect_in "$tmp/posted.md" "Quiet-day restore verification now runs" "quiet-day changes reach the next ask digest"
+expect_not_in "$tmp/posted.md" "Backups now run every night" "an already delivered summary is not repeated"
+expect_not_in "$GH_STUB_LOG" "PATCH $api/issues/900" "a closed digest is left closed"
+
+echo "send: accepted summary whitespace preserves content and delivery receipts"
+reset_case
+complete_asks | fixture GET "$asks_path"
+rm -f "$digests"/2026-10-*.md
+write_digest_file
+{ printf '\n'; sed 's/$/  /' "$digest_file"; } | awk '{ printf "%s\r\n", $0 }' >"$tmp/spaced-summary.md"
+cp "$tmp/spaced-summary.md" "$digest_file"
+run send --repo "$repo" --date 2026-10-24 --dir "$digests"
+expect_rc 0 "a summary accepted by check still composes"
+posted_body
+expect_in "$tmp/posted.md" "Backups now run every night" "normalized headings retain the shipped changelog"
+jq -r '.body' "$GH_STUB_DIR/payload.json" >"$tmp/raw-delivery.md"
+if [ "$(head -n 1 "$tmp/raw-delivery.md")" = '> 🤖 Generated by the Agentic Engineer' ] &&
+  sed -n '2p' "$tmp/raw-delivery.md" | grep -q '^<!-- maintainer-digest-summaries-v1: '; then
+  pass "the delivery starts with its disclosure and second-line receipt"
+else
+  bad "accepted whitespace broke delivery authentication or its receipt"
+fi
 
 # Converts workflow YAML to JSON for structural assertions.
 as_json() { yq -o=json '.' "$1"; }

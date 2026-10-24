@@ -2,20 +2,25 @@
 
 # How to write the maintainer digest
 
-The digest is the maintainer's email about the agents' work, sent every third UTC day. A workflow
-checks daily at 06:17 UTC and sends once three UTC calendar days have passed since the newest
-bot-created, maintainer-assigned digest, including a closed one. It opens the dated file as an
+The digest is the maintainer's email about the agents' work. A workflow checks daily at 06:17 UTC
+and sends only when unanswered asks remain, at most once per UTC day. It opens a combined digest as an
 issue in this public repository and assigns it to him, and GitHub emails it to him. Write it for
 one reader who has not followed the work since the previous digest.
 
 ## Where it goes
 
 - Name the file `docs/digests/YYYY-MM-DD.md` after its UTC delivery date, for example
-  `2026-10-24.md`. It covers work since the previous digest. Keep old week-named files as history.
+  `2026-10-24.md`. It covers work not already included in a delivered digest. Keep old week-named files as history.
 - Merge it through an ordinary reviewed pull request before 06:17 UTC on its delivery date. If the file is
   missing, too long or fails the check below, the workflow sends only the open asks and says that
   the summary is missing.
 - Copy everything below the line at the end of this guide into the file, then fill it in.
+- **Quiet days send nothing.** Keep their dated summaries. The next email with an unanswered ask
+  combines all pending changelogs and records their exact hashes in its generated receipt.
+  A failed assignment or withheld summary never consumes a changelog. Do not hand-write receipts.
+- **Never repeat answered asks.** A maintainer reply on the ask itself counts as a response.
+  A numbered reply such as `1: B` on a delivered digest maps back to that digest's ask, even when
+  the thread is closed. Agent output, other authors and quoted examples do not count as answers.
 
 ## Writing rules
 

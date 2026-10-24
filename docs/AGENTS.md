@@ -7,9 +7,10 @@ Describe present-state architecture and rationale. Preserve dated ADR records as
 `digests/` holds the maintainer's digests, one `YYYY-MM-DD.md` file per delivery date,
 written from [`digests/TEMPLATE.md`](digests/TEMPLATE.md) and its rules
 ([monorepo#4285](https://github.com/devantler-tech/monorepo/issues/4285)). A workflow emails each
-one every third UTC day, so check a digest with `.claude/scripts/maintainer-digest.sh check`
-before it merges. The daily workflow waits until three UTC calendar days after the newest
-bot-created, maintainer-assigned digest, including closed ones. Preserve old ISO-week files as history.
+one daily only while unanswered asks exist, so check a digest with
+`.claude/scripts/maintainer-digest.sh check` before it merges. Answered asks are excluded even
+if their issues remain open. A quiet day sends nothing; its dated changelog stays pending and
+is combined into the next digest containing an ask. Preserve old ISO-week files as history.
 An ask is an issue in this repository labelled `maintainer-ask` and titled `🙋 Ask: <decision>`,
 with the sections `### Question`, `### Options` (lettered `A`, `B`, …), `### Recommendation` and
 `### If unanswered`. Agents file asks through the API. There is deliberately no issue form: one local

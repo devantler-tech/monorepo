@@ -6,7 +6,7 @@ name: Maintainer digest
 # asks go on their own. The logic and its tests live in .claude/scripts/maintainer-digest.sh.
 on:
   schedule:
-    # Check daily; the helper sends only every third UTC day, including across month boundaries.
+    # Send daily only while unanswered asks exist; retain quiet-day changelogs for the next ask.
     - cron: "17 6 * * *"
   workflow_dispatch:
     inputs:
