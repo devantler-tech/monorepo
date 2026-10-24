@@ -271,8 +271,8 @@ if want throughput; then
     echo "        LIFETIME (created→closed), not board cycle time; stalled-in-column"
     echo "        detection is likewise UNMEASURED today. This population is org-wide"
     echo "        closed non-Epic issues, including off-board and accessible private"
-    echo "        issues; WIP counts project-5 items. These populations differ."
-    echo "        Search caps at 1000 results."
+    echo "        issues; WIP counts unarchived open non-Epic project-5 issues."
+    echo "        These populations differ. Search caps at 1000 results."
   fi
 fi
 

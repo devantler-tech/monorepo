@@ -275,7 +275,8 @@ contains "p85 computed"                              "$out" "p85 17d"
 contains "cycle-time proxy honestly labelled"        "$out" "PROXY for cycle time"
 contains "throughput names its org-wide population"  "$out" "This population is org-wide"
 contains "throughput includes the off-board residual" "$out" "closed non-Epic issues, including off-board and accessible private"
-contains "WIP and throughput populations are distinguished" "$out" "issues; WIP counts project-5 items. These populations differ."
+contains "WIP population names its open and archive boundaries" "$out" "issues; WIP counts unarchived open non-Epic project-5 issues."
+contains "WIP and throughput populations are distinguished" "$out" "These populations differ."
 not_contains "throughput does not claim board-population parity" "$out" "population as the WIP section"
 
 # Age: oldest per repo, age vs the fixed clock, oldest-first ordering
