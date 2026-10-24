@@ -199,14 +199,14 @@ Until that is solved, backfill is a standing duty, not an exception.
 
   **The board tracks ISSUES, not PRs** (maintainer direction 2026-07-18): a PR that closes an issue
   stands in for that issue's progress, so showing both double-counts the same work — dropping `,pr`
-  took the Ready column from 8/5 to a true 2/5. ⚠️ **No automation moves an issue card from its
-  linked PR's state** — native Project workflows act only on the project's own items, and nothing in
-  this org updates an issue's Status from PR events. **The agent working the PR moves the issue's
-  Status by hand at each lifecycle step, **when that step's entry condition in `AGENTS.md` actually
-  holds** — a PR merely being *open* is still 🏃🏻‍♂️ In Progress; it becomes 👀 In Review only once CI is
-  green **and** a review has been requested, and 🚀 Ready to Merge only on a green review at head with
-  the pentad clear. Moving a card early makes the board overstate progress, which is the one thing a
-  status ladder must never do. Only the final closed→Done move is a built-in workflow.
+  took the Ready column from 8/5 to a true 2/5. The enabled native **Pull request linked to issue**
+  workflow sets the implementing issue to **🏃🏻‍♂️ In Progress**, including when a draft PR is linked
+  or CI is pending. Linking a PR does not establish review readiness. **The agent working the PR
+  moves the issue's Status when that step's entry condition in `AGENTS.md` actually holds**: it becomes
+  👀 In Review only once CI is green **and** a review has been requested, and 🚀 Ready to Merge only
+  on a green review at head with the pentad clear. The native closed→Done workflow marks a resolved
+  issue ✅ Done. Moving a card early makes the board overstate progress; verify the configured
+  native workflow destination if linking a draft moves its issue beyond In Progress.
 
   ⚠️ **📊 Verifying belongs on the issue that is still OPEN, not on the one the merge just closed.**
   A delivery PR carries `Fixes #delivery`, so merging **closes** that issue and the built-in
