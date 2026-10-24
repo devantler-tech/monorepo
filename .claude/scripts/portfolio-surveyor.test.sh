@@ -1953,6 +1953,36 @@ expect_exempt \
   '["Casks/world-at-ruin.rb"]' \
   "$(jq -c 'map(. + {verified: true})' <<<"${war_cask_commits}")"
 
+# An exempt tap cask verdict says, on stderr, what it does not prove: exit 0 names who made the PR,
+# never whether its release is published (monorepo#4104, homebrew-tap#1936). Stdout stays empty and
+# the exit status is the one the cases above already pin. The ksail plugin release above is the
+# control for the other repositories: its exempt verdict writes no stderr at all.
+cask_reminder='programmed-bot-review-exemption: exit 0 proves who made this cask pull request, not that its release is published; before promoting a draft, check its release with .claude/scripts/release-cask-ripeness.sh (merge-policy guide) and promote only on RIPE'
+expect_cask_reminder() { # expect_cask_reminder <name> <stdin payload>
+  local out err rc=0
+  err="$("${classifier}" --input - 2>&1 >/dev/null <<<"$2")" || rc=$?
+  out="$("${classifier}" --input - 2>/dev/null <<<"$2")" || true
+  [[ "${rc}" -eq 0 ]] || fail "$1: the reminder fixture was not exempt (exit ${rc})"
+  [[ "${err}" == "${cask_reminder}" ]] || fail "$1: an exempt tap cask verdict did not print the ripeness reminder: '${err}'"
+  [[ -z "${out}" ]] || fail "$1: the ripeness reminder reached stdout: '${out}'"
+}
+cask_payload() { # cask_payload <head-ref> <title> <head> <files> <commits>
+  jq -nc --arg head_ref "$1" --arg title "$2" --arg head_oid "$3" --argjson files "$4" --argjson commits "$5" \
+    '{repo: "homebrew-tap", author: "devantler", head_ref: $head_ref, title: $title, head_oid: $head_oid,
+      files: $files, commits: $commits}'
+}
+expect_cask_reminder "GoReleaser KSail cask" "$(cask_payload goreleaser/ksail \
+  "chore(cask): update ksail to v7.172.2" "${ksail_cask_head}" '["Casks/ksail.rb"]' "${ksail_cask_commits}")"
+expect_cask_reminder "World at Ruin CD cask" "$(cask_payload goreleaser/world-at-ruin \
+  "chore(cask): update world-at-ruin to v0.36.0" "${war_cask_head}" '["Casks/world-at-ruin.rb"]' "${war_cask_commits}")"
+# A tap cask PR that is NOT exempt (it changes another file) gets no reminder: exit 0 is what it qualifies.
+if err="$("${classifier}" "homebrew-tap" "devantler" "goreleaser/ksail" "chore(cask): update ksail to v7.172.2" \
+  "${ksail_cask_head}" '["Casks/ksail.rb","README.md"]' "${ksail_cask_commits}" 2>&1 >/dev/null)"; then
+  fail 'a tap cask PR changing a second file was exempt'
+elif [[ "${err}" == *release-cask-ripeness* ]]; then
+  fail "a review-gated tap cask PR printed the ripeness reminder: '${err}'"
+fi
+
 # The KSail release arm is a trust boundary pinned to one exact signed identity (#3173). Its names are
 # only what a commit claims, so without GitHub's signature verdict, or with an unsigned commit, the
 # release stays review-gated. Every identity field is compared exactly — changing any one of them, a
