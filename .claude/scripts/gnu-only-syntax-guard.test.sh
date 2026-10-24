@@ -232,6 +232,10 @@ expect_finding "a marker inside \$'…' quotes is data" date-d-without-bsd 2 "$f
 f="$(fixture hash-not-comment 'n=${#arr[@]}; now=$(date -d yesterday) # gnu-only-ok: Linux-only')"
 expect_clean "\${#…} is not a comment, and the real trailing comment still counts" "$f"
 
+# --- Quoted arithmetic keeps its own grouping state (monorepo#3722) -------------------------------
+f="$(fixture arithmetic-nested-quoted 'minutes="$((($1 % 3600) / 60))"')"
+expect_clean "quoted arithmetic may begin with a nested parenthesis" "$f"
+
 # --- Several files in one run: findings keep their own file and line ------------------------------
 a="$(fixture multi-a 'x=1' 'find . -newermt @1')"
 b="$(fixture multi-b 'y=$(date -d "@1")')"
