@@ -62,6 +62,9 @@ func TestHelpDefinesTheEnforcedAskVocabulary(t *testing.T) {
 		t.Fatal(err)
 	}
 	verdict := func(word string) string {
+		if word == "digest" {
+			word += " o/monorepo#40"
+		}
 		got, _ := classify("**Blocker:** maintainer authority | authority | last-verified 2026-09-01: pending | asked "+word+" 2026-09-01", today, 14)
 		return got
 	}

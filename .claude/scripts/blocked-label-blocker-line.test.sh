@@ -877,7 +877,9 @@ else
   bad "MUTATION: a guide channel of any spelling is read, and turns the comparison red" "read '$MUTATED_CHANNELS' from the mutated rule"
 fi
 ask_verdict() { # word -> the check's verdict on an authority record asked through it
-  printf '[{"repo":"a","number":80,"body":"**Blocker:** maintainer authority | authority | last-verified 2026-09-01: pending | asked %s 2026-09-01"}]\n' "$1" >"$TMP/help-vocabulary.json"
+  local receipt="$1"
+  [ "$receipt" != digest ] || receipt='digest o/monorepo#40'
+  printf '[{"repo":"a","number":80,"body":"**Blocker:** maintainer authority | authority | last-verified 2026-09-01: pending | asked %s 2026-09-01"}]\n' "$receipt" >"$TMP/help-vocabulary.json"
   "$CHECK" --input "$TMP/help-vocabulary.json" --today 2026-09-05 2>&1 | awk 'NR == 1 { print $1 }'
 }
 IFS='|' read -r -a guide_channels <<<"$GUIDE_CHANNELS"
