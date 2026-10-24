@@ -57,7 +57,7 @@ case "${run_list}" in *"${sentinel}"*) ;; *) fail "AGENTS.md every-run list: end
 [ "${#run_list}" -gt 200 ] || fail "AGENTS.md every-run list: extraction too short (${#run_list} B)"
 
 for needle in \
-  'A Claude `agentic-engineer-2` run first reads `get_usage` and ends when ahead of the week' \
+  'Claude `agentic-engineer-2` reads `get_usage` first; ahead of the week it ends after rung 0' \
   '(.claude/guides/cadence.md#weekly-pacing-claude-lane)'; do
   case "${run_list}" in *"${needle}"*) ;; *) fail "AGENTS.md every-run list lacks: ${needle}" ;; esac
 done
@@ -65,7 +65,7 @@ done
 # The read must come before the other every-run steps, or a paced run would already have spent them.
 first_bullet="$(awk '/Never edit a plugin cache\. Every run:$/ { f = 1; next } f && /^- / { print; exit }' "${agents}")"
 case "${first_bullet}" in
-  '- A Claude `agentic-engineer-2` run first reads `get_usage`'*) ;;
+  '- Claude `agentic-engineer-2` reads `get_usage` first'*) ;;
   *) fail "the pacing read is not the first every-run bullet (first is: ${first_bullet})" ;;
 esac
 
@@ -81,6 +81,11 @@ for needle in \
   '`percentUsed` and `resetsAt`' \
   '`100 × (7 days − (resetsAt − now)) / 7 days`' \
   '`percentUsed` is more than 5 points above the elapsed share' \
+  'An ahead run still checks rung 0 first' \
+  '`.claude/scripts/platform-live-health.sh`' \
+  '`gh run list --repo devantler-tech/<repo> --branch main --limit 1 --json conclusion`' \
+  '**When the health check exits non-zero, any latest `main` run concluded `failure`, or any read fails, the run is not paced**' \
+  '`weekly_pace=rung0` and runs as usual' \
   '`weekly_pace=paced used=<percentUsed> elapsed=<share>`' \
   '`weekly_pace=normal used=<percentUsed> elapsed=<share>`' \
   '**A plan status other than `ok`, a missing window or a failed call** is UNKNOWN' \

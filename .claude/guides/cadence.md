@@ -40,10 +40,16 @@ Scheduled Engineer runs used 79–90% of that week's tokens (monorepo#3623, mono
 window: `percentUsed` and `resetsAt`. The elapsed share of the week is
 `100 × (7 days − (resetsAt − now)) / 7 days`.
 
-- **Ahead of pace** means `percentUsed` is more than 5 points above the elapsed share. The run is
-  **paced**: it writes one run-report line,
-  `weekly_pace=paced used=<percentUsed> elapsed=<share>`, and ends. It does no pre-flight check, survey
-  or work, and it writes no memory. The one-shipped-artifact floor does not apply to a paced run.
+- **Ahead of pace** means `percentUsed` is more than 5 points above the elapsed share. An ahead run
+  still checks rung 0 first, because the other entry may be deep in a long run. It runs
+  `.claude/scripts/platform-live-health.sh`, then reads the latest `main` run of each Portfolio-map
+  repository with `gh run list --repo devantler-tech/<repo> --branch main --limit 1 --json conclusion`.
+  **When the health check exits non-zero, any latest `main` run concluded `failure`, or any read
+  fails, the run is not paced**: it records `weekly_pace=rung0` and runs as usual. Otherwise the run
+  is **paced**: it writes one run-report line,
+  `weekly_pace=paced used=<percentUsed> elapsed=<share>`, and ends. It does no other pre-flight check,
+  survey or work, and it writes no memory. The one-shipped-artifact floor does not apply to a paced
+  run.
 - **Otherwise** the run records `weekly_pace=normal used=<percentUsed> elapsed=<share>` and continues
   as usual.
 - **A plan status other than `ok`, a missing window or a failed call** is UNKNOWN. Record
