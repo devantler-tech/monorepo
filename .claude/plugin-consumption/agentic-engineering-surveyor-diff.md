@@ -129,6 +129,9 @@ plugin carries them (or an explicit, tested subset):
     retrieval to each Portfolio-map repository; every operand is checked for truncation before
     subtraction; a capped operand withholds only that repository's residual and emits the named
     mandatory-query failure instead of contaminating or suppressing other repositories.
+12. **Type-aware Advance digest parity** — the ready row carries the native issue type even when
+    labels are absent; future-dated delivered Kata measurements have a separate dated row. Ported
+    from the reviewed plugin surveyor at `3a1119b0341c62f4709586b7afbab476905c8238` (#2264).
 
 
 🔴 **Dispatch topology — this overlay is the definition the survey actually LOADS, so a plugin-side

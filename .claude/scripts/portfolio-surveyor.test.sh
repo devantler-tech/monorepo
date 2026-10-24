@@ -4401,4 +4401,35 @@ rm -f "${_checks_mutant}"
 [[ "${_mut_err}" == *'row templates carry'* ]] ||
   fail "control: the checks grammar binding did not reject a template that dropped the required-gate values (monorepo#3506)"
 echo "portfolio surveyor contract: monorepo#3506 required-gate assertions passed"
+
+# Native issue types select Advance work; a label is optional. A delivered Kata whose
+# readback is not due must retain its date without appearing in the ready queue (#2264).
+_advance_digest_error() {
+  local text=$1
+  if ! grep -Fq 'roadmap-ready → #<n> "<title>" (<type>)' <<<"${text}"; then
+    echo 'Advance ready row must carry the native issue type'
+  elif grep -Fq 'roadmap-ready → #<n> "<title>" (<label>)' <<<"${text}"; then
+    echo 'Advance ready row must not require an issue label'
+  elif ! grep -Fq 'future-dated measurement, date=<UTC date> (not yet actionable)' <<<"${text}"; then
+    echo 'Advance must report a future measurement separately with its date'
+  fi
+}
+_advance_digest=$(awk '
+  /^### Advance$/ { inside = 1; next }
+  inside && /^```$/ { ended = 1; exit }
+  inside { print }
+  END { if (!inside || !ended) exit 1 }
+' "${surveyor}") || fail 'cannot extract the Advance digest schema (#2264)'
+_err=$(_advance_digest_error "${_advance_digest}")
+[ -z "${_err}" ] || fail "${_err} (#2264)"
+_advance_old_type=${_advance_digest//(<type>)/(<label>)}
+[[ "$(_advance_digest_error "${_advance_old_type}")" == *'native issue type'* ]] ||
+  fail 'control: a label-only ready row was accepted (#2264)'
+_advance_missing_date=${_advance_digest//date=<UTC date>/date=}
+[[ "$(_advance_digest_error "${_advance_missing_date}")" == *'separately with its date'* ]] ||
+  fail 'control: a future measurement without its date was accepted (#2264)'
+_advance_duplicate_label="${_advance_digest}"$'\n''- <repo>: roadmap-ready → #<n> "<title>" (<label>)'
+[[ "$(_advance_digest_error "${_advance_duplicate_label}")" == *'must not require an issue label'* ]] ||
+  fail 'control: a second label-only ready row was accepted (#2264)'
+echo 'portfolio surveyor contract: monorepo#2264 type-aware digest assertions passed'
 test_run_completed=1
