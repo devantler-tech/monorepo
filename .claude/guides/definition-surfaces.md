@@ -122,9 +122,9 @@ definition surface, and an installed/cache copy is never an authoring target.
 memory and the run report:**
 
 - Claude schedule pointers:
-  `/Users/homelab-mac-mini/.claude/scheduled-tasks/{daily-ai-assistant,agentic-engineer-2,agent-improver}/SKILL.md`.
+  `~/.claude/scheduled-tasks/{daily-ai-assistant,agentic-engineer-2,agent-improver}/SKILL.md`.
 - Codex schedule pointers:
-  `/Users/homelab-mac-mini/.codex/automations/{daily-ai-engineer,agentic-engineer-2,agent-improver}/automation.toml`.
+  `~/.codex/automations/{daily-ai-engineer,agentic-engineer-2,agent-improver}/automation.toml`.
   Each lane's engineer has two entries, its first one and `agentic-engineer-2`. The second is the
   first again with another start minute: the same thin pointer, working folder, model and settings.
   The [cadence guide](cadence.md#two-engineer-entries-per-lane) says why it is two entries, and
@@ -138,9 +138,13 @@ memory and the run report:**
   briefly missed cost pass is much cheaper than two writers proposing against the same spend** (the
   pass is cadence-gated, so the gap costs at most one pass).
 - Runtime permission/plugin controls:
-  `/Users/homelab-mac-mini/.claude/settings.json`,
-  `/Users/homelab-mac-mini/.claude/hooks/`, and
-  `/Users/homelab-mac-mini/.codex/config.toml`.
+  `~/.claude/settings.json`,
+  `~/.claude/hooks/`, and
+  `~/.codex/config.toml`.
+
+`~` is the agent host's own home directory, which the runtimes resolve. This public contract never
+spells it out, because a home-directory path names the operator's account and host layout
+(monorepo#2462); `agent-role-delivery-contract.test.sh` fails on one.
 
 For runtime-managed schedule pointers, **the in-session read-back is necessary but not sufficient**.
 Record the applied schedule and the surface's own change marker, then **re-read after at least one
