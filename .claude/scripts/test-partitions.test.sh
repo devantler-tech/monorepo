@@ -147,5 +147,37 @@ for fault in missing duplicate unknown; do
   fi
 done
 
+# The orchestrator is an independent four-minute serial tail on macOS. Its
+# actual entrypoint must enumerate all groups without executing the fixtures.
+orchestrator="$here/worktree-cleanup-all.test.sh"
+"$BASH" "$orchestrator" --list-cases >"$tmp/orchestrator-cases" || fail 'orchestrator registry failed'
+if [ "$(wc -l <"$tmp/orchestrator-cases" | tr -d ' ')" -ne 42 ] ||
+  grep -Ev '^t_[a-zA-Z0-9_]+$' "$tmp/orchestrator-cases" >/dev/null; then
+  fail 'orchestrator registry executed fixtures or lost case groups'
+fi
+for fault in missing-variant duplicate-variant unknown-variant; do
+  awk -v fault="$fault" '
+    /^t_excluded_nested_submodule_retains_parent missing$/ {
+      if (fault == "missing-variant") next
+      if (fault == "duplicate-variant") print
+      if (fault == "unknown-variant") { print "t_excluded_nested_submodule_retains_parent unknown-variant"; next }
+    }
+    { print }
+  ' "$orchestrator" >"$tmp/altered-orchestrator"
+  rc=0
+  "$BASH" "$tmp/altered-orchestrator" --list-cases >"$tmp/out" 2>"$tmp/err" || rc=$?
+  if [ "$rc" -ne 2 ] || ! grep -q 'case invocation registry' "$tmp/err"; then
+    fail "$fault orchestrator registry did not fail for complete parameter coverage"
+  fi
+done
+printf 't_rejects_a_bad_lane_or_extra_argument\n' >"$tmp/orchestrator-one"
+rc=0
+"$BASH" "$orchestrator" --run-cases "$tmp/orchestrator-one" "$tmp/orchestrator-receipt" \
+  >"$tmp/out" 2>"$tmp/err" || rc=$?
+if [ "$rc" -ne 0 ] || ! cmp -s "$tmp/orchestrator-one" "$tmp/orchestrator-receipt"; then
+  cat "$tmp/err" >&2
+  fail 'actual orchestrator assignment was rejected or incomplete'
+fi
+
 partition_test_finished=1
 echo 'test-partitions: OK'
