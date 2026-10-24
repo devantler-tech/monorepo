@@ -89,7 +89,8 @@ check "an early commit closing a Part-of parent fails" '[ "$RC" -eq 1 ]'
 check "the finding names the parent and the commit that closes it" \
   'has "OFFENDING #2609: commit $early (\"fix(agents): first slice\") closes it"'
 check "the delivered child is not reported" '! has "OFFENDING #2728"'
-check "the failure names the remedy" 'has "remove the closing keyword from each commit above" && has "Part of #N"'
+check "the failure names the remedy: move the keyword to the PR body" 'has "move the keyword to the PR body" && has "Part of #N"'
+check "the remedy never prescribes rewriting the commits" '! has "remove the closing keyword from each commit"'
 check "the remedy never prescribes a force-push" '! has "force"'
 check "the summary counts every commit" 'has "examined=2 findings=1"'
 

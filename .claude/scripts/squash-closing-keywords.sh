@@ -152,11 +152,11 @@ printf '%s: examined=%d findings=%d range=%s..%s\n' "$PROG" "$examined" "$findin
 if [ "$findings" -gt 0 ]; then
   cat <<'EOF'
 A squash merge copies every commit message into the squash commit, and GitHub closes each issue a
-closing keyword there names, whatever the PR body says. Make the two agree:
-  - if the issue should close, change the body's `Part of #N` to `Fixes #N`; otherwise
-  - remove the closing keyword from each commit above. That rewrites branch history, so do it only
-    where your repository's rules allow it; else carry the change on a fresh branch whose commit
-    messages do not close the issue, and open the pull request from there.
+closing keyword there names, whatever the PR body says. Closing keywords belong in the PR body
+only, so move the keyword to the PR body; never rewrite this branch's history to remove it:
+  - if the issue should close, change the body's `Part of #N` to `Fixes #N`;
+  - if it should not, carry the change on a fresh branch whose commit messages name the issue as
+    `Part of #N` or `#N`, and open the pull request from there.
 EOF
   exit 1
 fi
