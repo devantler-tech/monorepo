@@ -55,7 +55,9 @@
 # ALLOW-FILE MARKER
 #   A file that is ABOUT the offending form — this guard's self-test quotes `python3 -c` as
 #   fixture text — declares `python-ban-guard: allow-file — <reason>` in a parsed comment. The
-#   reason is mandatory: a bare marker is reported as a finding, never honoured.
+#   reason is mandatory: a bare marker is reported as a finding, never honoured. The legacy
+#   heuristic reads the same declaration from an unquoted `#` comment, so a data file such as the
+#   public-domain list, whose `py` line is a country code, can say so (#3221).
 #
 # USAGE
 #   python-ban-guard.sh [<repo-dir>]   # default: the repository this script lives in
@@ -136,7 +138,7 @@ decode_utf16() {
 }
 scan_invocations() {
   # Commands use ASCII syntax; unrelated invalid UTF-8 bytes must not abort the scan.
-  LC_ALL=C awk -v path="$1" -v sq="'" '
+  LC_ALL=C awk -v path="$1" -v sq="'" -v marker='python-ban-guard: allow-file' -v dash=' — ' '
     # Compare executable basenames while preserving full paths in diagnostics.
     function executable_name(token) {
       sub(/^.*\//, "", token)
@@ -313,6 +315,20 @@ scan_invocations() {
       }
       return n + 1
     }
+    # Read an allow-file declaration from a parsed comment, as the source parsers do: a marker
+    # followed by " — " and a reason exempts the file, and a marker without one is a finding.
+    # Only the first declaration counts, as in the source parsers.
+    function allow_declaration(comment, at,    p, rest) {
+      p = index(comment, marker)
+      if (p == 0 || declared != "") return
+      rest = substr(comment, p + length(marker))
+      if (substr(rest, 1, length(dash)) == dash && substr(rest, length(dash) + 1) ~ /[^[:space:]]/) {
+        declared = "reason"
+      } else {
+        declared = "bare"
+        bare_at = at
+      }
+    }
     BEGIN {
       # Legacy fallback pattern; the self-test ablates both scanner engines.
       interp = "^(py|python[23]?([.][0-9]+)?|pip[23]?([.][0-9]+)?|pytest)([.]exe)?$"
@@ -348,12 +364,15 @@ scan_invocations() {
         read_status = (getline next_line)
         if (read_status < 0) {
           printf "python-ban-guard: %s:%d: cannot read continued command\n", path, first_line > "/dev/stderr"
+          aborted = 1
           exit 2
         }
         if (read_status == 0) break
         logical_line = substr(logical_line, 1, length(logical_line) - 1) next_line
         line = without_comment(logical_line)
       }
+      # Findings wait for the END block, so a declaration anywhere in the file applies to all of it.
+      if (length(line) < length(logical_line)) allow_declaration(substr(logical_line, length(line) + 1), first_line)
       # Dockerfile RUN, CMD and ENTRYPOINT own their command operand: RUN runs it at build
       # time, while CMD and ENTRYPOINT declare the command the image itself runs, so a
       # container whose Python entrypoint is written there — most often in exec form — is
@@ -392,9 +411,16 @@ scan_invocations() {
           # Name the interpreter and its first argument, so the reader sees the form at a glance.
           hit = tok[i]
           if (i < n && tok[i + 1] != "") hit = hit " " tok[i + 1]
-          printf "%s:%d: Python invocation `%s`\n", path, first_line, hit
+          hits[++nhits] = sprintf("%s:%d: Python invocation `%s`", path, first_line, hit)
         }
       }
+    }
+    END {
+      # An exit from a rule above still runs this block: keep its failure a failure.
+      if (aborted) exit 2
+      if (declared == "reason") exit 0
+      if (declared == "bare") printf "%s:%d: bare `%s` marker carries no reason; a marker states WHY the file is about the form, or it is a finding\n", path, bare_at, marker
+      for (h = 1; h <= nhits; h++) print hits[h]
     }' "$2"
 }
 

@@ -146,6 +146,32 @@ func parkedDigestReport(pulls []issue, o options) (string, bool, error) {
 		}
 		blocker, kind := recordBlocker(line)
 		state := ""
+		if kind == "authority" {
+			ask := askRE.FindStringSubmatch(line)
+			if ask == nil || ask[1] != "digest" || ask[2] == "" {
+				_, _ = fmt.Fprintf(&report, "%-10s %s#%d  record=ASK-ISSUE-MISSING\n", "ACTIONABLE", item.Repo, item.Number)
+				continue
+			}
+			askState := item.AskState
+			if o.org != "" {
+				var err error
+				askState, err = readDigestAsk(ask[2], o.org)
+				if err != nil {
+					return "", false, err
+				}
+			}
+			if askState == "unlabelled" {
+				_, _ = fmt.Fprintf(&report, "%-10s %s#%d  record=ASK-UNLABELLED\n", "ACTIONABLE", item.Repo, item.Number)
+				continue
+			}
+			if askState != "open" && askState != "closed" {
+				return "", false, errors.New("linked ask state is unproven -- UNKNOWN")
+			}
+			if askState == "closed" {
+				_, _ = fmt.Fprintf(&report, "%-10s %s#%d  record=ASK-CLOSED\n", "ACTIONABLE", item.Repo, item.Number)
+				continue
+			}
+		}
 		// An authority blocker waits on a decision and an outcome blocker on an
 		// event, not on the object either may name.
 		if kind == "upstream" {

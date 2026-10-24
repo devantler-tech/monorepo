@@ -773,7 +773,7 @@ if [ "$RC" = 0 ] && grep -qE '^CONFORMS +a#46' <<<"$OUT"; then ok "CONTROL: a re
 # A caller following the built-in help must not be led to write a classless authority record, which
 # the legacy fallback reads as upstream and never asks for an ask.
 OUT="$("$CHECK" --help 2>&1)"; RC=$?
-if [ "$RC" = 0 ] && grep -q '| <blocker-kind> | last-verified' <<<"$OUT" && grep -q '| authority | last-verified <YYYY-MM-DD>: <result> | asked <pr|slack|session> <YYYY-MM-DD>' <<<"$OUT" && grep -q -- '--ask-max-age-days <n>' <<<"$OUT"; then ok "--help shows the class token, the authority ask suffix and the cadence option"; else bad "--help shows the class token, the authority ask suffix and the cadence option" "rc=$RC out=${OUT:0:300}"; fi
+if [ "$RC" = 0 ] && grep -q '| <blocker-kind> | last-verified' <<<"$OUT" && grep -q '| authority | last-verified <YYYY-MM-DD>: <result> | asked <pr|slack|session|digest> <YYYY-MM-DD>' <<<"$OUT" && grep -q -- '--ask-max-age-days <n>' <<<"$OUT"; then ok "--help shows the class token, the authority ask suffix and the cadence option"; else bad "--help shows the class token, the authority ask suffix and the cadence option" "rc=$RC out=${OUT:0:300}"; fi
 if ! grep -q '^set -euo pipefail' <<<"$OUT"; then ok "and --help stops before the code"; else bad "and --help stops before the code" "help leaked code"; fi
 
 # ------------------------------------------------------------------ 43. --help and the guides define the same ask channels
@@ -871,13 +871,15 @@ MUTATED_RULE="$(FROM='and `session` the native' TO='`SMS` a text, `self-dm` a se
   (i = index($0, ENVIRON["FROM"])) { $0 = substr($0, 1, i - 1) ENVIRON["TO"] substr($0, i + length(ENVIRON["FROM"])) }
   { print }' <<<"$ASK_RULE")"
 MUTATED_CHANNELS="$(rule_tokens "$MUTATED_RULE" 'names where it actually landed' 'No other word is a channel token')"
-if [ "$MUTATED_CHANNELS" = 'pr|slack|SMS|self-dm|dm2|session' ] && ! help_advertises "$MUTATED_CHANNELS"; then
+if [ "$MUTATED_CHANNELS" = 'pr|slack|SMS|self-dm|dm2|session|digest' ] && ! help_advertises "$MUTATED_CHANNELS"; then
   ok "MUTATION: a guide channel of any spelling is read, and turns the comparison red"
 else
   bad "MUTATION: a guide channel of any spelling is read, and turns the comparison red" "read '$MUTATED_CHANNELS' from the mutated rule"
 fi
 ask_verdict() { # word -> the check's verdict on an authority record asked through it
-  printf '[{"repo":"a","number":80,"body":"**Blocker:** maintainer authority | authority | last-verified 2026-09-01: pending | asked %s 2026-09-01"}]\n' "$1" >"$TMP/help-vocabulary.json"
+  local receipt="$1"
+  [ "$receipt" != digest ] || receipt='digest o/monorepo#40'
+  printf '[{"repo":"a","number":80,"body":"**Blocker:** maintainer authority | authority | last-verified 2026-09-01: pending | asked %s 2026-09-01"}]\n' "$receipt" >"$TMP/help-vocabulary.json"
   "$CHECK" --input "$TMP/help-vocabulary.json" --today 2026-09-05 2>&1 | awk 'NR == 1 { print $1 }'
 }
 IFS='|' read -r -a guide_channels <<<"$GUIDE_CHANNELS"
@@ -907,9 +909,9 @@ while IFS='@' read -r source token guide_clause help_clause; do
     bad "--help carries the guide's '$guide_clause'" "the guide must still say it, opening on its token '$token', and the help must say '$help_clause'"
   fi
 done <<'CLAUSES'
-rule@slack@`slack` the Slack DM to his own user@slack = the Slack DM to the maintainer's own user
-destination@@**Destination:** his self-DM@(his self-DM), never a Slack channel
-destination@@never a channel. Every channel in the workspace is public@never a Slack channel, because every channel in the workspace is public
+rule@slack@`slack` historical receipts@slack = the Slack DM to the maintainer's own user
+destination@@**Destination:** the public monorepo ask issue@digest = a linked maintainer-ask issue in this repository
+destination@@with only sanitized public context@digest = a linked maintainer-ask issue in this repository
 excluded@push@`push`, whether it means a git push or the runtime's push notification@push, whether it means a git push or the runtime's push notification
 excluded@issue@`issue`: a GitHub comment is a durable **record** of an ask@issue: a GitHub comment records an ask and is not one
 CLAUSES

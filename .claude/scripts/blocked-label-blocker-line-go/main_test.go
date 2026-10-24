@@ -62,6 +62,9 @@ func TestHelpDefinesTheEnforcedAskVocabulary(t *testing.T) {
 		t.Fatal(err)
 	}
 	verdict := func(word string) string {
+		if word == "digest" {
+			word += " o/monorepo#40"
+		}
 		got, _ := classify("**Blocker:** maintainer authority | authority | last-verified 2026-09-01: pending | asked "+word+" 2026-09-01", today, 14)
 		return got
 	}
@@ -99,7 +102,7 @@ func TestHelpDefinesTheEnforcedAskVocabulary(t *testing.T) {
 		}
 	}
 	for _, clause := range []string{
-		"slack = the Slack DM to the maintainer's own user (his self-DM), never a Slack channel, because every channel in the workspace is public;",
+		"slack = the Slack DM to the maintainer's own user (his self-DM), never a Slack channel, because every channel in the workspace is public (historical receipts only);",
 		"No other word is a channel token, and the check reads any other word as NO-ASK.",
 		"That includes push, whether it means a git push or the runtime's push notification, and issue:",
 	} {

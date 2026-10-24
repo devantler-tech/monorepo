@@ -194,10 +194,79 @@ contains "status-less item lands in (no status)"          "$out" "    1  (no sta
 contains "configured limit renders"                       "$out" "(limit 2)"
 contains "over-limit flag fires at 3>2"                   "$out" "⚠ OVER LIMIT"
 contains "unconfigured column is honestly unmeasured"     "$out" "(limit ?)"
-contains "UI-only limits gap stated"                      "$out" "limits are board-UI-only"
+contains "an override names itself as the limit source"   "$out" "Column limits come from FLOW_WIP_LIMITS"
 contains "open issue stuck in Done is flagged"            "$out" "⚠ OPEN issue in Done"
 not_contains "Epic with a Status is excluded from WIP (Kanban parity)" "$out" "📥 Backlog"
 not_contains "archived board card is excluded from WIP"                "$out" "🧊 Icebox"
+
+# ── Default limits: the board guide's confirmed ceilings (monorepo#4328) ──
+# The expected ceilings are read from the REAL guide here with grep, independently of
+# the script's jq parser, so a guide edit the script does not follow fails this test.
+guide="$script_dir/../guides/issues-and-board.md"
+ceiling() { # <guide column name> -> the guide's number for it, or nothing
+  { tr '\n' ' ' <"$guide" | grep -oE "Maintainer-confirmed ceilings:[^.]*" |
+      grep -oE "(^|, | )$1 \*\*[0-9]+\*\*" | grep -oE '[0-9]+' | head -1; } || true
+}
+# One open Issue per column, so every capped column renders; Verifying is filled to
+# its ceiling (FULL) and Ready to Merge one past it (OVER).
+statuses=("📊 Verifying:Verifying" "🚀 Ready to Merge:Ready to Merge" "👀 In Review:In Review" \
+  "🏃🏻‍♂️ In Progress:In Progress" "🫴 Ready:Ready" "📥 Backlog:Backlog" "🧊 Icebox:Icebox")
+cap_verifying="$(ceiling Verifying)"; cap_merge="$(ceiling 'Ready to Merge')"
+if [ -z "$cap_verifying" ] || [ -z "$cap_merge" ]; then
+  fail "the test can read the guide's ceilings itself (Verifying='$cap_verifying' Ready to Merge='$cap_merge')"
+fi
+per_status=()
+for entry in "${statuses[@]}"; do
+  status="${entry%%:*}"; count=1
+  [ "$status" = "📊 Verifying" ] && count="${cap_verifying:-1}"
+  [ "$status" = "🚀 Ready to Merge" ] && count=$(( ${cap_merge:-0} + 1 ))
+  per_status+=("$status=$count")
+done
+printf '%s\n' "${per_status[@]}" | jq -R -s '
+  split("\n") | map(select(length > 0) | capture("^(?<s>.+)=(?<n>[0-9]+)$"))
+  | [ .[] | .s as $s | range(.n | tonumber)
+      | {content_type: "Issue", archived_at: null,
+         content: {number: 1, state: "open", repository_url: "https://api.github.com/repos/devantler-tech/alpha"},
+         fields: [{data_type: "single_select", name: "Status", value: {name: {html: $s, raw: $s}}}]} ]' \
+  >"$tmp/items-columns.json"
+out="$tmp/out-default-limits.txt"
+env "${fixture_env[@]}" FLOW_ITEMS_JSON="$tmp/items-columns.json" bash "$tool" --section wip > "$out" 2>&1 ||
+  fail "default limits run exits 0 ($(tail -3 "$out"))"
+contains "default limits name the guide as their source" "$out" "Column limits come from the board guide's confirmed ceilings"
+for entry in "${statuses[@]}"; do
+  status="${entry%%:*}"; name="${entry#*:}"; n="$(ceiling "$name")"
+  if [ -z "$n" ]; then fail "the guide states a ceiling for $name"; continue; fi
+  contains "$name renders the guide's ceiling ($n)" "$out" "$status   (limit $n)"
+done
+contains "a column at its ceiling is FULL"     "$out" "📊 Verifying   (limit ${cap_verifying:-?})  FULL"
+contains "a column past its ceiling is OVER"   "$out" "🚀 Ready to Merge   (limit ${cap_merge:-?})  ⚠ OVER LIMIT"
+not_contains "a column under its ceiling is neither FULL nor OVER" \
+  "$out" "🫴 Ready   (limit $(ceiling Ready))  "
+
+# The guide is the only source, so an unreadable or incomplete one fails the section rather
+# than reading as "no limits" — and FLOW_WIP_LIMITS still replaces it.
+sed 's/Maintainer-confirmed ceilings:/Ceilings:/' "$guide" >"$tmp/guide-no-sentence.md"
+sed 's/, Verifying \*\*[0-9]*\*\*//' "$guide" >"$tmp/guide-short.md"
+cp "$guide" "$tmp/guide-unchanged.md"
+if cmp -s "$tmp/guide-unchanged.md" "$tmp/guide-short.md" || cmp -s "$tmp/guide-unchanged.md" "$tmp/guide-no-sentence.md"; then
+  fail "the negative-control guide copies differ from the real guide"
+fi
+for broken in guide-no-sentence guide-short guide-missing; do
+  out="$tmp/out-$broken.txt"
+  if env "${fixture_env[@]}" FLOW_WIP_GUIDE="$tmp/$broken.md" bash "$tool" --section wip > "$out" 2>/dev/null; then
+    fail "$broken: an unusable guide exits nonzero"
+  else
+    pass "$broken: an unusable guide exits nonzero"
+  fi
+  contains "$broken: the failure names the guide" "$out" "confirmed ceilings could not be read"
+  not_contains "$broken: no row reads as within a limit" "$out" "(limit "
+done
+out="$tmp/out-override.txt"
+env "${fixture_env[@]}" FLOW_WIP_GUIDE="$tmp/guide-missing.md" FLOW_WIP_LIMITS="🫴 Ready=0" \
+  bash "$tool" --section wip > "$out" 2>/dev/null || true
+contains "FLOW_WIP_LIMITS replaces the guide, even when the guide is unreadable" "$out" "🫴 Ready   (limit 0)  ⚠ OVER LIMIT"
+# The checks below read the full fixture run again.
+out="$tmp/out-all.txt"
 
 # Throughput: 3 in-window closures; durations [1,4,17] → median 4, p85 17
 contains "throughput counts only in-window closures" "$out" "issues closed in window: 3"
@@ -359,7 +428,7 @@ else
   fail "--help exits 0"
 fi
 contains "--help lists the test seams (sed range covers the whole header)" \
-  "$tmp/help.txt" "FLOW_NOW_UTC"
+  "$tmp/help.txt" "FLOW_WIP_GUIDE"
 
 # Exercise live-fetch code with complete-looking zero replies; no fixture override
 # or native gh is allowed to hide the missing unfiltered confirmation.

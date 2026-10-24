@@ -164,6 +164,14 @@ Pull valuable Ready work* says what an outcome is and is not.
 `.claude/scripts/blocked-label-blocker-line.sh compose --target <owner/repo#N> …` prints the same
 comment without posting it.
 
+**An authority park must enter the maintainer digest.** Before parking, file or reuse one public-safe
+`maintainer-ask` issue in this monorepo with the question, options, recommendation and default.
+Read replies first; never repeat an answered ask. Use `--asked digest <YYYY-MM-DD> --ask-issue
+devantler-tech/monorepo#N`. The helper verifies that the linked issue is open, trusted and labelled
+before writing. A missing ask is `ASK-ISSUE-MISSING`, a closed ask is `ASK-CLOSED`, a missing
+`maintainer-ask` label is `ASK-UNLABELLED`, and unreadable intake is UNKNOWN; none is a parked PR.
+The record is intake, never proof of bot notification.
+
 On every later run, **re-verify the blocker against live state and edit that comment in place**
 (run `park` again with today's result: it edits the one record and never posts a second):
 update the date and result, or, when
@@ -190,7 +198,8 @@ counts them:
   organization that the record names was read and is open. `blocker state not read`: the record
   names none the digest may read (another owner's, or a blocker described only in words), so
   checking that blocker when the record's date comes due is still yours. `authority`: the PR waits
-  on a decision, and the digest never reads an authority blocker's state. `outcome`: the PR waits on
+  on a decision, and the digest never reads an authority blocker's state; it separately verifies
+  the linked maintainer-ask issue is open. `outcome`: the PR waits on
   an event, and the digest reads no item the record names beside it, so checking for that event
   when the record's date comes due is yours.
 - `ACTIONABLE <repo>#<n>  record=<reason>`: the label is there and the park is not. The PR is ordinary

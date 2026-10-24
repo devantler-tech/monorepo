@@ -1814,60 +1814,27 @@ for guarded_surface in \
   esac
 done
 
-# The last-resort Slack channel must be reachable from an unattended run, and must say
-# exactly what that reach is worth (monorepo#3014). Each guard pins one property whose loss
-# would silently reopen that issue: the private destination, the unattended authorization,
-# resolve-before-ask, the missing notification, and the delivered-only record.
-assert_prose "as a DM to the maintainer's own Slack user" \
-  "Maintainer channels no longer names the self-DM as the Slack destination"
-assert_prose "never a channel. Every channel in the workspace is public" \
-  "Maintainer channels no longer forbids posting a Slack ask to a public channel"
-assert_prose "Unattended runs may send it" \
-  "Maintainer channels no longer authorizes unattended runs to send the Slack ask"
-assert_prose "the machine-local scheduler pointer must name this action too" \
-  "Maintainer channels no longer requires the scheduler pointer to name the Slack action"
-assert_prose "Try to resolve the blocker before asking" \
-  "Maintainer channels lets an authority blocker become an ask without an attempt to resolve it"
-assert_prose "It does not notify him." \
-  "Maintainer channels overstates the Slack self-DM as a notification"
-assert_prose "Never record an ask that was not delivered." \
-  "Maintainer channels lets an undelivered Slack ask be recorded on a blocker line"
-# "Once per blocker" alone contradicts the blocker-line rule that an authority ask goes
-# stale after 14 days and must be renewed: a run reading it literally never re-raises.
-assert_prose "renew it only when the blocker-line check reports it \`STALE-ASK\`" \
-  "Maintainer channels forbids renewing a stale Slack ask, contradicting the STALE-ASK rule"
-# The check reads a blocker record as the whole paragraph that starts with `**Blocker:**`,
-# so an ask appended to a line that is followed by more prose is read as prose and
-# stays NO-ASK. Measured 2026-09-13 on ksail#5515: a delivered, correctly spelled ask did
-# not register until a blank line was added after it.
-assert_prose "the ask must be the last thing in that paragraph, followed by a blank line" \
-  "Maintainer channels lets a Slack ask be recorded where the blocker check cannot see it"
-refute_prose "works from **unattended runs too**, via each agent's Slack tooling" \
-  "Issue-driven still claims Slack works unattended without the destination and caveats"
-# Two Slack surfaces exist: an already signed-in connector, and a plugin connector that needs an
-# interactive sign-in no unattended run can complete. Checked the obvious way, the second makes the
-# only unattended escalation channel look closed (monorepo#2900). Name the working surface, say an
-# auth failure elsewhere proves nothing, and make an "unavailable" report name what it tried.
-# Scoped to the Maintainer channels section, which is what an agent loads when it escalates: the
-# same words in another guide would not reach it there.
-maintainer_channels_flat="$(
-  awk '$0 == "## Maintainer channels" { inside = 1; next } inside && /^## / { exit } inside' \
-    "${repo_root}/.claude/guides/maintainer-channels.md" | tr '\n' ' ' | tr -s '[:space:]' ' '
-)"
-[ -n "${maintainer_channels_flat}" ] ||
-  fail "could not extract the maintainer-channels guide's '## Maintainer channels' section (monorepo#2900)"
-assert_maintainer_channels_prose() {
-  case "${maintainer_channels_flat}" in
-    *"$1"*) ;;
-    *) fail "Maintainer channels no longer says '$1' — $2" ;;
-  esac
-}
-for surface_rule in \
-  "the Slack connector that is already signed in, whose tools are named \`slack_send_message\`" \
-  "is a different surface, not evidence that the channel is closed" \
-  "names each surface it tried and what that surface returned"; do
-  assert_maintainer_channels_prose "${surface_rule}" "the escalation surface is ambiguous again (monorepo#2900)"
+# Channel cutover retains the old privacy, reach, deduplication and delivered-only controls.
+for channel_rule in \
+  "Try to resolve the blocker before asking" \
+  "Never send status messages." \
+  "never repeat an answered ask" \
+  "Never record an ask that was not delivered" \
+  "The ask must be the last thing" \
+  "at most three urgent bot assignments per UTC day" \
+  "Closed or relabelled asks still consume the cap" \
+  "failed or partial read is UNKNOWN" \
+  "Slack is retired for maintainer asks" \
+  "Spend stewardship remains disabled" \
+  "Read and reconcile replies every run"; do
+  assert_prose "${channel_rule}" "Maintainer channel cutover lost '${channel_rule}'"
 done
+maintainer_channels_flat="$(awk '$0 == "## Maintainer channels" { inside=1; next } inside && /^## / { exit } inside { print }' \
+  "${repo_root}/.claude/guides/maintainer-channels.md" | tr '\n' ' ' | tr -s '[:space:]' ' ')"
+[ -n "${maintainer_channels_flat}" ] || fail "Maintainer channels section is missing"
+assert_maintainer_channels_prose() {
+  case "${maintainer_channels_flat}" in *"$1"*) ;; *) fail "Maintainer channels no longer says '$1' — $2" ;; esac
+}
 # A push notification delivered an ask that the blocker check then read as never-asked, because
 # the ask-record vocabulary excluded "push" without saying which push it meant (monorepo#3243).
 # The channels section must settle it where an escalating agent reads — the exclusion, a reason

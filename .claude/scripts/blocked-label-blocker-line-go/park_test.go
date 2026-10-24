@@ -28,11 +28,13 @@ type fakeForge struct {
 	nullPull    bool            // the record carries "pull_request": null
 	failWrite   map[string]bool // "METHOD endpoint-suffix" whose write fails
 	dropWrite   map[string]bool // write that returns success and changes nothing
+	askPayload  string          // override the linked ask without changing the parked PR
 }
 
 const (
 	parkIssuePath    = "repos/o/r/issues/5"
 	parkCommentsPath = parkIssuePath + "/comments?per_page=100"
+	parkAskPath      = "repos/o/monorepo/issues/40"
 )
 
 func newFakeForge(t *testing.T) *fakeForge {
@@ -54,6 +56,11 @@ func (f *fakeForge) read(endpoint string) ([]byte, error) {
 	case "user":
 		raw, _ := json.Marshal(map[string]string{"login": f.login})
 		return raw, nil
+	case parkAskPath:
+		if f.askPayload != "" {
+			return []byte(f.askPayload), nil
+		}
+		return []byte(`{"number":40,"state":"open","user":{"login":"devantler"},"labels":[{"name":"maintainer-ask"}]}`), nil
 	case parkIssuePath:
 		record := map[string]any{"number": f.number, "state": f.state, "comments": len(f.comments)}
 		if !f.noLabels {
@@ -290,12 +297,41 @@ func TestParkBelievesOnlyWhatReadsBack(t *testing.T) {
 
 func TestParkAuthorityRecordCarriesItsAsk(t *testing.T) {
 	f := newFakeForge(t)
-	code, stdout, stderr := park(authorityArgs...)
-	if code != 0 || !strings.Contains(stdout, "| authority | last-verified 2026-10-06: token still expired | asked slack 2026-10-05") {
+	args := append(replaced(authorityArgs, "--asked", "digest"), "--ask-issue", "o/monorepo#40")
+	code, stdout, stderr := park(args...)
+	if code != 0 || !strings.Contains(stdout, "| authority | last-verified 2026-10-06: token still expired | asked digest o/monorepo#40 2026-10-05") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	if !strings.HasPrefix(f.comments[0].Body, disclosurePrefix+"Agentic Engineer\n") {
 		t.Errorf("record body = %q, want the disclosure line first", f.comments[0].Body)
+	}
+}
+
+func TestParkRejectsUntrustedOrUnreadableAskIntakeBeforeWriting(t *testing.T) {
+	for _, tc := range []struct {
+		name, reference, payload, want string
+		unreadable                     bool
+	}{
+		{"wrong owner", "other/monorepo#40", "", "outside the declared monorepo", false},
+		{"wrong repository", "o/other#40", "", "digest needs --ask-issue", false},
+		{"wrong author", "o/monorepo#40", `{"number":40,"state":"open","user":{"login":"someone-else"},"labels":[{"name":"maintainer-ask"}]}`, "identity, labels or state", false},
+		{"pull request", "o/monorepo#40", `{"number":40,"state":"open","user":{"login":"devantler"},"labels":[{"name":"maintainer-ask"}],"pull_request":{}}`, "identity, labels or state", false},
+		{"missing ask label", "o/monorepo#40", `{"number":40,"state":"open","user":{"login":"devantler"},"labels":[]}`, "missing maintainer-ask label", false},
+		{"missing labels field", "o/monorepo#40", `{"number":40,"state":"open","user":{"login":"devantler"}}`, "identity, labels or state", false},
+		{"unreadable ask", "o/monorepo#40", "", "could not read linked ask", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeForge(t)
+			f.askPayload = tc.payload
+			if tc.unreadable {
+				f.failRead = parkAskPath
+			}
+			args := append(replaced(authorityArgs, "--asked", "digest"), "--ask-issue", tc.reference)
+			code, stdout, stderr := park(args...)
+			if code != 2 || stdout != "" || !strings.Contains(stderr, tc.want) || len(f.writes) != 0 {
+				t.Fatalf("code=%d stdout=%q stderr=%q writes=%v", code, stdout, stderr, f.writes)
+			}
+		})
 	}
 }
 

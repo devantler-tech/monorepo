@@ -2920,7 +2920,7 @@ ROUT=$(CLAUDE_PROJECTS_DIR="$FIX/blob" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$
 if grep -q 'github-token' < <(sed -n '/credential-shaped/,/rotate the credential/p' <<<"$OUT"); then
   bad "mid-blob gh?_ substring is NOT counted" "counted as a token"
 else ok "mid-blob gh?_ substring is NOT counted"; fi
-# …but the output-boundary redactor still masks it (broad CRED_RE unchanged),
+# …but the output-boundary redactor still masks it (redact() keeps its own unanchored shapes),
 # so refusing to COUNT blob noise never means ECHOING it — proven POSITIVELY
 # on the error-signature path, not by absence alone.
 if grep -q 'redacted' < <(grep 'boom' <<<"$ROUT"); then

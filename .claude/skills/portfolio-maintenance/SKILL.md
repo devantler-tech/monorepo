@@ -452,10 +452,10 @@ ladder's security rung (§2 rung 5); GitHub-only runs in between stay blind to l
 design, which is exactly why the cadence must not silently lapse — track it in memory like the other
 cadence gates.
 
-**Read the Slack threads under your asks first — that is where the maintainer answers** (monorepo#3888).
-Before anything else in this step, read his self-DM and every ask thread that has replies, as the
-[maintainer-channels guide](../../guides/maintainer-channels.md) describes; record each answer on
-its issue, then treat it like the comments below.
+**Read maintainer ask and digest replies first** (monorepo#3888, #4286).
+Follow the [maintainer-channels guide](../../guides/maintainer-channels.md): read direct asks and
+open or closed delivery threads, record each authenticated answer on its original work, then act.
+Never repeat an answered ask. Slack is retired; confidential direction uses the interactive tool.
 
 **Maintainer comments on your own work are instructions — handle them first.** Before
 selecting new work, attribute every surfaced `CANDIDATE-MAINTAINER-COMMENT` and
@@ -822,7 +822,7 @@ measurement the first valuable slice when evidence is missing. Record `last_valu
    DISABLED*) — follow it, don't re-derive it here. When a draft reaches the full pentad AND you have
    tried and evaluated it as a user, **self-promote it and drive it to merge** (contract *Autonomy*;
    definition PRs included — their separate gate was retired by maintainer direction 2026-07-18, so
-   they no longer wait on him and there is nothing to ping about (Slack stays last-resort,
+   they no longer wait on him and there is nothing to ping about (the digest stays last-resort,
    genuinely-blocked-only — contract *Issue-driven → attention channels*)). **A merge-gated or parked PR is NOT
    exempt** (maintainer direction 2026-07-01): the
    gate excuses the *merge*, never red CI / open threads / conflicts / applicable current-head
@@ -1220,7 +1220,7 @@ routine prompt alone (surface cross-instance drift in the report). The same stew
 approval guards — contract → *Self-improvement → Runtime guard/permission stewardship*): keep it
 least-privilege-but-sufficient on run evidence — tighten over-broad grants directly (before/after
 recorded; sensitive specifics stay in the PRIVATE host-audit notes), surface a needed widening to the
-maintainer as a one-click / `AskUserQuestion` / Slack ping (never self-widen), and fold the full review into the
+maintainer as a one-click / `AskUserQuestion` / public-safe digest ask (never self-widen), and fold the full review into the
 ~monthly host least-privilege audit.
 
 ## Global rules (from the contract — non-negotiable)

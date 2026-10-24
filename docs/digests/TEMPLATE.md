@@ -2,9 +2,9 @@
 
 # How to write the maintainer digest
 
-The digest is the maintainer's email about the agents' work. A workflow checks daily at 06:17 UTC
+The digest is the maintainer's GitHub notification about the agents' work. A workflow checks daily at 06:17 UTC
 and sends only when unanswered asks remain, at most once per UTC day. It opens a combined digest as an
-issue in this public repository and assigns it to him, and GitHub emails it to him. Write it for
+issue in this public repository and assigns it to him. GitHub inbox replies are accepted; email is optional. Write it for
 one reader who has not followed the work since the previous digest.
 
 ## Where it goes
@@ -93,5 +93,5 @@ workflow holds back a file that fails it.
 
 ## How to reply
 
-Reply to this email with an ask's number and your choice, for example `1: B`, or the number, a colon and your own words, for example `3: your words`.
+Reply on this GitHub issue (or to its notification email) with an ask's number and your choice, for example `1: B`, or the number, a colon and your own words, for example `3: your words`.
 Your reply posts publicly, as a comment on this issue in the public devantler-tech/monorepo repository.
