@@ -71,6 +71,31 @@ export BUILD_CACHE_RECLAIM_CONTAINER_CLI=off
 # The still-low report measures the real temp and cache dirs, and fires whenever the host that
 # runs this suite is itself short of space. It is off for every case; case 24 names its own.
 export BUILD_CACHE_RECLAIM_CONSUMER_ROOTS=off
+# npm is isolated too: existing cases must never inspect the host's real cache.
+export BUILD_CACHE_RECLAIM_NPM_CLI=off
+
+# Every native holder fixture is our child and inherits this process group. Keep real
+# kernel holder checks, but isolate them from unrelated agent processes: a whole-host
+# snapshot cost 5.44s here versus 0.037s for this group, with the controlled open file
+# observed by both. Repeating it pushed this suite past its 300s deadline. This adapter
+# changes TEST input only; production still reads the entire host. Later fault stubs
+# precede it on PATH, so unavailable/partial-scan controls retain their behaviour.
+fixture_pgid=$(ps -o pgid= -p "$$" | tr -d '[:space:]') || exit 2
+case "$fixture_pgid" in '' | *[!0-9]*) exit 2 ;; esac
+native_lsof=$(command -v lsof 2>/dev/null) || native_lsof=''
+for native_lsof in "$native_lsof" /usr/sbin/lsof /usr/bin/lsof /bin/lsof; do
+  [ -n "$native_lsof" ] && [ -x "$native_lsof" ] && break
+done
+if [ -n "$native_lsof" ] && [ -x "$native_lsof" ]; then
+  fixture_bin="$fixture_root/claude-cache-fixture-tools"
+  mkdir -p "$fixture_bin" || exit 2
+  cat > "$fixture_bin/lsof" <<STUB
+#!/usr/bin/env bash
+exec "$native_lsof" -a -g "$fixture_pgid" "\$@"
+STUB
+  chmod +x "$fixture_bin/lsof" || exit 2
+  export PATH="$fixture_bin:$PATH"
+fi
 
 # age_tree <stamp> <dir> sets the modification time of the directory AND of everything in
 # it. The per-run sweep keeps a tree with any entry written within its threshold, so a
@@ -122,6 +147,165 @@ run() {
     GOMODCACHE="${GOMODCACHE_OVERRIDE:-$GO_MOD_FIXTURE}" \
     bash "$impl" "$@" 2>&1
 }
+
+# npm cases run first; --npm-only keeps the RED/GREEN iteration fixture-only and short.
+# The default CI invocation still executes these AND every existing case below.
+npm_fixture="$fixture_root/npm-fixture"
+npm_bin="$fixture_root/npm-bin"
+mkdir -p "$npm_bin" "$npm_fixture/_logs" "$npm_fixture/_npx/tool" "$npm_fixture/node_modules"
+printf 'keep\n' > "$npm_fixture/_logs/existing.log"
+printf 'keep\n' > "$npm_fixture/_npx/tool/package.json"
+printf 'keep\n' > "$npm_fixture/node_modules/entry"
+cat > "$npm_bin/npm" <<'STUB'
+#!/usr/bin/env bash
+npm_physical=$(cd -- "$NPM_FIXTURE" && pwd -P) || exit 2
+case "$*" in
+  '--global --ignore-scripts --logs-max=0 '*) shift 3 ;;
+  *) exit 2 ;;
+esac
+case "${1:-}" in
+  --logs-dir=*) logs_dir=${1#--logs-dir=} ;;
+  *) exit 2 ;;
+esac
+[ -d "$logs_dir" ] && [ -O "$logs_dir" ] && [ ! -L "$logs_dir" ] || exit 2
+[ "$logs_dir" != "$NPM_FIXTURE/_logs" ] || exit 2
+printf '%s\n' "$logs_dir" >> "$NPM_FIXTURE/private-log-dirs"
+shift
+case "$*" in
+  'config get cache')
+    [ "${NPM_CONFIG_FAIL:-0}" = 0 ] || exit 2
+    if [ "${NPM_LATE_CONFIG_FAIL:-0}" = 1 ]; then
+      [ ! -e "$NPM_FIXTURE/config-read" ] || exit 2
+      : > "$NPM_FIXTURE/config-read"
+    fi
+    printf '%s\n' "$NPM_FIXTURE"
+    ;;
+  "--cache=$npm_physical cache clean --force")
+    [ "${NPM_CLEAN_FAIL:-0}" = 0 ] || exit 2
+    printf 'clean\n' >> "$NPM_FIXTURE/clean-called"
+    rm -rf -- "$NPM_FIXTURE/_cacache"
+    ;;
+  *) echo 'unexpected npm invocation' >&2; exit 2 ;;
+esac
+STUB
+cat > "$npm_bin/lsof" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-}" = -Fn ]; then
+  printf 'n/dev/null\n'
+  [ "${NPM_HELD:-0}" = 0 ] || printf 'n%s/_cacache/content-v2/sha512/blob\n' "$NPM_FIXTURE"
+elif [ "${NPM_HELD:-0}" = 1 ] || [ "${NPM_LATE_HELD:-0}" = 1 ]; then
+  printf 'n%s/_cacache/content-v2/sha512/blob\n' "$NPM_FIXTURE"
+else
+  exit 1
+fi
+STUB
+cat > "$npm_bin/ps" <<'STUB'
+#!/usr/bin/env bash
+case "$*" in
+  *'args='*)
+    [ "${NPM_PS_FAIL:-0}" = 0 ] || exit 2
+    [ "${NPM_RUNNING:-0}" = 0 ] && echo '/usr/bin/sleep 30' || echo 'npm install'
+    ;;
+  *) echo '00:01 fixture-process' ;;
+esac
+STUB
+chmod +x "$npm_bin/npm" "$npm_bin/lsof" "$npm_bin/ps"
+npm_real_id=$(command -v id)
+cat > "$npm_bin/id" <<STUB
+#!/usr/bin/env bash
+if [ "\${NPM_FOREIGN:-0}" = 1 ] && [ "\${1:-}" = -u ]; then
+  echo 123456
+else
+  exec "$npm_real_id" "\$@"
+fi
+STUB
+chmod +x "$npm_bin/id"
+npm_payload() {
+  mkdir -p "$npm_fixture/_cacache/content-v2/sha512" "$npm_fixture/_cacache/index-v5"
+  dd if=/dev/zero of="$npm_fixture/_cacache/content-v2/sha512/blob" bs=1024 count=1024 2>/dev/null
+}
+run_npm() {
+  PATH="$npm_bin:$PATH" NPM_FIXTURE="$npm_fixture" NPM_CONFIG_CACHE="$npm_fixture" \
+    npm_config_cache="$npm_fixture" BUILD_CACHE_RECLAIM_NPM_CLI="${NPM_TEST_CLI:-npm}" \
+    BUILD_CACHE_RECLAIM_NPM_BUDGET_GB="${NPM_BUDGET:-0}" run "$@" 3 "$NEVER_CLEAN_BUDGET"
+}
+npm_payload || fail 'fixture: npm payload'
+out=$(run_npm dry-run)
+grep -q 'NPM_CONTENT_CACHE would be cleaned' <<<"$out" || fail 'npm over-budget dry run did not identify its cache'
+[ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'npm dry run changed its cache'
+out=$(NPM_BUDGET="$NEVER_CLEAN_BUDGET" run_npm apply)
+grep -q 'NPM_CONTENT_CACHE within budget' <<<"$out" || fail 'npm under-budget cache was not measured'
+[ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'npm under-budget content was removed'
+out=$(NPM_TEST_CLI=off run_npm apply)
+[ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'disabled npm reclamation removed content'
+out=$(NPM_BUDGET=invalid run_npm apply)
+rc=$?
+[ "$rc" -eq 2 ] || fail 'invalid npm budget did not report UNKNOWN'
+out=$(NPM_TEST_CLI="$npm_bin/missing" run_npm apply)
+rc=$?
+[ "$rc" -eq 2 ] || fail 'explicit missing npm executable silently selected another npm'
+[ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'explicit missing npm executable cleaned a fallback cache'
+npm_payload || fail 'fixture: restore payload after missing-executable control'
+out=$(NPM_HELD=1 run_npm apply)
+[ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'npm held-open content was removed'
+out=$(NPM_RUNNING=1 run_npm apply)
+[ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'a running npm lost its content cache'
+out=$(NPM_FOREIGN=1 run_npm apply)
+[ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'npm foreign-owned cache content was removed'
+out=$(NPM_LATE_CONFIG_FAIL=1 run_npm apply)
+rc=$?
+[ "$rc" -eq 2 ] || fail 'npm late configuration failure did not report UNKNOWN'
+[ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'npm failed configuration recheck removed content'
+rm -f "$npm_fixture/config-read"
+out=$(NPM_LATE_HELD=1 run_npm apply)
+[ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'npm cache opened after the snapshot was removed'
+out=$(NPM_PS_FAIL=1 run_npm apply)
+rc=$?
+[ "$rc" -eq 2 ] || fail 'npm unreadable process table did not report UNKNOWN'
+[ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'npm unreadable process table removed content'
+out=$(NPM_CLEAN_FAIL=1 run_npm apply)
+rc=$?
+[ "$rc" -eq 2 ] || fail 'npm failed clean did not report UNKNOWN'
+[ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'npm failed clean lost content'
+mv "$npm_fixture/_cacache/index-v5" "$npm_fixture/unknown-index"
+out=$(run_npm apply)
+[ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'npm unknown cache layout was cleaned'
+mv "$npm_fixture/unknown-index" "$npm_fixture/_cacache/index-v5"
+mv "$npm_fixture/_cacache" "$npm_fixture/symlink-target"
+ln -s "$npm_fixture/symlink-target" "$npm_fixture/_cacache"
+out=$(run_npm apply)
+[ -f "$npm_fixture/symlink-target/content-v2/sha512/blob" ] || fail 'npm cache symlink target was cleaned'
+rm "$npm_fixture/_cacache"
+mv "$npm_fixture/symlink-target" "$npm_fixture/_cacache"
+if [ "$(id -u)" -ne 0 ]; then
+  chmod 000 "$npm_fixture/_cacache"
+  out=$(run_npm apply)
+  rc=$?
+  chmod 700 "$npm_fixture/_cacache"
+  [ "$rc" -eq 2 ] || fail 'npm unreadable cache did not report UNKNOWN'
+  [ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'npm unreadable cache lost content'
+fi
+out=$(run_npm apply)
+[ ! -e "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail "npm over-budget idle content was not cleaned: $out"
+[ -f "$npm_fixture/clean-called" ] || fail 'npm was not asked to clean its identified content cache'
+for kept in _logs/existing.log _npx/tool/package.json node_modules/entry; do
+  [ -f "$npm_fixture/$kept" ] || fail "npm clean removed unrelated $kept"
+done
+npm_payload || fail 'fixture: recreate npm payload'
+out=$(NPM_CONFIG_FAIL=1 run_npm apply)
+rc=$?
+[ "$rc" -eq 2 ] || fail 'npm configuration failure did not report UNKNOWN'
+[ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'npm unreadable configuration removed content'
+while IFS= read -r logs_dir; do
+  [ ! -e "$logs_dir" ] || fail 'npm invocation left private log scratch behind'
+done < "$npm_fixture/private-log-dirs"
+rm -rf -- "$npm_fixture" "$npm_bin"
+if [ "${1:-}" = --npm-only ]; then
+  reclaim_test_finished=1
+  [ "$failures" -eq 0 ] || exit 1
+  echo 'build-cache-reclaim npm contract: PASS'
+  exit 0
+fi
 
 # --- 1. a stale agent tree IS reaped (the positive case) --------------------------
 stale=$(make_tree 'codex-stale-run' 10) || fail 'fixture: codex-stale-run'
