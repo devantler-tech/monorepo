@@ -730,6 +730,30 @@ grep -Fq 'Agent Improver scorecard store' "${constitution}" ||
 grep -Fq 'open verification-hypothesis store' "${constitution}" ||
   fail "Memory does not name the Agent Improver hypothesis store"
 
+# The stores are declared by the logical paths the runtimes resolve, never by the operator's home
+# directory (monorepo#2462): the contract is public, and an absolute home path, or a Claude project
+# directory named after one, spells out the operator's account and host layout.
+# shellcheck disable=SC2016 # The backticks are literal contract text, not a substitution.
+for store in \
+  '`~/.claude/projects/<checkout>/memory/agent-improver-scorecards.md`' \
+  '`~/.codex/automations/agent-improver/memory.md`' \
+  '`~/.claude/projects/<checkout>/memory/agent-improver-routine.md`' \
+  'store: `~/.codex/automations/daily-ai-engineer/memory.md` for Codex'; do
+  grep -Fq -- "${store}" "${constitution}" ||
+    fail "Memory does not declare a store by its logical path: ${store}"
+done
+host_path_re='(/Users/|/home/)[A-Za-z0-9._-]+|-Users-[A-Za-z0-9._]'
+host_paths() { grep -nE -- "${host_path_re}" "$1" || true; }
+host_found="$(host_paths "${constitution}")"
+[ -z "${host_found}" ] ||
+  fail "the contract spells out a home-directory path; name it by its logical path (~/... or \$HOME/...) instead: ${host_found}"
+# Negative control: the check fires on a planted path and on a planted project directory, so an empty
+# result above is not a pattern that matches nothing.
+printf '%s\n' "store: /Users/""someone/.claude/settings.json" "memory: ~/.claude/projects/-Users-""someone-repo/memory" \
+  >"${contract_tmp}/host-path-fixture"
+[ "$(host_paths "${contract_tmp}/host-path-fixture" | grep -c .)" -eq 2 ] ||
+  fail "the home-path guard did not fire on both planted paths"
+
 # Naming the two stores is NOT the same as requiring a run to read across them. Each assertion below
 # pins a distinct clause, so deleting one fails on its own line rather than being masked by another.
 # These use assert_prose (whitespace-flattened) and carry the ORDERING and the SEMANTICS, not just a
