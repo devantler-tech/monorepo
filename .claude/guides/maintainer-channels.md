@@ -22,6 +22,10 @@ or deciding about our own work are the engineer's steps. A runtime permission re
 durable fix request, shared by every affected item, rather than another ask for each item.
 Offer options that can work: an approving reply cannot change runtime permissions.
 
+This preserves the maintainer's 2026-07-12 direction, superseding the same-day "standing ping duties":
+contact him only for a genuine blocker, never status messages. The accepted GitHub cutover changes
+the delivery surface, not that attention boundary.
+
 **File or reuse one public-safe ask in this repository**, labelled `maintainer-ask`, with
 `### Question`, `### Options`, `### Recommendation` and `### If unanswered`. Link the original
 work and explain the exact action only he can take. Read existing asks and their replies first:

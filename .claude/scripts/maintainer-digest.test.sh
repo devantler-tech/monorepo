@@ -1020,7 +1020,7 @@ urgent_setup() {
   issue 10 devantler "🙋 Ask: Keep 30 days of backups" "$complete_body" |
     jq '.labels += [{name:"maintainer-ask-urgent"}]' >"$tmp/urgent.json"
   jq -s . "$tmp/urgent.json" | fixture GET "$asks_path"
-  cat "$tmp/urgent.json" | fixture GET "$api/issues/10"
+  fixture GET "$api/issues/10" <"$tmp/urgent.json"
   jq '.assignees=[{login:"devantler"}]' "$tmp/urgent.json" | fixture POST "$api/issues/10/assignees"
   printf '[]\n' | fixture GET "$api/issues/events?per_page=100"
 }
@@ -1049,10 +1049,10 @@ expect_rc 0 "a burst drains the whole queue"
 if [ "$(grep -cE '^POST .*/assignees ' "$GH_STUB_LOG")" = 3 ]; then pass "one run sends exactly three urgent assignments"; else bad "urgent burst exceeded or missed the cap"; fi
 expect_in "$tmp/out" "CAP-DELAYED #13" "the fourth queued ask remains for the digest"
 
-for missing in id event created_at actor assignee issue; do
+for missing in id event created_at actor assigner assignee issue; do
   urgent_setup
   jq -n --arg date "$(date -u +%Y-%m-%d)" --arg missing "$missing" \
-    '[{id:1,event:"assigned",created_at:($date+"T00:00:00Z"),actor:{login:"github-actions[bot]"},
+    '[{id:1,event:"assigned",created_at:($date+"T00:00:00Z"),actor:{login:"devantler"},assigner:{login:"github-actions[bot]"},
       assignee:{login:"devantler"},issue:{number:100}} | del(.[$missing])]' |
     fixture GET "$api/issues/events?per_page=100"
   run urgent --repo "$repo"
@@ -1064,7 +1064,7 @@ done
 urgent_setup
 today="$(date -u +%Y-%m-%d)"
 jq -n --arg date "$today" '[range(1;4) | {id:.,event:"assigned",created_at:($date+"T00:00:00Z"),
-  actor:{login:"github-actions[bot]"},assignee:{login:"devantler"},issue:{number:(100+.)}}]' |
+  actor:{login:"devantler"},assigner:{login:"github-actions[bot]"},assignee:{login:"devantler"},issue:{number:(100+.)}}]' |
   fixture GET "$api/issues/events?per_page=100"
 run urgent --repo "$repo"
 expect_rc 0 "three prior notifications consume the global daily cap"
@@ -1074,7 +1074,7 @@ expect_in "$GH_STUB_LOG" "POST $api/issues/10/labels" "cap delay is visible"
 
 urgent_setup
 jq -n --arg date "$today" '[{id:1,event:"assigned",created_at:($date+"T00:00:00Z"),
-  actor:{login:"github-actions[bot]"},assignee:{login:"devantler"},issue:{number:10}}]' |
+  actor:{login:"devantler"},assigner:{login:"github-actions[bot]"},assignee:{login:"devantler"},issue:{number:10}}]' |
   fixture GET "$api/issues/events?per_page=100"
 run urgent --repo "$repo"
 expect_rc 0 "an assignment event survives a missing delivered marker"
