@@ -217,7 +217,7 @@ human_comments() {
 # Remove asks already answered directly or by an unambiguous numbered reply to a delivered digest.
 # A direct maintainer reply counts as a response, leaving any follow-up decision to the engineer.
 filter_answered_asks() {
-  local number digest
+  local number digest rc
   : >"$tmp/answered.txt"
   load_delivery_history
   jq -r '.[].number' "$tmp/asks.json" >"$tmp/ask-numbers.txt"
@@ -243,6 +243,18 @@ filter_answered_asks() {
         | select(.repo == $repo and .number == .target)]
       | group_by(.index) | if any(.[]; length != 1) then error("ambiguous ask index")
         else map(.[0]) end' <"$tmp/delivery-asks.md" >"$tmp/answer-map.json" || unknown "ambiguous digest answer mapping"
+    # A digest that carried no currently open ask cannot answer one. Keep read failures distinct
+    # from a normal non-match, and retain all delivery numbers for summary-receipt accounting.
+    rc=0
+    jq -e --slurpfile asks "$tmp/asks.json" '
+      ([$asks[0][].number | tostring]) as $open
+      | any(.[]; .number as $number | ($open | index($number)) != null)' \
+      "$tmp/answer-map.json" >/dev/null || rc=$?
+    case "$rc" in
+      0) ;;
+      1) continue ;;
+      *) unknown "could not match delivered asks to current asks" ;;
+    esac
     human_comments "$digest" "$tmp/digest-comments-$digest.json"
     # Ignore quoted and fenced examples, including fences longer than three characters.
     jq -r --slurpfile mapping "$tmp/answer-map.json" "$reply_lines_def"'
@@ -494,7 +506,7 @@ compose_fallback() {
 # Combine reviewed dated summaries not recorded in any successfully assigned delivery. Receipts
 # live in the generated email itself, so a quiet day or failed assignment advances no file cursor.
 prepare_pending_summaries() {
-  local candidate date hash count=0 latest="" marker receipt existing rc
+  local candidate date hash count=0 latest="" marker receipt existing rc held_back=0
   : >"$tmp/sent-summary-records.jsonl"
   while IFS= read -r existing; do
     jq -r --argjson n "$existing" '.[] | select(.number == $n) | .body | split("\n")[1] // ""' \
@@ -531,7 +543,7 @@ prepare_pending_summaries() {
     check_file "$candidate" || rc=$?
     case "$rc" in
       0) ;;
-      1) reason="a pending summary failed the digest check, so it was held back"; continue ;;
+      1) held_back=1; reason="a pending summary failed the digest check, so it was held back"; continue ;;
       *) unknown "cannot read $candidate" ;;
     esac
     printf '%s\n' "$candidate" >>"$tmp/pending-files.txt"
@@ -552,6 +564,9 @@ prepare_pending_summaries() {
       line == "## What shipped" { inside=1; next } inside && line ~ /^## / { exit } inside { print }' \
       "$candidate" >>"$tmp/shipped.md"
   done <"$tmp/pending-files.txt"
+  if [ "$held_back" -eq 1 ]; then
+    printf '\n> ⚠️ A pending changelog was held back because it did not pass its checks.\n' >>"$tmp/shipped.md"
+  fi
   receipt=$(cat "$tmp/summary-receipt.json")
   awk -v shipped="$tmp/shipped.md" -v receipt="$receipt" '
     { sub(/\r$/, ""); header=$0; sub(/[ \t]+$/, "", header) }
