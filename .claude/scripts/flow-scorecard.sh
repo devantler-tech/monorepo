@@ -236,7 +236,7 @@ if want throughput; then
   # output is emitted — streaming into the pipe would let a partial first
   # attempt's pages be double-counted by the retry and bias the median/p85.
   # `-type:Epic` (negation verified honored live) keeps roadmap-scale Epic
-  # lifetimes from skewing the Kanban-population median/p85; the envelope check
+  # lifetimes from skewing the org-wide issue-lifetime median/p85; the envelope check
   # rejects `incomplete_results: true` (a Search-side timeout returned as HTTP
   # success) instead of silently publishing an undercount; and the retry fires
   # only on a rate-limit/incomplete signature — a permanent error fails the
@@ -269,8 +269,10 @@ if want throughput; then
         end' || section_failed throughput "metric rendering failed (malformed or drifted issue payload)"
     echo "  NOTE: PROXY — the API exposes no Status-change history, so this is issue"
     echo "        LIFETIME (created→closed), not board cycle time; stalled-in-column"
-    echo "        detection is likewise UNMEASURED today. Epics are excluded (same"
-    echo "        population as the WIP section). Search caps at 1000 results."
+    echo "        detection is likewise UNMEASURED today. This population is org-wide"
+    echo "        closed non-Epic issues, including off-board and accessible private"
+    echo "        issues; WIP counts unarchived open non-Epic project-5 issues."
+    echo "        These populations differ. Search caps at 1000 results."
   fi
 fi
 
