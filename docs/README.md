@@ -4,9 +4,12 @@
 editorial standard are owned by [business-site](https://github.com/devantler-tech/business-site),
 checked out at `applications/business-site`.
 
-[`digests/`](digests/) holds the maintainer's weekly digests. Each Monday a workflow opens that
-week's digest as an issue assigned to him, so GitHub emails it to him; when the week's file is
-missing, it sends the open asks on their own. [`digests/TEMPLATE.md`](digests/TEMPLATE.md) is the
+[`digests/`](digests/) holds the maintainer's dated digests. A workflow checks daily at 06:17 UTC
+and opens a digest only when unanswered asks remain, at most once per UTC day, so GitHub emails
+it to him. Answered questions are excluded, including replies to closed digest threads. Quiet
+days send nothing; their pending changelogs are combined into following ask digests in batches that
+fit. When no usable pending summary is available, it sends the open asks on their own.
+[`digests/TEMPLATE.md`](digests/TEMPLATE.md) is the
 starting point and carries the writing rules.
 
 The former website snapshot is retired after replacement publication under

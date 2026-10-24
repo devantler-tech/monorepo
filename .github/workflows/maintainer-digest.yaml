@@ -1,13 +1,13 @@
 name: Maintainer digest
 
-# Opens the week's maintainer digest as an issue assigned to the maintainer, so GitHub emails it to
+# Opens the dated maintainer digest as an issue assigned to the maintainer, so GitHub emails it to
 # him (monorepo#4285). It runs as github-actions[bot] because GitHub never emails a user about their
-# own activity, and the agents act through his account. When the week's file is missing, the open
+# own activity, and the agents act through his account. When the dated file is missing, the open
 # asks go on their own. The logic and its tests live in .claude/scripts/maintainer-digest.sh.
 on:
   schedule:
-    # Mondays at 06:17 UTC, which is 07:17 or 08:17 in Denmark, off the top of the hour.
-    - cron: "17 6 * * 1"
+    # Send daily only while unanswered asks exist; retain quiet-day changelogs for the next ask.
+    - cron: "17 6 * * *"
   workflow_dispatch:
     inputs:
       dry-run:
@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   send:
-    name: Send the weekly digest
+    name: Send the digest when due
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

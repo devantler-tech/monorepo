@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# maintainer-digest.sh — send the weekly maintainer digest by email (ADR 0009 phase 1,
-# monorepo#4285). Urgent asks are a follow-up (monorepo#4305).
+# maintainer-digest.sh — email daily only while unanswered asks exist (monorepo#4475).
+# ADR 0009 phase 1 / monorepo#4285 supplies delivery; urgent asks remain monorepo#4305.
 #
 # Why this exists. The agents act through the maintainer's own GitHub account, and GitHub never
 # emails a user about their own activity, so an ask an agent files never reaches him on its own. The
 # Slack DM that carried asks left answers unread for weeks (monorepo#3888). GitHub does email him an
 # issue that github-actions[bot] opens and assigns to him, so maintainer-digest.yaml sends one for the
-# agents every Monday. This script is its logic, kept here so it can be tested.
+# agents. A daily check suppresses answered asks and sends nothing on quiet days. Reviewed
+# changelogs remain pending until a later ask digest records their successful delivery.
 #
 # Subcommands:
-#   send [--repo OWNER/REPO] [--week YYYY-Www] [--dir DIR] [--dry-run]
-#     Open DIR/<week>.md (default docs/digests, the current ISO week in UTC) as the issue
-#     "🙋 Maintainer digest — week <n>", labelled maintainer-digest and assigned to the maintainer,
+#   send [--repo OWNER/REPO] [--date YYYY-MM-DD] [--dir DIR] [--dry-run]
+#     Open DIR/<date>.md (default docs/digests, today's UTC date) as the issue
+#     "🙋 Maintainer digest — <date>", labelled maintainer-digest and assigned to the maintainer,
 #     then close the earlier digests github-actions[bot] opened. Its Needs you section is replaced by
 #     the asks open at the moment of sending, so an ask filed after the summary was written still
 #     goes out. When the file is missing, too long or fails `check`, a short digest of the open asks
-#     goes instead, saying the summary is missing. Nothing new is sent when that week's digest is
-#     already open and assigned to him; the earlier digests are still closed, so a rerun after a failed
-#     close finishes the cleanup.
+#     goes instead, saying the summary is missing. An assigned digest from today prevents a
+#     duplicate. Quiet days neither send nor retire a digest, and consume no pending summary.
 #   needs-you [--repo OWNER/REPO]
 #     Print the Needs you section for the open asks, as `send` puts it in the digest.
 #   check FILE...
@@ -136,8 +136,24 @@ check_repo() {
 # A field is a dotted path and its shape: number, string, text (present, a string or null, as GitHub
 # writes an empty body), timestamp (a valid UTC ISO 8601 time) or logins (a list of accounts).
 required_ask='{"number":"number","title":"string","user.login":"string","html_url":"string","body":"text"}'
-required_digest='{"number":"number","title":"string","user.login":"string","created_at":"timestamp","assignees":"logins"}'
+required_digest='{"number":"number","title":"string","body":"text","state":"string","user.login":"string","created_at":"timestamp","assignees":"logins"}'
+required_comment='{"id":"number","body":"text","user.login":"string"}'
 required_created='{"number":"number","assignees":"logins"}'
+# Only a reply's own unquoted prose can answer an ask. Keep this shared by direct and numbered
+# replies; a short closing fence cannot end a longer opening fence.
+# shellcheck disable=SC2016 # Constant jq program, not shell expansion.
+reply_lines_def='def reply_lines:
+  gsub("\\r"; "") | split("\n")
+  | reduce .[] as $line ({fence:"", lines:[]};
+      ($line | sub("^ {0,3}"; "")) as $trim
+      | if .fence == "" and ($trim | test("^(?:`{3,}|~{3,})")) then
+          .fence = ($trim | capture("^(?<fence>`{3,}|~{3,})").fence)
+        elif .fence != "" then
+          .fence as $fence
+          | if ($trim | test("^" + $fence[0:1] + "{" + ($fence | length | tostring) + ",}[ \\t]*$"))
+            then .fence = "" else . end
+        else .lines += [$line] end)
+  | .lines[] | select(test("^[^> \\t]"));'
 # shellcheck disable=SC2016 # A jq program, not a shell expansion.
 conforms_def='def conforms($spec):
   . as $o | type == "object" and all($spec | to_entries[];
@@ -174,6 +190,84 @@ fetch_asks() {
     "$tmp/asks-all.json" >"$tmp/asks.json" || unknown "could not sort the asks"
   jq -r --arg who "$maintainer" 'map(select(.user.login != $who) | .number) | sort | .[]' \
     "$tmp/asks-all.json" >"$tmp/untrusted.txt" || unknown "could not sort the asks"
+  filter_answered_asks
+}
+
+# Read both open and closed delivery records; a closed email thread can receive a later answer.
+load_delivery_history() {
+  [ ! -f "$tmp/digests.json" ] || return 0
+  read_issues "repos/$repo/issues?state=all&labels=$digest_label&per_page=100" "$tmp/digests.json" "$required_digest"
+  jq -e 'all(.[]; .state == "open" or .state == "closed")' "$tmp/digests.json" >/dev/null ||
+    unknown "a digest listing has an invalid issue state"
+}
+
+# Select the maintainer's own replies, excluding disclosed agent output and sender/trigger markers.
+# This only suppresses a repeated question; it never executes or grants authority from reply text.
+# Strip only the canonical disclosure's quote level; a nested quotation is still quoted material.
+human_comments() {
+  read_issues "repos/$repo/issues/$1/comments?per_page=100" "$2" "$required_comment"
+  jq --arg who "$maintainer" "$reply_lines_def"'
+    map(select(.user.login == $who and (.body | type) == "string")
+      | select((.body | [reply_lines] | length) > 0)
+      | select((.body | gsub("\\r"; "") | split("\n") | map(select(test("\\S"))) | first
+        | sub("^[ \\t]*(?:[-*+][ \\t]+)*(?:>[ \\t]*)?(?:[-*+][ \\t]+)*"; "")
+        | test("^(?:🤖[ \\t]*)?(?:Generated by the|Generated with \\[|Sent using|@(?:codex|coderabbitai|cursor)\\b)"; "i")) | not))' \
+    "$2" >"$2.human" || unknown "could not classify maintainer replies"
+}
+
+# Remove asks already answered directly or by an unambiguous numbered reply to a delivered digest.
+# A direct maintainer reply counts as a response, leaving any follow-up decision to the engineer.
+filter_answered_asks() {
+  local number digest rc
+  : >"$tmp/answered.txt"
+  load_delivery_history
+  jq -r '.[].number' "$tmp/asks.json" >"$tmp/ask-numbers.txt"
+  while IFS= read -r number; do
+    human_comments "$number" "$tmp/ask-comments-$number.json"
+    if jq -e 'length > 0' "$tmp/ask-comments-$number.json.human" >/dev/null; then
+      printf '%s\n' "$number" >>"$tmp/answered.txt"
+    fi
+  done <"$tmp/ask-numbers.txt"
+  jq -r --arg bot "$bot" --arg who "$maintainer" '
+    .[] | select(.user.login == $bot and any(.assignees[]; .login == $who)
+      and (.title | test("^🙋 Maintainer digest — (week ([1-9]|[1-4][0-9]|5[0-3])|[0-9]{4}-[0-9]{2}-[0-9]{2})$"))
+      and (.body | type) == "string" and (.body | startswith("> 🤖 Generated by the"))) | .number' \
+    "$tmp/digests.json" >"$tmp/delivery-numbers.txt"
+  while IFS= read -r digest; do
+    jq -er --argjson n "$digest" '.[] | select(.number == $n) | .body' "$tmp/digests.json" >"$tmp/delivery-body.md"
+    awk '$0 == "## Needs you" { inside=1; next } inside && /^## / { exit } inside { print }' \
+      "$tmp/delivery-body.md" >"$tmp/delivery-asks.md"
+    jq -Rn --arg repo "$repo" '
+      [inputs | gsub("\\r$"; "")
+        | sub("^- "; "### ") | sub("\\. Held back \\(\\[#"; ". Ask [#") | sub("\\)\\)$"; ")")
+        | try capture("^### (?<index>[1-9][0-9]*)\\. Ask \\[#(?<number>[1-9][0-9]*)\\]\\(https://github\\.com/(?<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/(?<target>[1-9][0-9]*)\\)$") catch empty
+        | select(.repo == $repo and .number == .target)]
+      | group_by(.index) | if any(.[]; length != 1) then error("ambiguous ask index")
+        else map(.[0]) end' <"$tmp/delivery-asks.md" >"$tmp/answer-map.json" || unknown "ambiguous digest answer mapping"
+    # A digest that carried no currently open ask cannot answer one. Keep read failures distinct
+    # from a normal non-match, and retain all delivery numbers for summary-receipt accounting.
+    rc=0
+    jq -e --slurpfile asks "$tmp/asks.json" '
+      ([$asks[0][].number | tostring]) as $open
+      | any(.[]; .number as $number | ($open | index($number)) != null)' \
+      "$tmp/answer-map.json" >/dev/null || rc=$?
+    case "$rc" in
+      0) ;;
+      1) continue ;;
+      *) unknown "could not match delivered asks to current asks" ;;
+    esac
+    human_comments "$digest" "$tmp/digest-comments-$digest.json"
+    # Ignore quoted and fenced examples, including fences longer than three characters.
+    jq -r --slurpfile mapping "$tmp/answer-map.json" "$reply_lines_def"'
+      .[].body | reply_lines | try capture("^(?<index>[1-9][0-9]*):[ \\t]*(?<answer>\\S.*)$") catch empty
+      | .index as $index | $mapping[0][] | select(.index == $index) | .number' \
+      "$tmp/digest-comments-$digest.json.human" >"$tmp/digest-answers.txt" || unknown "could not read numbered maintainer replies"
+    cat "$tmp/digest-answers.txt" >>"$tmp/answered.txt"
+  done <"$tmp/delivery-numbers.txt"
+  jq --rawfile answered "$tmp/answered.txt" '($answered | split("\n")) as $ids
+    | map(select((.number | tostring) as $n | ($ids | index($n)) == null))' \
+    "$tmp/asks.json" >"$tmp/unanswered.json" || unknown "could not remove answered asks"
+  mv "$tmp/unanswered.json" "$tmp/asks.json"
 }
 
 # Prints the text under "### <name>" in the body file $1, up to the next heading, without the blank
@@ -286,7 +380,7 @@ render_needs_you() {
   local brief=${1:-} count i k name others number
   count="$(jq 'length' "$tmp/asks.json")"
   printf '## Needs you\n\n'
-  [ "$count" -gt 0 ] || printf 'Nothing needs you this week.\n'
+  [ "$count" -gt 0 ] || printf 'Nothing needs you right now.\n'
   [ "$brief" != brief ] || [ "$count" -eq 0 ] ||
     printf '_The asks are too long to show in full here, so open each one to read it._\n\n'
   i=0
@@ -402,12 +496,113 @@ compose_body() {
 compose_fallback() {
   {
     printf '> 🤖 Generated by the Agentic Engineer\n\n'
-    printf '**The summary is missing this week:** %s, so this digest lists only the open asks.\n\n' "$1"
+    printf '**The summary is missing for this digest:** %s, so it lists only the open asks.\n\n' "$1"
     cat "$tmp/needs-you.md"
     printf '\n## How to reply\n\n%s\n%s\n' \
       "Reply to this email with an ask's number and your choice, for example \`1: B\`, or the number, a colon and your own words, for example \`3: your words\`." \
       "Your reply posts publicly, as a comment on this issue in the public $repo repository."
   } >"$tmp/body.md"
+}
+
+# Combine a fitting oldest-first batch of reviewed summaries not recorded in an assigned delivery.
+# Receipts live in the email itself; deferred content and failed assignment advance no file cursor.
+prepare_pending_summaries() {
+  local candidate date hash count=0 marker receipt existing rc held_back=0 selected_count=0
+  : >"$tmp/sent-summary-records.jsonl"
+  while IFS= read -r existing; do
+    jq -r --argjson n "$existing" '.[] | select(.number == $n) | .body | split("\n")[1] // ""' \
+      "$tmp/digests.json" >"$tmp/receipt-line.txt"
+    marker=$(cat "$tmp/receipt-line.txt")
+    case "$marker" in
+      '<!-- maintainer-digest-summaries-v1: '*' -->')
+        receipt=${marker#'<!-- maintainer-digest-summaries-v1: '}
+        receipt=${receipt%' -->'}
+        printf '%s\n' "$receipt" | jq -c 'if type == "array" and all(.[];
+          type == "object" and (.date | type) == "string" and (.date | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))
+          and (.sha256 | type) == "string" and (.sha256 | test("^[0-9a-f]{64}$")))
+          then .[] else error("invalid summary receipt") end' >>"$tmp/sent-summary-records.jsonl" ||
+          unknown "could not read a delivered summary receipt"
+        ;;
+    esac
+  done <"$tmp/delivery-numbers.txt"
+  jq -s . "$tmp/sent-summary-records.jsonl" >"$tmp/sent-summaries.json"
+  : >"$tmp/pending-summary-records.jsonl"
+  : >"$tmp/shipped.md"
+  : >"$tmp/pending-files.txt"
+  for candidate in "$dir"/????-??-??.md; do
+    [ -e "$candidate" ] || continue
+    date=${candidate##*/}; date=${date%.md}
+    [[ "$date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && "$date" < "$day" || "$date" = "$day" ]] || continue
+    if [ ! -f "$candidate" ] || [ ! -r "$candidate" ]; then
+      unknown "cannot read $candidate"
+    fi
+    hash=$(shasum -a 256 "$candidate" | awk '{print $1}') || unknown "cannot hash $candidate"
+    if jq -e --arg date "$date" --arg hash "$hash" 'any(.[]; .date == $date and .sha256 == $hash)' "$tmp/sent-summaries.json" >/dev/null; then
+      continue
+    fi
+    rc=0
+    check_file "$candidate" || rc=$?
+    case "$rc" in
+      0) ;;
+      1) held_back=1; reason="a pending summary failed the digest check, so it was held back"; continue ;;
+      *) unknown "cannot read $candidate" ;;
+    esac
+    printf '%s\n' "$candidate" >>"$tmp/pending-files.txt"
+    jq -nc --arg date "$date" --arg hash "$hash" '{date:$date,sha256:$hash}' >>"$tmp/pending-summary-records.jsonl"
+    count=$((count + 1))
+  done
+  if [ "$count" -eq 0 ]; then
+    [ -n "$reason" ] || reason="no pending reviewed summary is available for $day"
+    return 0
+  fi
+  reason=""
+  : >"$tmp/selected-shipped.md"
+  : >"$tmp/selected-records.jsonl"
+  while IFS= read -r candidate; do
+    cp "$tmp/selected-shipped.md" "$tmp/trial-shipped.md"
+    if [ "$count" -gt 1 ]; then
+      date=${candidate##*/}; printf '**%s**\n\n' "${date%.md}" >>"$tmp/trial-shipped.md"
+    fi
+    awk '{ sub(/\r$/, ""); line=$0; sub(/[ \t]+$/, "", line) }
+      line == "## What shipped" { inside=1; next } inside && line ~ /^## / { exit } inside { print }' \
+      "$candidate" >>"$tmp/trial-shipped.md"
+    cp "$tmp/selected-records.jsonl" "$tmp/trial-records.jsonl"
+    date=${candidate##*/}; date=${date%.md}
+    jq -ec --arg date "$date" 'select(.date == $date)' "$tmp/pending-summary-records.jsonl" >>"$tmp/trial-records.jsonl" ||
+      unknown "could not select pending summary receipts"
+    jq -sc . "$tmp/trial-records.jsonl" >"$tmp/summary-receipt.json" || unknown "could not compose summary receipts"
+    cp "$tmp/trial-shipped.md" "$tmp/shipped.md"
+    if [ "$held_back" -eq 1 ]; then
+      printf '\n> ⚠️ A pending changelog was held back because it did not pass its checks.\n' >>"$tmp/shipped.md"
+    fi
+    if [ "$((selected_count + 1))" -lt "$count" ]; then
+      printf '\n> More changelog content remains pending for a later ask.\n' >>"$tmp/shipped.md"
+    fi
+    receipt=$(cat "$tmp/summary-receipt.json")
+    awk -v shipped="$tmp/shipped.md" -v receipt="$receipt" '
+      { sub(/\r$/, ""); header=$0; sub(/[ \t]+$/, "", header) }
+      !started && header == "" { next }
+      !started { print header; print "<!-- maintainer-digest-summaries-v1: " receipt " -->"; started=1; next }
+      header == "## What shipped" { print header; while ((getline line < shipped) > 0) print line; skipping=1; next }
+      skipping && header ~ /^## / { skipping=0 }
+      !skipping { print }' "$candidate" >"$tmp/combined-summary.md"
+    compose_body "$tmp/combined-summary.md" >"$tmp/body.md"
+    if too_long "$tmp/body.md"; then
+      # Keep a completed fitting batch. If this one cannot fit even alone, try a later summary
+      # instead of blocking every smaller summary behind it. No receipt is recorded for the skip.
+      [ "$selected_count" -eq 0 ] || break
+      continue
+    fi
+    cp "$tmp/trial-shipped.md" "$tmp/selected-shipped.md"
+    cp "$tmp/trial-records.jsonl" "$tmp/selected-records.jsonl"
+    cp "$tmp/body.md" "$tmp/accepted-body.md"
+    selected_count=$((selected_count + 1))
+  done <"$tmp/pending-files.txt"
+  if [ "$selected_count" -eq 0 ]; then
+    reason="the combined pending summaries were too long to send"
+    return 0
+  fi
+  cp "$tmp/accepted-body.md" "$tmp/body.md"
 }
 
 # Tests the conservative byte limit before an issue body is submitted to GitHub.
@@ -447,12 +642,11 @@ cmd_needs_you() {
   finish "$found"
 }
 
-# Closes every open digest the bot opened before the requested week ended, except #$1 (0 keeps none);
-# with $2 = 1 it only says so. A digest opened after that week is a later one, so a backfill of an
-# earlier week never retires it.
+# Close only open bot digests through the requested UTC date, except #$1 (0 keeps none).
+# A preview reports the plan, and a backfill never closes a later digest.
 close_earlier() {
   local keep=$1 dry=$2 n
-  jq -r --arg bot "$bot" --argjson keep "$keep" --argjson end "$week_end" 'map(select(.user.login == $bot and .number != $keep
+  jq -r --arg bot "$bot" --argjson keep "$keep" --argjson end "$send_end" 'map(select(.user.login == $bot and .state == "open" and .number != $keep
       and (.created_at | fromdateiso8601) < $end) | .number) | .[]' \
     "$tmp/digests.json" >"$tmp/earlier.txt" || unknown "could not list the earlier digests"
   while IFS= read -r n; do
@@ -467,64 +661,52 @@ close_earlier() {
   done <"$tmp/earlier.txt"
 }
 
-# Sends or previews one week's digest, retiring earlier bot digests only after confirmed assignment.
+# Send a dated digest when due; retire earlier bot digests only after confirmed assignment.
 cmd_send() {
-  local week="" dir="" dry_run=0 week_number week_end title file reason="" rc existing number assigned=1
+  local day="" dir="" dry_run=0 day_start send_end title file reason="" existing number assigned=1
   repo="${GITHUB_REPOSITORY:-}"
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --repo) need_value "$@"; repo=$2; shift 2 ;;
-      --week) need_value "$@"; week=$2; shift 2 ;;
+      --date) need_value "$@"; day=$2; shift 2 ;;
       --dir) need_value "$@"; dir=$2; shift 2 ;;
       --dry-run) dry_run=1; shift ;;
       *) usage "unknown send option: $1" ;;
     esac
   done
   check_repo
-  [ -n "$week" ] || week="$(date -u +%G-W%V)"
-  [[ "$week" =~ ^[0-9]{4}-W(0[1-9]|[1-4][0-9]|5[0-3])$ ]] || usage "--week must look like 2026-W43"
+  [ -n "$day" ] || day="$(date -u +%Y-%m-%d)"
+  [[ "$day" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || usage "--date must look like 2026-10-24"
+  day_start="$(jq -en --arg day "$day" '$day + "T00:00:00Z" | fromdateiso8601
+    | select(strftime("%Y-%m-%d") == $day)')" || usage "--date must be a real UTC date"
+  send_end=$((day_start + 86400))
   [ -n "$dir" ] || dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/docs/digests"
-  week_number=$((10#${week##*-W}))
-  # The end of the ISO week: its Monday is found from 4 January, which is always in week 1.
-  week_end="$(jq -n --argjson y "$((10#${week%%-W*}))" --argjson w "$week_number" '
-    ("\($y)-01-04T00:00:00Z" | fromdateiso8601) as $j4 | ((($j4 | gmtime | .[6]) + 6) % 7) as $d
-    | $j4 - $d * 86400 + $w * 604800')" || unknown "could not work out when week $week ends"
-  title="🙋 Maintainer digest — week $week_number"
-  file="$dir/$week.md"
+  title="🙋 Maintainer digest — $day"
+  file="$dir/$day.md"
 
-  read_issues "repos/$repo/issues?state=open&labels=$digest_label&per_page=100" "$tmp/digests.json" "$required_digest"
+  load_delivery_history
+  fetch_asks
+  if [ "$(jq 'length' "$tmp/asks.json")" -eq 0 ]; then
+    echo "NO-ASKS: no unanswered asks; pending changelogs remain for the next ask"
+    finish 0
+  fi
   # A digest GitHub did not assign to him was never emailed, so it does not count as sent. The title
-  # names only the week, so a digest counts only when it was opened in the last eight days: one left
-  # open from the same week a year ago must not hold back this year's.
-  existing="$(jq -r --arg title "$title" --arg bot "$bot" --arg who "$maintainer" '
-    map(select(.title == $title and .user.login == $bot and any(.assignees[]; .login == $who)
-      and (.created_at | fromdateiso8601) > (now - 8 * 86400)) | .number)
-    | first // empty' "$tmp/digests.json")"
+  # may name a legacy ISO week or a date. Use its creation date, not its title or open state, to
+  # prevent a second delivery on the same UTC day. A future delivery suppresses a backfill.
+  existing="$(jq -r --arg bot "$bot" --arg who "$maintainer" --argjson start "$day_start" '
+    map(select(.user.login == $bot and any(.assignees[]; .login == $who)
+      and (.title | test("^🙋 Maintainer digest — (week ([1-9]|[1-4][0-9]|5[0-3])|[0-9]{4}-[0-9]{2}-[0-9]{2})$"))
+      and (.created_at | fromdateiso8601) >= $start))
+    | sort_by(.created_at) | last | .number // empty' "$tmp/digests.json")"
   if [ -n "$existing" ]; then
-    echo "ALREADY-SENT #$existing: this week's digest is already open, so nothing is sent"
-    # A rerun after a failed close still retires the earlier digests, keeping this week's open.
+    echo "ALREADY-SENT #$existing: a digest was already delivered for this UTC day"
+    # A rerun after a failed close still retires earlier open digests, keeping the newest one.
     close_earlier "$existing" "$dry_run"
     finish "$found"
   fi
-  fetch_asks
   render_needs_you >"$tmp/needs-you.md"
 
-  if [ ! -e "$file" ]; then
-    reason="no summary was written for week $week_number"
-  elif [ ! -f "$file" ] || [ ! -r "$file" ]; then
-    unknown "cannot read $file"
-  else
-    rc=0
-    check_file "$file" || rc=$?
-    case "$rc" in
-      0)
-        compose_body "$file" >"$tmp/body.md"
-        ! too_long "$tmp/body.md" || reason="the summary for week $week_number was too long to send"
-        ;;
-      1) reason="the summary for week $week_number failed the digest check, so it was held back" ;;
-      *) unknown "cannot read $file" ;;
-    esac
-  fi
+  prepare_pending_summaries
   if [ -n "$reason" ]; then
     finding "FALLBACK: $reason"
     compose_fallback "$reason"
@@ -553,8 +735,8 @@ cmd_send() {
     unknown "an unexpected or incomplete response when opening the digest issue"
   number="$(jq -r '.number' "$tmp/created.json")" || unknown "an unexpected response when opening the digest issue"
   echo "SENT #$number: \"$title\" from ${reason:+the fallback because }${reason:-$file}"
-  # GitHub drops an assignee it cannot assign without an error, and then no email goes out. Last
-  # week's digest then stays open: it is still the newest one he received.
+  # GitHub drops an assignee it cannot assign without an error, and then no email goes out. The
+  # earlier digest then stays open: it is still the newest one he received.
   if ! jq -e --arg who "$maintainer" 'any(.assignees[]; .login == $who)' "$tmp/created.json" >/dev/null; then
     finding "NOT-ASSIGNED #$number: GitHub did not assign $maintainer, so the digest was not emailed"
     assigned=0
