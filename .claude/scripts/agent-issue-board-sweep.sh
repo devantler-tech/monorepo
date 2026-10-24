@@ -46,8 +46,8 @@
 #   mention it.
 #
 # FAIL-CLOSED
-#   A failed discovery is never treated as "no issues": an empty result is only believed when the
-#   search command itself succeeded. A `board-add.sh` failure on one issue does not abort the
+#   A failed discovery is never treated as "no issues": an empty filtered result also needs a
+#   complete, same-scope unfiltered zero. A `board-add.sh` failure on one issue does not abort the
 #   sweep -- the remaining issues are still boarded -- but the script exits non-zero so the
 #   failure is visible rather than absorbed. A result set sitting exactly AT the --limit cap is
 #   treated as truncated and fails closed, because `--limit` bounds what is fetched rather than
