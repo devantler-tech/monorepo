@@ -8,8 +8,8 @@
 # fixture depended on that pattern rather than on some other path through the script.
 #
 # Fixtures are throwaway git repositories under mktemp: the guard scans TRACKED files, so each
-# fixture stages what it wants seen. The repository-wide sweep is a separate CI step behind
-# ENFORCE_PYTHON_BAN_GUARD; running it here would silently enforce the rule even with that flag off.
+# fixture stages what it wants seen. The repository-wide sweep is its own CI step, so this suite
+# stays a test of the guard and never doubles as the sweep of this repository.
 #
 # python-ban-guard: allow-file — this file quotes every Python shape the guard rejects as fixture text.
 set -Eeuo pipefail
@@ -66,17 +66,6 @@ run() {
   rc=0
   out="$(bash "${GUARD:-$guard}" "$1" 2>&1)" || rc=$?
 }
-
-# ---------------------------------------------------------------------------
-# 0. Release-flag expiry (feature-flag-first: the CI gate ships latent behind
-#    ENFORCE_PYTHON_BAN_GUARD, and a release flag must not become permanent debt).
-today="$(date -u +%Y-%m-%d)"
-if [[ "$today" < "2026-11-01" ]]; then
-  report "release flag ENFORCE_PYTHON_BAN_GUARD is within its window (expires 2026-10-31)" yes
-else
-  report "release flag ENFORCE_PYTHON_BAN_GUARD is within its window (expires 2026-10-31)" no \
-    "the flag is overdue: activate the sweep and remove the gate, then delete this check"
-fi
 
 # ---------------------------------------------------------------------------
 # 1. Positive control: a tracked bash script is clean.
@@ -353,6 +342,31 @@ report "a bare allow-file marker is itself a finding" \
 r="$(mkrepo marker-control)"; addf "$r" tools/about.sh '#!/usr/bin/env bash' '# a comment that is not the marker' "python3 -c 'print(1)'"
 run "$r"
 report "control: without the marker the same file flags" "$([[ $rc -eq 1 && "$out" == *'Python invocation `python3 -c`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+# The compatibility heuristic reads the same declaration from an unquoted `#` comment, so a data
+# file whose lines only look like commands can say so (#3221: the public-domain list's `py` line).
+# The `do` line is a real domain too, and a bare `do` is not valid shell, so these files take the
+# compatibility route rather than the shell parser, as the real domain list does.
+r="$(mkrepo marker-data)"; addf "$r" data/domains.txt '# python-ban-guard: allow-file — domain data; py is a country code' 'do' 'py' 'qa'
+run "$r"
+report "a data file's comment declaration exempts it on the compatibility route" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo marker-data-control)"; addf "$r" data/domains.txt '# domain data' 'do' 'py' 'qa'
+run "$r"
+report "control: without the declaration the same data file flags its py line" \
+  "$([[ $rc -eq 1 && "$out" == *'domains.txt:3: Python invocation `py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+# The shell parser stops at a bare marker; only the compatibility route reports both lines, so this
+# case also proves which route read the file.
+r="$(mkrepo marker-data-bare)"; addf "$r" data/domains.txt '# python-ban-guard: allow-file' 'do' 'py'
+run "$r"
+report "a bare declaration on the compatibility route is itself a finding and exempts nothing" \
+  "$([[ $rc -eq 1 && "$out" == *'domains.txt:1: bare'*'carries no reason'* && "$out" == *'domains.txt:3: Python invocation `py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo marker-data-quoted)"; addf "$r" data/run.txt "echo '# python-ban-guard: allow-file — quoted text is not a comment'" 'do' 'python3 --version'
+run "$r"
+report "a quoted declaration on the compatibility route exempts nothing" \
+  "$([[ $rc -eq 1 && "$out" == *'run.txt:3: Python invocation `python3 --version`'* ]] && echo yes || echo no)" "rc=$rc: $out"
 
 # ---------------------------------------------------------------------------
 # 7b. Command position: a mention as an ARGUMENT or in a YAML name is not an invocation,
