@@ -89,6 +89,19 @@ case "$1 ${2:-}" in
       | map(with_entries(select(.key as $k | $asked | index($k))))' "${GH_RESULTS}" | jq -r "$filter"
     exit 0
     ;;
+  "api search/issues")
+    printf 'zero-control\n' >> "${GH_CALL_LOG}"
+    [[ "$*" != *archived:false* && " $* " == *" per_page=1 "* ]] || exit 64
+    case "${GH_ZERO_CONTROL:-zero}" in
+      fail) exit 1 ;;
+      nonzero) echo '{"total_count":1,"incomplete_results":false,"items":[{"number":9}]}' ;;
+      missing) echo '{"total_count":0,"items":[]}' ;;
+      incomplete) echo '{"total_count":0,"incomplete_results":true,"items":[]}' ;;
+      zero) echo '{"total_count":0,"incomplete_results":false,"items":[]}' ;;
+      *) exit 64 ;;
+    esac
+    exit 0
+    ;;
   "api graphql")
     case " $* " in
       *" --input - "*)
@@ -298,6 +311,16 @@ report "empty successful sweep exits 0 with no board-add call" \
   "$([ "$rc" -eq 0 ] && [ ! -s "$BOARD_LOG" ] && echo yes || echo no)" "rc=$rc log=[$(cat "$BOARD_LOG")]"
 report "empty sweep reports discovered=0" \
   "$(grep -q 'discovered=0 verified=0 boarded=0' <<<"$out" && echo yes || echo no)" "$out"
+report "a genuine empty sweep performs one bounded unfiltered control" \
+  "$([ "$(count_calls zero-control)" -eq 1 ] && echo yes || echo no)" "$out"
+run_sweep_without_author "$sweep" --owner fixture-org --author fixture-maintainer
+report "the zero control preserves the selected owner and author" \
+  "$(grep -qF 'org:"fixture-org"' "$GH_ARGV_LOG" && grep -qF 'author:"fixture-maintainer"' "$GH_ARGV_LOG" && echo yes || echo no)" "$out"
+for mode in nonzero missing incomplete fail; do
+  GH_ZERO_CONTROL="$mode" run_sweep "$sweep"
+  report "unconfirmed filtered zero ($mode) is UNKNOWN before any board write" \
+    "$([ "$rc" -eq 2 ] && [ ! -s "$BOARD_LOG" ] && ! grep -q 'discovered=0' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+done
 
 # 4. FAIL-CLOSED: a failed discovery is not an empty one. This is the control for case 3 —
 #    both produce no output from `gh`, and only the exit status separates them.

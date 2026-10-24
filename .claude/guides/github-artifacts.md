@@ -9,6 +9,14 @@
 - **PR titles MUST be Conventional Commits** (`fix:`/`feat:`/`chore:`/`docs:`/`ci:`/`refactor:`/
   `test:`). Every repo squash-merges on the PR title → changelog/release; a bracket prefix corrupts
   it. Use **labels** + `claude/*` branch names for attribution/dedup, never a title prefix.
+- **Closing keywords belong only in the PR body, never in a commit message** (monorepo#3525). A squash
+  merge copies every commit message on the branch into the squash commit, and GitHub closes each
+  issue a `Fixes`, `Closes` or `Resolves` there names, whatever the body says: that is how #2720
+  closed Security parent #2609 while its body said only `Part of #2609`. In a commit message, name an
+  issue with `Part of #N` or a plain `#N`; the body's `Fixes #N` still closes its issue on merge.
+  [`squash-closing-keywords.sh`](../scripts/squash-closing-keywords.sh) fails a PR whose commits would
+  close an issue its body only marks `Part of`, and its remedy moves the keyword to the body, never a
+  rewrite of the branch's history.
 - Open code/manifest PRs as **drafts** (`gh pr create --draft`).
 - **PR bodies are written for the maintainer as PROJECT MANAGER — high-level, SHORT, ZERO code
   detail** (maintainer direction 2026-07-03; codified org-wide in `devantler-tech/.github`'s

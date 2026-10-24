@@ -430,6 +430,62 @@ fi
 contains "--help lists the test seams (sed range covers the whole header)" \
   "$tmp/help.txt" "FLOW_WIP_GUIDE"
 
+# Exercise live-fetch code with complete-looking zero replies; no fixture override
+# or native gh is allowed to hide the missing unfiltered confirmation.
+mkdir "$tmp/zero-bin"
+cat >"$tmp/zero-bin/gh" <<'SHIM'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FLOW_ZERO_CALLS"
+filter=''; previous=''
+for arg in "$@"; do
+  [ "$previous" != --jq ] || filter=$arg
+  previous=$arg
+done
+if [[ "$*" == *archived:false* ]]; then
+  body='{"total_count":0,"incomplete_results":false,"items":[]}'
+else
+  [[ " $* " == *"per_page=1 "* ]] || exit 64
+  case "$FLOW_ZERO_CONTROL" in
+    fail) exit 1 ;;
+    nonzero) body='{"total_count":1,"incomplete_results":false,"items":[{"number":9}]}' ;;
+    missing) body='{"total_count":0,"items":[]}' ;;
+    incomplete) body='{"total_count":0,"incomplete_results":true,"items":[]}' ;;
+    zero) body='{"total_count":0,"incomplete_results":false,"items":[]}' ;;
+    *) exit 64 ;;
+  esac
+fi
+printf '%s\n' "$body" | jq -r "$filter"
+SHIM
+printf '#!/usr/bin/env bash\nexit 0\n' >"$tmp/zero-bin/sleep"
+chmod +x "$tmp/zero-bin/gh" "$tmp/zero-bin/sleep"
+for mode in nonzero missing incomplete fail zero; do
+  : >"$tmp/zero-calls"
+  rc=0
+  PATH="$tmp/zero-bin:$PATH" FLOW_SUBSTANTIVE_JSON='' FLOW_ZERO_CONTROL="$mode" \
+    FLOW_ZERO_CALLS="$tmp/zero-calls" bash "$tool" --section age >"$tmp/zero-out" 2>"$tmp/zero-err" || rc=$?
+  if [ "$mode" = zero ]; then
+    if [ "$rc" -eq 0 ] && [ "$(grep -Ec 'per_page=1([[:space:]]|$)' "$tmp/zero-calls")" -eq 4 ]; then
+      pass 'all four genuinely empty types are confirmed'
+    else
+      fail 'genuine empty types were not confirmed'
+    fi
+    for type in Feature Bug Security Performance; do
+      if [ "$(grep -c "type:$type" "$tmp/zero-calls")" -eq 2 ]; then
+        pass "the zero control preserves $type scope"
+      else
+        fail "the zero control lost $type scope"
+      fi
+    done
+  else
+    if [ "$rc" -eq 2 ] && grep -q 'UNMEASURED' "$tmp/zero-out"; then
+      pass "unconfirmed age discovery ($mode) is UNKNOWN"
+    else
+      fail "unconfirmed age discovery ($mode) was trusted (rc=$rc)"
+    fi
+  fi
+done
+
 echo ""
 if [ "$failures" -gt 0 ]; then
   echo "$failures test(s) FAILED"

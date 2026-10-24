@@ -47,8 +47,8 @@
 #   free-text search for a marker string returns unrelated issues that merely mention it.
 #
 # FAIL-CLOSED
-#   A failed discovery is never treated as "no issues": an empty result is only believed when the
-#   search command itself succeeded. A `board-add.sh` failure on one issue does not abort the
+#   A failed discovery is never treated as "no issues": an empty filtered result also needs a
+#   complete, same-scope unfiltered zero. A `board-add.sh` failure on one issue does not abort the
 #   sweep -- the remaining issues are still boarded -- but the script exits non-zero so the
 #   failure is visible rather than absorbed. A full page whose issues all share one creation time
 #   cannot be advanced past, and a discovery that has not ended within its page bound may hold
@@ -224,7 +224,7 @@ while :; do
     exit 2
   fi
   # `--jq` on an empty result set prints nothing, so an empty page means no issue from a search
-  # that SUCCEEDED. That is the only path on which an empty sweep is believed.
+  # that SUCCEEDED. An empty census is still confirmed by the unfiltered control below.
   if [ -z "$page" ]; then break; fi
   found_rows="${found_rows}${page}"$'\n'
   [ "$(printf '%s\n' "$page" | grep -c .)" -ge "$limit" ] || break
@@ -247,6 +247,20 @@ done
 # The pages overlap by the issues created in the second one page ends on: keep each issue once, in
 # the order it was first returned, which is oldest first.
 found="$(awk -F'\t' 'NF && !seen[$1]++ { print $1 "\t" $2 }' <<<"$found_rows")"
+
+# A successful filtered zero is unproven until an unfiltered, complete control agrees (#4437).
+# Count only: archived control rows must never reach board-add or membership checks.
+if [ -z "$found" ]; then
+  zero_query=$(jq -rn --arg owner "$owner" --arg author "$author" \
+    '"org:\($owner|@json) is:issue is:open author:\($author|@json)"') || exit 2
+  if ! zero_control=$(gh api search/issues --method GET -f q="$zero_query" -f per_page=1 2>"$err_file") ||
+    ! printf '%s' "$zero_control" | jq -es 'length == 1 and (.[0] |
+      .incomplete_results == false and .total_count == 0 and (.items | type == "array" and length == 0))' \
+      >/dev/null 2>&1; then
+    echo 'agent-issue-board-sweep: UNKNOWN — empty archived-filter discovery not confirmed (nothing swept)' >&2
+    exit 2
+  fi
+fi
 discovered_count=0
 [ -z "$found" ] || discovered_count="$(printf '%s\n' "$found" | grep -c .)"
 

@@ -403,9 +403,11 @@ else
   # The stored sweep is named and headed by the arguments that decide what a sweep reads, so a sweep
   # for other arguments is never reused. Arguments that cannot be a safe file name are not cached.
   # Version the file name too: a still-running older collector must not overwrite this format.
-  cache_file="" cache_head="# review-lane-health sweep-v2 org=$org since=$since limit=$limit at="
+  # v3 excludes unconfirmed empty sweeps written by older concurrent checkouts.
+  # Conditional HTTP entries retain their independently revalidated v1 format.
+  cache_file="" cache_head="# review-lane-health sweep-v3 org=$org since=$since limit=$limit at="
   if [ "$cache_seconds" -gt 0 ] && [[ "$org" =~ ^[A-Za-z0-9._-]+$ && "$since" =~ ^[0-9-]+$ ]]; then
-    cache_file="$cache_dir/$org.$since.$limit.v2.events"
+    cache_file="$cache_dir/$org.$since.$limit.v3.events"
   fi
   # cache_usable — true only for a private regular file of this user whose first line names these
   # arguments and a sweep time within the lifetime, and whose every other line is a well-formed event.
@@ -436,6 +438,17 @@ else
     gh search prs --owner "$org" --updated ">=$since" --archived=false --sort updated --order desc \
       --limit "$limit" --json repository,number \
       --jq '.[] | "\(.repository.name) \(.number)"' >"$tmp/prs" || unknown "cannot search $org pull requests"
+    if [ ! -s "$tmp/prs" ]; then
+      # The archived qualifier has returned complete-looking false zeros (#4437).
+      # Confirm existence only: never collect or act on archived control rows.
+      [[ "$since" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || unknown 'zero-control date is not ISO-8601'
+      zero_query=$(jq -rn --arg org "$org" --arg since "$since" \
+        '"org:\($org|@json) is:pr updated:>=\($since)"') || unknown 'cannot construct zero control'
+      zero_control=$(gh api search/issues --method GET -f q="$zero_query" -f per_page=1) || unknown 'zero control read failed'
+      printf '%s' "$zero_control" | jq -es 'length == 1 and (.[0] |
+        .incomplete_results == false and .total_count == 0 and (.items | type == "array" and length == 0))' \
+        >/dev/null 2>&1 || unknown 'empty archived-filter discovery not confirmed'
+    fi
     collect_prs
     echo "review-lane-health: $http_reads REST reads, $http_replays answered 304 Not Modified (not charged)" >&2
     if [ "$http_usable" = 1 ]; then
