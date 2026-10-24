@@ -1664,26 +1664,11 @@ jobs:
       # ablation proving the flagged fixture depends on the invocation pattern.
       - name: Self-test the guard
         run: bash .claude/scripts/python-ban-guard.test.sh
-      # ENFORCEMENT IS LATENT, per feature-flag-first delivery: a static scan over
-      # every tracked file can block a valid change on a false positive, and
-      # gating the whole repository on that judgement is the risk the flag
-      # holds back. The sweep gates a PR only while the
-      # `ENFORCE_PYTHON_BAN_GUARD` repository variable is `true`; activation is
-      # a separate, reversible step once the guard has run clean on real
-      # traffic. The self-test above is NOT gated. This is a RELEASE flag:
-      # #3221 owns activation and removal, and it expires 2026-10-31, from
-      # which date `python-ban-guard.test.sh` fails so the flag cannot become
-      # permanent debt without someone deciding to keep it.
+      # The repository-wide sweep gates every pull request. A false positive is
+      # fixed in the guard, or declared on the file with the allow-file marker
+      # and its reason; the sweep is never switched off to make a change pass.
       - name: Reject Python on the repository's executable surfaces
-        if: vars.ENFORCE_PYTHON_BAN_GUARD == 'true'
         run: bash .claude/scripts/python-ban-guard.sh
-      # The OFF state is a real state, so it reports rather than silently doing
-      # nothing: a run in which the sweep did not execute says so.
-      - name: Report that enforcement is latent
-        if: vars.ENFORCE_PYTHON_BAN_GUARD != 'true'
-        run: |
-          echo "python-ban-guard: enforcement is LATENT (ENFORCE_PYTHON_BAN_GUARD is not 'true')."
-          echo "The self-test ran; the repository-wide sweep did not gate this PR."
 
   test-maintainer-preflight:
     name: Test maintainer preflight contract

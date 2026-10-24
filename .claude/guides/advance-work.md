@@ -347,9 +347,8 @@ steps, tooling, generators, test harnesses, and one-off helpers. Concretely:
   retain that scan. The guard names
   this rule and the bash/Go alternative, honours the embedded-interpreter carve-out by invocation
   shape, and exempts a file about the form only when a parsed comment declares
-  `python-ban-guard: allow-file — <reason>`. The sweep ships latent
-  behind the `ENFORCE_PYTHON_BAN_GUARD` repository variable until #3221 activates it; its
-  self-test runs on every PR regardless.
+  `python-ban-guard: allow-file — <reason>`. The sweep and its self-test
+  gate every PR.
 - **Go is the preferred scripting language; bash is a legitimate starting point.** Write a small,
   simple script in bash; once it grows in size, logic, or reuse, **migrate it to Go** rather than
   letting bash sprawl — treat "bash first, Go when it grows" as the standard maturation path, and
