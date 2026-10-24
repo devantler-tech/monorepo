@@ -17,12 +17,13 @@ concurrency:
 
 jobs:
   urgent:
+    name: Deliver urgent maintainer asks
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'maintainer-ask-urgent'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: read
-      issues: write
+      contents: read # Read the reviewed helper from main.
+      issues: write # Assign eligible asks and record delivery/cap markers.
     steps:
       - name: Require the reviewed default branch
         env:

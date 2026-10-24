@@ -160,6 +160,10 @@ func parkedDigestReport(pulls []issue, o options) (string, bool, error) {
 					return "", false, err
 				}
 			}
+			if askState == "unlabelled" {
+				_, _ = fmt.Fprintf(&report, "%-10s %s#%d  record=ASK-UNLABELLED\n", "ACTIONABLE", item.Repo, item.Number)
+				continue
+			}
 			if askState != "open" && askState != "closed" {
 				return "", false, errors.New("linked ask state is unproven -- UNKNOWN")
 			}

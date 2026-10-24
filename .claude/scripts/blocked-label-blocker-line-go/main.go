@@ -397,6 +397,9 @@ func classify(line string, today time.Time, maxAge int64) (string, bool) {
 	if ask[2] != "" && ask[1] != "digest" {
 		return "NO-ASK", legacy
 	}
+	if ask[1] == "digest" && ask[2] == "" {
+		return "NO-ASK", legacy
+	}
 	askDate, err := civilDate(ask[3])
 	if err != nil || askDate.After(today) {
 		return "MALFORMED", legacy

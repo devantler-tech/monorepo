@@ -6,6 +6,7 @@
 > it before escalating anything to the maintainer and before authoring a PR body, issue or comment.
 
 ## Maintainer channels
+
 Three channels reach the maintainer:
 
 1. **A draft PR** — the default. Make the engineering decision and ship it for his steering.
@@ -56,12 +57,14 @@ notification. Leave their threads available for replies.
 **Urgent means a public site or production outage, or an escalated sibling lane, that only he can
 clear.** Label the existing ask `maintainer-ask-urgent` and dispatch
 `maintainer-ask-urgent.yaml` on `main` when needed. Label events created by a workflow token do
-not start another workflow, so a bot-created urgent ask requires that explicit dispatch.
+not start another workflow, so a bot-applied urgent label requires that explicit dispatch.
 The workflow sweeps the whole queue under the daily sender's shared concurrency group. It permits
 at most three urgent bot assignments per UTC day, using assignment events rather than issue creation
 time. Closed or relabelled asks still consume the cap. A retry never toggles an assignment.
 A cap-delayed ask stays open and leads the next digest. A failed or partial read is UNKNOWN,
 never an empty queue or proof of delivery.
+An ask whose delivery cannot be proven is skipped without a resend; later eligible asks still use
+the proven daily budget. The completed sweep returns UNKNOWN until every such ask is reconciled.
 
 **Read and reconcile replies every run, before selecting work or sending an ask.** Read current ask
 threads and every bot digest updated since the previous run, open or closed. On the first run or

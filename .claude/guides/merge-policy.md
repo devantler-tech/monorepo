@@ -168,8 +168,9 @@ comment without posting it.
 `maintainer-ask` issue in this monorepo with the question, options, recommendation and default.
 Read replies first; never repeat an answered ask. Use `--asked digest <YYYY-MM-DD> --ask-issue
 devantler-tech/monorepo#N`. The helper verifies that the linked issue is open, trusted and labelled
-before writing. A missing ask is `ASK-ISSUE-MISSING`, a closed ask is `ASK-CLOSED`, and unreadable
-intake is UNKNOWN; none is a parked PR. The record is intake, never proof of bot notification.
+before writing. A missing ask is `ASK-ISSUE-MISSING`, a closed ask is `ASK-CLOSED`, a missing
+`maintainer-ask` label is `ASK-UNLABELLED`, and unreadable intake is UNKNOWN; none is a parked PR.
+The record is intake, never proof of bot notification.
 
 On every later run, **re-verify the blocker against live state and edit that comment in place**
 (run `park` again with today's result: it edits the one record and never posts a second):

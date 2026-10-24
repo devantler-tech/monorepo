@@ -747,7 +747,7 @@ cmd_send() {
 # GitHub replaces pending concurrency runs, so the triggering issue alone is not a durable queue.
 # Assignment events are the ledger, including closed/relabelled issues and ambiguous retries.
 cmd_urgent() {
-  local dry=0 number count today
+  local dry=0 number count today unproven=0
   repo="${GITHUB_REPOSITORY:-}"
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -794,10 +794,14 @@ cmd_urgent() {
       continue
     fi
     if jq -e 'any(.labels[]; .name == "maintainer-ask-delivered")' "$tmp/current.json" >/dev/null; then
-      unknown "urgent #$number has a delivery marker outside the readable history; never resend it"
+      finding "UNPROVEN #$number: delivery marker outside the readable history; never resend it"
+      unproven=1
+      continue
     fi
     if jq -e --arg who "$maintainer" 'any(.assignees[]; .login == $who)' "$tmp/current.json" >/dev/null; then
-      unknown "urgent #$number is assigned without a proven bot delivery; never toggle its assignment"
+      finding "UNPROVEN #$number: assigned without a proven bot delivery; never toggle its assignment"
+      unproven=1
+      continue
     fi
     if [ "$count" -ge 3 ]; then
       if [ "$dry" -eq 0 ] && ! jq -e 'any(.labels[]; .name == "maintainer-ask-cap-delayed")' "$tmp/current.json" >/dev/null; then
@@ -837,6 +841,9 @@ cmd_urgent() {
     fi
     count=$((count + 1))
   done <"$tmp/urgent-numbers.txt"
+  if [ "$unproven" -ne 0 ]; then
+    unknown "some urgent asks have unproven delivery; other eligible asks were processed"
+  fi
   finish "$found"
 }
 

@@ -134,7 +134,7 @@ func readDigestAsk(reference, org string) (string, error) {
 			return target.State, nil
 		}
 	}
-	return "closed", nil
+	return "unlabelled", nil
 }
 
 func parkRun(args []string, stdout, stderr io.Writer) int {
@@ -201,6 +201,9 @@ func parkRun(args []string, stdout, stderr io.Writer) int {
 		state, err := readDigestAsk(c.askIssue, org)
 		if err != nil {
 			return refuse(nothing, err)
+		}
+		if state == "unlabelled" {
+			return refuse(nothing, errors.New("the linked maintainer ask is missing maintainer-ask label"))
 		}
 		if state != "open" {
 			return refuse(nothing, errors.New("the linked maintainer ask is not open"))

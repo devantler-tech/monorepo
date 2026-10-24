@@ -14,7 +14,7 @@ This supersedes ADR 0009's email-arrival prerequisite and Slack exception for ma
 It also supersedes the older separate App-comment publisher proposed in #4054; no additional App,
 credential or second inbox is needed for this accepted workflow.
 
-The reviewed workflow assigns urgent asks as github-actions[bot], with a global cap of three per
+The reviewed workflow assigns urgent asks as `github-actions[bot]`, with a global cap of three per
 UTC day and durable assignment-history accounting. Daily and urgent delivery share serialization.
 An authority-parked PR links its open ask issue; missing intake remains actionable. Agents read and
 reconcile authenticated replies, including older closed digest threads, before sending anything.
