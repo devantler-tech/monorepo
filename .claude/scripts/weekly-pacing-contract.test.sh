@@ -30,8 +30,14 @@ fail() {
   exit 1
 }
 
-[ -r "${agents}" ] || fail "cannot read ${agents}"
-[ -r "${guide}" ] || fail "cannot read ${guide}"
+# An unreadable input is UNKNOWN, not a contract finding (exit 2, per this directory's AGENTS.md).
+unknown() {
+  echo "weekly-pacing contract: UNKNOWN — $*" >&2
+  exit 2
+}
+
+[ -r "${agents}" ] || unknown "cannot read ${agents}"
+[ -r "${guide}" ] || unknown "cannot read ${guide}"
 
 sentinel='@@END-ANCHOR-SEEN@@'
 
@@ -77,6 +83,7 @@ for needle in \
   '`percentUsed` is more than 5 points above the elapsed share' \
   '`weekly_pace=paced used=<percentUsed> elapsed=<share>`' \
   '`weekly_pace=normal used=<percentUsed> elapsed=<share>`' \
+  '**A plan status other than `ok`, a missing window or a failed call** is UNKNOWN' \
   '`weekly_pace=UNKNOWN`, and run as usual' \
   'An unreadable reading never pauses the lane.' \
   '`daily-ai-assistant` is never paced'; do
@@ -91,14 +98,10 @@ case "${allowance}" in
   *) fail "cadence guide allowance passage does not point at weekly pacing" ;;
 esac
 
-# Negative control: the section check must fire on a guide without the section, for that reason.
-scratch="$(mktemp -d)"
-trap 'rm -rf "${scratch}"' EXIT
-awk '/^### Weekly pacing \(Claude lane\)$/ { skip = 1; next } skip && /^### / { skip = 0 } !skip' "${guide}" >"${scratch}/cadence.md"
-control="$(awk -v s="${sentinel}" -v a='^### Weekly pacing [(]Claude lane[)]$' -v b='^### ' '
-  !ins && $0 ~ a { ins = 1; print; next }
-  ins && $0 ~ b  { print s; exit }
-  ins            { print }' "${scratch}/cadence.md")"
+# Negative control: the same extraction must miss the section once it is removed from the guide, so
+# a passing run above means the section was found, not that extract() matches anything.
+control="$(awk '/^### Weekly pacing [(]Claude lane[)]$/ { skip = 1; next } skip && /^### / { skip = 0 } !skip' "${guide}" \
+  | extract - '^### Weekly pacing [(]Claude lane[)]$' '^### ')"
 case "${control}" in
   *"${sentinel}"*) fail "negative control: extraction still found the section after removing it" ;;
 esac
