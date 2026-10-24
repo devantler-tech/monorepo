@@ -42,6 +42,8 @@
 #   2c. Per-lane fallback module caches (go-mod-*) directly under the temp root, each removed
 #      only when it exceeds cache_budget_gb.
 #   3. The golangci-lint cache, emptied only when it exceeds its own, smaller budget.
+#   3a. npm's regenerable _cacache, under its own budget (monorepo#4487). npm's
+#       installed npx tools, logs, credentials and dependency trees are never candidates.
 #   4. Go's orphaned work dirs (go-build<digits>, go-link-<digits>) directly under the
 #      per-user temp dir and under the temp root (a lane may run with TMPDIR set to either),
 #      older than a threshold counted in HOURS.
@@ -71,6 +73,8 @@
 #   BUILD_CACHE_RECLAIM_LOOSE_FILE_CTIME      `off` drops the change-time half of the idle rule
 #                                             for (2a); test suite only, default on
 #   BUILD_CACHE_RECLAIM_LINT_BUDGET_GB        budget for (3); default 2
+#   BUILD_CACHE_RECLAIM_NPM_BUDGET_GB         budget for (3a); default 2
+#   BUILD_CACHE_RECLAIM_NPM_CLI               npm executable for (3a), `off` skips; default npm
 #   GOLANGCI_LINT_CACHE                       golangci-lint's own cache-dir override
 #   BUILD_CACHE_RECLAIM_GO_TMPDIR             temp dir for (4); default `getconf
 #                                             DARWIN_USER_TEMP_DIR`, else ${TMPDIR:-/tmp}
@@ -179,6 +183,8 @@ CACHE_BUDGET_GB=$(uint_setting cache_budget_gb "$CACHE_BUDGET_GB") || exit 2
 # gap would have stayed open. A lint cache is cheap to rebuild, so it is held smaller.
 LINT_BUDGET_GB=$(uint_setting BUILD_CACHE_RECLAIM_LINT_BUDGET_GB \
   "${BUILD_CACHE_RECLAIM_LINT_BUDGET_GB:-2}") || exit 2
+NPM_BUDGET_GB=$(uint_setting BUILD_CACHE_RECLAIM_NPM_BUDGET_GB \
+  "${BUILD_CACHE_RECLAIM_NPM_BUDGET_GB:-2}") || exit 2
 # Go's work dirs are aged in HOURS, not min_age_days. A go command's work dir is live only
 # while that command runs, and every holder check below still applies, so waiting three
 # days only lets orphans pile up: 15.7 GB of them were 0-2 days old when the host filled.
@@ -1134,6 +1140,57 @@ tree_guard() {
 PROTECTED_OK=1
 PROTECTED_DIRS=''
 PROTECTED_CACHE_DIRS=''
+
+# Read the native user/global cache setting, never a project's .npmrc. An absolute
+# executable is retained for both reads and the clean, so PATH cannot select a different
+# tool between them. npm's sibling node must also be visible to its /usr/bin/env shebang.
+NPM_BIN=''
+NPM_CACHE_ROOT=''
+if [ "${BUILD_CACHE_RECLAIM_NPM_CLI:-npm}" != off ]; then
+  npm_requested=${BUILD_CACHE_RECLAIM_NPM_CLI:-npm}
+  npm_candidate=$(command -v "$npm_requested" 2>/dev/null) || npm_candidate=''
+  if [ "$npm_requested" = npm ]; then
+    for npm_candidate in "$npm_candidate" /opt/homebrew/bin/npm /usr/local/bin/npm; do
+      [[ "$npm_candidate" = /* ]] && [ -x "$npm_candidate" ] || continue
+      NPM_BIN=$npm_candidate
+      break
+    done
+  elif [[ "$npm_candidate" = /* ]] && [ -x "$npm_candidate" ]; then
+    NPM_BIN=$npm_candidate
+  else
+    log 'UNKNOWN: configured npm executable unavailable; no fallback selected'
+    PROTECTED_OK=0
+    unknown=$((unknown + 1))
+  fi
+fi
+npm_command() {
+  local logs_dir rc=0
+  # logs-max=0 disables new logs but npm still prunes OLD logs. Redirect its log
+  # lifecycle to our own private scratch, so even a read/dry-run preserves user logs.
+  logs_dir=$(mktemp -d "$TMPDIR_ROOT/.npm-reclaim-logs.XXXXXX" 2>/dev/null) || return 2
+  PATH="${NPM_BIN%/*}:$PATH" "$NPM_BIN" --global --ignore-scripts --logs-max=0 \
+    --logs-dir="$logs_dir" "$@" || rc=$?
+  if ! rm -rf -- "$logs_dir"; then
+    log 'UNKNOWN: npm private log cleanup failed' >&2
+    return 2
+  fi
+  return "$rc"
+}
+npm_cache_root() {
+  npm_command config get cache
+}
+if [ -n "$NPM_BIN" ]; then
+  if NPM_CACHE_ROOT=$(npm_cache_root 2>/dev/null) &&
+    [[ "$NPM_CACHE_ROOT" = /* ]] && safe_path "$NPM_CACHE_ROOT"; then
+    :
+  else
+    log 'UNKNOWN: npm cache setting could not be read safely; keeping its cache and per-run trees'
+    NPM_CACHE_ROOT=''
+    PROTECTED_OK=0
+    unknown=$((unknown + 1))
+  fi
+fi
+
 protect_dir() {
   local resolved kind=${2:-}
   case "$1" in
@@ -1158,6 +1215,7 @@ below_protected_cache() {
 protect_dir "${GOCACHE:-}" cache
 protect_dir "${GOMODCACHE:-}" cache
 protect_dir "${GOLANGCI_LINT_CACHE:-}" cache
+protect_dir "$NPM_CACHE_ROOT" cache
 protect_dir "$GO_TMP_ROOT"
 protect_dir "${GO_TMP_ROOT}/rod"
 if [ -n "${go_bin:-}" ]; then
@@ -1959,6 +2017,109 @@ reclaim_lint_cache() {
 }
 
 reclaim_lint_cache
+
+# npm owns the opaque cache format and its deletion. Recognise only its known
+# content/index pair, reject symlinks or foreign/special files, and ask npm to clean
+# that identified cache. Its other cache-root children (notably _npx) are preserved.
+npm_cache_shape() {
+  local root=$1 hit
+  [ ! -L "$root" ] && [ -d "$root" ] && [ ! -L "$root/_cacache" ] || return 1
+  [ -r "$root/_cacache" ] && [ -x "$root/_cacache" ] || return 2
+  [ -d "$root/_cacache/content-v2/sha512" ] && [ -d "$root/_cacache/index-v5" ] || return 1
+  hit=$(find "$root/_cacache" -type l -print -quit 2>/dev/null) || return 2
+  [ -z "$hit" ]
+}
+npm_process_idle() {
+  local rows
+  rows=$(ps -A -ww -o args= 2>/dev/null) && [ -n "$rows" ] || return 2
+  # Node-based npm/npx and npm's own process titles both occur on supported hosts.
+  printf '%s\n' "$rows" | awk '
+    /^[[:space:]]*([^[:space:]]*\/)?(npm|npx)([[:space:]]|$)/ { held = 1 }
+    /(^|\/)node([[:space:]]|$)/ && /(^|[[:space:]\/])(npm-cli|npx-cli)\.js([[:space:]]|$)/ { held = 1 }
+    END { exit held }'
+}
+reclaim_npm_cache() {
+  local root dir canon cache_mb after_mb fresh points rc
+  [ -n "$NPM_BIN" ] && [ -n "$NPM_CACHE_ROOT" ] || return 0
+  root=$NPM_CACHE_ROOT
+  [ -e "$root/_cacache" ] || [ -L "$root/_cacache" ] || return 0
+  npm_cache_shape "$root"
+  rc=$?
+  if [ "$rc" != 0 ]; then
+    log 'NPM_CONTENT_CACHE layout unrecognised or unreadable — keeping'
+    [ "$rc" != 2 ] || unknown=$((unknown + 1))
+    return 0
+  fi
+  canon=$(cd -- "$root" 2>/dev/null && pwd -P) || return 0
+  dir=$canon/_cacache
+  tree_guard "$dir" "$MOUNT_POINTS" ''
+  rc=$?
+  if [ "$rc" != 0 ]; then
+    log "NPM_CONTENT_CACHE ${TREE_GUARD_WHY} — keeping"
+    [ "$rc" != 2 ] || unknown=$((unknown + 1))
+    return 0
+  fi
+  if ! cache_mb=$(size_mb "$dir"); then
+    log 'NPM_CONTENT_CACHE size unreadable — keeping'
+    unknown=$((unknown + 1))
+    return 0
+  fi
+  log "NPM_CONTENT_CACHE ${dir} = ${cache_mb} MB (budget $((NPM_BUDGET_GB * 1024)) MB)"
+  if [ "$cache_mb" -le $((NPM_BUDGET_GB * 1024)) ]; then
+    log 'NPM_CONTENT_CACHE within budget — keeping'
+    return 0
+  fi
+  npm_process_idle
+  rc=$?
+  if [ "$rc" != 0 ] || dir_in_use "$dir"; then
+    log 'NPM_CONTENT_CACHE npm/npx running or cache in use/unknown — keeping'
+    [ "$rc" != 2 ] || unknown=$((unknown + 1))
+    return 0
+  fi
+  if [ "$MODE" != apply ]; then
+    reclaimed_mb=$((reclaimed_mb + cache_mb))
+    log "NPM_CONTENT_CACHE would be cleaned (over budget), ~${cache_mb} MB"
+    return 0
+  fi
+  # Rebind configuration, shape, owner/mount and holder evidence immediately before
+  # mutation; a snapshot from the beginning of this potentially long sweep is stale.
+  if ! fresh=$(npm_cache_root 2>/dev/null) || ! points=$(read_mount_points); then
+    log 'NPM_CONTENT_CACHE configuration or mount recheck unreadable — keeping'
+    unknown=$((unknown + 1))
+    return 0
+  fi
+  if [ "$fresh" != "$root" ]; then
+    log 'NPM_CONTENT_CACHE configuration changed — keeping'
+    return 0
+  fi
+  npm_cache_shape "$root"
+  rc=$?
+  if [ "$rc" = 0 ]; then tree_guard "$dir" "$points" ''; rc=$?; fi
+  if [ "$rc" = 0 ]; then npm_process_idle; rc=$?; fi
+  if [ "$rc" != 0 ] || ! still_idle "$dir"; then
+    log 'NPM_CONTENT_CACHE changed, active or unknown at clean time — keeping'
+    [ "$rc" != 2 ] || unknown=$((unknown + 1))
+    return 0
+  fi
+  rc=0
+  npm_command --cache="$canon" cache clean --force >/dev/null 2>&1 || rc=$?
+  if [ ! -e "$dir" ] && [ ! -L "$dir" ]; then
+    after_mb=0
+  elif ! after_mb=$(size_mb "$dir"); then
+    log 'NPM_CONTENT_CACHE post-clean size unreadable'
+    unknown=$((unknown + 1))
+    return 0
+  fi
+  if [ "$rc" -eq 0 ] && [ "$after_mb" -eq 0 ]; then
+    reclaimed_mb=$((reclaimed_mb + cache_mb))
+    log "NPM_CONTENT_CACHE cleaned, reclaimed ~${cache_mb} MB"
+  else
+    [ "$after_mb" -ge "$cache_mb" ] || reclaimed_mb=$((reclaimed_mb + cache_mb - after_mb))
+    log 'NPM_CONTENT_CACHE clean incomplete — UNKNOWN'
+    unknown=$((unknown + 1))
+  fi
+}
+reclaim_npm_cache
 
 # ---------------------------------------------------------------------------
 # 4. Go's own orphaned work dirs under the per-user temp dir.
