@@ -10,6 +10,10 @@ section of `homebrew-tap/AGENTS.md` (the submodule path; repo `devantler-tech/ho
 its latest `main`): <https://github.com/devantler-tech/homebrew-tap/blob/main/AGENTS.md>. The tap
 ships **Casks** (`Casks/*.rb`, GoReleaser-generated `# DO NOT EDIT`) — never chase version/sha bumps.
 
+**Promote a draft cask PR only when `.claude/scripts/release-cask-ripeness.sh` reports `RIPE` at its
+head.** The review-exemption classifier's exit 0 proves who made the PR, never that its release is
+published; the call and the fence are in the [merge-policy guide](../../../guides/merge-policy.md).
+
 Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md). This card is a
 pointer by design — the menu is maintained once, in the tap's own `AGENTS.md`.
 
