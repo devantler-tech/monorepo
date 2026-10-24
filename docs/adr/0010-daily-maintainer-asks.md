@@ -29,6 +29,7 @@ When all pending changelogs cannot fit in one email, send an oldest-first batch 
 more remains. Record receipts only for that batch; keep the rest pending for later asks.
 
 Summaries use their UTC delivery date as `docs/digests/YYYY-MM-DD.md`, and cover work since the
-previous delivery. Existing ISO-week files and ADR 0009 remain historical records. If a dated
-summary is unavailable or fails its existing checks, the sender still includes the current
-open asks and explains that the work summary is missing.
+previous delivery. Existing ISO-week files and ADR 0009 remain historical records. If no pending
+reviewed summary is usable, the sender still includes the current open asks and explains that
+the work summary is missing. When some summaries are usable and others fail their checks, send
+the usable batch with a notice that some content was held back.

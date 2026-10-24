@@ -11,9 +11,9 @@ one reader who has not followed the work since the previous digest.
 
 - Name the file `docs/digests/YYYY-MM-DD.md` after its UTC delivery date, for example
   `2026-10-24.md`. It covers work not already included in a delivered digest. Keep old week-named files as history.
-- Merge it through an ordinary reviewed pull request before 06:17 UTC on its delivery date. If the file is
-  missing, too long or fails the check below, the workflow sends only the open asks and says that
-  the summary is missing.
+- Merge it through an ordinary reviewed pull request before 06:17 UTC on its delivery date. If no
+  pending reviewed summary passes its checks and fits in the email, the workflow sends only the
+  open asks and says that the summary is missing.
 - Copy everything below the line at the end of this guide into the file, then fill it in.
 - **Quiet days send nothing.** Keep their dated summaries. The next email with an unanswered ask
   combines pending changelogs and records their exact hashes in its generated receipt. Large
