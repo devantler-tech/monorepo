@@ -15,6 +15,16 @@ func TestDigestReceiptRetainsTheAskClock(t *testing.T) {
 	}
 }
 
+func TestDigestReceiptNeedsAnIssueBeforeItsDateCanConform(t *testing.T) {
+	today, _ := civilDate("2026-09-20")
+	for _, date := range []string{"2026-09-20", "2026-09-01", "2050-01-01"} {
+		got, _ := classify("**Blocker:** choose the retention rule | authority | last-verified 2026-09-20: pending | asked digest "+date, today, 14)
+		if got != "NO-ASK" {
+			t.Errorf("unlinked digest %s: got %s, want NO-ASK", date, got)
+		}
+	}
+}
+
 func TestAuthorityParkMustReachAnOpenAskIssue(t *testing.T) {
 	for _, tc := range []struct {
 		receipt, state, want string
@@ -23,6 +33,7 @@ func TestAuthorityParkMustReachAnOpenAskIssue(t *testing.T) {
 		{"slack 2026-08-30", "", "ASK-ISSUE-MISSING", 1},
 		{"digest o/monorepo#40 2026-08-30", "open", "PARKED", 0},
 		{"digest o/monorepo#40 2026-08-30", "closed", "ASK-CLOSED", 1},
+		{"digest o/monorepo#40 2026-08-30", "unlabelled", "ASK-UNLABELLED", 1},
 		{"digest o/monorepo#40 2026-08-30", "", "UNKNOWN", 2},
 	} {
 		record := commentJSON(t, "devantler", recordHead+"**Blocker:** choose the retention rule | authority | last-verified 2026-09-01: pending | asked "+tc.receipt)

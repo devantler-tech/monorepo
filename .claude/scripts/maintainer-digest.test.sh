@@ -1102,6 +1102,29 @@ run urgent --repo "$repo"
 expect_rc 2 "pre-existing assignment without a bot delivery is unproven"
 expect_no_writes "an unproven assignment is never toggled to notify again"
 
+for unproven_kind in assignment marker; do
+  urgent_setup
+  jq --arg kind "$unproven_kind" 'if $kind=="assignment" then .assignees=[{login:"devantler"}]
+    else .labels += [{name:"maintainer-ask-delivered"}] end' "$tmp/urgent.json" >"$tmp/unproven.json"
+  fixture GET "$api/issues/10" <"$tmp/unproven.json"
+  jq -s . "$tmp/unproven.json" <(for n in 11 12 13 14; do
+    jq --argjson n "$n" '.number=$n' "$tmp/urgent.json"
+  done) | fixture GET "$asks_path"
+  for n in 11 12 13 14; do
+    jq --argjson n "$n" '.number=$n' "$tmp/urgent.json" | fixture GET "$api/issues/$n"
+    jq --argjson n "$n" '.number=$n | .assignees=[{login:"devantler"}]' "$tmp/urgent.json" | fixture POST "$api/issues/$n/assignees"
+  done
+  run urgent --repo "$repo"
+  expect_rc 2 "an unproven $unproven_kind keeps the completed sweep UNKNOWN"
+  expect_in "$tmp/err" "UNPROVEN #10" "the unproven $unproven_kind is identified"
+  expect_in "$tmp/err" "UNKNOWN" "the unproven $unproven_kind is not reported clean"
+  expect_not_in "$GH_STUB_LOG" "POST $api/issues/10/assignees" "the unproven $unproven_kind is not resent"
+  expect_not_in "$GH_STUB_LOG" "DELETE " "the unproven $unproven_kind is not toggled"
+  if [ "$(grep -cE '^POST .*/assignees ' "$GH_STUB_LOG")" = 3 ]; then pass "later asks retain the three-delivery cap"; else bad "the unproven $unproven_kind blocked or changed later deliveries"; fi
+  expect_in "$tmp/out" "DELIVERED #11" "a later eligible ask is delivered after the unproven $unproven_kind"
+  expect_in "$tmp/out" "CAP-DELAYED #14" "overflow remains cap-delayed after the unproven $unproven_kind"
+done
+
 reset_case
 complete_asks | jq -s 'add | map(if .number==11 then .labels += [{name:"maintainer-ask-cap-delayed"}] else . end)' |
   fixture GET "$asks_path"
