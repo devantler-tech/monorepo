@@ -110,8 +110,22 @@ emit() { if [ -n "$jqexpr" ]; then jq -r "$jqexpr"; else cat; fi; }
 if [ "$1 $2" = "search prs" ]; then
   [[ "$*" == *"--archived=false"* && "$*" == *"--sort updated --order desc"* ]] ||
     { echo "stub gh: search must exclude archived repos and sort by update" >&2; exit 1; }
-  echo '[{"repository":{"name":"r"},"number":7}]' | emit
+  if [ "${ZERO_PRIMARY:-0}" = 1 ]; then echo '[]' | emit
+  else echo '[{"repository":{"name":"r"},"number":7}]' | emit; fi
   exit
+fi
+if [ "$1 $2" = 'api search/issues' ]; then
+  [[ "$*" != *archived:false* && " $* " == *" per_page=1 "* ]] || exit 64
+  [[ "$*" == *'org:"o"'* && "$*" == *is:pr* && "$*" == *'updated:>=2026-09-14'* ]] || exit 64
+  case "${ZERO_CONTROL:-zero}" in
+    fail) exit 1 ;;
+    nonzero) echo '{"total_count":1,"incomplete_results":false,"items":[{"number":8}]}' ;;
+    missing) echo '{"total_count":0,"items":[]}' ;;
+    incomplete) echo '{"total_count":0,"incomplete_results":true,"items":[]}' ;;
+    zero) echo '{"total_count":0,"incomplete_results":false,"items":[]}' ;;
+    *) exit 64 ;;
+  esac
+  exit 0
 fi
 [ "$1" = api ] && [ "$include" = 1 ] && [ -z "$jqexpr" ] ||
   { echo "stub gh: REST reads must use --include and no --jq: $*" >&2; exit 1; }
@@ -256,8 +270,8 @@ sweep() { # [checker arguments] — one cached-mode run against the stub, counti
   PATH="$bin:$PATH" run --org o --since 2026-09-14 --cache-seconds 900 "$@"
   n="$(calls)"
 }
-cached="$tmp/cache/o.2026-09-14.60.v2.events"
-head_line="# review-lane-health sweep-v2 org=o since=2026-09-14 limit=60 at="
+cached="$tmp/cache/o.2026-09-14.60.v3.events"
+head_line="# review-lane-health sweep-v3 org=o since=2026-09-14 limit=60 at="
 
 sweep
 if [ "$rc" -ne 1 ] || [ "$n" -lt 5 ]; then fail "the first call must sweep (rc=$rc, $n gh calls)"; fi
@@ -304,7 +318,7 @@ sweep
 [ "$n" -eq 0 ] || fail "the sweep just stored must be reused, got $n gh calls"
 sweep --limit 5
 [ "$n" -gt 0 ] || fail "a sweep for another --limit must not be reused"
-cp "$cached" "$tmp/cache/o.2026-09-14.7.v2.events"
+cp "$cached" "$tmp/cache/o.2026-09-14.7.v3.events"
 sweep --limit 7
 [ "$n" -gt 0 ] || fail "a stored sweep whose first line names other arguments must not be reused"
 sweep --refresh
@@ -485,6 +499,29 @@ fresh
 [ -n "$(entry_for "$pull")" ] || fail "a kept read in use must not be pruned"
 unset GH_LOG
 
+# A successful filtered zero is still unproven until a complete unfiltered control agrees.
+for mode in nonzero missing incomplete fail; do
+  ZERO_PRIMARY=1 ZERO_CONTROL="$mode" PATH="$bin:$PATH" run --org o --since 2026-09-14 \
+    --cache-dir "$tmp/zero-$mode" --cache-seconds 900
+  [ "$rc" -eq 2 ] || fail "unconfirmed zero ($mode) must be UNKNOWN, got $rc"
+  [ ! -s "$tmp/out" ] || fail 'unconfirmed zero published lane verdicts'
+  [ ! -f "$tmp/zero-$mode/o.2026-09-14.60.v3.events" ] || fail 'unconfirmed zero cached a complete sweep'
+done
+ZERO_PRIMARY=1 ZERO_CONTROL=zero PATH="$bin:$PATH" run --org o --since 2026-09-14 --cache-dir "$tmp/zero-agreed"
+expect 'two complete zero searches' 0 'cr=NO-EVIDENCE'
+
+# Older concurrent checkouts can still write an unconfirmed empty v2 sweep.
+# It must not bypass the repaired discovery path, even while its TTL is valid.
+legacy="$tmp/legacy-empty"
+mkdir "$legacy"
+printf '# review-lane-health sweep-v2 org=o since=2026-09-14 limit=60 at=%s\n' "$now" \
+  >"$legacy/o.2026-09-14.60.v2.events"
+ZERO_PRIMARY=1 ZERO_CONTROL=nonzero PATH="$bin:$PATH" run --org o --since 2026-09-14 \
+  --cache-dir "$legacy" --cache-seconds 900
+[ "$rc" -eq 2 ] || fail "legacy unconfirmed empty sweep bypassed discovery (rc=$rc)"
+[ ! -s "$tmp/out" ] || fail 'legacy unconfirmed empty sweep published a verdict'
+[ -f "$legacy/o.2026-09-14.60.v2.events" ] || fail 'legacy cache should be ignored, not destroyed'
+
 # Independent PRs must overlap without sharing scratch files or changing event order.
 # This wrapper reuses the existing paginated artifact server for six distinct PRs.
 mkdir "$tmp/multi-bin"
@@ -539,12 +576,12 @@ multi() {
 multi --jobs 1 --cache-dir "$tmp/serial"
 [ "$rc" -eq 1 ] || fail "serial multi-PR control failed: $rc"
 cp "$tmp/out" "$tmp/serial-out"
-serial_events="$tmp/serial/o.2026-09-14.60.v2.events"
+serial_events="$tmp/serial/o.2026-09-14.60.v3.events"
 mkdir "$tmp/overlap"
 MULTI_STATE="$tmp/overlap" MULTI_BARRIER=1 multi --jobs 4 --cache-dir "$tmp/parallel"
 [ "$rc" -eq 1 ] || { cat "$tmp/err" >&2; fail "parallel multi-PR sweep failed: $rc"; }
 cmp -s "$tmp/serial-out" "$tmp/out" || fail 'parallel verdicts differ from serial'
-cmp -s "$serial_events" "$tmp/parallel/o.2026-09-14.60.v2.events" || fail 'parallel events differ from serial'
+cmp -s "$serial_events" "$tmp/parallel/o.2026-09-14.60.v3.events" || fail 'parallel events differ from serial'
 grep -qF '30 REST reads, 0 answered 304' "$tmp/err" || fail 'parallel pagination/counters lost reads'
 awk '$1 == "start" { if (++active > max) max=active } $1 == "done" { active-- }
   END { exit !(max == 4 && active == 0) }' "$tmp/overlap/activity" || fail 'worker concurrency was not bounded at four'
@@ -564,7 +601,7 @@ for fault in fail abort; do
   fi
   [ "$rc" -eq 2 ] || fail "$fault worker must report UNKNOWN, got $rc"
   grep -q '^LANE-HEALTH' "$tmp/out" && fail "$fault worker published a partial verdict"
-  [ ! -f "$state/cache/o.2026-09-14.60.v2.events" ] || fail "$fault worker stored a partial sweep"
+  [ ! -f "$state/cache/o.2026-09-14.60.v3.events" ] || fail "$fault worker stored a partial sweep"
   [ -z "$(find "$state" -name 'active.*')" ] || fail "$fault worker left an unjoined writer"
 done
 for invalid in 0 5 -1 nope; do
@@ -594,7 +631,7 @@ PATH="$tmp/multi-bin:$PATH" REVIEW_ABORT_REACHED="$state/reached" TMPDIR="$state
 [ -f "$state/reached" ] || fail 'worker abort fixture never reached the installed trap'
 [ "$rc" -eq 2 ] || fail "unbound worker must report UNKNOWN, got $rc"
 [ ! -s "$state/out" ] || fail 'unbound worker published a verdict'
-[ ! -f "$state/cache/o.2026-09-14.60.v2.events" ] || fail 'unbound worker cached a sweep'
+[ ! -f "$state/cache/o.2026-09-14.60.v3.events" ] || fail 'unbound worker cached a sweep'
 [ -z "$(find "$state/temp" -mindepth 1 -maxdepth 1)" ] || fail 'unbound worker left scratch behind'
 
 # Observe deletion attempts on both sides of trap installation. Bash 3.2 unwinds
@@ -634,7 +671,7 @@ PATH="$state/bin:$tmp/multi-bin:$PATH" REVIEW_ABORT_REACHED="$state/reached" \
 [ ! -f "$state/parent-delete-attempt" ] || fail "$abort_at worker tried to delete parent scratch"
 [ "$rc" -eq 2 ] || fail "$abort_at worker abort must report UNKNOWN, got $rc"
 [ ! -s "$state/out" ] || fail "$abort_at worker abort published a verdict"
-[ ! -f "$state/cache/o.2026-09-14.60.v2.events" ] || fail "$abort_at worker abort cached a sweep"
+[ ! -f "$state/cache/o.2026-09-14.60.v3.events" ] || fail "$abort_at worker abort cached a sweep"
 [ -z "$(find "$state/temp" -mindepth 1 -maxdepth 1)" ] || fail "$abort_at worker abort left scratch behind"
 done
 
@@ -662,7 +699,7 @@ rc=0
 wait "$collector_pid" || rc=$?
 [ "$rc" -eq 2 ] || fail "interrupted parent must report UNKNOWN, got $rc"
 [ ! -s "$state/out" ] || fail 'interrupted parent published a verdict'
-[ ! -f "$state/cache/o.2026-09-14.60.v2.events" ] || fail 'interrupted parent cached a sweep'
+[ ! -f "$state/cache/o.2026-09-14.60.v3.events" ] || fail 'interrupted parent cached a sweep'
 [ -z "$(find "$state" -name 'active.*')" ] || fail 'interrupted parent returned before joining its writers'
 
 completed=1

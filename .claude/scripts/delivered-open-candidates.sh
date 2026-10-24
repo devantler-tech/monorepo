@@ -143,6 +143,15 @@ if [ -n "$oldest" ]; then
   want=$(( total < oldest ? total : oldest ))
   got=$(grep -c . <<<"$listed" || true)
   [ "$got" -eq "$want" ] || unknown "issue search returned $got of $want issues"
+  if [ "$total" = 0 ]; then
+    # Preserve type/state/owner scope and charge this bounded control to the same
+    # invocation allowance. Archived control items are evidence of uncertainty only.
+    search_read -f q="${q/ archived:false/}" -f per_page=1
+    printf '%s' "$search_result" | jq -es 'length == 1 and (.[0] |
+      .incomplete_results == false and .total_count == 0 and (.items | type == "array" and length == 0))' \
+      >/dev/null 2>&1 || unknown 'empty archived-filter discovery not confirmed'
+    exit 0
+  fi
   while IFS= read -r ref; do [ -n "$ref" ] && issues+=("$ref"); done <<<"$listed"
   listed_issues=1
 fi
