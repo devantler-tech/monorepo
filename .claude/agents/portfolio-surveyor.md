@@ -1640,7 +1640,8 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - SHARD-CURSOR next=<repo>#<n>|none · classified=[<repo>#<n>@<head>@<updatedAt>,…] · remaining=<n>   # exact resumable continuation state for the orchestrator; includes joined terminal or named-blocker candidates and candidate-scoped failed joins attempted in this shard, never an unjoined remainder
 
 ### Advance
-- <repo>: roadmap-ready → #<n> "<title>" (<label>)
+- <repo>: roadmap-ready → #<n> "<title>" (<type>)
+- <repo> #<n> "<title>" — future-dated measurement, date=<UTC date> (not yet actionable)
 - <repo>: NO roadmap yet → strategy-review candidate
 - <repo> #<n> "<title>" — subissues=<completed>/<total> DELIVERY-CHECK (every child closed; completion check before starting, never a skip)
 - <repo> #<n> "<title>" — labels=<name,...>|none   # from the candidate's own deepening read; absent on a row never deepened
