@@ -520,7 +520,9 @@ prepare_pending_summaries() {
     [ -e "$candidate" ] || continue
     date=${candidate##*/}; date=${date%.md}
     [[ "$date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && "$date" < "$day" || "$date" = "$day" ]] || continue
-    [ -f "$candidate" ] && [ -r "$candidate" ] || unknown "cannot read $candidate"
+    if [ ! -f "$candidate" ] || [ ! -r "$candidate" ]; then
+      unknown "cannot read $candidate"
+    fi
     hash=$(shasum -a 256 "$candidate" | awk '{print $1}') || unknown "cannot hash $candidate"
     if jq -e --arg date "$date" --arg hash "$hash" 'any(.[]; .date == $date and .sha256 == $hash)' "$tmp/sent-summaries.json" >/dev/null; then
       continue
