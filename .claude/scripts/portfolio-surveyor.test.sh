@@ -660,6 +660,39 @@ case "${status_step_rc}" in
   1) fail "surveyor Status field-id step does not say a REST option name is an object read as .name.raw" ;;
   *) fail "surveyor Status field-id step boundaries not found — cannot check the .name.raw rule" ;;
 esac
+# An org-wide PR search that also asks for merge state or checks often comes back as an HTML page
+# (`invalid character '<'`): 38 of the surveyor's 57 such calls failed, 2026-10-16 → 10-22, after the
+# same rule landed only in the PR-readiness guide, which the surveyor never reads (monorepo#4492).
+# Scoped to the paragraph that tells the surveyor to read heavy fields one PR at a time; a missing
+# boundary fails closed, and a control proves the check fails once the rule is removed.
+# shellcheck disable=SC2016
+heavy_rule='**Never put merge state, checks, `mergeable`, threads or commits in an org-wide search:**'
+heavy_rule_rc() {
+  awk -v rule="${heavy_rule}" '
+    index($0, "Enumerate **every open PR") { in_par = 1; seen_start = 1 }
+    index($0, "**Deepening is both shard-bounded and budgeted") { if (in_par) seen_end = 1; in_par = 0 }
+    in_par { text = text " " $0 }
+    END {
+      if (!seen_start || !seen_end) exit 2
+      gsub(/[[:space:]]+/, " ", text)
+      exit (index(text, rule) && index(text, "HTML page") && index(text, "monorepo#4492")) ? 0 : 1
+    }
+  ' "$1"
+}
+heavy_rc=0
+heavy_rule_rc "${surveyor}" || heavy_rc=$?
+case "${heavy_rc}" in
+  0) ;;
+  1) fail "surveyor PR-enumeration paragraph does not forbid heavy fields in an org-wide search (monorepo#4492)" ;;
+  *) fail "surveyor PR-enumeration paragraph boundaries not found — cannot check the org-wide search rule" ;;
+esac
+heavy_mutant="$(mktemp)"
+awk '{ sub(/\*\*Never put merge state, checks,/, "Put merge state, checks,") } { print }' "${surveyor}" >"${heavy_mutant}"
+heavy_mut_rc=0
+heavy_rule_rc "${heavy_mutant}" || heavy_mut_rc=$?
+rm -f "${heavy_mutant}"
+[ "${heavy_mut_rc}" -eq 1 ] ||
+  fail "control: the org-wide search rule check did not report a removed rule as missing (rc ${heavy_mut_rc})"
 # shellcheck disable=SC2016
 grep -Fq 'never a single-page `.length`' "${surveyor}" ||
   fail "surveyor BOARD-COVERAGE row does not forbid a single-page length as the board census"
