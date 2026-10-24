@@ -108,8 +108,11 @@ review_lane_health_cleanup() {
   fi
   exit "$rc"
 }
-trap review_lane_health_cleanup EXIT
-trap 'exit 2' HUP INT TERM
+install_cleanup() {
+  trap review_lane_health_cleanup EXIT
+  trap 'exit 2' HUP INT TERM
+}
+install_cleanup
 
 unknown() { echo "review-lane-health: UNKNOWN — $*" >&2; exit 2; }
 
@@ -298,10 +301,9 @@ collect_worker() {
   local tmp="$1/worker-$2" result_dir="$1/result-$2" sweep_pids=''
   local http_reads=0 http_replays=0 http_unstored=0 http_unconfirmed=0
   local review_lane_health_finished=0
-  trap review_lane_health_cleanup EXIT
+  install_cleanup
   # A trapped signal waits for the foreground gh child before exiting, so an
   # interrupted collector cannot leave that child writing into removed scratch.
-  trap 'exit 2' HUP INT TERM
   cp "$1/classify-comments.jq" "$tmp/classify-comments.jq"
   : >"$tmp/events"
   collect_pr "$3" "$4"

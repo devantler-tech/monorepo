@@ -572,6 +572,31 @@ for invalid in 0 5 -1 nope; do
   [ "$rc" -eq 2 ] || fail "invalid job count $invalid must be rejected"
 done
 
+# Inject the Bash 3.2 failure class immediately AFTER the worker installs the same
+# cleanup handler as the parent. Reaching the marker, UNKNOWN, empty stdout/cache
+# and no scratch left prove the worker's local sentinel and parent backstop hold.
+state="$tmp/worker-unbound"
+mkdir -p "$state/temp"
+awk '
+  { print }
+  /^  install_cleanup$/ {
+    seen++
+    print "  : > \"$REVIEW_ABORT_REACHED\""
+    print "  : \"${REVIEW_ABORT_MUST_BE_UNSET}\""
+  }
+  END { if (seen != 1) exit 1 }
+' "$checker" >"$state/checker" || fail 'worker abort injection did not bind exactly once'
+unset REVIEW_ABORT_MUST_BE_UNSET
+rc=0
+PATH="$tmp/multi-bin:$PATH" REVIEW_ABORT_REACHED="$state/reached" TMPDIR="$state/temp" \
+  bash "$state/checker" --org o --since 2026-09-14 --now "$now" --jobs 4 --cache-dir "$state/cache" \
+  >"$state/out" 2>"$state/err" || rc=$?
+[ -f "$state/reached" ] || fail 'worker abort fixture never reached the installed trap'
+[ "$rc" -eq 2 ] || fail "unbound worker must report UNKNOWN, got $rc"
+[ ! -s "$state/out" ] || fail 'unbound worker published a verdict'
+[ ! -f "$state/cache/o.2026-09-14.60.v2.events" ] || fail 'unbound worker cached a sweep'
+[ -z "$(find "$state/temp" -mindepth 1 -maxdepth 1)" ] || fail 'unbound worker left scratch behind'
+
 # Interrupt the parent while its own collectors are active. It must join them before
 # removing scratch, and must never cache or classify their partial result.
 state="$tmp/parent-interrupted"
