@@ -22,7 +22,7 @@ const composeHelp = `Compose a blocker record in the one shape the guard accepts
 
   compose --target <owner/repo#N> --kind upstream  --blocker <owner/repo#N> --result <text>
   compose --target <owner/repo#N> --kind authority --blocker <what only the maintainer can do>
-          --result <text> --asked <pr|slack|session> <YYYY-MM-DD>
+          --result <text> --asked <pr|slack|session|digest> <YYYY-MM-DD>
   compose --target <owner/repo#N> --kind outcome   --blocker <the event waited on, in words> --result <text>
 
   --target    the pull request or issue being parked.
@@ -42,6 +42,9 @@ const composeHelp = `Compose a blocker record in the one shape the guard accepts
   --asked     authority only, and required: where and when the maintainer was
               asked. Ask first; a record without a fresh ask is refused.
   --actor     engineer (default) or improver: selects the disclosure line.
+  --ask-issue owner/monorepo#N: required for --asked digest. The record links this
+              intake issue before the date. park verifies its open state and label.
+              slack is historical read-only input and cannot be composed anew.
   --line-only print only the **Blocker:** line, for an issue body. Without it the
               whole pull-request record comment is printed: disclosure line,
               marker, record. --target is still required.
@@ -69,7 +72,7 @@ var (
 
 type composition struct {
 	target, kind, blocker, result string
-	askChannel, askDate           string
+	askChannel, askDate, askIssue string
 	actor                         string
 	asked, lineOnly               bool
 	today                         time.Time
@@ -89,7 +92,7 @@ func composeArguments(args []string) (composition, bool, error) {
 		case "--line-only":
 			c.lineOnly = true
 			continue
-		case "--target", "--kind", "--blocker", "--result", "--actor", "--asked":
+		case "--target", "--kind", "--blocker", "--result", "--actor", "--asked", "--ask-issue":
 		default:
 			return c, false, fmt.Errorf("unknown argument %q", name)
 		}
@@ -112,6 +115,8 @@ func composeArguments(args []string) (composition, bool, error) {
 			c.result = args[i]
 		case "--actor":
 			c.actor = args[i]
+		case "--ask-issue":
+			c.askIssue = args[i]
 		case "--asked":
 			if i+1 >= len(args) {
 				return c, false, errors.New("--asked needs a channel and a date")
@@ -177,7 +182,7 @@ func composeRecord(c composition, maxAge, verifyMaxAge int64) (line, body string
 			return "", "", errors.New("an authority --blocker must say on one line, in words, what only the maintainer can do")
 		}
 		if !c.asked {
-			return "", "", errors.New("--kind authority needs --asked <pr|slack|session> <YYYY-MM-DD>: ask the maintainer first, then record it")
+			return "", "", errors.New("--kind authority needs --asked <pr|slack|session|digest> <YYYY-MM-DD>: ask the maintainer first, then record it")
 		}
 		known := false
 		for _, channel := range askChannels {
@@ -185,6 +190,16 @@ func composeRecord(c composition, maxAge, verifyMaxAge int64) (line, body string
 		}
 		if !known {
 			return "", "", fmt.Errorf("--asked names the channel %q; the channels are %s", c.askChannel, strings.Join(askChannels, ", "))
+		}
+		if c.askChannel == "slack" {
+			return "", "", errors.New("slack is a read-only historical receipt; file or reuse a digest ask")
+		}
+		if c.askChannel == "digest" {
+			if !trackedItem(c.askIssue) || !strings.Contains(c.askIssue, "/monorepo#") {
+				return "", "", errors.New("digest needs --ask-issue owner/monorepo#N")
+			}
+		} else if c.askIssue != "" {
+			return "", "", errors.New("--ask-issue belongs to the digest channel")
 		}
 		if _, err := civilDate(c.askDate); err != nil {
 			return "", "", errors.New("--asked needs a real YYYY-MM-DD calendar date")
@@ -201,7 +216,11 @@ func composeRecord(c composition, maxAge, verifyMaxAge int64) (line, body string
 	}
 	line = fmt.Sprintf("**Blocker:** %s | %s | last-verified %s: %s", c.blocker, c.kind, c.today.Format("2006-01-02"), c.result)
 	if c.kind == "authority" {
-		line += fmt.Sprintf(" | asked %s %s", c.askChannel, c.askDate)
+		receipt := c.askChannel
+		if c.askIssue != "" {
+			receipt += " " + c.askIssue
+		}
+		line += fmt.Sprintf(" | asked %s %s", receipt, c.askDate)
 	}
 	body = fmt.Sprintf("%s%s\n\n%s\n\n%s\n", disclosurePrefix, disclosure, recordMarker, line)
 	// The guard is the only judge of the shape. Read the comment back exactly as

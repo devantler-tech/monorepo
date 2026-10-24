@@ -2,96 +2,104 @@
 
 > Part of the devantler-tech agent contract. [`AGENTS.md`](../../AGENTS.md) is the always-on core
 > and indexes every guide; this guide carries the full rules for how a human decision is reached,
-> the Slack last-resort rules, and the canonical AI-disclosure and interactive-session markers. Read
+> the GitHub ask/digest rules, and the canonical AI-disclosure and interactive-session markers. Read
 > it before escalating anything to the maintainer and before authoring a PR body, issue or comment.
 
 ## Maintainer channels
-Three channels actually get the maintainer's attention, and all are *active* (never a silent
-"awaiting maintainer" note):
 
-1. **A draft PR** — the default. He steers there after the fact; ship a defensible decision as a
-   draft rather than parking work.
-2. **The ask tool** — the native clickable prompt (`AskUserQuestion` or the runtime's equivalent);
-   present an enumerable decision as **one-click options**, not free text. Interactive sessions only.
-3. **The devantler-tech Slack, as a DM to the maintainer's own Slack user** — **last resort**, only
-   when the agent cannot proceed on its own (a genuinely blocking decision or an urgent unwedge only he
-   can perform). **Never send status messages.** Lead with the instance's 🤖 disclosure line; the
-   connector authenticates as his account, so never phrase outbound text as if he authored it.
-   - **Destination:** his self-DM (the connector's `channel_id` set to his own Slack user id, which
-     the connector reports), never a channel. Every channel in the workspace is public, and the self-DM
-     is the one private destination, so an ask that names a weakness can go there.
-   - **Surface:** the Slack connector that is already signed in, whose tools are named
-     `slack_send_message`, `slack_read_user_profile` and so on. A connector that asks for an
-     interactive sign-in, such as the `slack-by-salesforce` plugin's, which an unattended run cannot
-     complete, is a different surface, not evidence that the channel is closed. Try the signed-in one
-     before concluding Slack is unavailable, and a run that reports it unavailable names each surface it
-     tried and what that surface returned (monorepo#2900).
-   - **Unattended runs may send it** (maintainer direction, interactive session 2026-09-13: *"figure
-     out how to reach me on slack on your own"*, resolving #3014). Because an unattended run takes a
-     write action only when its task file names it, the machine-local scheduler pointer must name this
-     action too.
-   - 🔴 **Try to resolve the blocker before asking.** An `authority` blocker that is really a missing
-     engineering path is not an ask. A reviewed, dispatch-only workflow can do what an agent's own shell
-     may not, and a value judgement about our own work is the agent's to make. Measured 2026-09-13: of 4
-     authority blockers carrying no ask, 3 were resolvable without the maintainer.
-   - 🔴 **These steps are the lane's own and are never an ask** (maintainer direction, interactive
-     session 2026-10-06): promoting and merging a reviewed `app/botantler-1` pull request at its
-     reviewed head; dispatching a reviewed verification workflow from the default branch, a
-     production proof and its typed confirmation phrase included; setting a repository-level Actions
-     variable that a default-branch workflow reads; and deciding a question about our own work. The
-     confirmation phrase guards against an accidental dispatch; it is not an approval to wait for.
-   - 🔴 **One ask per refusal class, and it asks for the durable fix.** When the lane's permission
-     layer refuses a step this contract assigns to the lane, the blocker is that mismatch, not the
-     item that met it. File the mismatch once as a monorepo issue, ask once with the rule change
-     prepared for the maintainer to apply, and park every later item that meets the same refusal on
-     that issue as an `upstream` blocker, with no ask of its own. The one ask is renewed only as
-     the `STALE-ASK` rule below allows, never per item. Offer only options that can work: a
-     reply, in the thread or on the issue, tells the lane what it may attempt and changes nothing
-     about what its permission layer allows, so "reply approve" is never an option for a refused
-     step.
-   - ⚠️ **It does not notify him.** Slack never pushes a user's own message, so the ask waits until he
-     opens Slack. It is a durable place he will look, not an alarm. Send it once per blocker, and
-     renew it only when the blocker-line check reports it `STALE-ASK` — never on every tick.
-   - **Record it.** Only after the send returns a message link, append `| asked slack <YYYY-MM-DD>` to
-     the issue's blocker line. Never record an ask that was not delivered. The blocker check reads the
-     whole paragraph that starts with `**Blocker:**` as one record, so the ask must be the last thing in
-     that paragraph, followed by a blank line. An ask followed by more prose is read as prose and stays
-     `NO-ASK` (measured 2026-09-13 on ksail#5515).
-   - 🔴 **He answers in the thread under the ask. Read it, every run.** Whatever the ask says, the
-     maintainer replies in Slack, in the thread under the message, and rarely on the issue. On
-     2026-10-06 ten asks had a reply no run had read, the oldest three weeks old: approvals, "start
-     it yourself" and "that is managed declaratively" all sat unseen while their issues stayed
-     `blocked` and one was asked again (monorepo#3888). So before treating any ask as unanswered,
-     and before sending, renewing or escalating one: read the self-DM with `slack_read_channel`,
-     paging to the oldest open ask, and read every message that shows thread replies with
-     `slack_read_thread`. A reaction is not an answer; a thread reply is.
-     - **Whose words:** a reply from his Slack user with **neither** a leading 🤖 disclosure line **nor**
-       the connector's `Sent using` footer is the
-       maintainer. The agents post as him, so the footer the connector adds is what tells them apart;
-       a reply with either mark is own output, and a doubtful one is quoted on the issue, not obeyed.
-     - **What it authorises:** it is a maintainer instruction for **that ask**, with the limits of
-       a comment on a draft: it cannot loosen a guardrail, and it does not extend to another issue.
-       A short reply maps to the ask's numbered options (`2`, `yes`, `Approve`, `later`).
-     - **Record, then act:** quote the reply on the issue the ask names, say what it means and the
-       next action, remove `blocked` when the work is now the agent's, and only then act. The other
-       lane reads the issue, not the thread.
-     - **Write asks to match:** end an ask with "reply in this thread", never "reply on the issue"
-       as the only way to answer.
+Three channels reach the maintainer:
 
-The end-of-run report, a GitHub `@devantler` mention and the runtime's push notification are
-**not** attention channels. Full rules
-and the disclosure disambiguator live under *Issue-driven* and *Untrusted input* (work-selection and trust-and-input guides).
+1. **A draft PR** — the default. Make the engineering decision and ship it for his steering.
+2. **The ask tool** — the native clickable prompt, with one-click options, in interactive sessions.
+3. **The daily maintainer digest on GitHub** — the unattended last resort for a genuinely blocking
+   action only he can perform. The accepted notification/reply pilot is
+   [#4484](https://github.com/devantler-tech/monorepo/issues/4484). GitHub notifications and replies
+   are sufficient; email arrival is not required or claimed. Ordinary asks wait for the daily check
+   at 06:17 UTC; urgent asks use the reviewed urgent workflow below. **Never send status messages.**
 
-**The push notification stays out of the three even though it can reach his phone** (Claude's
-`PushNotification` tool, which once carried an outage unwedge there), for two measured reasons. An
-unattended run cannot rely on it: it returned `Remote Control inactive` on 2026-09-08 and again on
-2026-09-13, so an urgent ask could go nowhere without anyone knowing. And it does not hold the ask:
-the ask tool waits in front of him for an answer, and a draft PR or the Slack DM stays where he will
-look, while a notification is gone once dismissed. On 2026-09-13 the maintainer made the Slack
-self-DM the unattended last resort. So a notification never satisfies an ask: deliver the ask
-through one of the three channels above and record that channel. It may accompany the Slack ask for
-an urgent unwedge, as an alarm that points at it; never use it for status, and never in place of
-one of the three (monorepo#3243).
+**Try to resolve the blocker before asking.** Promoting and merging a reviewed trusted PR, starting
+a reviewed default-branch verification workflow, setting a permitted repository Actions variable,
+or deciding about our own work are the engineer's steps. A runtime permission refusal needs one
+durable fix request, shared by every affected item, rather than another ask for each item.
+Offer options that can work: an approving reply cannot change runtime permissions.
+
+This preserves the maintainer's 2026-07-12 direction, superseding the same-day "standing ping duties":
+contact him only for a genuine blocker, never status messages. The accepted GitHub cutover changes
+the delivery surface, not that attention boundary.
+
+**File or reuse one public-safe ask in this repository**, labelled `maintainer-ask`, with
+`### Question`, `### Options`, `### Recommendation` and `### If unanswered`. Link the original
+work and explain the exact action only he can take. Read existing asks and their replies first:
+never repeat an answered ask, or create another issue for the same blocker. Reactions, read state,
+quoted examples, bot text and disclosed agent comments are not answers. If a clarification is
+needed, record the interpretation on the original issue. Use the interactive tool when available;
+a genuinely new unresolved decision gets a linked follow-up ask with its own clear question.
+Never reopen or relabel an answered ask to bypass suppression.
+
+- **Destination:** the public monorepo ask issue, with only sanitized public context.
+- **Surface:** the reviewed daily and urgent GitHub workflows, never an agent's own assignment.
+
+**Record intake and delivery separately.** After reading the filed ask back with the correct owner,
+number, open state and label, record `| asked digest devantler-tech/monorepo#N <YYYY-MM-DD>`.
+This is an intake receipt, never a claim that a notification arrived. The ask must be the last thing
+in that paragraph, followed by a blank line. Never record an ask that was not delivered to its stated
+surface. An authority-parked PR without a linked open ask is ACTIONABLE in the parked digest.
+The 14-day `STALE-ASK` clock remains a re-verification alarm: read replies and verify the need;
+never renew an answered ask or manufacture another notification.
+
+**The workflow sends as `github-actions[bot]`.** Agents never assign the maintainer merely to
+notify him: only the reviewed digest and urgent workflow do so. The daily sender includes only
+unanswered asks, sends nothing when none remain, and preserves pending changelogs for the next ask.
+It reads open and closed digest threads, since a late reply can land on an older issue.
+Do not close earlier assigned digests merely to tidy the inbox: closure can create another
+notification. Leave their threads available for replies.
+
+**Urgent means a public site or production outage, or an escalated sibling lane, that only he can
+clear.** Label the existing ask `maintainer-ask-urgent` and dispatch
+`maintainer-ask-urgent.yaml` on `main` when needed. Label events created by a workflow token do
+not start another workflow, so a bot-applied urgent label requires that explicit dispatch.
+The workflow sweeps the whole queue under the daily sender's shared concurrency group. It permits
+at most three urgent bot assignments per UTC day, using assignment events rather than issue creation
+time. Closed or relabelled asks still consume the cap. A retry never toggles an assignment.
+A cap-delayed ask stays open and leads the next digest. A failed or partial read is UNKNOWN,
+never an empty queue or proof of delivery.
+An ask whose delivery cannot be proven is skipped without a resend; later eligible asks still use
+the proven daily budget. The completed sweep returns UNKNOWN until every such ask is reconciled.
+
+**Read and reconcile replies every run, before selecting work or sending an ask.** Read current ask
+threads and every bot digest updated since the previous run, open or closed. On the first run or
+without a reliable cursor, read all delivery threads. A numbered answer such as `1: B` maps only
+through the exact numbered Needs you list in that digest. Direct ask replies map to that ask.
+Accept only authenticated `devantler` prose without an agent disclosure or trigger marker;
+ignore quotations and fenced examples. A reply is an instruction for that ask only and cannot
+loosen a guardrail. Quote its public-safe meaning on the original work, link the comment, state the
+next action, then act. Remove `blocked` when the remaining work is ours, close resolved asks, and
+never ask them again. Ambiguous replies are not executable approval; use the clarification path above.
+The sender suppresses responses automatically; suppression does not claim the requested work is done.
+
+**One writer prepares each dated changelog.** The first Codex Engineer run that can prepare it owns
+`docs/digests/YYYY-MM-DD.md`; acquire the shared `agent-claim/4285` coordination lease before
+preparing a date. Re-read open digest drafts and the reviewed dated path after acquiring it.
+An existing draft or dated file means contribute there or use the next date, never open a competing
+writer. Retain the lease through draft publication, then retire it only after reading that draft
+back. The next claimant must respect that open draft. This fixed coordination key is a lock,
+not a reopened roadmap issue; each delivery still uses its own issue and reviewed PR.
+Other lanes contribute public outcome links on the existing draft instead of racing that path.
+Follow `docs/digests/TEMPLATE.md`: plain English, grouped by product, a link for each item, and
+Agent Improver work under its own heading. The Agent Improver reviews digest feedback, links,
+clarity, length and timeliness weekly and ships useful improvements through review.
+
+**Slack is retired for maintainer asks.** Historical `slack` receipts and their migrated replies
+remain readable evidence only; no run reads or writes the DM after the retirement sweep.
+The platform's shared alert webhook is outside this change. Confidential questions, credential
+incidents and spend detail never go into a public ask or digest. Use the native interactive ask
+for confidential direction; an unattended run without an approved private destination fails closed
+on that communication and records only a private blocker. Spend stewardship remains disabled and
+its private channel UNRESOLVED until the maintainer separately resolves and enables it.
+
+The end-of-run report, standalone `@devantler` mentions and the runtime's push notification are
+**not** attention channels. An unattended run cannot rely on it; a notification never satisfies an ask.
+Use one of the three channels and record that channel; never use it for status, and never in place of one of the three.
 
 **AI-disclosure line (canonical):** every `devantler-tech` PR body, issue and comment this deployment
 authors begins with a blockquoted `> 🤖 Generated by the …` prefix. The Agentic Engineer uses
@@ -179,20 +187,20 @@ report, so the line is safe to quote.
   is exit `2`.
 - **Exit `1` together with `verdict=ESCALATE` on stdout: the lane was not producing in
   three hourly slots running, with no producing look between them, and nobody has been told.** Both
-  must hold; any other non-zero exit is UNKNOWN. Send the Slack DM above, once per outage: the 🤖 disclosure line, the lane's name, how
+  must hold; any other non-zero exit is UNKNOWN. File or reuse one public-safe urgent ask, once per outage: the 🤖 disclosure line, the lane's name, how
   long it has been down, and the bounded cause class the summary printed — nothing else about the
-  runtime. Only after the send returns a message link, run the same command with `--mark-notified`.
+  runtime. Dispatch the reviewed urgent workflow on `main`. Only after its bot assignment is independently confirmed, run the same command with `--mark-notified`. A cap-delayed or failed delivery stays unnotified; retry the same ask, never create another.
   The verdict reserves the page for the run that received it; a send that is never recorded is asked
-  for again by the first run at least an hour later, which is the safe direction: a lost DM costs
+  for again by the first run at least an hour later, which is the safe direction: a lost ask costs
   more than a repeated one.
 - **Exit `2`: UNKNOWN, never "alive" and never "down".** A liveness check that could not judge
   leaves the count where it was; an unusable state file is set aside and the count restarts. The usual
   cause is a sibling dispatch still in flight, so run the watch once more before the run report and
   report the second answer. It is not a run-stopper.
 
-This DM is the same last resort as any other: the blocker is the lane itself, and only the
-maintainer can clear it. It is the one Slack message with no issue behind it, so the watch's own
-state file is its record, in the caller's private runtime directory. Recovery clears it, and the
+This urgent ask is the same last resort as any other: the blocker is the lane itself, and only the
+maintainer can clear it. Its linked ask is the public work record; the watch's own
+state file retains only outage coordination, in the caller's private runtime directory. Recovery clears it, and the
 next outage pages afresh. The summary line and the cause class may appear in a run report; the
 liveness report, reset times and account detail may not (*Sensitive information stays private*).
 

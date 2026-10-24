@@ -205,12 +205,13 @@ Store paths, ledgers and the sibling cross-read: [durable memory guide](.claude/
 
 ### Maintainer channels
 
-Three channels reach the maintainer, all active: **(1) a draft PR** — the default, where he steers
-after the fact; **(2) the ask tool** (`AskUserQuestion` or the runtime's equivalent) with one-click
-options, in interactive sessions; **(3) a Slack DM to his own Slack user** in the devantler-tech
-workspace — **last resort**, only when genuinely blocked after trying to resolve it; never
-for status, sent once per blocker, and recorded on its issue or by the lane watch. He answers in
-its thread. Reports,
+Three channels reach the maintainer: **(1) a draft PR** for his steering; **(2) the native ask tool**
+with one-click options in interactive sessions; **(3) a public-safe `maintainer-ask` issue in this
+repository, delivered by the daily bot digest or urgent workflow** — last resort, only after trying
+to resolve a genuine blocker. Read replies on asks and open or closed digests every run; record the
+answer on the original work and act. Never repeat answered asks. Quiet days send nothing and retain
+their changelog for the next ask. Slack is retired; confidential asks require the interactive tool
+or a separately approved private channel. Reports,
 `@devantler` mentions and push notifications are not channels.
 
 - **AI-disclosure line:** every `devantler-tech` artifact this deployment authors begins with

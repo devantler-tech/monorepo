@@ -22,7 +22,7 @@ func compose(args ...string) (int, string, string) {
 var (
 	upstreamArgs  = []string{"--target", "o/r#5", "--kind", "upstream", "--blocker", "o/other#7", "--result", "still open"}
 	outcomeArgs   = []string{"--target", "o/r#5", "--kind", "outcome", "--blocker", "a release newer than v1.2.3 carrying o/other#7", "--result", "tag exists, release not published"}
-	authorityArgs = []string{"--target", "o/r#5", "--kind", "authority", "--blocker", "rotate the registry token", "--result", "token still expired", "--asked", "slack", "2026-10-05"}
+	authorityArgs = []string{"--target", "o/r#5", "--kind", "authority", "--blocker", "rotate the registry token", "--result", "token still expired", "--asked", "session", "2026-10-05"}
 )
 
 // replaced returns args with the value of one flag swapped, so each refusal
@@ -66,7 +66,7 @@ func TestComposeLineOnlyAndActor(t *testing.T) {
 	}
 	code, out, _ = compose(append(append([]string{}, authorityArgs...), "--actor", "improver")...)
 	if code != 0 || !strings.HasPrefix(out, disclosurePrefix+"Agent Improver\n") ||
-		!strings.HasSuffix(out, "**Blocker:** rotate the registry token | authority | last-verified 2026-10-06: token still expired | asked slack 2026-10-05\n") {
+		!strings.HasSuffix(out, "**Blocker:** rotate the registry token | authority | last-verified 2026-10-06: token still expired | asked session 2026-10-05\n") {
 		t.Errorf("improver authority record is %q (exit %d)", out, code)
 	}
 }
@@ -98,13 +98,13 @@ func TestComposeRefusals(t *testing.T) {
 		{"an empty result", replaced(upstreamArgs, "--result", " "), "--result must be one non-empty line"},
 		{"an unusable target", replaced(upstreamArgs, "--target", "r#5"), "--target must be one item"},
 		{"an ask on an upstream record", append(append([]string{}, upstreamArgs...), "--asked", "slack", "2026-10-05"), "belongs to --kind authority"},
-		{"an ask dated after today", append(replaced(authorityArgs, "--asked", "slack")[:10], "2026-10-07"), "reads the composed record as MALFORMED"},
+		{"an ask dated after today", append(replaced(authorityArgs, "--asked", "session")[:10], "2026-10-07"), "reads the composed record as MALFORMED"},
 		{"an unknown actor", append(append([]string{}, upstreamArgs...), "--actor", "maintainer"), "--actor must be"},
 		{"authority without an ask", authorityArgs[:8], "ask the maintainer first"},
 		{"authority with no words", replaced(authorityArgs, "--blocker", "#"), "what only the maintainer can do"},
 		{"an ask channel that does not exist", replaced(authorityArgs, "--asked", "issue"), "the channels are pr, slack, session"},
 		{"an ask channel carrying a second record", replaced(authorityArgs, "--asked", "x | asked slack"), "the channels are pr, slack, session"},
-		{"an ask date with trailing space", append(replaced(authorityArgs, "--asked", "slack")[:10], "2026-10-05 "), "--asked needs a real"},
+		{"an ask date with trailing space", append(replaced(authorityArgs, "--asked", "session")[:10], "2026-10-05 "), "--asked needs a real"},
 		{"an ask with one value", authorityArgs[:10], "--asked needs a channel and a date"},
 		{"an empty ask on an upstream record", append(append([]string{}, upstreamArgs...), "--asked", "", "2026-10-05"), "belongs to --kind authority"},
 		{"a caller-chosen date", append(append([]string{}, upstreamArgs...), "--today", "2020-01-01"), "unknown argument"},
@@ -117,7 +117,7 @@ func TestComposeRefusals(t *testing.T) {
 		{"authority with a delimiter", replaced(authorityArgs, "--blocker", "rotate | upstream"), "what only the maintainer can do"},
 		{"a flag with no value", append(append([]string{}, upstreamArgs...), "--actor"), "--actor needs a value"},
 		{"a missing target", upstreamArgs[2:], "--target is required"},
-		{"an ask that has gone stale", append(replaced(authorityArgs, "--asked", "slack")[:10], "2026-09-01"), "reads the composed record as STALE-ASK"},
+		{"an ask that has gone stale", append(replaced(authorityArgs, "--asked", "session")[:10], "2026-09-01"), "reads the composed record as STALE-ASK"},
 		{"a flag given twice", append(append([]string{}, upstreamArgs...), "--kind", "authority"), "--kind given more than once"},
 		{"a missing result", upstreamArgs[:6], "--result is required"},
 		{"an unknown flag", append(append([]string{}, upstreamArgs...), "--org", "o"), "unknown argument"},

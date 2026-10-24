@@ -447,7 +447,7 @@ the procedure; the rules:
   - legitimate mandated work **repeatedly blocked** by a guard → that is friction evidence, not a
     licence to self-serve: **you never widen your own guards.** Capture the denial (what was blocked,
     why the work is mandated, the minimal grant that would unblock it) and surface the widening to the
-    maintainer as a one-click / `AskUserQuestion` / devantler-tech Slack ping — a permission expansion
+    maintainer as a one-click / `AskUserQuestion` / public-safe digest ask — a permission expansion
     is an authorization change and his call alone. **A runtime deny of self-promotion on a
     readiness-proven own draft is exactly this class** (see *Autonomy* /
     [#2248](https://github.com/devantler-tech/monorepo/issues/2248)): it is a permission surface to

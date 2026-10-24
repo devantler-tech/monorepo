@@ -51,7 +51,7 @@ these are what bound the damage if one ever does. Egress is therefore explicit, 
   a system or person. The end-of-run report to the maintainer is not a network destination and needs
   no listing, but it carries content and so is bound by the private-source and sanitization rules
   below exactly like any artifact. Outbound content goes only to: `devantler-tech` GitHub artifacts
-  (issues, PRs, comments, reviews, pushes); the maintainer's Slack (last-resort per *Issue-driven*);
+  (issues, PRs, comments, reviews, pushes); public-safe maintainer asks through the reviewed GitHub digest (last-resort per *Issue-driven*);
   the interactive ask channel (`AskUserQuestion`); the runtime's **private native attention channel**
   (the automation task/inbox used for sensitive unattended notification per *Local agent host*); the
   private out-of-repo operator notes; **read-only public web research** — a search engine or a public

@@ -27,7 +27,7 @@ no open issue declares a blocker without carrying the blocked label, and that
 no Security issue is left unstarted with no record of why.
 
   **Blocker:** <identifier> | <blocker-kind> | last-verified <YYYY-MM-DD>: <result>
-  **Blocker:** <what only the maintainer can do> | authority | last-verified <YYYY-MM-DD>: <result> | asked <pr|slack|session> <YYYY-MM-DD>
+  **Blocker:** <what only the maintainer can do> | authority | last-verified <YYYY-MM-DD>: <result> | asked <pr|slack|session|digest> <YYYY-MM-DD>
 
 The blocker kind is upstream, authority or outcome. Explicit authority records
 may name an account action, credential or permission in plain language. Legacy
@@ -39,7 +39,8 @@ The independent provider outage cause belongs in the result, for example
 "outage-cause=credentials/auth; access is still missing".
 Ask channels: pr = a draft PR; slack = the Slack DM to the maintainer's own user
 (his self-DM), never a Slack channel, because every channel in the workspace is
-public; session = the native ask tool in an interactive session. No other word
+public (historical receipts only); session = the native ask tool in an interactive session;
+digest = a linked maintainer-ask issue in this repository. No other word
 is a channel token, and the check reads any other word as NO-ASK. That includes
 push, whether it means a git push or the runtime's push notification, and
 issue: a GitHub comment records an ask and is not one.
@@ -123,7 +124,7 @@ BLOCKER_LINE_CACHE_DIR names another directory; "off" keeps nothing.
 // askChannels is the closed set of tokens an ask record may name. The ask
 // expression and the digest are built from it and the help is pinned to it by
 // test, so none of them can accept or advertise a token the others do not.
-var askChannels = []string{"pr", "slack", "session"}
+var askChannels = []string{"pr", "slack", "session", "digest"}
 
 // askExpression matches an ask record that names one of channels. Each token
 // is quoted, so one that holds a metacharacter can only ever match itself and
@@ -133,7 +134,7 @@ func askExpression(channels []string) *regexp.Regexp {
 	for i, channel := range channels {
 		quoted[i] = regexp.QuoteMeta(channel)
 	}
-	return regexp.MustCompile(`\| asked (` + strings.Join(quoted, "|") + `) ([0-9]{4}-[0-9]{2}-[0-9]{2})[\t ]*$`)
+	return regexp.MustCompile(`\| asked (` + strings.Join(quoted, "|") + `)(?: ([A-Za-z0-9._-]+/monorepo#[1-9][0-9]*))? ([0-9]{4}-[0-9]{2}-[0-9]{2})[\t ]*$`)
 }
 
 var (
@@ -393,7 +394,13 @@ func classify(line string, today time.Time, maxAge int64) (string, bool) {
 	if ask == nil {
 		return "NO-ASK", legacy
 	}
-	askDate, err := civilDate(ask[2])
+	if ask[2] != "" && ask[1] != "digest" {
+		return "NO-ASK", legacy
+	}
+	if ask[1] == "digest" && ask[2] == "" {
+		return "NO-ASK", legacy
+	}
+	askDate, err := civilDate(ask[3])
 	if err != nil || askDate.After(today) {
 		return "MALFORMED", legacy
 	}
@@ -568,6 +575,7 @@ func askDigestReport(rows []askRow) string {
 	_, _ = fmt.Fprintf(&out, "(%s), then append `| asked <channel> <YYYY-MM-DD>` to that issue's **Blocker:** line.\n", strings.Join(askChannels, " | "))
 	// Every channel in the workspace is public, and an ask can name a weakness.
 	_, _ = fmt.Fprint(&out, "slack means the maintainer's own Slack self-DM, never a Slack channel: every channel in the workspace is public.\n")
+	_, _ = fmt.Fprint(&out, "That token is historical evidence only: never send a new Slack ask. New PR authority parks require a linked digest ask.\n")
 	// Repository visibility is not in the search payload, so this tool cannot
 	// establish it. Say so rather than let a private row reach a public PR.
 	_, _ = fmt.Fprint(&out, "CHECK BEFORE DELIVERY: this tool does not establish repository visibility.\n")
@@ -638,6 +646,8 @@ type issue struct {
 	// record names is "open" or "closed". Only the parked digest reads it; under
 	// --org the state is read from the forge instead (see pulldigest.go).
 	BlockerState string `json:"blocker_state"`
+	// AskState is the explicit offline answer for the linked maintainer-ask issue.
+	AskState string `json:"ask_state"`
 }
 
 // unrecordedType is the one issue type read for being unstarted: a Security

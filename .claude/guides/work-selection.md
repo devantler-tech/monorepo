@@ -311,14 +311,11 @@ governs the issue work that follows.) Two rules enforce that:
    refusals of two classes raised item by item, and four were this lane's own to perform or decide.
 
    🔴 **An `authority` line MUST also record the ask: append `| asked <channel> <YYYY-MM-DD>`.**
-   `<channel>` names where it actually landed — a channel that *reaches* him per *Maintainer
-   channels*: `pr` means a draft PR, `slack` the Slack DM to his own user that *Maintainer
-   channels* declares, and `session` the native ask tool in an interactive session. No other word
-   is a channel token, and the check reads any other word as `NO-ASK`. That includes `push`,
-   whether it means a git push or the runtime's push notification (not an attention channel
-   either; *Maintainer channels* says why), and `issue`: a GitHub comment is a durable **record** of
-   an ask and is explicitly **not** an attention channel, so a comment alone leaves the issue
-   exactly as parked as silence. Re-raise on a cadence rather than every run; the ask goes stale
+   `<channel>` names where it actually landed: `pr` a draft PR, `slack` historical receipts
+   from the retired self-DM, and `session` the native interactive ask tool; `digest` a linked ask
+   in this repository. No other word is a channel token. That includes `push`, whether it means a git push or the runtime's push notification,
+   and `issue`: a GitHub comment is a durable **record** of an ask, never proof of notification.
+   Re-raise on a cadence rather than every run; the ask goes stale
    after **14 days** by default. An authority line with no ask, or with a stale one, is a finding —
    `NO-ASK` / `STALE-ASK`. **The class is an explicit token; a record that predates the
    field is INFERRED rather than refused** — read as `authority` only when its identifier already
@@ -327,6 +324,9 @@ governs the issue work that follows.) Two rules enforce that:
    guarantee: a blocker phrased "needs an account action" is authority-caused, reads as ordinary
    prose, and escapes the ask requirement until it is classed — which is why the explicit token is
    required on every record written under this rule and always overrides the inference.
+
+   For new unattended intake use `| asked digest devantler-tech/monorepo#N <YYYY-MM-DD>`.
+   A parked authority PR must name an open ask with the maintainer-ask label; file or reuse it before parking.
 
    🔴 **The label and the line are not coupled by anything, so CHECK them rather than assuming.** A
    live claim expires after ~2h, so a wrongly-skipped issue comes back; a **label never expires**,
@@ -386,25 +386,11 @@ governs the issue work that follows.) Two rules enforce that:
    self-blocking this contract forbids. When an issue *feels* like it needs his direction, that feeling is
    a cue to **investigate it deeply and make the call yourself**, then **express the decision as a draft
    PR** — the draft is exactly where he redirects anything he disapproves of (his words), so a defensible
-   decision shipped as a draft is always the right move, never a deferral. **Three channels actually
-   get his attention, and all are *active*:** (1) a **draft PR** (the default — he steers there);
-   (2) the **ask tool** — the native **`AskUserQuestion`** clickable prompt (present an enumerable decision
-   as **one-click options**, not free text; interactive sessions only); and (3) the **devantler-tech
-   Slack** (maintainer direction 2026-07-11: *"you can always reach me on the devantler-tech slack"*) —
-   works from **unattended runs too**, sent as a DM to his own Slack user — *Maintainer channels*
-   carries the destination, the try-to-resolve-first rule, the fact that it does not notify him, and
-   how a delivered ask is recorded. **Slack is a LAST-RESORT
-   channel, only for when the agent cannot proceed on its own** (maintainer direction 2026-07-12,
-   superseding the same-day "standing ping duties": *"You should only contact me when you cannot
-   proceed on your own, and I am not interested in status messages"*): a genuinely blocking decision,
-   or an urgent unwedge only he can perform. **Never send status messages** — no merged-PR
-   pings, no run summaries, no progress notes: your PRs and merges are visible on GitHub and he
-   reviews them at his own pace. **Identity:** each agent's Slack connector authenticates as the
-   maintainer's OWN account, so a message reads as him writing to himself — always write in the
-   agent's own voice and lead with the agent's 🤖 disclosure line naming which instance sent it, never
-   phrasing anything as if he authored it (a dedicated agent Slack identity is a maintainer-side Slack
-   app; until one exists this disclosure is the only sender marker). The **end-of-run report** (he rarely reads
-   it) and a **GitHub `@devantler` mention** (it does not notify him) are **NOT** attention channels.
+   decision shipped as a draft is always the right move, never a deferral.    **Three channels actually get his attention:** a draft PR, the native interactive ask tool,
+   and a public-safe ask delivered by the daily bot digest or urgent workflow. Follow the
+   [maintainer-channels guide](maintainer-channels.md) for intake, delivery and reply reconciliation.
+   This last resort is only for a genuine blocker after trying to resolve it. Never send status
+   messages or repeat an answered ask. The end-of-run report and a standalone mention are not channels.
    Never leave a silent "awaiting maintainer" note and move on to easier work. **"Repo Assist"/`automation` roadmap issues are
    KSail's own roadmap *feature specs* — part of this queue, NOT maintainer-interactive work**; the
    interactive-PR attribution rule is about random-slug `claude/*` *PRs* (see *Untrusted input*), never

@@ -22,7 +22,7 @@ const parkHelp = `Park a pull request: write its one blocker record and add the 
 
   park --org <owner> --target <owner/repo#N> --kind upstream  --blocker <owner/repo#N> --result <text>
   park --org <owner> --target <owner/repo#N> --kind authority --blocker <what only the maintainer can do>
-       --result <text> --asked <pr|slack|session> <YYYY-MM-DD>
+       --result <text> --asked <pr|slack|session|digest> <YYYY-MM-DD>
   park --org <owner> --target <owner/repo#N> --kind outcome   --blocker <the event waited on, in words> --result <text>
 
 --org is required and names the one owner park may write to: a target under
@@ -104,6 +104,39 @@ func ownRecords(comments []comment) []comment {
 	return own
 }
 
+// A receipt names an actual trusted ask, not an arbitrary issue or pull request.
+func readDigestAsk(reference, org string) (string, error) {
+	ref := trackedItemRE.FindStringSubmatch(reference)
+	if ref == nil || ref[1] != org || ref[2] != "monorepo" {
+		return "", errors.New("ask is outside the declared monorepo -- UNKNOWN")
+	}
+	raw, err := forgeRead("repos/" + org + "/monorepo/issues/" + ref[3])
+	if err != nil {
+		return "", errors.New("could not read linked ask -- UNKNOWN")
+	}
+	var target struct {
+		Number int64  `json:"number"`
+		State  string `json:"state"`
+		User   struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Labels *[]struct {
+			Name string `json:"name"`
+		} `json:"labels"`
+		PullRequest json.RawMessage `json:"pull_request"`
+	}
+	n, _ := strconv.ParseInt(ref[3], 10, 64)
+	if json.Unmarshal(raw, &target) != nil || target.Number != n || target.Labels == nil || len(target.PullRequest) > 0 || target.User.Login != recordAuthor || (target.State != "open" && target.State != "closed") {
+		return "", errors.New("linked ask identity, labels or state are unproven -- UNKNOWN")
+	}
+	for _, label := range *target.Labels {
+		if label.Name == "maintainer-ask" {
+			return target.State, nil
+		}
+	}
+	return "unlabelled", nil
+}
+
 func parkRun(args []string, stdout, stderr io.Writer) int {
 	// Park writes and then proves the write by reading it back, so every one
 	// of its reads must be the forge's answer of this moment.
@@ -160,6 +193,21 @@ func parkRun(args []string, stdout, stderr io.Writer) int {
 	}
 	if m[1] != org {
 		return refuse(nothing, fmt.Errorf("the target is under %q, not --org %q: park writes to one owner only", m[1], org))
+	}
+	if c.kind == "authority" {
+		if c.askChannel != "digest" {
+			return refuse(nothing, errors.New("authority parking needs a linked digest ask; historical channels are read-only for PR parks"))
+		}
+		state, err := readDigestAsk(c.askIssue, org)
+		if err != nil {
+			return refuse(nothing, err)
+		}
+		if state == "unlabelled" {
+			return refuse(nothing, errors.New("the linked maintainer ask is missing maintainer-ask label"))
+		}
+		if state != "open" {
+			return refuse(nothing, errors.New("the linked maintainer ask is not open"))
+		}
 	}
 	item := issue{Repo: m[2], Number: number}
 	path, err := pullPath(m[1], item.Repo, number)

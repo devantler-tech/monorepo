@@ -401,6 +401,7 @@ jobs:
               - '.claude/scripts/maintainer-digest.test.sh'
               - 'docs/digests/**'
               - '.github/workflows/maintainer-digest.yaml'
+              - '.github/workflows/maintainer-ask-urgent.yaml'
               - '.github/ISSUE_TEMPLATE/**'
               - '.github/workflows/ci.yaml'
             comment-disclosure-drift:

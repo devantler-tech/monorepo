@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # maintainer-digest.sh — email daily only while unanswered asks exist (monorepo#4475).
-# ADR 0009 phase 1 / monorepo#4285 supplies delivery; urgent asks remain monorepo#4305.
+# ADR 0009 phase 1 / monorepo#4285 supplies delivery; urgent delivery completes monorepo#4305.
 #
 # Why this exists. The agents act through the maintainer's own GitHub account, and GitHub never
 # emails a user about their own activity, so an ask an agent files never reaches him on its own. The
@@ -108,7 +108,7 @@ finding() {
 # Prints invalid arguments and exits with the UNKNOWN status through the guarded completion path.
 usage() {
   echo "maintainer-digest.sh: $*" >&2
-  echo "usage: maintainer-digest.sh send|needs-you|check ... (see the header comment)" >&2
+  echo "usage: maintainer-digest.sh send|urgent|needs-you|check ... (see the header comment)" >&2
   finish 2
 }
 
@@ -135,7 +135,7 @@ check_repo() {
 # partial object is UNKNOWN by construction: no decision falls back to a default for a missing field.
 # A field is a dotted path and its shape: number, string, text (present, a string or null, as GitHub
 # writes an empty body), timestamp (a valid UTC ISO 8601 time) or logins (a list of accounts).
-required_ask='{"number":"number","title":"string","user.login":"string","html_url":"string","body":"text"}'
+required_ask='{"number":"number","title":"string","user.login":"string","html_url":"string","body":"text","state":"string","labels":"labels","assignees":"logins","created_at":"timestamp"}'
 required_digest='{"number":"number","title":"string","body":"text","state":"string","user.login":"string","created_at":"timestamp","assignees":"logins"}'
 required_comment='{"id":"number","body":"text","user.login":"string"}'
 required_created='{"number":"number","assignees":"logins"}'
@@ -166,6 +166,7 @@ conforms_def='def conforms($spec):
       elif $shape == "timestamp" then ($v | type) == "string"
         and ((try ($v | fromdateiso8601 | todateiso8601) catch null) == $v)
       elif $shape == "logins" then ($v | type) == "array" and all($v[]; type == "object" and (.login | type) == "string")
+      elif $shape == "labels" then ($v | type) == "array" and all($v[]; type == "object" and (.name | type) == "string")
       else false end);'
 
 # Reads every page of an issue listing into $2 as one JSON array, leaving out pull requests. Every
@@ -186,7 +187,8 @@ read_issues() {
 # Splits the open asks into the maintainer's own, oldest first, and the numbers of everyone else's.
 fetch_asks() {
   read_issues "repos/$repo/issues?state=open&labels=$ask_label&per_page=100" "$tmp/asks-all.json" "$required_ask"
-  jq --arg who "$maintainer" 'map(select(.user.login == $who)) | sort_by(.number)' \
+  jq -e 'all(.[]; .state == "open")' "$tmp/asks-all.json" >/dev/null || unknown "unexpected ask state"
+  jq --arg who "$maintainer" 'map(select(.user.login == $who)) | sort_by([if any(.labels[]; .name == "maintainer-ask-cap-delayed") then 0 else 1 end, .number])' \
     "$tmp/asks-all.json" >"$tmp/asks.json" || unknown "could not sort the asks"
   jq -r --arg who "$maintainer" 'map(select(.user.login != $who) | .number) | sort | .[]' \
     "$tmp/asks-all.json" >"$tmp/untrusted.txt" || unknown "could not sort the asks"
@@ -499,7 +501,7 @@ compose_fallback() {
     printf '**The summary is missing for this digest:** %s, so it lists only the open asks.\n\n' "$1"
     cat "$tmp/needs-you.md"
     printf '\n## How to reply\n\n%s\n%s\n' \
-      "Reply to this email with an ask's number and your choice, for example \`1: B\`, or the number, a colon and your own words, for example \`3: your words\`." \
+      "Reply on this GitHub issue (or to its notification email) with an ask's number and your choice, for example \`1: B\`, or the number, a colon and your own words, for example \`3: your words\`." \
       "Your reply posts publicly, as a comment on this issue in the public $repo repository."
   } >"$tmp/body.md"
 }
@@ -645,19 +647,15 @@ cmd_needs_you() {
 # Close only open bot digests through the requested UTC date, except #$1 (0 keeps none).
 # A preview reports the plan, and a backfill never closes a later digest.
 close_earlier() {
-  local keep=$1 dry=$2 n
+  local keep=$1 n
   jq -r --arg bot "$bot" --argjson keep "$keep" --argjson end "$send_end" 'map(select(.user.login == $bot and .state == "open" and .number != $keep
       and (.created_at | fromdateiso8601) < $end) | .number) | .[]' \
     "$tmp/digests.json" >"$tmp/earlier.txt" || unknown "could not list the earlier digests"
   while IFS= read -r n; do
     [ -n "$n" ] || continue
-    if [ "$dry" -eq 1 ]; then
-      echo "DRY-RUN would close the earlier digest #$n"
-      continue
-    fi
-    gh api -X PATCH "repos/$repo/issues/$n" -f state=closed -f state_reason=completed >/dev/null ||
-      unknown "could not close the earlier digest #$n"
-    echo "CLOSED #$n: the earlier digest"
+    # Closing an assigned issue can send another notification. Keep the reply thread;
+    # the engineer closes it only after its asks have been reconciled.
+    echo "RETAINED #$n: the earlier digest reply thread"
   done <"$tmp/earlier.txt"
 }
 
@@ -745,6 +743,110 @@ cmd_send() {
   finish "$found"
 }
 
+# Urgent notifications share the daily workflow's concurrency group. Sweep the whole queue:
+# GitHub replaces pending concurrency runs, so the triggering issue alone is not a durable queue.
+# Assignment events are the ledger, including closed/relabelled issues and ambiguous retries.
+cmd_urgent() {
+  local dry=0 number count today unproven=0
+  repo="${GITHUB_REPOSITORY:-}"
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --repo) need_value "$@"; repo=$2; shift 2 ;;
+      --dry-run) dry=1; shift ;;
+      *) usage "unknown urgent option: $1" ;;
+    esac
+  done
+  check_repo
+  fetch_asks
+  jq -r '.[] | select(any(.labels[]; .name == "maintainer-ask-urgent")) | .number' \
+    "$tmp/asks.json" >"$tmp/urgent-numbers.txt"
+  if [ ! -s "$tmp/urgent-numbers.txt" ]; then echo "NO-URGENT-ASKS"; finish 0; fi
+  read_issues "repos/$repo/issues/events?per_page=100" "$tmp/events.json" \
+    '{"id":"number","event":"string","created_at":"timestamp"}'
+  jq -e "$conforms_def"' all(.[] | select(.event == "assigned");
+    conforms({"actor.login":"string","assigner.login":"string","assignee.login":"string","issue.number":"number"}))' \
+    "$tmp/events.json" >/dev/null || unknown "incomplete assignment history"
+  today=$(date -u +%Y-%m-%d)
+  # Count all bot assignments conservatively, except authenticated daily digest issues.
+  # Removing an urgent label or closing an ask cannot replenish the notification budget.
+  jq --arg who "$maintainer" --arg bot "$bot" --slurpfile digests "$tmp/digests.json" '
+    [$digests[0][] | select(.user.login == $bot
+      and (.title | test("^🙋 Maintainer digest — (week ([1-9]|[1-4][0-9]|5[0-3])|[0-9]{4}-[0-9]{2}-[0-9]{2})$"))
+      and ((.body // "") | startswith("> 🤖 Generated by the"))) | .number] as $digestids
+    | unique_by(.id)
+    | map(select(.event == "assigned" and .assigner.login == $bot and .assignee.login == $who)
+      | select(.issue.number as $n | ($digestids | index($n)) == null))' \
+    "$tmp/events.json" >"$tmp/assignments.json" || unknown "could not classify assignment history"
+  count=$(jq --arg day "$today" '[.[] | select(.created_at[0:10] == $day)] | length' "$tmp/assignments.json")
+  while IFS= read -r number; do
+    # Re-read the actual target and human replies immediately before each write.
+    gh api "repos/$repo/issues/$number" >"$tmp/current.json" || unknown "could not refresh urgent #$number"
+    jq -e --argjson spec "$required_ask" --argjson n "$number" "$conforms_def"' conforms($spec) and .number == $n and (has("pull_request") | not)' \
+      "$tmp/current.json" >/dev/null || unknown "incomplete urgent #$number"
+    jq -e '.state == "open" or .state == "closed"' "$tmp/current.json" >/dev/null || unknown "invalid urgent state"
+    jq -s --arg who "$maintainer" 'map(select(.state == "open" and .user.login == $who
+      and any(.labels[]; .name == "maintainer-ask") and any(.labels[]; .name == "maintainer-ask-urgent")))' \
+      "$tmp/current.json" >"$tmp/asks.json"
+    filter_answered_asks
+    [ "$(jq length "$tmp/asks.json")" -gt 0 ] || continue
+    if jq -e --argjson n "$number" 'any(.[]; .issue.number == $n)' "$tmp/assignments.json" >/dev/null; then
+      echo "ALREADY-DELIVERED #$number"
+      continue
+    fi
+    if jq -e 'any(.labels[]; .name == "maintainer-ask-delivered")' "$tmp/current.json" >/dev/null; then
+      finding "UNPROVEN #$number: delivery marker outside the readable history; never resend it"
+      unproven=1
+      continue
+    fi
+    if jq -e --arg who "$maintainer" 'any(.assignees[]; .login == $who)' "$tmp/current.json" >/dev/null; then
+      finding "UNPROVEN #$number: assigned without a proven bot delivery; never toggle its assignment"
+      unproven=1
+      continue
+    fi
+    if [ "$count" -ge 3 ]; then
+      if [ "$dry" -eq 0 ] && ! jq -e 'any(.labels[]; .name == "maintainer-ask-cap-delayed")' "$tmp/current.json" >/dev/null; then
+        gh api -X POST "repos/$repo/issues/$number/labels" -f 'labels[]=maintainer-ask-cap-delayed' >/dev/null ||
+          unknown "could not mark cap-delayed #$number"
+        gh api "repos/$repo/issues/$number" >"$tmp/marked.json" || unknown "could not verify cap delay"
+        jq -e --argjson spec "$required_ask" --argjson n "$number" "$conforms_def"' conforms($spec)
+          and .number == $n and any(.labels[]; .name == "maintainer-ask-cap-delayed")' "$tmp/marked.json" >/dev/null ||
+          unknown "cap delay did not read back"
+      fi
+      echo "CAP-DELAYED #$number"
+      continue
+    fi
+    load_ask 0
+    if [ "$ask_private" -ne 0 ] || [ -n "$ask_missing" ]; then
+      unknown "urgent #$number is not public-safe and complete"
+    fi
+    if [ "$dry" -eq 1 ]; then
+      echo "WOULD-ASSIGN #$number"
+    else
+      gh api -X POST "repos/$repo/issues/$number/assignees" -f "assignees[]=$maintainer" >"$tmp/assigned.json" ||
+        unknown "assignment of urgent #$number is ambiguous; retry against the event ledger"
+      jq -e --argjson spec "$required_ask" --argjson n "$number" --arg who "$maintainer" "$conforms_def"'
+        conforms($spec) and .number == $n and any(.assignees[]; .login == $who)' "$tmp/assigned.json" >/dev/null ||
+        unknown "urgent #$number assignment was not confirmed"
+      gh api "repos/$repo/issues/$number" >"$tmp/assigned-readback.json" || unknown "could not verify urgent assignment"
+      jq -e --argjson spec "$required_ask" --argjson n "$number" --arg who "$maintainer" "$conforms_def"'
+        conforms($spec) and .number == $n and any(.assignees[]; .login == $who)' "$tmp/assigned-readback.json" >/dev/null ||
+        unknown "urgent assignment did not read back"
+      gh api -X POST "repos/$repo/issues/$number/labels" -f 'labels[]=maintainer-ask-delivered' >/dev/null ||
+        unknown "urgent #$number delivered but marker failed; retry against the event ledger"
+      gh api "repos/$repo/issues/$number" >"$tmp/delivered-readback.json" || unknown "could not verify delivery marker"
+      jq -e --argjson spec "$required_ask" --argjson n "$number" "$conforms_def"' conforms($spec)
+        and .number == $n and any(.labels[]; .name == "maintainer-ask-delivered")' "$tmp/delivered-readback.json" >/dev/null ||
+        unknown "urgent #$number delivered but marker did not read back"
+      echo "DELIVERED #$number"
+    fi
+    count=$((count + 1))
+  done <"$tmp/urgent-numbers.txt"
+  if [ "$unproven" -ne 0 ]; then
+    unknown "some urgent asks have unproven delivery; other eligible asks were processed"
+  fi
+  finish "$found"
+}
+
 [ "$#" -gt 0 ] || usage "a subcommand is required"
 subcommand=$1
 shift
@@ -752,5 +854,6 @@ case "$subcommand" in
   send) cmd_send "$@" ;;
   needs-you) cmd_needs_you "$@" ;;
   check) cmd_check "$@" ;;
+  urgent) cmd_urgent "$@" ;;
   *) usage "unknown subcommand: $subcommand" ;;
 esac
