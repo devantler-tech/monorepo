@@ -288,21 +288,16 @@ for mutation in '.version = 2' '.instances = {}' '.instances["build-worker"].nam
   expect_rc "malformed registry fails closed: $mutation" 2 --input "$TMP/prov.json" --instances "$TMP/bad-instances.json"
 done
 
-# ------------------------------------------------------------------ 18. release-flag wiring and expiry
-# These assertions check workflow wiring, not expression evaluation. Actions compares strings
-# without case sensitivity, so `TRUE` enables the job too. Both-state behavior must be evaluated
-# with the Actions expression engine or an actual workflow, never a Bash replacement for it.
+# ------------------------------------------------------------------ 18. workflow wiring
+# These assertions check workflow wiring, not expression evaluation: behavior that depends on the
+# Actions expression engine is evaluated with an actual workflow, never a Bash replacement for it.
 CI_YAML="$HERE/../../.github/workflows/ci.yaml"
 if [ -r "$CI_YAML" ]; then
   gate="$(awk '/^  report-unsigned-commits:/ { injob = 1; next } injob && /^    if: / { sub(/^    if: /, ""); print; exit } injob && /^  [a-z]/ { exit }' "$CI_YAML")"
+  # The job is scoped to pull requests, so a push to main never reports, and it needs no other switch.
   case "$gate" in
-    *"vars.UNSIGNED_COMMIT_REPORT == 'true'"*) ok "the reporting job retains the release-variable condition" ;;
-    *) bad "the reporting job retains the release-variable condition" "gate=$gate" ;;
-  esac
-  # The other conjunct: the job is scoped to pull requests, so a push to main never reports.
-  case "$gate" in
-    *"github.event_name == 'pull_request'"*) ok "the reporting job is scoped to pull_request events" ;;
-    *) bad "the reporting job is scoped to pull_request events" "gate=$gate" ;;
+    "github.event_name == 'pull_request'") ok "the reporting job runs on every pull request event and only there" ;;
+    *) bad "the reporting job runs on every pull request event and only there" "gate=$gate" ;;
   esac
   # And the provenance the per-PR path needs must actually be wired, or case 16 guards a path CI
   # never takes.
@@ -393,18 +388,9 @@ SH
     bad "the workflow report-step shell is present and executable" "missing or malformed report run block"
   fi
 else
-  bad "the workflow is readable for the flag-state assertions" "missing $CI_YAML"
+  bad "the workflow is readable for the wiring assertions" "missing $CI_YAML"
 fi
 
-# The flag is a RELEASE flag, so it is short-lived by contract: monorepo#3229 owns activating it and
-# then removing both the variable and the condition. This assertion is the forcing function -- from
-# the expiry it fails, so the flag cannot quietly become permanent debt. Removing the flag means
-# removing this case in the same change.
-#
-# `date -u +%Y%m%d` is the one spelling BSD and GNU agree on; every relative-date form differs.
-flag_expiry=20261031
-today="$(date -u +%Y%m%d)"
-if [ "$today" -lt "$flag_expiry" ]; then ok "the UNSIGNED_COMMIT_REPORT release flag has not passed its expiry"; else bad "the UNSIGNED_COMMIT_REPORT release flag has not passed its expiry" "today=$today expiry=$flag_expiry -- activate then remove the flag per monorepo#3229"; fi
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 completed=1
 [ "$fail" = 0 ] || exit 1
