@@ -37,6 +37,7 @@ jobs:
       prod-kube-context: ${{ steps.filter.outputs.prod-kube-context }}
       maintainer-preflight: ${{ steps.filter.outputs.maintainer-preflight }}
       self-review-contract: ${{ steps.filter.outputs.self-review-contract }}
+      fix-hint-contract: ${{ steps.filter.outputs.fix-hint-contract }}
       review-provider-loop-contract: ${{ steps.filter.outputs.review-provider-loop-contract }}
       agent-role-delivery-contract: ${{ steps.filter.outputs.agent-role-delivery-contract }}
       work-priority-ladder: ${{ steps.filter.outputs.work-priority-ladder }}
@@ -745,6 +746,11 @@ jobs:
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/skills/product-engineering/SKILL.md'
               - '.claude/scripts/self-review-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            fix-hint-contract:
+              - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/*.sh'
               - '.github/workflows/ci.yaml'
             review-provider-loop-contract:
               - 'AGENTS.md'
@@ -2666,6 +2672,21 @@ jobs:
       - name: Verify the self-review contract
         run: bash .claude/scripts/self-review-contract.test.sh
 
+  test-fix-hint-contract:
+    name: Test fix-hint contract
+    needs: changes
+    if: needs.changes.outputs.fix-hint-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify no fix hint tells an agent to break the contract
+        run: bash .claude/scripts/fix-hint-contract.test.sh
+
   test-review-provider-loop-contract:
     name: Test review-provider loop contract
     needs: changes
@@ -3187,6 +3208,7 @@ jobs:
       - test-lane-draft-count
       - test-delivered-open-candidates
       - test-self-review-contract
+      - test-fix-hint-contract
       - test-review-provider-loop-contract
       - test-agent-role-delivery-contract
       - test-work-priority-ladder
@@ -3283,6 +3305,7 @@ jobs:
             ${{ needs.test-lane-draft-count.result }}
             ${{ needs.test-delivered-open-candidates.result }}
             ${{ needs.test-self-review-contract.result }}
+            ${{ needs.test-fix-hint-contract.result }}
             ${{ needs.test-review-provider-loop-contract.result }}
             ${{ needs.test-agent-role-delivery-contract.result }}
             ${{ needs.test-work-priority-ladder.result }}

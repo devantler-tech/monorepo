@@ -380,6 +380,7 @@ worktree-cleanup-all.test.sh|--run-cases $tmp/converted/memory.md $tmp/converted
 agent-role-delivery-contract.test.sh|
 maintainer-digest.sh|
 maintainer-digest.test.sh|
+fix-hint-contract.test.sh|
 "
 
 # This trap is installed only inside a real submodule synchronization transaction.
