@@ -232,6 +232,28 @@ expect_finding "a marker inside \$'…' quotes is data" date-d-without-bsd 2 "$f
 f="$(fixture hash-not-comment 'n=${#arr[@]}; now=$(date -d yesterday) # gnu-only-ok: Linux-only')"
 expect_clean "\${#…} is not a comment, and the real trailing comment still counts" "$f"
 
+# --- Quoted arithmetic keeps its own grouping state (monorepo#3722) -------------------------------
+f="$(fixture arithmetic-nested-quoted 'minutes="$((($1 % 3600) / 60))"')"
+expect_clean "quoted arithmetic may begin with a nested parenthesis" "$f"
+f="$(fixture arithmetic-deep-quoted 'minutes="$((((($1 % 3600) / 60))))"')"
+expect_clean "quoted arithmetic keeps deeper grouping balanced" "$f"
+f="$(fixture arithmetic-multiline-quoted 'minutes="$(((' '$1 % 3600) / 60))"')"
+expect_clean "quoted arithmetic grouping continues across physical lines" "$f"
+f="$(fixture arithmetic-then-gnu 'minutes="$((($1 % 3600) / 60))"; now=$(date -d yesterday)')"
+expect_finding "GNU date after quoted arithmetic is still checked" date-d-without-bsd 2 "$f"
+f="$(fixture arithmetic-and-substitution 'label="$((($1 % 3600) / 60)) $(date -d yesterday)"')"
+expect_finding "a later quoted command substitution is still checked" date-d-without-bsd 2 "$f"
+f="$(fixture arithmetic-command-quoted-option 'x="$(( $(date "-d" yesterday +%s) + 1 ))"')"
+expect_finding "quoted GNU option inside arithmetic command substitution is checked" date-d-without-bsd 2 "$f"
+f="$(fixture arithmetic-command-backtick 'x="$(( `date "-d" yesterday +%s` + 1 ))"')"
+expect_finding "quoted GNU option inside arithmetic backticks is checked" date-d-without-bsd 2 "$f"
+f="$(fixture arithmetic-command-portable 'x="$(( $(date -r 0 +%s) + 1 ))"')"
+expect_clean "portable command substitution inside quoted arithmetic stays clean" "$f"
+f="$(fixture arithmetic-incomplete-quoted 'minutes="$((($1 % 3600) / 60)"')"
+run "$f"
+[[ $rc -eq 2 && -z "$out" ]] || fail "incomplete quoted arithmetic: expected unknown without a clean result, got $rc (out: $out; err: $err)"
+ok
+
 # --- Several files in one run: findings keep their own file and line ------------------------------
 a="$(fixture multi-a 'x=1' 'find . -newermt @1')"
 b="$(fixture multi-b 'y=$(date -d "@1")')"
