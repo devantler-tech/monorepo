@@ -9,12 +9,12 @@
 # nothing reached the maintainer, who was the only one able to fix it. See monorepo#3801.
 #
 # So each runtime watches its SIBLING on every run, and this script turns a sequence of single
-# liveness verdicts into one decision: send the last-resort Slack DM now, or not. It keeps a small
+# liveness verdicts into one decision: file the last-resort urgent ask now, or not. It keeps a small
 # private state file between runs because neither liveness check reports how long a lane has been
 # down, and because "once per outage" needs a memory of having sent.
 #
 # It never sends anything itself. Exit 1 together with `verdict=ESCALATE` on stdout tells the caller
-# to send the DM through the Slack connector and then record that with --mark-notified.
+# to file or reuse an urgent ask, verify bot assignment, then record --mark-notified.
 #
 # WHAT IT COUNTS
 #   Hourly slots in which the sibling lane's engineer was not producing, on any of its entries (see
@@ -476,5 +476,5 @@ summary ESCALATE "$cause"
 claimed="$NOW_EPOCH"
 write_state
 # The every-run bullet in AGENTS.md has no room for the procedure, so the verdict carries it.
-echo "sibling-lane-watch: send the lane-outage Slack DM, then re-run with --mark-notified -- see 'Sibling lane outage' in .claude/guides/maintainer-channels.md" >&2 || true
+echo "sibling-lane-watch: file or reuse the lane-outage urgent ask; verify bot assignment, then re-run with --mark-notified -- see 'Sibling lane outage' in .claude/guides/maintainer-channels.md" >&2 || true
 finish 1

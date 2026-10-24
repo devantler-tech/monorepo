@@ -17,7 +17,7 @@ const blockedLabel = `"labels":[{"name":"blocked"}],`
 
 func TestParkedDigestReportsAConformingRecordAsParkedWithItsBlocker(t *testing.T) {
 	record := commentJSON(t, "devantler", recordHead+goodLine)
-	code, out := runInput(t, "["+digestPull("5", blockedLabel, record)+"]", "--parked-digest")
+	code, out := runInput(t, "["+digestPull("5", blockedLabel+`"ask_state":"open",`, record)+"]", "--parked-digest")
 	if code != 0 {
 		t.Fatalf("code=%d, want 0; out:\n%s", code, out)
 	}
@@ -79,8 +79,8 @@ func TestParkedDigestNeverReportsAnUnlabelledPullRequest(t *testing.T) {
 }
 
 func TestParkedDigestReportsAnAuthorityBlockerThatWasAsked(t *testing.T) {
-	record := commentJSON(t, "devantler", recordHead+"**Blocker:** approve the upgrade | authority | last-verified 2026-09-01: waiting | asked slack 2026-08-30")
-	code, out := runInput(t, "["+digestPull("5", blockedLabel, record)+"]", "--parked-digest")
+	record := commentJSON(t, "devantler", recordHead+"**Blocker:** approve the upgrade | authority | last-verified 2026-09-01: waiting | asked digest o/monorepo#40 2026-08-30")
+	code, out := runInput(t, "["+digestPull("5", blockedLabel+`"ask_state":"open",`, record)+"]", "--parked-digest")
 	if code != 0 || !strings.Contains(out, "PARKED     p#5  [authority]  approve the upgrade\n") {
 		t.Fatalf("code=%d out:\n%s", code, out)
 	}
@@ -92,7 +92,7 @@ func TestParkedDigestReportsAnAuthorityBlockerThatWasAsked(t *testing.T) {
 // record nobody re-checked goes stale like any other.
 func TestParkedDigestReportsAnOutcomeWait(t *testing.T) {
 	record := commentJSON(t, "devantler", recordHead+"**Blocker:** a release carrying owner/repo#7 | outcome | last-verified 2026-09-01: tag exists, release not published")
-	pull := "[" + digestPull("5", blockedLabel+`"blocker_state":"closed",`, record) + "]"
+	pull := "[" + digestPull("5", blockedLabel+`"ask_state":"open","blocker_state":"closed",`, record) + "]"
 	code, out := runInput(t, pull, "--parked-digest")
 	if code != 0 || !strings.Contains(out, "PARKED     p#5  [outcome]  a release carrying owner/repo#7\n") {
 		t.Fatalf("code=%d out:\n%s", code, out)
@@ -143,7 +143,7 @@ func TestParkedDigestIsNotChangedByIssueFindings(t *testing.T) {
 func TestParkedDigestBoundsTheBlockerItPrints(t *testing.T) {
 	long := "owner/repo#7 " + strings.Repeat("x", 300)
 	record := commentJSON(t, "devantler", recordHead+"**Blocker:** "+long+" | upstream | last-verified 2026-09-01: open")
-	code, out := runInput(t, "["+digestPull("5", blockedLabel, record)+"]", "--parked-digest")
+	code, out := runInput(t, "["+digestPull("5", blockedLabel+`"ask_state":"open",`, record)+"]", "--parked-digest")
 	if code != 0 {
 		t.Fatalf("code=%d out:\n%s", code, out)
 	}
@@ -211,8 +211,8 @@ func TestParkedDigestDoesNotHonourAParkWhoseBlockerClosed(t *testing.T) {
 // An authority blocker waits on a decision. Whatever object it names closing
 // does not make that decision, so its park is not read through the object.
 func TestParkedDigestDoesNotReadAnAuthorityBlockersState(t *testing.T) {
-	record := commentJSON(t, "devantler", recordHead+"**Blocker:** owner/repo#7 | authority | last-verified 2026-09-01: waiting | asked slack 2026-08-30")
-	code, out := runInput(t, "["+digestPull("5", blockedLabel+`"blocker_state":"closed",`, record)+"]", "--parked-digest")
+	record := commentJSON(t, "devantler", recordHead+"**Blocker:** owner/repo#7 | authority | last-verified 2026-09-01: waiting | asked digest o/monorepo#40 2026-08-30")
+	code, out := runInput(t, "["+digestPull("5", blockedLabel+`"ask_state":"open","blocker_state":"closed",`, record)+"]", "--parked-digest")
 	if code != 0 || !strings.Contains(out, "PARKED     p#5  [authority]  owner/repo#7\n") {
 		t.Fatalf("code=%d out:\n%s", code, out)
 	}
@@ -401,7 +401,7 @@ func TestParkedDigestRefusesABlockerThatCannotClear(t *testing.T) {
 // start a second row.
 func TestParkedDigestRowCannotBeForgedByTheBlockerText(t *testing.T) {
 	record := commentJSON(t, "devantler", recordHead+"**Blocker:** owner/repo#7  [upstream, blocker open] PARKED     evil#1  [authority]  x | upstream | last-verified 2026-09-01: open")
-	code, out := runInput(t, "["+digestPull("5", blockedLabel, record)+"]", "--parked-digest")
+	code, out := runInput(t, "["+digestPull("5", blockedLabel+`"ask_state":"open",`, record)+"]", "--parked-digest")
 	if code != 0 || !strings.HasPrefix(out, "PARKED     p#5  [upstream, blocker state not read]  owner/repo#7") {
 		t.Fatalf("code=%d out:\n%s", code, out)
 	}

@@ -23,12 +23,14 @@ closed on the cost dimension only** — operate and advance work continue, spend
 | **Protected-outcomes floor** | [`.claude/finops/lifestyle-floor.md`](../finops/lifestyle-floor.md) — the declared, versioned list of outcomes never traded for money. **Changing it is the maintainer's call**, in a session or over the private channel; never the engineer's, and never inferred from a metric. |
 | **Run procedure for a cost pass** | [`.claude/skills/finops/`](../skills/finops/SKILL.md) — measure → attribute → diagnose → floor-veto → act → verify → record. |
 | **Cost evidence source** | the read-only [`.claude/scripts/finops-snapshot.sh`](../scripts/finops-snapshot.sh) (OpenCost attribution), plus Coroot's Prometheus for actual usage. The **provider billing API is NOT wired**, so every saving figure is *modelled*, never *realised*, and must say so. The run loop carries the full source-by-source state and its four known measurement defects. |
-| **Private decision channel** | the devantler-tech Slack, per *Maintainer channels* — 🔴 **and its destination is still UNRESOLVED**: the only channel in the workspace is the **public** `#announcements`, where financial detail must never go. Until the maintainer designates a private destination, send **nothing** — and route only **non-financial** blockers through the run report, never a financial decision, which is not produced at all while this reads UNRESOLVED (see *Activation gate*). |
+| **Private decision channel** | **UNRESOLVED**. The accepted GitHub ask/digest channel is public and cannot carry financial detail; Slack is retired. The private Money digest proposed in platform#5030 is not live or designated here. Until the maintainer separately designates a private destination and enables spend stewardship, send **nothing** and produce no financial decision (see *Activation gate*). |
 | **Cost-pass cadence** | per *Cadence & focus* — a heavy task, so roughly weekly, never every run, and always behind hotfixes and actionable PRs. |
 | **Which lanes may run it** | Only registered instances with verified access to both the live-cluster evidence source and private ledger. A missing capability skips the cost pass; provider or host labels never establish access. |
 | **Private evidence store** | the out-of-repository ledger named under *Durable memory* — proposals, open asks, and projected-vs-realised. Absolute figures never enter a repo file. |
 
 **Activation gate — the decision-producing half is DEFAULT-OFF until the private channel resolves.**
+While unresolved, route only **non-financial** blockers through the run report; never produce or
+park a financial decision there. A report records work and does not replace the maintainer channels.
 Spend stewardship is disabled in the effective desired state; ordinary operate and advance work
 continue. The **Private decision channel** row supplies an additional restriction after the reviewed
 entrypoint's explicit opt-in and deployment prerequisites resolve:

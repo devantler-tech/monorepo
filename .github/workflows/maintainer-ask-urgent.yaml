@@ -1,0 +1,43 @@
+name: Urgent maintainer asks
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Preview urgent assignments without sending
+        type: boolean
+        default: false
+
+permissions: {}
+concurrency:
+  group: maintainer-digest
+  cancel-in-progress: false
+
+jobs:
+  urgent:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'maintainer-ask-urgent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Require the reviewed default branch
+        env:
+          REF: ${{ github.ref }}
+        run: test "$REF" = refs/heads/main
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Sweep unanswered urgent asks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          args=(urgent)
+          if [ "$DRY_RUN" = true ]; then args+=(--dry-run); fi
+          bash .claude/scripts/maintainer-digest.sh "${args[@]}"

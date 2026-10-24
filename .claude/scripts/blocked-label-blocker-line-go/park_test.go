@@ -54,6 +54,8 @@ func (f *fakeForge) read(endpoint string) ([]byte, error) {
 	case "user":
 		raw, _ := json.Marshal(map[string]string{"login": f.login})
 		return raw, nil
+	case "repos/o/monorepo/issues/40":
+		return []byte(`{"number":40,"state":"open","user":{"login":"devantler"},"labels":[{"name":"maintainer-ask"}]}`), nil
 	case parkIssuePath:
 		record := map[string]any{"number": f.number, "state": f.state, "comments": len(f.comments)}
 		if !f.noLabels {
@@ -290,8 +292,9 @@ func TestParkBelievesOnlyWhatReadsBack(t *testing.T) {
 
 func TestParkAuthorityRecordCarriesItsAsk(t *testing.T) {
 	f := newFakeForge(t)
-	code, stdout, stderr := park(authorityArgs...)
-	if code != 0 || !strings.Contains(stdout, "| authority | last-verified 2026-10-06: token still expired | asked slack 2026-10-05") {
+	args := append(replaced(authorityArgs, "--asked", "digest"), "--ask-issue", "o/monorepo#40")
+	code, stdout, stderr := park(args...)
+	if code != 0 || !strings.Contains(stdout, "| authority | last-verified 2026-10-06: token still expired | asked digest o/monorepo#40 2026-10-05") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	if !strings.HasPrefix(f.comments[0].Body, disclosurePrefix+"Agentic Engineer\n") {

@@ -99,7 +99,7 @@ func TestHelpDefinesTheEnforcedAskVocabulary(t *testing.T) {
 		}
 	}
 	for _, clause := range []string{
-		"slack = the Slack DM to the maintainer's own user (his self-DM), never a Slack channel, because every channel in the workspace is public;",
+		"slack = the Slack DM to the maintainer's own user (his self-DM), never a Slack channel, because every channel in the workspace is public (historical receipts only);",
 		"No other word is a channel token, and the check reads any other word as NO-ASK.",
 		"That includes push, whether it means a git push or the runtime's push notification, and issue:",
 	} {

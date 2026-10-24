@@ -138,7 +138,7 @@ step:
    maintainer-decisions" in memory** — that passive parking is the self-blocking the contract forbids
    (see *Issue-driven → Pull valuable Ready work*). When something feels like it needs his call, **investigate,
    decide, and ship a draft PR** (he redirects there); if you genuinely cannot proceed without him,
-   **actively** raise it via the **ask tool** (`AskUserQuestion`), a **devantler-tech Slack ping**
+   **actively** raise it via the **ask tool** (`AskUserQuestion`), a **public-safe digest ask**
    (last-resort, genuinely-blocked-only — see *Issue-driven*), or **ship the decision as a draft PR** —
    don't file-and-wait. The end-of-run report (he rarely reads it) and an `@devantler` mention (no
    notification) are NOT attention channels. A
@@ -249,6 +249,6 @@ step:
    closed to `QUERY-UNKNOWN` with this paragraph named as the blocker.
 2. **The end-of-run report** is a per-run record (products surveyed, what changed with PR links). It is
    **not** an attention channel — he rarely reads it — so anything that needs his action goes via a draft
-   PR or `AskUserQuestion` (or, when genuinely blocked in an unattended run, a last-resort Slack ping),
+   PR or `AskUserQuestion` (or, when genuinely blocked in an unattended run, a digest ask),
    never parked in the report. Live truth for PRs/CI/issues is GitHub itself;
    per-product status is derivable from `gh pr list` / `gh run list`, so it is never duplicated into a file.
