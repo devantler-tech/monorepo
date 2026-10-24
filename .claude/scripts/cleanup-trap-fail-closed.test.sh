@@ -376,6 +376,7 @@ codex-transcript-retention.test.sh|
 codex-worktree-retention.sh|dry-run 7
 codex-worktree-retention.test.sh|
 worktree-cleanup.test.sh|--run-cases $tmp/converted/memory.md $tmp/converted/cleanup-receipt
+worktree-cleanup-all.test.sh|--run-cases $tmp/converted/memory.md $tmp/converted/orchestrator-receipt
 agent-role-delivery-contract.test.sh|
 maintainer-digest.sh|
 maintainer-digest.test.sh|
