@@ -25,6 +25,9 @@ deliveries record each summary's date and exact hash in the generated issue body
 failed assignment and withheld content cannot mark a summary delivered. No separate state file
 or external service is introduced. GitHub scheduling can be delayed; this is not an email SLA.
 
+When all pending changelogs cannot fit in one email, send an oldest-first batch that fits and say
+more remains. Record receipts only for that batch; keep the rest pending for later asks.
+
 Summaries use their UTC delivery date as `docs/digests/YYYY-MM-DD.md`, and cover work since the
 previous delivery. Existing ISO-week files and ADR 0009 remain historical records. If a dated
 summary is unavailable or fails its existing checks, the sender still includes the current

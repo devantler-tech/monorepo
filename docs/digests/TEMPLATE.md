@@ -16,7 +16,8 @@ one reader who has not followed the work since the previous digest.
   the summary is missing.
 - Copy everything below the line at the end of this guide into the file, then fill it in.
 - **Quiet days send nothing.** Keep their dated summaries. The next email with an unanswered ask
-  combines all pending changelogs and records their exact hashes in its generated receipt.
+  combines pending changelogs and records their exact hashes in its generated receipt. Large
+  backlogs use batches that fit in an email, with a notice when more remains for later asks.
   A failed assignment or withheld summary never consumes a changelog. Do not hand-write receipts.
 - **Never repeat answered asks.** A maintainer reply on the ask itself counts as a response.
   A numbered reply such as `1: B` on a delivered digest maps back to that digest's ask, even when
