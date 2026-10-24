@@ -247,10 +247,15 @@ rc=$?
 [ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'explicit missing npm executable cleaned a fallback cache'
 npm_payload || fail 'fixture: restore payload after missing-executable control'
 out=$(NPM_HELD=1 run_npm apply)
+grep -qF 'NPM_CONTENT_CACHE npm/npx running or cache in use/unknown — keeping' <<<"$out" || fail 'npm holder control missed its guard'
+grep -qF 'NPM_CONTENT_CACHE would be cleaned' <<<"$out" && fail 'npm holder control proposed cleaning'
 [ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'npm held-open content was removed'
 out=$(NPM_RUNNING=1 run_npm apply)
+grep -qF 'NPM_CONTENT_CACHE npm/npx running or cache in use/unknown — keeping' <<<"$out" || fail 'npm running-process control missed its guard'
+grep -qF 'NPM_CONTENT_CACHE would be cleaned' <<<"$out" && fail 'npm running-process control proposed cleaning'
 [ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'a running npm lost its content cache'
 out=$(NPM_FOREIGN=1 run_npm apply)
+grep -qF "NPM_CONTENT_CACHE another user's file inside — keeping" <<<"$out" || fail 'npm foreign-owner control missed its guard'
 [ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'npm foreign-owned cache content was removed'
 out=$(NPM_LATE_CONFIG_FAIL=1 run_npm apply)
 rc=$?
@@ -258,6 +263,7 @@ rc=$?
 [ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'npm failed configuration recheck removed content'
 rm -f "$npm_fixture/config-read"
 out=$(NPM_LATE_HELD=1 run_npm apply)
+grep -qF 'NPM_CONTENT_CACHE changed, active or unknown at clean time — keeping' <<<"$out" || fail 'npm late-holder control missed its re-probe'
 [ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'npm cache opened after the snapshot was removed'
 out=$(NPM_PS_FAIL=1 run_npm apply)
 rc=$?
@@ -269,11 +275,13 @@ rc=$?
 [ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'npm failed clean lost content'
 mv "$npm_fixture/_cacache/index-v5" "$npm_fixture/unknown-index"
 out=$(run_npm apply)
+grep -qF 'NPM_CONTENT_CACHE layout unrecognised or unreadable — keeping' <<<"$out" || fail 'npm unknown-layout control missed its guard'
 [ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'npm unknown cache layout was cleaned'
 mv "$npm_fixture/unknown-index" "$npm_fixture/_cacache/index-v5"
 mv "$npm_fixture/_cacache" "$npm_fixture/symlink-target"
 ln -s "$npm_fixture/symlink-target" "$npm_fixture/_cacache"
 out=$(run_npm apply)
+grep -qF 'NPM_CONTENT_CACHE layout unrecognised or unreadable — keeping' <<<"$out" || fail 'npm symlink control missed its guard'
 [ -f "$npm_fixture/symlink-target/content-v2/sha512/blob" ] || fail 'npm cache symlink target was cleaned'
 rm "$npm_fixture/_cacache"
 mv "$npm_fixture/symlink-target" "$npm_fixture/_cacache"
@@ -283,6 +291,7 @@ if [ "$(id -u)" -ne 0 ]; then
   rc=$?
   chmod 700 "$npm_fixture/_cacache"
   [ "$rc" -eq 2 ] || fail 'npm unreadable cache did not report UNKNOWN'
+  grep -qF 'NPM_CONTENT_CACHE layout unrecognised or unreadable — keeping' <<<"$out" || fail 'npm unreadable-cache control missed its guard'
   [ -f "$npm_fixture/_cacache/content-v2/sha512/blob" ] || fail 'npm unreadable cache lost content'
 fi
 out=$(run_npm apply)
