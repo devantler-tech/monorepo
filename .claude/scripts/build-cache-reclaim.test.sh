@@ -190,11 +190,13 @@ esac
 STUB
 cat > "$npm_bin/lsof" <<'STUB'
 #!/usr/bin/env bash
+# Native lsof reports physical paths, including /private on macOS.
+npm_physical=$(cd -- "$NPM_FIXTURE" && pwd -P) || exit 2
 if [ "${1:-}" = -Fn ]; then
   printf 'n/dev/null\n'
-  [ "${NPM_HELD:-0}" = 0 ] || printf 'n%s/_cacache/content-v2/sha512/blob\n' "$NPM_FIXTURE"
+  [ "${NPM_HELD:-0}" = 0 ] || printf 'n%s/_cacache/content-v2/sha512/blob\n' "$npm_physical"
 elif [ "${NPM_HELD:-0}" = 1 ] || [ "${NPM_LATE_HELD:-0}" = 1 ]; then
-  printf 'n%s/_cacache/content-v2/sha512/blob\n' "$NPM_FIXTURE"
+  printf 'n%s/_cacache/content-v2/sha512/blob\n' "$npm_physical"
 else
   exit 1
 fi
