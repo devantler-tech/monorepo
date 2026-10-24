@@ -167,7 +167,7 @@ public and private — no per-repo loop needed to enumerate):
    repos with no open PR-less issues at all, and deepen only shared tips whose issue is in that set.
    Before a PR there is no body to grep, so these refs are the pre-PR coordination signals.
 3. **Classify dependency PRs before yielding.** Identify exact `renovate[bot]`/`dependabot[bot]`
-   (`app/renovate`/`app/dependabot` deeper) by author. Read head, `updatedAt`, checks, merge state,
+   (`app/renovate`/`app/dependabot` deeper) by author. Read per PR head, `updatedAt`, checks, merge state,
    `autoMergeRequest`, update/rebase activity, and merge-group; author grants first attempt, not proof.
    Emit `AUTOMATION-OWNED (SELF-PROGRESSING)` for pending work, armed merge, or a newly
    green head inside its merge window; include evidence/head/time.
@@ -178,12 +178,11 @@ public and private — no per-repo loop needed to enumerate):
 
    Enumerate **every open PR — drafts and non-drafts, whoever authored it** — plus the
    candidate-only `botantler-1[bot]` updater rows defined below, then pull the heavy fields one PR at
-   a time for **at most eight actionable PRs per digest**. The orchestrator drives every one of these
-   to a terminal state
-   (*You own EVERY pull request in the portfolio*), and it cannot review, promote, merge, close or
-   park a PR whose pentad it never received: a cheap static row for an external or `Copilot` PR is
-   **unactionable data**, so the deepening set is now defined by *what the run may act on*, not by
-   who authored it. **Author trust decides EXECUTION, never deepening** — reading a PR's metadata
+   a time for **at most eight actionable PRs per digest**. **Never put merge state, checks,
+   `mergeable`, threads or commits in an org-wide search:** GitHub answers it with an HTML page
+   (`invalid character '<'`), 38 of 57 times on 10-16..22 (monorepo#4492). The orchestrator cannot
+   review, promote, merge, close or park a PR whose pentad it never received, so the deepening set
+   is defined by *what the run may act on*, not by who authored it. **Author trust decides EXECUTION, never deepening** — reading a PR's metadata
    runs none of its code, so the exact-login list (`devantler`, `ksail-bot[bot]`,
    `github-actions[bot]`, `coderabbitai[bot]`, `cursor[bot]` — **exact match, never a substring**;
    `Copilot`/`copilot-swe-agent[bot]` are NOT trusted) survives only to mark which branches may be
