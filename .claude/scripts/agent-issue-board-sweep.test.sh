@@ -194,7 +194,7 @@ id_of() {
 # created_at <n> — the creation time of the n-th issue of a fixture: one second after the one
 # before it, so the order and every page boundary are unambiguous.
 created_at() {
-  printf '2026-01-01T%02d:%02d:%02dZ' "$(($1 / 3600))" "$((($1 % 3600) / 60))" "$(($1 % 60))"
+  printf '2026-01-01T%02d:%02d:%02dZ' "$(($1 / 3600))" "$(($1 % 3600 / 60))" "$(($1 % 60))"
 }
 # results <url>... — the discovery result set, oldest first. Every issue starts absent from the
 # board, so a case that says nothing about membership exercises the per-issue path as before.
