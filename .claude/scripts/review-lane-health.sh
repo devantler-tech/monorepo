@@ -53,7 +53,7 @@
 #
 # Usage:
 #   review-lane-health.sh [--org ORG] [--since YYYY-MM-DD] [--limit N] [--stale-hours N] [--now EPOCH]
-#                         [--cache-seconds N] [--cache-dir DIR] [--refresh]
+#                         [--cache-seconds N] [--cache-dir DIR] [--refresh] [--jobs 1..4]
 #   review-lane-health.sh --events FILE [--stale-hours N] [--now EPOCH]   # classify recorded events
 #
 # Events are tab-separated: lane (cr|codex|bugbot), ISO-8601 UTC time, ok|fail|declined, cause (- when
@@ -66,7 +66,7 @@
 set -euo pipefail
 
 org="devantler-tech" since="" limit=60 stale_hours=72 now="" events_file=""
-cache_seconds=900 cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/review-lane-health" refresh=0
+cache_seconds=900 cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/review-lane-health" refresh=0 jobs=4
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' >&2; exit 2; }
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -79,10 +79,12 @@ while [ $# -gt 0 ]; do
     --cache-seconds) cache_seconds="${2:-}"; shift 2 || usage ;;
     --cache-dir) cache_dir="${2:-}"; shift 2 || usage ;;
     --refresh) refresh=1; shift ;;
+    --jobs) jobs="${2:-}"; shift 2 || usage ;;
     *) usage ;;
   esac
 done
 [[ "$limit" =~ ^[0-9]+$ && "$stale_hours" =~ ^[0-9]+$ && "$cache_seconds" =~ ^[0-9]+$ ]] || usage
+[[ "$jobs" =~ ^[1-4]$ ]] || usage
 [ -n "$cache_dir" ] || usage
 [ -z "$now" ] && now="$(date -u +%s)"
 [[ "$now" =~ ^[0-9]+$ ]] || usage
@@ -93,17 +95,28 @@ tmp="$(mktemp -d)"
 # cleanup then becomes the script's status. Completion is recorded explicitly, so reaching the end is
 # the only way a zero status leaves this script; an abort reports UNKNOWN (monorepo#3414).
 review_lane_health_finished=0
+review_cleanup_scope=$BASH_SUBSHELL
+sweep_pids=''
 # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
 review_lane_health_cleanup() {
-  local rc=$?
-  rm -rf "$tmp"
-  if [ "$review_lane_health_finished" != 1 ] && [ "$rc" -eq 0 ]; then
+  local rc=$? pid
+  # Errexit can unwind a worker's locals before EXIT on Bash 3.2. Its inherited
+  # parent bindings must never authorize cleanup in a different subshell.
+  if [ "$BASH_SUBSHELL" -eq "$review_cleanup_scope" ]; then
+    for pid in $sweep_pids; do wait "$pid" || true; done
+    rm -rf "$tmp"
+  fi
+  if [ "$review_lane_health_finished" != 1 ] && [ "$rc" -ne 2 ]; then
     echo "review-lane-health: aborted before finishing; reporting UNKNOWN rather than a clean pass" >&2
     rc=2
   fi
   exit "$rc"
 }
-trap review_lane_health_cleanup EXIT
+install_cleanup() {
+  trap review_lane_health_cleanup EXIT
+  trap 'exit 2' HUP INT TERM
+}
+install_cleanup
 
 unknown() { echo "review-lane-health: UNKNOWN — $*" >&2; exit 2; }
 
@@ -262,6 +275,70 @@ collect_pr() {
     else empty end' "$tmp/checks" >>"$tmp/events"
 }
 
+# Independent PR reads overlap, but each collector owns its complete scratch directory.
+# Join the whole bounded batch, then merge results in search order. A failed worker never
+# contributes a verdict or a completed sweep; successful per-URL HTTP entries stay valid.
+# --jobs 1 retains the original serial control (monorepo#4491).
+collect_prs() {
+  local parent_tmp=$tmp pr count=0 ids='' id pid failed=0 a b c d extra
+  while IFS= read -r pr; do
+    [ -n "$pr" ] || continue
+    if [ "$jobs" = 1 ]; then
+      collect_pr "${pr%% *}" "${pr##* }"
+      continue
+    fi
+    count=$((count + 1))
+    mkdir "$parent_tmp/worker-$count" "$parent_tmp/result-$count" || unknown 'cannot allocate collector scratch'
+    collect_worker "$parent_tmp" "$count" "${pr%% *}" "${pr##* }" \
+      2>"$parent_tmp/result-$count/err" &
+    sweep_pids="$sweep_pids $!"
+    ids="$ids $count"
+    if [ $((count % jobs)) -ne 0 ]; then continue; fi
+    finish_collectors
+  done <"$parent_tmp/prs"
+  [ -z "$sweep_pids" ] || finish_collectors
+}
+
+# Called only as a background job: local scratch/counters stay private, and explicit
+# exit keeps them bound through cleanup. It exports only complete result files.
+collect_worker() {
+  local tmp="$1/worker-$2" result_dir="$1/result-$2" sweep_pids=''
+  local http_reads=0 http_replays=0 http_unstored=0 http_unconfirmed=0
+  local review_lane_health_finished=0
+  local review_cleanup_scope=$BASH_SUBSHELL
+  install_cleanup
+  # A trapped signal waits for the foreground gh child before exiting, so an
+  # interrupted collector cannot leave that child writing into removed scratch.
+  cp "$1/classify-comments.jq" "$tmp/classify-comments.jq"
+  : >"$tmp/events"
+  collect_pr "$3" "$4"
+  cp "$tmp/events" "$result_dir/events"
+  printf '%s %s %s %s\n' "$http_reads" "$http_replays" "$http_unstored" "$http_unconfirmed" \
+    >"$result_dir/stats"
+  review_lane_health_finished=1
+  # Exit while the worker's local scratch still binds the inherited EXIT handler.
+  exit 0
+}
+
+# Uses collect_prs' dynamically scoped batch locals; no caller may remove worker scratch
+# until every wait has completed, even when the first worker failed.
+finish_collectors() {
+  for pid in $sweep_pids; do wait "$pid" || failed=1; done
+  sweep_pids=''
+  if [ "$failed" != 0 ]; then
+    for id in $ids; do cat "$parent_tmp/result-$id/err" >&2; done
+    unknown 'pull-request collector failed'
+  fi
+  for id in $ids; do
+    read -r a b c d extra <"$parent_tmp/result-$id/stats" || unknown 'collector counters missing'
+    [[ "$a $b $c $d" =~ ^[0-9]+\ [0-9]+\ [0-9]+\ [0-9]+$ && -z "$extra" ]] || unknown 'invalid collector counters'
+    cat "$parent_tmp/result-$id/events" >>"$parent_tmp/events" || unknown 'collector events unreadable'
+    http_reads=$((http_reads + a)) http_replays=$((http_replays + b))
+    http_unstored=$((http_unstored + c)) http_unconfirmed=$((http_unconfirmed + d))
+  done
+  ids=''
+}
+
 # One jq program classifies comments and review objects. Each lane counts only its own bot and only
 # exact artifact shapes, so a review that merely discusses a rate or usage limit is never a refusal.
 # CodeRabbit's auto-generated summary is not evidence: a refusal refreshes it.
@@ -359,10 +436,7 @@ else
     gh search prs --owner "$org" --updated ">=$since" --archived=false --sort updated --order desc \
       --limit "$limit" --json repository,number \
       --jq '.[] | "\(.repository.name) \(.number)"' >"$tmp/prs" || unknown "cannot search $org pull requests"
-    while IFS= read -r pr; do
-      [ -n "$pr" ] || continue
-      collect_pr "${pr%% *}" "${pr##* }"
-    done <"$tmp/prs"
+    collect_prs
     echo "review-lane-health: $http_reads REST reads, $http_replays answered 304 Not Modified (not charged)" >&2
     if [ "$http_usable" = 1 ]; then
       [ "$http_unstored" -eq 0 ] ||

@@ -485,5 +485,185 @@ fresh
 [ -n "$(entry_for "$pull")" ] || fail "a kept read in use must not be pruned"
 unset GH_LOG
 
+# Independent PRs must overlap without sharing scratch files or changing event order.
+# This wrapper reuses the existing paginated artifact server for six distinct PRs.
+mkdir "$tmp/multi-bin"
+cat >"$tmp/multi-bin/gh" <<'MULTI'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "$1 $2" = 'search prs' ]; then
+  printf 'r 7\nr 8\nr 9\nr 10\nr 11\nr 12\n'
+  exit 0
+fi
+args=("$@")
+pr=''
+for ((i=0; i<${#args[@]}; i++)); do
+  if [[ "${args[i]}" =~ ^repos/o/r/(pulls|issues)/([0-9]+)(.*)$ ]]; then
+    pr=${BASH_REMATCH[2]}
+    args[i]="repos/o/r/${BASH_REMATCH[1]}/7${BASH_REMATCH[3]}"
+  elif [[ "${args[i]}" =~ ^repos/o/r/commits/abc[0-9]+/(.*)$ ]]; then
+    args[i]="repos/o/r/commits/abc/${BASH_REMATCH[1]}"
+  fi
+done
+if [ -n "${MULTI_STATE:-}" ]; then
+  printf 'start %s\n' "$$" >>"$MULTI_STATE/activity"
+  touch "$MULTI_STATE/active.$$"
+  trap 'rm -f "$MULTI_STATE/active.$$"; printf "done %s\n" "$$" >>"$MULTI_STATE/activity"' EXIT
+  if [[ "$*" =~ /pulls/[0-9]+$ ]]; then
+    touch "$MULTI_STATE/started.$pr"
+    if [ "${MULTI_BARRIER:-0}" = 1 ] && [ "$pr" -lt 11 ]; then
+      tries=0
+      until [ -f "$MULTI_STATE/started.7" ] && [ -f "$MULTI_STATE/started.8" ] &&
+        [ -f "$MULTI_STATE/started.9" ] && [ -f "$MULTI_STATE/started.10" ]; do
+        tries=$((tries + 1))
+        [ "$tries" -lt 150 ] || { echo 'fixture: four collectors did not overlap' >&2; exit 1; }
+        sleep 0.02
+      done
+    fi
+  fi
+  [ -z "${MULTI_DELAY:-}" ] || sleep "$MULTI_DELAY"
+fi
+if [ "$pr" = "${MULTI_FAIL_PR:-none}" ]; then exit 1; fi
+if [ "$pr" = "${MULTI_ABORT_PR:-none}" ]; then kill -TERM "$PPID"; exit 1; fi
+if [ -n "$pr" ]; then
+  "$MULTI_ORIGINAL_GH" "${args[@]}" | sed "s/\"sha\":\"abc\"/\"sha\":\"abc$pr\"/g"
+else
+  "$MULTI_ORIGINAL_GH" "${args[@]}"
+fi
+MULTI
+chmod +x "$tmp/multi-bin/gh"
+export MULTI_ORIGINAL_GH="$bin/gh"
+multi() {
+  PATH="$tmp/multi-bin:$PATH" PAD=105 run --org o --since 2026-09-14 --cache-seconds 900 "$@"
+}
+multi --jobs 1 --cache-dir "$tmp/serial"
+[ "$rc" -eq 1 ] || fail "serial multi-PR control failed: $rc"
+cp "$tmp/out" "$tmp/serial-out"
+serial_events="$tmp/serial/o.2026-09-14.60.v2.events"
+mkdir "$tmp/overlap"
+MULTI_STATE="$tmp/overlap" MULTI_BARRIER=1 multi --jobs 4 --cache-dir "$tmp/parallel"
+[ "$rc" -eq 1 ] || { cat "$tmp/err" >&2; fail "parallel multi-PR sweep failed: $rc"; }
+cmp -s "$tmp/serial-out" "$tmp/out" || fail 'parallel verdicts differ from serial'
+cmp -s "$serial_events" "$tmp/parallel/o.2026-09-14.60.v2.events" || fail 'parallel events differ from serial'
+grep -qF '30 REST reads, 0 answered 304' "$tmp/err" || fail 'parallel pagination/counters lost reads'
+awk '$1 == "start" { if (++active > max) max=active } $1 == "done" { active-- }
+  END { exit !(max == 4 && active == 0) }' "$tmp/overlap/activity" || fail 'worker concurrency was not bounded at four'
+[ -z "$(find "$tmp/overlap" -name 'active.*')" ] || fail 'collector returned with a writer still active'
+multi --jobs 2 --refresh --cache-dir "$tmp/parallel"
+cmp -s "$tmp/serial-out" "$tmp/out" || fail 'conditional parallel replay changed verdicts'
+grep -qF '30 REST reads, 30 answered 304' "$tmp/err" || fail 'parallel replay counters differ'
+multi --jobs 3 --cache-dir "$tmp/parallel"
+grep -qF 'reusing the sweep' "$tmp/err" || fail 'worker count must not invalidate a complete cached sweep'
+for fault in fail abort; do
+  state="$tmp/worker-$fault"
+  mkdir "$state"
+  if [ "$fault" = fail ]; then
+    MULTI_STATE="$state" MULTI_FAIL_PR=8 multi --jobs 4 --cache-dir "$state/cache"
+  else
+    MULTI_STATE="$state" MULTI_ABORT_PR=8 multi --jobs 4 --cache-dir "$state/cache"
+  fi
+  [ "$rc" -eq 2 ] || fail "$fault worker must report UNKNOWN, got $rc"
+  grep -q '^LANE-HEALTH' "$tmp/out" && fail "$fault worker published a partial verdict"
+  [ ! -f "$state/cache/o.2026-09-14.60.v2.events" ] || fail "$fault worker stored a partial sweep"
+  [ -z "$(find "$state" -name 'active.*')" ] || fail "$fault worker left an unjoined writer"
+done
+for invalid in 0 5 -1 nope; do
+  multi --jobs "$invalid" --cache-dir "$tmp/invalid-jobs"
+  [ "$rc" -eq 2 ] || fail "invalid job count $invalid must be rejected"
+done
+
+# Inject the Bash 3.2 failure class immediately AFTER the worker installs the same
+# cleanup handler as the parent. Reaching the marker, UNKNOWN, empty stdout/cache
+# and no scratch left prove the worker's local sentinel and parent backstop hold.
+state="$tmp/worker-unbound"
+mkdir -p "$state/temp"
+awk '
+  { print }
+  /^  install_cleanup$/ {
+    seen++
+    print "  : > \"$REVIEW_ABORT_REACHED\""
+    print "  : \"${REVIEW_ABORT_MUST_BE_UNSET}\""
+  }
+  END { if (seen != 1) exit 1 }
+' "$checker" >"$state/checker" || fail 'worker abort injection did not bind exactly once'
+unset REVIEW_ABORT_MUST_BE_UNSET
+rc=0
+PATH="$tmp/multi-bin:$PATH" REVIEW_ABORT_REACHED="$state/reached" TMPDIR="$state/temp" \
+  bash "$state/checker" --org o --since 2026-09-14 --now "$now" --jobs 4 --cache-dir "$state/cache" \
+  >"$state/out" 2>"$state/err" || rc=$?
+[ -f "$state/reached" ] || fail 'worker abort fixture never reached the installed trap'
+[ "$rc" -eq 2 ] || fail "unbound worker must report UNKNOWN, got $rc"
+[ ! -s "$state/out" ] || fail 'unbound worker published a verdict'
+[ ! -f "$state/cache/o.2026-09-14.60.v2.events" ] || fail 'unbound worker cached a sweep'
+[ -z "$(find "$state/temp" -mindepth 1 -maxdepth 1)" ] || fail 'unbound worker left scratch behind'
+
+# Observe deletion attempts on both sides of trap installation. Bash 3.2 unwinds
+# local bindings before running EXIT after an errexit abort, unlike explicit exit.
+for abort_at in early bound; do
+state="$tmp/worker-$abort_at-abort"
+mkdir -p "$state/temp" "$state/bin"
+cat >"$state/bin/rm" <<'RM'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  if [ -n "${REVIEW_FORBIDDEN_RM:-}" ] && [ "$arg" = "$REVIEW_FORBIDDEN_RM" ]; then
+    : >"$REVIEW_PARENT_DELETE_ATTEMPT"
+  fi
+done
+exec /bin/rm "$@"
+RM
+chmod +x "$state/bin/rm"
+awk -v where="$abort_at" '
+  { print }
+  (where == "early" && /^collect_worker\(\) \{$/) ||
+  (where == "bound" && /^  install_cleanup$/) {
+    seen++
+    print "  if [ \"$2\" = 1 ]; then"
+    print "    export REVIEW_FORBIDDEN_RM=\"$1\""
+    print "    : > \"$REVIEW_ABORT_REACHED\""
+    print "    false"
+    print "  fi"
+  }
+  END { if (seen != 1) exit 1 }
+' "$checker" >"$state/checker" || fail "$abort_at worker injection did not bind exactly once"
+rc=0
+PATH="$state/bin:$tmp/multi-bin:$PATH" REVIEW_ABORT_REACHED="$state/reached" \
+  REVIEW_PARENT_DELETE_ATTEMPT="$state/parent-delete-attempt" TMPDIR="$state/temp" \
+  bash "$state/checker" --org o --since 2026-09-14 --now "$now" --jobs 4 --cache-dir "$state/cache" \
+  >"$state/out" 2>"$state/err" || rc=$?
+[ -f "$state/reached" ] || fail "$abort_at worker abort fixture did not run"
+[ ! -f "$state/parent-delete-attempt" ] || fail "$abort_at worker tried to delete parent scratch"
+[ "$rc" -eq 2 ] || fail "$abort_at worker abort must report UNKNOWN, got $rc"
+[ ! -s "$state/out" ] || fail "$abort_at worker abort published a verdict"
+[ ! -f "$state/cache/o.2026-09-14.60.v2.events" ] || fail "$abort_at worker abort cached a sweep"
+[ -z "$(find "$state/temp" -mindepth 1 -maxdepth 1)" ] || fail "$abort_at worker abort left scratch behind"
+done
+
+# Interrupt the parent while its own collectors are active. It must join them before
+# removing scratch, and must never cache or classify their partial result.
+state="$tmp/parent-interrupted"
+mkdir "$state"
+PATH="$tmp/multi-bin:$PATH" MULTI_STATE="$state" MULTI_DELAY=0.1 \
+  "$checker" --org o --since 2026-09-14 --now "$now" --jobs 4 --cache-dir "$state/cache" \
+  >"$state/out" 2>"$state/err" &
+collector_pid=$!
+tries=0
+until [ -f "$state/started.7" ] && [ -f "$state/started.8" ] &&
+  [ -f "$state/started.9" ] && [ -f "$state/started.10" ]; do
+  tries=$((tries + 1))
+  if [ "$tries" -gt 500 ]; then
+    kill -TERM "$collector_pid" 2>/dev/null || true
+    wait "$collector_pid" || true
+    fail 'interruption fixture never started its collectors'
+  fi
+  sleep 0.02
+done
+kill -TERM "$collector_pid"
+rc=0
+wait "$collector_pid" || rc=$?
+[ "$rc" -eq 2 ] || fail "interrupted parent must report UNKNOWN, got $rc"
+[ ! -s "$state/out" ] || fail 'interrupted parent published a verdict'
+[ ! -f "$state/cache/o.2026-09-14.60.v2.events" ] || fail 'interrupted parent cached a sweep'
+[ -z "$(find "$state" -name 'active.*')" ] || fail 'interrupted parent returned before joining its writers'
+
 completed=1
 echo "review-lane-health: OK"
