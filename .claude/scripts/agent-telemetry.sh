@@ -6968,6 +6968,7 @@ fi
 if want outcomes; then
   echo
   echo "── OUTCOMES (did the work hold?) ────────────────────────────────"
+  echo "  Scheduled-workflow effectiveness: UNKNOWN (requires native scheduled-session and verified outcome joins)"
   if command -v gh >/dev/null 2>&1 && [ -e "$MONOREPO/.git" ]; then
     SINCE_ISO=$(date -u -v-"${SINCE_DAYS}"d '+%Y-%m-%d' 2>/dev/null \
                 || date -u -d "${SINCE_DAYS} days ago" '+%Y-%m-%d' 2>/dev/null)
@@ -6983,7 +6984,6 @@ if want outcomes; then
     # section then counts only the submodule cohort, whose archive state it has
     # not read, so every portfolio verdict below stays UNKNOWN or INCOMPLETE.
     echo "  Registered-writer merged PR activity since ${SINCE_ISO} (legacy namespace series; includes interactive sessions):"
-    echo "  Scheduled-workflow effectiveness: UNKNOWN (requires native scheduled-session and verified outcome joins)"
     # The submodule cohort is kept as its own total so the series measured
     # before monorepo#4139 stays comparable; a wider denominator is not a gain.
     # Portable extraction: BSD sed rejects the non-greedy `+?` a single-pass

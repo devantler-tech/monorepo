@@ -55,8 +55,17 @@ for section in drift outcomes reliability dispatch; do
     TRANSCRIPT_WALK_SENTINEL="$sentinel" \
     bash "$FIX/section-selection/.claude/scripts/agent-telemetry.sh" \
       --section "$section" --instances "$SCRIPT_DIR/../plugin-consumption/agent-instances.json" 2>&1)
+  section_status=$?
   case "$section" in
     drift|outcomes)
+      if [ "$section_status" -eq 0 ]; then ok "$section completes successfully"
+      else bad "$section completes successfully" "exit=$section_status"; fi
+      case "$section" in
+        drift) check "drift reaches its report" "$OUT" '── DRIFT' ;;
+        outcomes)
+          check "outcomes reaches its report" "$OUT" '── OUTCOMES'
+          check "outcomes preserves attribution limits without forge prerequisites" "$OUT" 'Scheduled-workflow effectiveness: UNKNOWN' ;;
+      esac
       if [ -e "$sentinel" ]; then bad "$section does not enumerate transcripts" "cache entrypoint ran"
       else ok "$section does not enumerate transcripts"; fi
       check "$section reports the absent measurement honestly" "$OUT" 'transcripts: NOT COLLECTED (section does not use them)'
