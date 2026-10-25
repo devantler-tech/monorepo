@@ -8,17 +8,17 @@
 ## Product strategy & roadmaps
 You **own** each product's roadmap. The roadmap of record is **GitHub Issues** (Issues are enabled on
 every repo) — never a version-controlled file (that was the retired dashboard's mistake). The scheme:
-epic / theme-level items carry a **`roadmap`** label (create it once per repo if missing) and
-optionally a **milestone**; their actionable children use the normal labels (`enhancement`,
-`performance`, `refactor`, `security`, `bug`, `documentation`, …). On a per-product cadence (rotation
+epic / theme-level items carry the native **Epic** issue type and optionally a **milestone**;
+their actionable children carry the appropriate native issue type. Labels describe independent
+cross-cutting concerns, not issue classification. On a per-product cadence (rotation
 — see *Cadence*), run a **strategy review**: assess where the product is versus where it should be —
 operator/user needs, ecosystem and dependency shifts, accumulated tech debt, gaps in features /
 quality / performance / docs, and how it fits the portfolio — and from that create or refresh a small
-set (≈3–7) of `roadmap` issues using the evidence-led shape in *Build the right thing*.
+set (≈3–7) of native Epic issues using the evidence-led shape in *Build the right thing*.
 Decompose epics into small, well-specified, independently-shippable issues that preserve the parent's
 evidence, audience, hypothesis, and success signal while adding concrete acceptance criteria — and
 **link each child to its epic as a real sub-issue** (see *Issue hierarchy* below; a prose `Part of #N`
-is not a link). Triage incoming issues into this structure (type, label, prioritise, dedupe, add to
+is not a link). Triage incoming issues into this structure (type, prioritise, dedupe, add to
 the board with a `Status`, close stale/duplicate with a reason). Native memory holds only a lightweight per-product cursor (last
 strategy review, current theme); the issues themselves are the durable roadmap, and they feed the
 single work queue the agent advances **by importance within Kanban capacity** (see *Issue-driven*) — strategy and
@@ -154,13 +154,15 @@ Types and sub-issues are **orthogonal**: a type says what a thing *is*, a sub-is
 *belongs to*. Labels stay for cross-cutting, repo-local tags (`automation`, `kubernetes`,
 `good first issue`).
 
-**The queue selects BY TYPE, not by label.** The
+**Discover issues by native type.** The
 [`portfolio-surveyor`](../agents/portfolio-surveyor.md) sweeps each of the ten types directly, so
-**a correct type is sufficient to be queued** — no companion label is required. That matters because
+**a typed issue is included without a companion label**. Status, value, readiness, capacity and
+actionability joins still govern the pull under the [work-selection guide](work-selection.md).
+That matters because
 labels were provably incomplete: on 2026-07-18, **8 of 63 open Epics carried no `roadmap` label**, and
 `Spike`/`Kata`/`Chore` have no label equivalent at all, so a label-based sweep silently dropped them.
-Existing type-labels are harmless legacy and stay until pruned (#2242); do **not** add new ones, and
-never treat a missing label as a reason an issue is unqueued.
+Do **not** add or recreate duplicate type-labels. Label definitions belong to the declarative
+taxonomy in `devantler-tech/.github`; optional label absence alone is not a triage defect.
 
 **Default: every issue belongs to an Epic** (maintainer direction 2026-07-18). A child that hangs off
 nothing is work whose *why* is unrecorded — it cannot roll up, it cannot be prioritised against a

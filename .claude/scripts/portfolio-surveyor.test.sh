@@ -4469,4 +4469,47 @@ _advance_duplicate_label="${_advance_digest}"$'\n''- <repo>: roadmap-ready → #
 [[ "$(_advance_digest_error "${_advance_duplicate_label}")" == *'must not require an issue label'* ]] ||
   fail 'control: a second label-only ready row was accepted (#2264)'
 echo 'portfolio surveyor contract: monorepo#2264 type-aware digest assertions passed'
+
+# agent-plugins#599 / #2242: keep the deployed overlay aligned with the corrected
+# canonical triage policy. These are definition-drift controls, not a model eval.
+_triage_policy_error() {
+  local text=$1 clause
+  if grep -Fq 'label-less issues' <<<"${text}"; then
+    echo 'optional label absence still establishes missing triage'
+    return
+  fi
+  # shellcheck disable=SC2016 # These are literal Markdown contract clauses.
+  for clause in \
+    'Missing optional labels alone never establishes incomplete triage.' \
+    'Where native issue types exist, use the untyped residual and other consumer-required metadata.' \
+    'For PRs, judge missing metadata against the consuming contract; issue types do not classify PRs.' \
+    'An incomplete read is `QUERY-UNKNOWN`, never evidence that required metadata is absent.'; do
+    if ! grep -Fq -- "${clause}" <<<"${text}"; then
+      printf 'missing triage obligation: %s\n' "${clause}"
+      return
+    fi
+  done
+}
+_triage_policy=$(awk '
+  /^5[.] \*\*Stale & contributor-facing[.]\*\*/ { inside=1 }
+  inside && /^6[.] / { ended=1; exit }
+  inside { print }
+  END { if (!inside || !ended) exit 1 }
+' "${surveyor}") || fail 'cannot extract operative triage policy (#2242)'
+_err=$(_triage_policy_error "${_triage_policy}")
+[ -z "${_err}" ] || fail "${_err} (#2242)"
+if grep -Fq 'treat label-less issues as untriaged' "${surveyor}"; then
+  fail 'issue enumeration still treats optional labels as required triage (#2242)'
+fi
+for _prefix in 'Missing optional labels alone' 'Where native issue types exist' \
+  'For PRs, judge missing metadata' 'An incomplete read is'; do
+  _mut=$(awk -v prefix="${_prefix}" '{ line=$0; sub(/^[[:space:]]+/,"",line); if (index(line,prefix)!=1) print }' <<<"${_triage_policy}")
+  [ "${_mut}" != "${_triage_policy}" ] || fail 'triage removal control changed nothing (#2242)'
+  [[ "$(_triage_policy_error "${_mut}")" == 'missing triage obligation:'* ]] ||
+    fail 'a removed triage obligation was accepted (#2242)'
+done
+_mut="${_triage_policy}"$'\n''label-less issues/PRs (untriaged)'
+[[ "$(_triage_policy_error "${_mut}")" == *'optional label absence'* ]] ||
+  fail 'contradictory label-based triage was accepted (#2242)'
+echo 'portfolio surveyor contract: native triage policy and five mutation controls passed'
 test_run_completed=1

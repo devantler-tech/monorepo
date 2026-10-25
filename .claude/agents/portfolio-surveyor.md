@@ -123,9 +123,8 @@ public and private — no per-repo loop needed to enumerate):
    total (re-read once on mismatch). A repo returning
    exactly 300, or a total still unequal, emits `DISCOVERY-TRUNCATED (issues, 300 cap)` naming it;
    so does a failed read or `incomplete_results: true`.
-   (`--archived=false` keeps archived repos' stale PRs/issues — e.g. `data-product`'s 2025 bot PRs —
-   out of every survey; archived repos are read-only and carry no actionable signal.)
-   (`gh search issues` returns issues only — not PRs; treat label-less issues as untriaged.)
+   (`--archived=false` excludes read-only archived repos from every survey.)
+   (`gh search issues` returns issues only — not PRs; optional label absence is not a triage defect.)
    Report assignee **logins**, not a count. Only a **`devantler`** assignment can be a claim: the
    contract's *Claim protocol* lease is specifically the agent account's, and every instance assigns as
    `devantler`, so that login means **an instance has claimed this** — never "the maintainer took it".
@@ -133,8 +132,7 @@ public and private — no per-repo loop needed to enumerate):
    leftover `claude/*-<issue>` branch present: reporting it as one would park actionable work behind an
    unrelated person's assignment and time the lease off the wrong assignment event. Report those as
    ordinary open issues, noting the assignee so the orchestrator can respect a human's in-progress work
-   on its own merits. Without these logins the orchestrator selects the oldest issue blind to live
-   claims and re-opens the duplicate-build race the protocol exists to close.
+   on its own merits.
    **Short-circuit dependency-automation ISSUES** (live miss 2026-07-21,
    #2349): an issue whose author is the exact `renovate[bot]` or `dependabot[bot]` identity
    (org-search/REST; deeper surfaces may show `app/renovate` / `app/dependabot`) is
@@ -142,9 +140,7 @@ public and private — no per-repo loop needed to enumerate):
    (`platform#313`, open since 2023-08-24 by design). Match **author login only** — never the title,
    labels, or age. **Exclude them from every oldest-actionable / Advance ranking**; at most emit one
    compact Operate `AUTOMATION-OWNED (NO-ACTION)` line. **Never select, triage-as-work, or close
-   them** — closing a Dependency Dashboard changes Renovate's behaviour. Without this filter the
-   dashboard heads a repo's oldest-first queue forever and every run re-derives that it is not real
-   work.
+   them** — closing a Dependency Dashboard changes Renovate's behaviour.
 2b. **Shared claim tips and lane branches (one branch-list call per repo that has PR-less open issues):**
    `gh api repos/<o>/<r>/branches --paginate --jq '.[] | [.name,.commit.sha] | @tsv'`.
    Filter the result by exact shared-claim names and the namespaces in the consumer instance registry.
@@ -1339,8 +1335,12 @@ public and private — no per-repo loop needed to enumerate):
 
    Treat `skipped`/`neutral`/still-running as **not red**. **Always name the judged sha** so the claim
    is falsifiable, and fail closed on a query error (report `unknown`, never a silent green).
-5. **Stale & contributor-facing.** From (1): actionable PRs not updated in >14d; label-less issues/PRs
-   (untriaged); dependency-bot PRs are positively self-progressing or ordinarily actionable.
+5. **Stale & contributor-facing.** From (1): actionable PRs not updated in >14d; genuinely incomplete
+   triage; dependency-bot PRs are positively self-progressing or ordinarily actionable.
+   Missing optional labels alone never establishes incomplete triage.
+   Where native issue types exist, use the untyped residual and other consumer-required metadata.
+   For PRs, judge missing metadata against the consuming contract; issue types do not classify PRs.
+   An incomplete read is `QUERY-UNKNOWN`, never evidence that required metadata is absent.
    **Select ready work BY ISSUE TYPE, not by label.** Labels are incomplete, and `no:type` is silently
    ignored, so derive the untyped residual as **primary open issues minus the union of all type
    sweeps**. **Scope every sweep AT RETRIEVAL**: for each non-archived repository in the Portfolio
@@ -1408,7 +1408,7 @@ public and private — no per-repo loop needed to enumerate):
    never deepen carries no label verdict. A missing, cut-short or malformed label list makes the
    candidate `QUERY-UNKNOWN`, never unblocked.
    Flag repos with **no open
-   `roadmap` issue at all** (strategy-review candidates) — **product repos only** (the ones the
+   native Epic issue at all** (strategy-review candidates) — **product repos only** (the ones the
    monorepo `AGENTS.md` portfolio map names): strategy reviews are per *product*, so org/infra
    repos outside the map
    are never strategy-review candidates, however empty their issue lists.
