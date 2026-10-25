@@ -648,7 +648,7 @@ PORTFOLIO_SLUG_RE=$(
 )
 
 # The same rule expressed over a bare DIRECTORY NAME, so scope can be decided
-# from `ls` alone — before descending into any tree (see session_files).
+# from `ls` alone — before descending into any tree (see scoped_session_paths).
 PORTFOLIO_DIR_RE=$(
   printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$' \
   | while IFS= read -r p; do
@@ -2541,26 +2541,11 @@ newest_first() {
     | while IFS= read -r p; do stat_mtime "$p"; done
 }
 
-# Root transcripts only, capped AFTER the subagent filter. Filtering downstream
-# of `head -n MAX_FILES` lets sidechains evict eligible root runs before the
-# classifier ever sees them — with subagents routinely outnumbering roots here,
-# the published dispatch count could reach zero while root runs existed.
-root_session_files() {
-  [ -d "$CLAUDE_PROJECTS" ] || return 0
-  if store_root_in_scope; then
-    newest_first "$CLAUDE_PROJECTS" | sort -rn | cut -d' ' -f2- \
-      | grep -v '/subagents/' | head -n "$MAX_FILES"
-    return 0
-  fi
-  ls -1 "$CLAUDE_PROJECTS" 2>/dev/null \
-  | grep -E "^($PORTFOLIO_DIR_RE)$" \
-  | while IFS= read -r d; do
-      newest_first "$CLAUDE_PROJECTS/$d"
-    done \
-  | sort -rn | cut -d' ' -f2- | grep -v '/subagents/' | head -n "$MAX_FILES"
-}
-
-session_files() {
+# Every in-scope transcript in the window, NEWEST FIRST and uncapped. The walk
+# decides scope here, once, for both session_files and root_session_files, so
+# the two cannot drift apart on the professional-work boundary; each applies
+# its own filter and cap to this list (monorepo#2613).
+scoped_session_paths() {
   # Filter PROJECT DIRECTORIES first, then walk only the in-scope ones. The
   # contract forbids discovering or enumerating excluded repositories at all —
   # so walking and statting every *.jsonl on the host and filtering afterwards
@@ -2571,7 +2556,7 @@ session_files() {
   # If the store ROOT is itself inside an allowlisted path, it is already scoped
   # and every directory under it is in scope — no per-directory filter needed.
   if store_root_in_scope; then
-    newest_first "$CLAUDE_PROJECTS" | sort -rn | cut -d' ' -f2- | head -n "$MAX_FILES"
+    newest_first "$CLAUDE_PROJECTS" | sort -rn | cut -d' ' -f2-
     return 0
   fi
   ls -1 "$CLAUDE_PROJECTS" 2>/dev/null \
@@ -2579,7 +2564,19 @@ session_files() {
   | while IFS= read -r d; do
       newest_first "$CLAUDE_PROJECTS/$d"
     done \
-  | sort -rn | cut -d' ' -f2- | head -n "$MAX_FILES"
+  | sort -rn | cut -d' ' -f2-
+}
+
+# Root transcripts only, capped AFTER the subagent filter. Filtering downstream
+# of `head -n MAX_FILES` lets sidechains evict eligible root runs before the
+# classifier ever sees them — with subagents routinely outnumbering roots here,
+# the published dispatch count could reach zero while root runs existed.
+root_session_files() {
+  scoped_session_paths | grep -v '/subagents/' | head -n "$MAX_FILES"
+}
+
+session_files() {
+  scoped_session_paths | head -n "$MAX_FILES"
 }
 
 # The Codex instance's own transcripts. Its schema differs from Claude's
