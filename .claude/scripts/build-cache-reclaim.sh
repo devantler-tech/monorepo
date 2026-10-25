@@ -16,9 +16,13 @@
 # one covers ~4% of the agent's disk churn; this covers the rest.
 #
 # Usage:
-#   build-cache-reclaim.sh [dry-run|apply] [min_age_days] [cache_budget_gb]
+#   build-cache-reclaim.sh [--cache-only] [dry-run|apply] [min_age_days] [cache_budget_gb]
 #
 # Defaults: dry-run, 3 days, 10 GB.
+# --cache-only selects recognized regenerable caches (1, 2b, 2c, 3, 3a). It excludes
+# run data, loose files, work dirs, profiles, images, transcripts and worktree retention.
+# Low-disk cache recovery names this scope explicitly (#4517); the broader interface
+# retains its existing approved retention policy and safety checks.
 #
 # Exit: 0 every sweep read its input; 2 a usage or setting error, or a scan that could not be
 # read (logged as UNKNOWN -- the summary is then partial, never clean).
@@ -130,6 +134,11 @@
 # one costs a pull, or a rebuild from its source when a lane built it locally.
 set -uo pipefail
 
+CACHE_ONLY=0
+if [ "${1:-}" = --cache-only ]; then
+  CACHE_ONLY=1
+  shift
+fi
 MODE=${1:-dry-run}
 MIN_AGE_DAYS=${2:-3}
 CACHE_BUDGET_GB=${3:-10}
@@ -274,6 +283,9 @@ removed=0
 unknown=0
 
 log() { printf 'build-cache-reclaim: %s\n' "$*"; }
+if [ "$CACHE_ONLY" -eq 1 ]; then
+  log 'scope=cache-only — non-cache cleanup and retention passes disabled'
+fi
 
 # size_mb reports a directory's size, or the empty string when it cannot be measured.
 # An unmeasurable tree is never removed: "I could not tell" must not become "delete".
@@ -1302,7 +1314,7 @@ sweep_loose_file() {
 }
 
 run_trees_recent=0
-if [ -d "$TMPDIR_ROOT" ]; then
+if [ "$CACHE_ONLY" -eq 0 ] && [ -d "$TMPDIR_ROOT" ]; then
   if ! run_tree_uid=$(id -u 2>/dev/null) || [ -z "$run_tree_uid" ]; then
     unknown=$((unknown + 1))
     log "UNKNOWN (own user id unreadable) $TMPDIR_ROOT: per-run trees not examined"
@@ -2266,6 +2278,7 @@ if go_tool_oldest=$(oldest_process_secs compile link asm cgo vet) && [ "$go_tool
   GO_TOOL_RUNNING=0
 fi
 for go_work_root in "${go_work_roots[@]}"; do
+  [ "$CACHE_ONLY" -eq 0 ] || break
   [ -d "$go_work_root" ] || continue
   if [ -z "$go_work_uid" ]; then
     unknown=$((unknown + 1))
@@ -2354,7 +2367,7 @@ done
 # profile, never read as "no browser is running".
 BROWSER_ARGS_OK=0
 BROWSER_ARGS=''
-if BROWSER_ARGS=$(ps -A -ww -o args= 2>/dev/null) && [ -n "$BROWSER_ARGS" ]; then
+if [ "$CACHE_ONLY" -eq 0 ] && BROWSER_ARGS=$(ps -A -ww -o args= 2>/dev/null) && [ -n "$BROWSER_ARGS" ]; then
   BROWSER_ARGS_OK=1
 fi
 
@@ -2395,7 +2408,7 @@ ${1##*/}
 }
 
 BROWSER_PROFILE_ROOT="${GO_TMP_ROOT}/rod/user-data"
-if [ -d "$BROWSER_PROFILE_ROOT" ]; then
+if [ "$CACHE_ONLY" -eq 0 ] && [ -d "$BROWSER_PROFILE_ROOT" ]; then
   [ "$BROWSER_ARGS_OK" -eq 1 ] ||
     log 'WARNING: ps produced no command lines — every browser test profile will be KEPT'
   browser_seen=0
@@ -2618,7 +2631,7 @@ reclaim_container_images() {
   local name digest variants est_mb after after_b freed_mb verdict
   local would=0 deleted=0 unclassified=0
 
-  if [ "$CONTAINER_CLI" = off ]; then
+  if [ "$CACHE_ONLY" -eq 1 ] || [ "$CONTAINER_CLI" = off ]; then
     log "${label} disabled — nothing to reclaim"
     return 0
   fi
@@ -2793,7 +2806,7 @@ reclaim_container_images
 # run_codex_retention <label> <switch> <helper name> <days> <removed-key> <no-op line>
 run_codex_retention() {
   local label=$1 switch=$2 name=$3 days=$4 key=$5 noop=$6 helper rc line counts
-  if [ "$switch" = off ]; then
+  if [ "$CACHE_ONLY" -eq 1 ] || [ "$switch" = off ]; then
     log "${label}: skipped (disabled)"
     return 0
   fi

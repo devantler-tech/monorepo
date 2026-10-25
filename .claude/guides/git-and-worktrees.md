@@ -420,7 +420,9 @@ or sweeper of the lane is still running. On a sweep `1` or
 `2`, read the end of that log, record it in `needs_attention`, and escalate per
 *Maintainer channels* when it persists across runs after you have tried to resolve it; it never
 blocks the run. On a disk-preflight `1`, run
-`.claude/scripts/build-cache-reclaim.sh apply` once and check again. If it still exits `1`, or exits
+`.claude/scripts/build-cache-reclaim.sh --cache-only apply` once and check again. This recovery
+reclaims recognized regenerable caches; broader host-retention cleanup is a separate operation.
+If it still exits `1`, or exits
 `2` at any point (`2` is never "enough"), do **no builds, tests or cluster work this run** — GitHub-only
 work such as reviews, triage and merges can go on — record it in `needs_attention`, and escalate per
 *Maintainer channels* when it persists after you have tried to resolve it.

@@ -36,6 +36,10 @@ reclaim_test_finished=0
 # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap below.
 cleanup() {
   local status=$?
+  # Scope probes deliberately make only these owned fixture directories unreadable.
+  if [ -n "$fixture_root" ]; then
+    chmod u+rwx "$fixture_root/scope-go" "$fixture_root/scope-go/rod/user-data" 2>/dev/null || true
+  fi
   [ -z "$fixture_root" ] || rm -rf -- "$fixture_root"
   [ -z "$go_tmp_root" ] || rm -rf -- "$go_tmp_root"
   if [ "$reclaim_test_finished" != 1 ]; then
@@ -148,7 +152,94 @@ run() {
     bash "$impl" "$@" 2>&1
 }
 
-# npm cases run first; --npm-only keeps the RED/GREEN iteration fixture-only and short.
+# Cache-only recovery must not enter a retention pass, even with those passes enabled.
+# The unscoped apply below proves the ordinary-data fixtures are otherwise eligible.
+scope_tmp="$fixture_root/scope-tmp"
+scope_go="$fixture_root/scope-go"
+scope_home="$fixture_root/scope-home"
+scope_bin="$fixture_root/scope-bin"
+scope_cache="$scope_tmp/marked-cache"
+scope_notes="$scope_tmp/run-data"
+scope_loose="$scope_tmp/result.bin"
+scope_work="$scope_go/go-build4517"
+scope_profile="$scope_go/rod/user-data/f00d13572468ace0"
+scope_transcript="$scope_home/sessions/2020/01/01/rollout-2020-01-01T00-00-00-11111111-1111-4111-8111-111111111111.jsonl"
+scope_worktree="$scope_home/worktrees/old-scope"
+mkdir -p "$scope_cache/00" "$scope_notes" "$scope_work/b001" "$scope_profile/Default" \
+  "${scope_transcript%/*}" "$scope_worktree" "$scope_bin" "$fixture_root/scope-store" || exit 2
+printf '%s\n' 'This directory holds cached build artifacts from the Go build system.' \
+  'Run "go clean -cache" if the directory is getting too large.' > "$scope_cache/README"
+printf 'cache\n' > "$scope_cache/00/a1-d"
+printf 'keep\n' > "$scope_notes/record"
+printf 'keep\n' > "$scope_work/b001/file"
+printf 'keep\n' > "$scope_profile/Default/Preferences"
+printf 'keep\n' > "$scope_transcript"
+printf 'keep\n' > "$scope_worktree/record"
+dd if=/dev/zero of="$scope_loose" bs=1048576 count=1 2>/dev/null || exit 2
+dd if=/dev/zero of="$fixture_root/scope-store/blob" bs=1048576 count=1 2>/dev/null || exit 2
+scope_stamp=$(stamp_hours_ago 960) || exit 2
+age_tree "$scope_stamp" "$scope_tmp" && age_tree "$scope_stamp" "$scope_go" && \
+  age_tree "$scope_stamp" "$scope_home" || exit 2
+cat > "$scope_bin/container" <<'STUB'
+#!/usr/bin/env bash
+printf 'called\n' >> "$SCOPE_CONTAINER_CALLS"
+exit 2
+STUB
+# Only the retention ablation uses this controlled empty holder inventory, as case 25 does.
+printf '#!/bin/sh\nprintf "p1\\nn/dev/null\\n"\n' > "$scope_bin/lsof"
+chmod +x "$scope_bin/container" "$scope_bin/lsof" || exit 2
+run_scope() {
+  BUILD_CACHE_RECLAIM_TMPDIR="$scope_tmp" BUILD_CACHE_RECLAIM_GO_TMPDIR="$scope_go" \
+    BUILD_CACHE_RECLAIM_LOOSE_FILE_MIN_MB=0 BUILD_CACHE_RECLAIM_LOOSE_FILE_CTIME=off \
+    BUILD_CACHE_RECLAIM_CONTAINER_CLI="${SCOPE_CONTAINER_CLI:-$scope_bin/container}" \
+    BUILD_CACHE_RECLAIM_CONTAINER_STORE="$fixture_root/scope-store" \
+    BUILD_CACHE_RECLAIM_CONTAINER_BUDGET_GB=0 SCOPE_CONTAINER_CALLS="$fixture_root/scope-container-called" \
+    BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPTS=on BUILD_CACHE_RECLAIM_CODEX_WORKTREES_RETENTION=on \
+    BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPT_DAYS="${SCOPE_RETENTION_DAYS:-invalid}" \
+    BUILD_CACHE_RECLAIM_CODEX_WORKTREE_DAYS="${SCOPE_RETENTION_DAYS:-invalid}" \
+    CODEX_TRANSCRIPT_RETENTION_HOME="$scope_home" CODEX_WORKTREE_RETENTION_HOME="$scope_home" \
+    CODEX_TRANSCRIPT_RETENTION_LSOF="$scope_bin/lsof" CODEX_WORKTREE_RETENTION_LSOF="$scope_bin/lsof" \
+    GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" bash "$impl" "$@" 2>&1
+}
+scope_out=$(run_scope --cache-only dry-run 3 "$NEVER_CLEAN_BUDGET")
+scope_rc=$?
+[ "$scope_rc" -eq 0 ] || fail "scope: cache-only dry-run failed ($scope_rc): $scope_out"
+[ -f "$scope_cache/00/a1-d" ] || fail 'scope: dry-run removed cache content'
+grep -qF "WOULD REAP" <<< "$scope_out" || fail 'scope: dry-run did not find the eligible cache'
+
+# Unselected work-dir/profile scans must not turn a safe cache-only call into UNKNOWN.
+chmod 000 "$scope_go" || exit 2
+scope_out=$(run_scope --cache-only apply 3 "$NEVER_CLEAN_BUDGET")
+scope_rc=$?
+chmod 700 "$scope_go" || exit 2
+[ "$scope_rc" -eq 0 ] || fail "scope: cache-only apply entered an unselected pass ($scope_rc): $scope_out"
+[ ! -e "$scope_cache" ] || fail 'scope: apply did not reclaim the eligible marked cache'
+chmod 000 "$scope_go/rod/user-data" || exit 2
+scope_out=$(run_scope --cache-only dry-run 3 "$NEVER_CLEAN_BUDGET")
+scope_rc=$?
+chmod 700 "$scope_go/rod/user-data" || exit 2
+[ "$scope_rc" -eq 0 ] || fail "scope: cache-only read entered the browser-profile pass ($scope_rc): $scope_out"
+for scope_file in "$scope_notes/record" "$scope_loose" "$scope_work/b001/file" \
+  "$scope_profile/Default/Preferences" "$scope_transcript" "$scope_worktree/record" \
+  "$fixture_root/scope-store/blob"; do
+  [ -f "$scope_file" ] || fail "scope: cache-only removed non-cache data: $scope_file"
+done
+[ ! -e "$fixture_root/scope-container-called" ] || fail 'scope: cache-only called the container runtime'
+
+scope_out=$(SCOPE_RETENTION_DAYS=7 SCOPE_CONTAINER_CLI=off run_scope apply 3 "$NEVER_CLEAN_BUDGET")
+scope_rc=$?
+[ "$scope_rc" -eq 0 ] || fail "scope: the broader control failed ($scope_rc): $scope_out"
+for scope_file in "$scope_notes/record" "$scope_loose" "$scope_transcript" "$scope_worktree/record"; do
+  [ ! -e "$scope_file" ] || fail "scope: broader cleanup did not exercise its eligible retention control: $scope_file"
+done
+if [ "${1:-}" = --scope-only ]; then
+  reclaim_test_finished=1
+  [ "$failures" -eq 0 ] || exit 1
+  printf 'build-cache-reclaim cache-only scope: all assertions passed\n'
+  exit 0
+fi
+
+# npm cases precede the legacy cases; --npm-only keeps the targeted iteration short.
 # The default CI invocation still executes these AND every existing case below.
 npm_fixture="$fixture_root/npm-fixture"
 npm_bin="$fixture_root/npm-bin"
