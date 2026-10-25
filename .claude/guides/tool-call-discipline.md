@@ -54,6 +54,11 @@ both the root budget and every complete root-to-directory instruction chain's re
 small edit does not consume the last readable bytes.
 
 ## Latency discipline — overlap the waiting, never block on it
+
+The [run-loop read-boundary inventory](read-boundary-inventory.md) records which gate and
+discovery reads have mechanical completeness controls, which still rely on their caller,
+and where an independent signal is missing. It is evidence for #3430, not an all-clear certificate.
+
 Token discipline above spends context well; this spends **wall-clock** well. The dominant cost of a
 run is **not** thinking or authoring — it is **waiting on remote systems** (CI, reviewers,
 promotion). Measured on the 744th tick: a 105-minute run authored everything it shipped in the
