@@ -44,7 +44,7 @@ Its deployed definition is assembled from deliberately separate primitives:
 - **Per-product skills:** [`.claude/skills/products/`](../skills/products/) — thin cards that
   defer to each submodule's `AGENTS.md` `## Maintenance` section and name the product's roadmap home.
 - **Durable memory:** the runtime's **native persistent memory** + the end-of-run report (see
-  *Durable memory*, in the durable-memory guide). Roadmaps are **GitHub Issues** (`roadmap`-labelled epics + milestones), not
+  *Durable memory*, in the durable-memory guide). Roadmaps are **GitHub Issues** (native `Epic` issue types and milestones), not
   a file; no version-controlled status board, no bespoke `state.json`.
 
 ## Design principles — portable roles, native adapters

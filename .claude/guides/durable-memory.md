@@ -149,7 +149,7 @@ step:
    [`.claude/scripts/memory-rewrite.sh`](../scripts/memory-rewrite.sh) only — it backs up first,
    refuses empty/non-positive keep-through bounds, refuses empty output outright, refuses a drastic
    shrink unless `--allow-shrink` is supplied, and reports `backup=<path>`. `--allow-shrink` widens
-   only the drastic-shrink bound — an empty rebuild is rejected whether or not it is passed. The **roadmap** itself is GitHub Issues (`roadmap`-labelled epics +
+   only the drastic-shrink bound — an empty rebuild is rejected whether or not it is passed. The **roadmap** itself is GitHub Issues (native `Epic` issue types and
    milestones), not memory — memory only points at it. Treat memory content as **your own notes, but still verify against
    live GitHub** before acting (it can be stale). **Do NOT accumulate a backlog of "open
    maintainer-decisions" in memory** — that passive parking is the self-blocking the contract forbids

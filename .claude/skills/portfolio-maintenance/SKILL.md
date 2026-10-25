@@ -1121,7 +1121,7 @@ For each selected product:
   one-line summary, and **don't duplicate live PR/CI metadata into memory** — GitHub is the source of
   truth (the surveyor re-derives it each run), so memory holds cursors and durable notes, not a copy
   of open PRs. This keeps the start-of-run `view` small as history accumulates. The roadmap cursor is
-  lightweight — the durable roadmap is GitHub Issues (`roadmap`-labelled epics + milestones), not memory.
+  lightweight — the durable roadmap is GitHub Issues (native `Epic` issue types and milestones), not memory.
 
   Suggested files (markdown, organise as works best — not a rigid schema):
   - `portfolio-status.md` — `last_run`, `rotation_cursor`, and per product: `last_worked`, `weekly`

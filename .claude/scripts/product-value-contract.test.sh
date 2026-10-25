@@ -71,6 +71,21 @@ if grep -Fq 'problem → proposed direction → rough size' "${contract}"; then
   fail "canonical contract still permits evidence-free enhancement issues"
 fi
 
+# Retiring the label definitions is incomplete while a deployment guide still asks
+# writers to recreate them. Cover the memory and definition entry points too (#2242).
+for taxonomy_guidance in \
+  "${repo_root}/.claude/guides/durable-memory.md" \
+  "${repo_root}/.claude/guides/definition-and-plugin.md" \
+  "${run_loop}"; do
+  # shellcheck disable=SC2016 # Markdown backticks are literal contract data.
+  grep -Fq 'native `Epic` issue types' "${taxonomy_guidance}" ||
+    fail "${taxonomy_guidance} must describe roadmaps with native Epic issue types (#2242)"
+  # shellcheck disable=SC2016 # Retired classification wording is literal data.
+  if grep -Fq '`roadmap`-labelled epics' "${taxonomy_guidance}"; then
+    fail "${taxonomy_guidance} still prescribes the retired roadmap label (#2242)"
+  fi
+done
+
 for documentation_contract in "${contract}" "${engineering}"; do
   # Literal Markdown; backticks must not execute shell command substitution.
   # shellcheck disable=SC2016
