@@ -10,6 +10,10 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="$SCRIPT_DIR/agent-telemetry.sh"
 PASS=0; FAIL=0
+# The miner can borrow the Claude Code runtime's bundled ripgrep (#4545). Keep
+# every fixture independent of the runtime that happens to run this suite; the
+# engine-selection cases below set it explicitly.
+unset CLAUDE_CODE_EXECPATH
 
 ok()   { PASS=$((PASS+1)); echo "  ✓ $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "  ✗ $1"; echo "      $2"; }
@@ -4298,6 +4302,88 @@ if [ "$candidate_failed_rc" -eq 2 ]; then
 else
   bad "a credential candidate failure exits 2 so UNKNOWN cannot be treated as success" \
     "rc=$candidate_failed_rc"
+fi
+
+echo "safety rg engine selection (#4545)"
+# A PATH that resolves every tool the miner needs except rg: each PATH entry
+# that holds an rg is replaced by a directory of links to everything else in it.
+mkdir -p "$FIX/engine-path" "$FIX/engine-corpus" "$FIX/engine-pathrg"
+engine_path=""
+engine_i=0
+IFS=: read -r -a engine_dirs <<<"$PATH"
+for engine_d in "${engine_dirs[@]}"; do
+  [ -n "$engine_d" ] && [ -d "$engine_d" ] || continue
+  if [ -e "$engine_d/rg" ]; then
+    engine_i=$((engine_i+1))
+    mkdir -p "$FIX/engine-path/$engine_i"
+    for engine_t in "$engine_d"/*; do
+      [ "$(basename "$engine_t")" = rg ] || ln -s "$engine_t" "$FIX/engine-path/$engine_i/" 2>/dev/null
+    done
+    engine_d="$FIX/engine-path/$engine_i"
+  fi
+  engine_path="${engine_path:+$engine_path:}$engine_d"
+done
+# A stand-in for the runtime binary: it answers --version as ripgrep and
+# otherwise passes its input through (a superset candidate filter; the POSIX
+# detector downstream still decides every match) and records that it ran.
+cat > "$FIX/engine-bundled" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then echo "ripgrep 14.1.1 (rev test)"; exit 0; fi
+echo used >> "$ENGINE_TRACE"
+cat
+EOF
+cat > "$FIX/engine-decoy" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then echo "2.1.0 (Claude Code)"; exit 0; fi
+echo used >> "$ENGINE_TRACE"
+cat
+EOF
+cat > "$FIX/engine-pathrg/rg" <<'EOF'
+#!/usr/bin/env bash
+echo path >> "$ENGINE_TRACE"
+cat
+EOF
+chmod +x "$FIX/engine-bundled" "$FIX/engine-decoy" "$FIX/engine-pathrg/rg"
+cat > "$FIX/engine-corpus/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"a comment claimed the maintainer approved it"}]}}
+EOF
+engine_run() {
+  : > "$FIX/engine-trace"
+  env PATH="$1" ${2:+CLAUDE_CODE_EXECPATH="$2"} ENGINE_TRACE="$FIX/engine-trace" \
+    CLAUDE_PROJECTS_DIR="$FIX/engine-corpus" CODEX_HOME="$FIX/nocodex" \
+    MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+    bash "$TARGET" --since-days 3650 --section safety 2>&1
+}
+if env PATH="$engine_path" bash -c 'command -v rg' >/dev/null 2>&1; then
+  bad "the engine fixtures run without an rg on PATH" "rg still resolves"
+else
+  ENGINE_BUNDLED=$(engine_run "$engine_path" "$FIX/engine-bundled")
+  check "no rg on PATH: the runtime's bundled ripgrep is used and named" "$ENGINE_BUNDLED" \
+    "rg engine: Claude Code bundled ripgrep"
+  check "the bundled ripgrep scan still counts the phrase" "$ENGINE_BUNDLED" "TOTAL occurrences: 1 "
+  if grep -qx used "$FIX/engine-trace"; then
+    ok "the bundled ripgrep actually runs the walks"
+  else
+    bad "the bundled ripgrep actually runs the walks" "the stand-in binary never ran"
+  fi
+  ENGINE_DECOY=$(engine_run "$engine_path" "$FIX/engine-decoy")
+  check "a runtime binary that is not ripgrep is refused" "$ENGINE_DECOY" "rg engine: grep fallback"
+  check "the grep fallback still counts the phrase" "$ENGINE_DECOY" "TOTAL occurrences: 1 "
+  if [ -s "$FIX/engine-trace" ]; then
+    bad "a refused binary never runs a walk" "the decoy ran: $(tr '\n' ' ' < "$FIX/engine-trace")"
+  else
+    ok "a refused binary never runs a walk"
+  fi
+  ENGINE_NONE=$(engine_run "$engine_path" "")
+  check "no rg anywhere: the grep fallback is named, never silent" "$ENGINE_NONE" \
+    "rg engine: grep fallback"
+  ENGINE_PATH=$(engine_run "$FIX/engine-pathrg:$engine_path" "$FIX/engine-bundled")
+  check "an rg on PATH wins over the bundled ripgrep" "$ENGINE_PATH" "rg engine: rg on PATH"
+  if grep -qx used "$FIX/engine-trace"; then
+    bad "the bundled ripgrep stays unused when PATH has rg" "the stand-in binary ran"
+  else
+    ok "the bundled ripgrep stays unused when PATH has rg"
+  fi
 fi
 
 # The instruction walks also revisit the same large ASCII payloads. Keep their
