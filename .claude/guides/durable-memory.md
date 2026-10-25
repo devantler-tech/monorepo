@@ -60,7 +60,9 @@ step:
    boundary. It never edits the ledger. A successful page is **not a complete history read**:
    omitted notes never clear a blocker or prove a cursor, hypothesis or `needs_attention` absent.
    Read the relevant older note before relying on it, using targeted search or another page with
-   `--before-line <next_before_line> --expected-sha256 <sha256>`. A changed digest restarts paging.
+   `--before-line <next_before_line> --expected-sha256 <sha256>`. Stop when `omitted_older=0`:
+   `next_before_line=0` means no older section, and passing it starts a fresh read of the newest
+   sections. A changed digest restarts paging.
    Exit `2` is UNKNOWN, including an oversized newest section, a partial final record or a failed or
    changed read; resolve that reason or make an explicit larger/targeted read, never substitute
    repeated arbitrary line tails and call the result complete. This does not replace the mandatory

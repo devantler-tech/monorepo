@@ -25,11 +25,11 @@ run() {
   if [ "$rc" = "$want" ]; then pass "$name"; else fail "$name: rc=$rc want=$want"; fi
 }
 unknown() {
-  local name=$1
-  shift
+  local name=$1 reason=$2
+  shift 2
   run "$name" 2 "$@"
   [ ! -s "$tmp/out" ] || fail "$name printed a partial successful body"
-  grep -q 'UNKNOWN' "$tmp/err" || fail "$name did not explain UNKNOWN"
+  grep -qF "UNKNOWN $reason" "$tmp/err" || fail "$name did not explain the intended UNKNOWN reason"
 }
 cat > "$tmp/memory.md" <<'EOF'
 ## Old
@@ -66,7 +66,7 @@ sed '1,2d' "$tmp/out" > "$tmp/body"
 cmp -s "$tmp/body" "$tmp/old" || fail 'continuation skipped or duplicated a section'
 grep -q 'omitted_older=0 next_before_line=0 ' "$tmp/out" || fail 'final page omission metadata'
 cmp -s "$tmp/memory.md" "$tmp/original" || fail 'reader changed source bytes'
-unknown unbound-continuation --file "$tmp/memory.md" --before-line 4
+unknown unbound-continuation 'continuation requires expected source digest' --file "$tmp/memory.md" --before-line 4
 
 # Headings inside examples must not detach a note from the fence and context it belongs to.
 cat > "$tmp/fenced.md" <<'EOF'
@@ -153,21 +153,40 @@ grep -q '^keep this$' "$tmp/out" || fail 'byte-bound lost newest note'
 if grep -q '0000000000000000' "$tmp/out"; then fail 'oversized older section leaked into body'; fi
 grep -q 'sections=1 omitted_older=1 next_before_line=3 ' "$tmp/out" || fail 'byte-bound omissions hidden'
 large_digest="$(sed -n '1s/.*sha256=\([0-9a-f]*\).*/\1/p' "$tmp/out")"
-unknown oversized-newest --file "$tmp/large.md" --before-line 3 --sections 2 --max-bytes 1024 --expected-sha256 "$large_digest"
-grep -q 'oversized section' "$tmp/err" || fail 'oversized section reason missing'
+unknown oversized-newest 'oversized section' --file "$tmp/large.md" --before-line 3 --sections 2 --max-bytes 1024 --expected-sha256 "$large_digest"
+
+# Count bytes rather than Unicode characters when choosing complete sections.
+{
+  printf '## Multibyte old\n'
+  for ((i=0;i<240;i++)); do printf '🦀'; done
+  printf '\n## Latest\nkeep this\n'
+} > "$tmp/multibyte.md"
+run multibyte-byte-bound 0 --file "$tmp/multibyte.md" --sections 2 --max-bytes 1024
+grep -q 'sections=1 omitted_older=1 next_before_line=3 ' "$tmp/out" || fail 'multibyte section counted characters instead of bytes'
+if grep -q '🦀' "$tmp/out"; then fail 'multibyte section exceeds byte budget'; fi
+grep -q '^keep this$' "$tmp/out" || fail 'multibyte byte-bound lost latest note'
+
+# The exact rendered page fits; reducing its limit by one byte must refuse it.
+{ printf '## Boundary\n'; printf '%0900d\n' 0; } > "$tmp/boundary.md"
+run measure-boundary 0 --file "$tmp/boundary.md" --max-bytes 2048
+exact="$(wc -c < "$tmp/out" | tr -d ' ')"
+cp "$tmp/out" "$tmp/exact-page"
+run exact-rendered-boundary 0 --file "$tmp/boundary.md" --max-bytes "$exact"
+cmp -s "$tmp/out" "$tmp/exact-page" || fail 'a fitting complete page was refused or changed'
+unknown one-byte-over-budget 'oversized section' --file "$tmp/boundary.md" --max-bytes "$((exact - 1))"
 
 printf '## Pending\nunfinished' > "$tmp/partial.md"
 : > "$tmp/empty.md"
-unknown partial-final-record --file "$tmp/partial.md"
-unknown empty --file "$tmp/empty.md"
-unknown missing --file "$tmp/absent.md"
-unknown wrong-digest --file "$tmp/memory.md" --expected-sha256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-unknown no-eligible-section --file "$tmp/memory.md" --before-line 1 --expected-sha256 "$digest"
-unknown bad-budget --file "$tmp/memory.md" --max-bytes 0
-unknown ambiguous-integer --file "$tmp/memory.md" --max-bytes 01024
-unknown bad-count --file "$tmp/memory.md" --sections nope
-unknown empty-expected-digest --file "$tmp/memory.md" --expected-sha256 ''
-unknown unknown-option --file "$tmp/memory.md" --discard
+unknown partial-final-record 'partial final record (missing newline)' --file "$tmp/partial.md"
+unknown empty 'empty source' --file "$tmp/empty.md"
+unknown missing 'missing or unreadable regular file' --file "$tmp/absent.md"
+unknown wrong-digest 'source digest changed; restart paging' --file "$tmp/memory.md" --expected-sha256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+unknown no-eligible-section 'no eligible section' --file "$tmp/memory.md" --before-line 1 --expected-sha256 "$digest"
+unknown bad-budget 'max-bytes must be 1024..1048576' --file "$tmp/memory.md" --max-bytes 0
+unknown ambiguous-integer 'expected a canonical nonnegative integer' --file "$tmp/memory.md" --max-bytes 01024
+unknown bad-count 'expected a canonical nonnegative integer' --file "$tmp/memory.md" --sections nope
+unknown empty-expected-digest 'malformed expected digest' --file "$tmp/memory.md" --expected-sha256 ''
+unknown unknown-option 'unknown option' --file "$tmp/memory.md" --discard
 printf 'plain legacy note\n' > "$tmp/plain.md"
 run no-heading 0 --file "$tmp/plain.md"
 grep -q '^plain legacy note$' "$tmp/out" || fail 'unheaded record lost'
@@ -192,9 +211,9 @@ cat > "$tmp/hash-bin/shasum" <<'EOF'
 exit 0
 EOF
 chmod +x "$tmp/stat-bin/stat" "$tmp/cat-bin/cat" "$tmp/hash-bin/shasum"
-STAT_COUNTER="$tmp/stat-count" PATH="$tmp/stat-bin:$PATH" unknown changed-source --file "$tmp/memory.md"
-PATH="$tmp/cat-bin:$PATH" unknown failed-snapshot --file "$tmp/memory.md"
-PATH="$tmp/hash-bin:$PATH" unknown empty-successful-digest --file "$tmp/memory.md"
+STAT_COUNTER="$tmp/stat-count" PATH="$tmp/stat-bin:$PATH" unknown changed-source 'source changed during read' --file "$tmp/memory.md"
+PATH="$tmp/cat-bin:$PATH" unknown failed-snapshot 'failed snapshot read' --file "$tmp/memory.md"
+PATH="$tmp/hash-bin:$PATH" unknown empty-successful-digest 'malformed snapshot digest' --file "$tmp/memory.md"
 
 memory_read_test_finished=1
 if [ "$fails" -gt 0 ]; then printf 'automation-memory-read tests: FAIL (%s)\n' "$fails"; exit 1; fi

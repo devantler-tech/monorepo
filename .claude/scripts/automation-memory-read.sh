@@ -84,8 +84,12 @@ after="$(fingerprint)" || unknown 'cannot re-stat source'
 # LC_ALL=C makes lengths byte counts without changing the source bytes. Keep whole sections,
 # including their original newlines. Fenced examples are opaque, so their apparent headings never
 # detach from the containing note (CommonMark 0.31.2 section4.5). Native section headings are the
-# unindented ## lines outside those examples. The metadata allowance is checked before output.
-if ! awk -v cap="$((max_bytes - 512))" -v count="$sections" -v before="$before_line" -v sha="$sha" '
+# unindented ## lines outside those examples. Every candidate includes its actual metadata bytes.
+if ! awk -v cap="$max_bytes" -v count="$sections" -v before="$before_line" -v sha="$sha" '
+  function metadata(first, picked, used, next_line) {
+    next_line=(first > 1 ? start[first] : 0)
+    return sprintf("MEMORY-READ sha256=%s sections=%d omitted_older=%d next_before_line=%d body_bytes=%d\n---\n", sha,picked,first-1,next_line,used)
+  }
   function example(line, probe, ch, n, rest, inside) {
     inside=(fence_char != "")
     probe=line
@@ -122,15 +126,14 @@ if ! awk -v cap="$((max_bytes - 512))" -v count="$sections" -v before="$before_l
     if (last == 0) { print "no eligible section" > "/dev/stderr"; exit 2 }
     first=last+1; used=0; picked=0
     for (i=last; i>=1 && picked<count; i--) {
-      if (used+size[i] > cap) break
+      if (used+size[i]+length(metadata(i,picked+1,used+size[i])) > cap) break
       used+=size[i]; picked++; first=i
     }
     if (picked == 0) {
       printf "oversized section start=%d end=%d bytes=%d\n", start[last],end[last],size[last] > "/dev/stderr"
       exit 2
     }
-    next_line=(first > 1 ? start[first] : 0)
-    printf "MEMORY-READ sha256=%s sections=%d omitted_older=%d next_before_line=%d body_bytes=%d\n---\n", sha,picked,first-1,next_line,used
+    printf "%s",metadata(first,picked,used)
     for (i=first; i<=last; i++) printf "%s",text[i]
   }
 ' "$tmp/source" > "$tmp/result" 2> "$tmp/reason"; then
