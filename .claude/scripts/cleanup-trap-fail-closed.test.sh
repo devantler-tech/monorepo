@@ -255,6 +255,8 @@ worktree-lane-sweep.sh|
 business-site-ci.test.sh|
 memory-backup.sh|
 memory-hygiene.sh|
+automation-memory-read.sh|--file $tmp/converted/memory.md
+automation-memory-read.test.sh|
 memory-rewrite.sh|--file $tmp/converted/memory.md --from $tmp/converted/replacement.md --backup-dir $tmp/converted/backups
 hypothesis-id-reserve.test.sh|
 review-lane-health.sh|--now 1
