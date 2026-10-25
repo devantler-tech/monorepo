@@ -27,8 +27,8 @@ guide_scope() {
       active && /^\*\*Runtime-local surfaces / {active=0; ended=1}
       active {print}
       END {if(found != 1 || !ended) exit 1}' |
-    awk '/^- The observation-plane implementation at/ {active=1}
-      active && /^- / && !/^- The (observation-plane implementation|read-only memory observer) at/ {exit}
+    awk '!finished && /^- The observation-plane implementation at/ {active=1}
+      active && /^- / && !/^- The (observation-plane implementation|read-only memory observer) at/ {active=0; finished=1}
       active {print}'
 }
 observer_paths() {
@@ -120,6 +120,19 @@ reject writable-reader 'memory observer lost read-only restriction' "$fixture_co
   "$(printf '%s\n' "$fixture_scope" | sed 's/read-only/read-write/')"
 reject open-source-grant 'unnamed sources are not excluded' "$fixture_core" \
   "$(printf '%s\n' "$fixture_scope" | sed '/no other script source is included/d')"
+
+# A selector must drain the complete grant list even after its observer entries end.
+# Exiting awk early can SIGPIPE its producers on Linux while small fixtures still pass.
+large_guide=$(printf '%s\n' "$fixture_guide" | awk '
+  {print}
+  /^- Deployment configuration / {
+    for(i=0; i<65536; i++) print "  Unrelated deployment prose remains inside the version-controlled list."
+  }')
+if ! large_scope=$(guide_scope <<< "$large_guide"); then
+  printf 'FAIL large grant scope was truncated\n' >&2; exit 1
+fi
+check_scope "$fixture_core" "$large_scope" || { printf 'FAIL large grant: %s\n' "$observer_failure" >&2; exit 1; }
+printf 'PASS large grant scope\n'
 
 core=$(root_scope < "$observer_root/AGENTS.md")
 guide=$(guide_scope < "$observer_root/.claude/guides/definition-surfaces.md")
