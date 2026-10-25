@@ -251,7 +251,7 @@ assert_root_version_controlled_surface_prose() {
     *) fail "$2" ;;
   esac
 }
-root_telemetry_grant='`.claude/scripts/*.test.sh`, `.github/workflows/ci.yaml`; observation surface: `.claude/scripts/agent-telemetry.sh`; deployment surfaces under `.claude/`'
+root_telemetry_grant='`.claude/scripts/*.test.sh`, `.github/workflows/ci.yaml`; observers: `.claude/scripts/agent-telemetry.sh`, `.claude/scripts/automation-memory-read.sh`; deployment: `.claude/`'
 assert_root_version_controlled_surface_prose "${root_telemetry_grant}" \
   "root Version-controlled surfaces do not grant the Agent Improver authority over the telemetry collector"
 
