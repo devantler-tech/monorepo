@@ -178,26 +178,24 @@ grep -Fq '${{ needs.changes.result }}' "${workflow}" ||
 LIVE_MONOREPO_LABELS='automation
 blocked
 breaking change
-bug
 dependencies
-documentation
 duplicate
-enhancement
 github_actions
 good first issue
 help wanted
 javascript
+maintainer-ask
+maintainer-ask-cap-delayed
+maintainer-ask-delivered
+maintainer-ask-urgent
+maintainer-digest
 needs investigation
 needs triage
 next
 off topic
-performance
 question
-refactor
 released
 repo-assist
-roadmap
-security
 spam
 submodules
 wontfix'
@@ -215,8 +213,18 @@ labels_line="$(grep -E '^\- \*\*Labels\*\*' "${monorepo_card}" || true)"
 [[ -n "${labels_line}" ]] || fail "site card missing Labels allowlist line"
 grep -Fq "\`github_actions\`" <<<"${labels_line}" ||
   fail "site card Labels allowlist missing live github_actions (#2260)"
-grep -Fq "\`roadmap\`" <<<"${labels_line}" ||
-  fail "site card Labels allowlist missing live roadmap (#2260)"
+for retired_type_label in roadmap bug enhancement documentation performance security refactor; do
+  if monorepo_labels_are_live "\`${retired_type_label}\`"; then
+    fail "live taxonomy fixture admits retired type label ${retired_type_label} (#2242)"
+  fi
+done
+# shellcheck disable=SC2016 # Markdown backticks are literal contract data.
+grep -Fq 'native `Epic` issue type' "${engineering}" ||
+  fail "engineering overlay must select strategic work by native Epic type (#2242)"
+# shellcheck disable=SC2016 # Retired Markdown classification names are literal data.
+if grep -Eq 'gh label create roadmap|\*\*Label scheme:\*\*|`roadmap`|`enhancement`' "${engineering}"; then
+  fail "engineering overlay still prescribes duplicate classification labels (#2242)"
+fi
 if grep -Eq "\`ci\`" <<<"${labels_line}"; then
   fail "site card Labels allowlist still lists nonexistent ci (#2260)"
 fi
