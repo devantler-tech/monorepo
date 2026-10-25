@@ -1324,7 +1324,7 @@ cp "${repo_root}/.claude/plugin-consumption/agentic-engineering.desired-state.js
 for session_classifier_name in pr-ownership-disclosure.sh programmed-bot-review-exemption.sh \
   pr-unresolved-threads.sh coderabbit-summary-verdict.sh local-review-verdict.sh \
   coderabbit-review-verdict.sh kata-measure-date.sh pr-worktree-holder.sh \
-  maintainer-comment-candidates.sh required-gate-completeness.sh; do
+  maintainer-comment-candidates.sh required-gate-completeness.sh managed-run-streak.sh; do
   cp "${repo_root}/.claude/scripts/${session_classifier_name}" "${session_main}/.claude/scripts/"
   cp "${repo_root}/.claude/scripts/${session_classifier_name}" "${session_other}/.claude/scripts/"
 done
@@ -1587,6 +1587,33 @@ kata_sites="$(grep -o '[^[:space:]"`'"'"']*kata-measure-date\.sh[^[:space:]`]*' 
   grep -vxF '<repo-root>/.claude/scripts/kata-measure-date.sh' || true)"
 [ -z "${kata_sites}" ] ||
   fail "surveyor overlay calls kata-measure-date.sh by a form the guard refuses: ${kata_sites}"
+
+# The GitHub-managed run-streak helper likewise (monorepo#3586): counted by eye from a run listing,
+# the survey's streak verdict could drift from the tested rule. Run the overlay's OWN pipeline
+# through the hook, and prove a relative-path call is refused.
+# shellcheck disable=SC2016 # backticks are literal Markdown in the pattern, not a substitution
+streak_command="$(grep -o '`gh api --paginate [^`]*managed-run-streak\.sh --input -`' "${surveyor_agent}" |
+  tr -d '`' || true)"
+[ "$(printf '%s\n' "${streak_command}" | grep -c .)" = 1 ] ||
+  fail "surveyor overlay must prescribe exactly one guarded managed-run-streak.sh pipeline (monorepo#3586)"
+streak_command="${streak_command//<repo-root>/${repo_root}}"
+streak_command="${streak_command//<repo>/ksail}"
+streak_command="${streak_command//<workflow_id>/107623015}"
+streak_command="${streak_command//<red-run-id>/1}"
+streak_payload="$(jq -nc --arg cmd "${streak_command}" '{tool_input: {command: $cmd}}')"
+run_surveyor_hook "${streak_payload}" >/dev/null ||
+  fail "consumer surveyor hook refused the overlay's managed run-streak pipeline (monorepo#3586)"
+relative_streak_command="${streak_command//${repo_root}\/.claude\/scripts\//.claude/scripts/}"
+[ "${relative_streak_command}" != "${streak_command}" ] ||
+  fail "negative control did not rewrite the run-streak helper path (monorepo#3586)"
+relative_streak_payload="$(jq -nc --arg cmd "${relative_streak_command}" '{tool_input: {command: $cmd}}')"
+if run_surveyor_hook "${relative_streak_payload}" >/dev/null 2>&1; then
+  fail "consumer surveyor hook admitted a RELATIVE managed-run-streak.sh call (monorepo#3586)"
+fi
+streak_sites="$(grep -o '[^[:space:]"`'"'"']*managed-run-streak\.sh[^[:space:]`]*' "${surveyor_agent}" |
+  grep -vxF '<repo-root>/.claude/scripts/managed-run-streak.sh' || true)"
+[ -z "${streak_sites}" ] ||
+  fail "surveyor overlay calls managed-run-streak.sh by a form the guard refuses: ${streak_sites}"
 
 # The worktree-holder probe likewise (monorepo#3067): every other active-work signal is a published
 # event, and #3053 read idle on all of them while two sessions worked in its worktree. Run the

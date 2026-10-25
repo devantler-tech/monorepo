@@ -16,27 +16,36 @@
 #     - red is `failure`, `timed_out` OR `startup_failure` — a config that will not parse concludes
 #       `startup_failure` on every attempt and must still accumulate a streak;
 #     - only runs on `main` count: a pull-request scan must neither extend nor break a streak;
-#     - the streak's age comes from walking back to the first non-red run, never a two-run peek.
+#     - the streak's age comes from walking back to the first non-red run, never a two-run peek;
+#     - the history must be complete: see COMPLETENESS below.
 #   An unfinished run has no verdict yet, so it neither extends nor breaks a streak; order comes
-#   from `created_at` (then `id`), never from the order the API happened to return.
+#   from `created_at` (then `id`), never from the order the API happened to return. A run that two
+#   pages both returned is counted once.
 #
 # USAGE
 #   managed-run-streak.sh --input -
 #   stdin: a STREAM of JSON run objects, one per run of that workflow on main, exactly one of them
-#          marked `"judged": true` (the red run being judged), e.g.
-#          runs=$(set -o pipefail
+#          marked `"judged": true` (the red run being judged), each carrying its page's
+#          `total_count`. The surveyor's read-only guard admits it as one piped call (monorepo#3586):
 #            gh api --paginate "repos/<o>/<r>/actions/workflows/<id>/runs?branch=main&per_page=100" \
-#              --jq '.workflow_runs[] | {id, name, status, conclusion, created_at, head_branch,
-#                    judged: (.id == <red-run-id>)}') || { echo UNKNOWN; exit 2; }
-#          printf '%s\n' "$runs" | managed-run-streak.sh --input -
-#          Capture the read and check its status BEFORE classifying: this helper sees only the
-#          runs it is given, so a `gh` that fails after emitting some pages would otherwise hand
-#          it a partial history, and a missing earlier red run turns REPEATED into FIRST.
+#              --jq '.total_count as $total | .workflow_runs[] | {id, name, status, conclusion,
+#                    created_at, head_branch, total_count: $total, judged: (.id == <red-run-id>)}' \
+#              | managed-run-streak.sh --input -
 #          A stream, not an array: `--paginate` applies `--jq` per page, so one array per page
 #          would split the history. Each run needs `id` (number), `name` (string or null),
 #          `status` (string), `conclusion` (string or null), `created_at` (string),
-#          `head_branch` (string or null) and `judged` (boolean). The run name is read only from
-#          this data; it never enters a command line.
+#          `head_branch` (string or null), `total_count` (number) and `judged` (boolean). The run
+#          name is read only from this data; it never enters a command line.
+#
+# COMPLETENESS
+#   A pipe cannot see whether `gh` failed after some pages, and a missing earlier red run turns
+#   REPEATED into FIRST. So the helper checks the read itself, with the count every page already
+#   carries: it needs at least min(total_count, 1000) distinct runs, or it answers UNKNOWN. The
+#   1000 is GitHub's: a branch-filtered listing serves at most 1,000 runs (measured 2026-10-25 on
+#   ksail's code scanning, `total_count` 2500, page 10 full, page 11 empty). The largest
+#   `total_count` seen is used, so a run that arrives mid-read reads as incomplete, never as whole.
+#   With more than 1,000 runs the history is the newest 1,000, so `runs=` and `since=` can stop at
+#   that edge; the verdict itself still needs only the runs back to the first non-red one.
 #
 # OUTPUT (one line on stdout)
 #   CLEAR                          the newest finished run of this unit on main is not red
@@ -47,11 +56,12 @@
 # EXIT CODES
 #   0  CLEAR or FIRST
 #   1  REPEATED
-#   2  usage error, malformed input, or the judged run is absent or not red on main
+#   2  usage error, malformed input, an incomplete history, or the judged run is absent or not
+#      red on main
 set -euo pipefail
 
 usage() {
-  sed -n '23,45p' "$0" >&2
+  sed -n '25,60p' "$0" >&2
   exit 2
 }
 
@@ -71,9 +81,10 @@ jq -se 'length > 0
       and ((.conclusion | type) as $t | $t == "string" or $t == "null")
       and (.created_at | type == "string")
       and ((.head_branch | type) as $t | $t == "string" or $t == "null")
+      and (.total_count | type == "number")
       and (.judged | type == "boolean")))' \
   <<<"$payload" >/dev/null 2>&1 || {
-  echo "managed-run-streak: stdin must be a stream of run objects carrying id, name, status, conclusion, created_at, head_branch and a boolean judged, exactly one of them judged" >&2
+  echo "managed-run-streak: stdin must be a stream of run objects carrying id, name, status, conclusion, created_at, head_branch, total_count and a boolean judged, exactly one of them judged" >&2
   exit 2
 }
 
@@ -81,9 +92,12 @@ result="$(jq -rs '
   def unit: (.name // "") | sub("( - Update)? #[0-9]+$"; "");
   def red: .status == "completed" and (.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "startup_failure");
 
-  . as $runs
+  (map(.id) | unique | length) as $read
+  | ([map(.total_count) | max, 1000] | min) as $expected
+  | (unique_by(.id)) as $runs
   | ([.[] | select(.judged)] | first) as $target
-  | if ($target.head_branch != "main") then "UNKNOWN judged run is not on main"
+  | if $read < $expected then "UNKNOWN history incomplete: read \($read) of \($expected) runs"
+    elif ($target.head_branch != "main") then "UNKNOWN judged run is not on main"
     elif ($target | red | not) then "UNKNOWN judged run is not red"
     else
       ($target | unit) as $u

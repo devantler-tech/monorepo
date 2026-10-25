@@ -97,7 +97,7 @@ verify_asset "scripts/json-stream.lib.sh"
 # surveyor's environment widen the read-only allowlist to a program of its
 # choosing, which is exactly the bypass the SCOPE and GUARD pins above close.
 #
-# Ten programs are declared, and all are READS. pr-ownership-disclosure.sh
+# Eleven programs are declared, and all are READS. pr-ownership-disclosure.sh
 # classifies a `devantler` PR body as the maintainer's interactive work or the
 # routine's own output. Without a route for it the surveyor falls back to
 # hand-deriving that verdict, and that substitution has already misread live
@@ -146,6 +146,10 @@ verify_asset "scripts/json-stream.lib.sh"
 # other owner before the first request. Undeclared, the survey could only read the check
 # rollup, which lists what ran and so reported an absent required check as green
 # (monorepo#3506).
+# managed-run-streak.sh reads ONE GitHub-managed workflow's run history on stdin and says
+# whether a red run on main is the first failure of its streak or a repeated one, refusing a
+# history shorter than the pages' own total_count. Undeclared, the surveyor counted the streak
+# by eye from a run listing, so the tested rule and the applied one could drift (monorepo#3586).
 #
 # Absence fails CLOSED, consistently with DESIRED_STATE above: a checkout that
 # cannot present its own reviewed files does not get a survey. Exiting 0 with
@@ -160,7 +164,8 @@ coderabbit-review-verdict.sh
 kata-measure-date.sh
 pr-worktree-holder.sh
 maintainer-comment-candidates.sh
-required-gate-completeness.sh'
+required-gate-completeness.sh
+managed-run-streak.sh'
 
 consumer_classifiers=''
 for classifier_name in ${classifier_names}; do

@@ -41,11 +41,25 @@ r() {
     }'
 }
 
-# payload <judged-id> <run>...  -> the helper's stdin: one run object per line, the judged one marked
+# payload <judged-id> <run>...  -> the helper's stdin: one run object per line, the judged one marked.
+# Each run carries the page's total_count, which defaults to the number of distinct runs given (a
+# complete read); a run that already carries one keeps it.
 payload() {
   local id="$1"
   shift
-  printf '%s\n' "$@" | jq -c --argjson id "${id}" '. + {judged: (.id == $id)}'
+  printf '%s\n' "$@" |
+    jq -sc --argjson id "${id}" '(map(.id) | unique | length) as $n
+      | .[] | {total_count: $n} + . + {judged: (.id == $id)}'
+}
+
+# window <count> <total_count>  -> <count> runs, oldest green and the rest red, the newest judged
+window() {
+  jq -nc --argjson n "$1" --argjson total "$2" 'range(1; $n + 1) as $i | {
+      id: $i, name: "Code Quality: Push on main", status: "completed",
+      conclusion: (if $i == 1 then "success" else "failure" end),
+      created_at: ("2026-09-01T00:00:00Z" | fromdate | . + $i * 60 | todate),
+      head_branch: "main", total_count: $total, judged: ($i == $n)
+    }'
 }
 
 run() { # run <tool> <payload> [args...] -> sets got, rc
@@ -78,7 +92,7 @@ dep_b="docker in /pkg/svc/installer/kyverno"
 # --- the rules --------------------------------------------------------------------------------
 
 # Live corpus, ksail 2026-09-24: four consecutive red CodeQL runs on main after a green.
-live="$(jq -c '.[0].id as $id | .[] | . + {judged: (.id == $id)}' "${live_fixture}")"
+live="$(jq -c '.[0].id as $id | length as $n | .[] | . + {total_count: $n, judged: (.id == $id)}' "${live_fixture}")"
 expect "live ksail streak is REPEATED" 1 "REPEATED runs=4 since=2026-09-24" "${live}"
 
 expect "a single red after a green is the exempt FIRST failure" 0 "FIRST since=2026-09-10" \
@@ -144,6 +158,25 @@ expect "order comes from created_at, not from input order" 0 "CLEAR" \
   "$(payload 1 "$(r 3 "$d" success 2026-09-03T05:00:00Z)" "$(r 1 "$d" failure 2026-09-01T05:00:00Z)" \
     "$(r 2 "$d" failure 2026-09-02T05:00:00Z)")"
 
+# Completeness (monorepo#3586): the surveyor pipes gh straight into the helper, so a read that died
+# after some pages reaches it as a shorter history. The page's own total_count catches that.
+expect "a run two pages both returned is counted once" 1 "REPEATED runs=2 since=2026-09-02" \
+  "$(payload 3 "$(r 1 "$d" success 2026-09-01T05:00:00Z)" "$(r 2 "$d" failure 2026-09-02T05:00:00Z)" \
+    "$(r 2 "$d" failure 2026-09-02T05:00:00Z)" "$(r 3 "$d" failure 2026-09-03T05:00:00Z)")"
+
+expect "a history shorter than its total_count is refused" 2 "" \
+  "$(payload 2 "$(r 1 "$d" success 2026-09-01T05:00:00Z | jq -c '. + {total_count: 3}')" \
+    "$(r 2 "$d" failure 2026-09-02T05:00:00Z | jq -c '. + {total_count: 3}')")"
+
+expect "a run that arrives mid-read makes the history incomplete" 2 "" \
+  "$(payload 2 "$(r 1 "$d" success 2026-09-01T05:00:00Z | jq -c '. + {total_count: 2}')" \
+    "$(r 2 "$d" failure 2026-09-02T05:00:00Z | jq -c '. + {total_count: 3}')")"
+
+expect "the newest 1000 runs are complete when GitHub caps the listing" 1 "REPEATED runs=999 since=2026-09-01" \
+  "$(window 1000 2500)"
+
+expect "fewer than 1000 runs of a capped listing are refused" 2 "" "$(window 999 2500)"
+
 # --- refusals ---------------------------------------------------------------------------------
 
 expect "a judged run absent from the input is refused" 2 "" \
@@ -152,7 +185,8 @@ expect "a judged run that is not red is refused" 2 "" \
   "$(payload 1 "$(r 1 "$d" success 2026-09-01T05:00:00Z)")"
 expect "a judged run off main is refused" 2 "" \
   "$(payload 1 "$(r 1 "$d" failure 2026-09-01T05:00:00Z feature)")"
-expect "a run missing a field is refused" 2 "" '{"id":1,"name":"x","status":"completed","conclusion":"failure","created_at":"2026-09-01T05:00:00Z","judged":true}'
+expect "a run missing a field is refused" 2 "" '{"id":1,"name":"x","status":"completed","conclusion":"failure","created_at":"2026-09-01T05:00:00Z","total_count":1,"judged":true}'
+expect "a run missing total_count is refused" 2 "" '{"id":1,"name":"x","status":"completed","conclusion":"failure","created_at":"2026-09-01T05:00:00Z","head_branch":"main","judged":true}'
 expect "two judged runs are refused" 2 "" "$(payload 1 "$(r 1 "$d" failure 2026-09-01T05:00:00Z)") $(payload 1 "$(r 1 "$d" failure 2026-09-02T05:00:00Z)")"
 expect "a non-object value is refused" 2 "" "$(payload 1 "$(r 1 "$d" failure 2026-09-01T05:00:00Z)") [1]"
 expect "an array instead of a stream is refused" 2 "" "[$(payload 1 "$(r 1 "$d" failure 2026-09-01T05:00:00Z)")]"
@@ -206,6 +240,10 @@ ablate "main-only history" 'select(.head_branch == "main" and ' 'select('
 ablate "finished runs only" '.status == "completed" and (unit == $u)' '(unit == $u)'
 ablate "sort by created_at" 'sort_by(.created_at, .id) | reverse' '.'
 ablate "walk to the first non-red run" '"REPEATED runs=\($n) since=\(.[$n - 1].created_at[0:10])"' '"REPEATED runs=\($n) since=\(.[1].created_at[0:10])"'
+ablate "completeness check" 'if $read < $expected then' 'if false then'
+ablate "largest total_count" 'map(.total_count) | max' 'map(.total_count) | min'
+ablate "1000-run listing cap" ', 1000] | min' '] | min'
+ablate "one count per run" '(unique_by(.id)) as $runs' '. as $runs'
 
 completed=1
 echo "managed-run-streak: ${checks} checks, ${failures} failure(s)"
