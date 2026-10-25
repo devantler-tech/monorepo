@@ -7,13 +7,29 @@ export LC_ALL=C
 observer_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 observer_failure=''
 observer_tick=$(printf '\140')
+definition_scope() {
+  awk -v heading="$1" -v peer="$2" '
+    $0 == heading {found++; active=1; next}
+    active && $0 ~ peer {active=0; ended=1}
+    active {print}
+    END {if(found != 1 || !ended) exit 1}'
+}
 root_scope() {
-  awk '/^- \*\*Version-controlled\*\*/ {active=1} active {print} active && /^- \*\*Runtime-local\*\*/ {exit}'
+  definition_scope '### Agent definition locations' '^### ' |
+    awk '/^- \*\*Version-controlled\*\*/ {active=1; found++}
+      active && /^- \*\*Runtime-local\*\*/ {active=0; ended=1}
+      active {print}
+      END {if(found != 1 || !ended) exit 1}'
 }
 guide_scope() {
-  awk '/^- The observation-plane implementation at/ {active=1}
-    active && /^- / && !/^- The (observation-plane implementation|read-only memory observer) at/ {exit}
-    active {print}'
+  definition_scope '## Agent definition locations' '^## ' |
+    awk '/^\*\*Version-controlled surfaces / {active=1; found++; next}
+      active && /^\*\*Runtime-local surfaces / {active=0; ended=1}
+      active {print}
+      END {if(found != 1 || !ended) exit 1}' |
+    awk '/^- The observation-plane implementation at/ {active=1}
+      active && /^- / && !/^- The (observation-plane implementation|read-only memory observer) at/ {exit}
+      active {print}'
 }
 observer_paths() {
   grep -oE "${observer_tick}[.]claude/scripts/[^${observer_tick}]+${observer_tick}" \
@@ -59,19 +75,26 @@ reject() {
 }
 
 fixture_root=$(cat <<'EOF'
+### Agent definition locations
 - **Version-controlled**: `.claude/scripts/*.test.sh`; observation surfaces:
   `.claude/scripts/agent-telemetry.sh` and
   `.claude/scripts/automation-memory-read.sh`.
 - **Runtime-local**: schedules.
+### Authority model
 EOF
 )
 fixture_guide=$(cat <<'EOF'
+## Agent definition locations
+**Version-controlled surfaces — fixture:**
 - The observation-plane implementation at `.claude/scripts/agent-telemetry.sh`.
 - The read-only memory observer at
   `.claude/scripts/automation-memory-read.sh` are definition surfaces;
   no other script source is included by this grant.
   The memory reader is read-only.
 - Deployment configuration stays separate.
+**Runtime-local surfaces — fixture:**
+- Schedules stay separate.
+## Authority model
 EOF
 )
 fixture_core=$(printf '%s\n' "$fixture_root" | root_scope)
@@ -85,6 +108,14 @@ reject prefix-extension 'guide omits the exact memory observer' "$fixture_core" 
   "$(printf '%s\n' "$fixture_scope" | sed 's/automation-memory-read.sh/automation-memory-read.sh.extra/')"
 misplaced=$(printf '%s\n' "$fixture_guide" | sed '/automation-memory-read.sh/d'; printf '\n%s%s%s\n' "$observer_tick" '.claude/scripts/automation-memory-read.sh' "$observer_tick")
 reject outside-grant 'guide omits the exact memory observer' "$fixture_core" "$(printf '%s\n' "$misplaced" | guide_scope)"
+preceding=$(printf '%s\n' "$fixture_scope"; printf '%s\n' "$fixture_guide" | sed '/automation-memory-read.sh/d')
+reject preceding-lookalike 'guide omits the exact memory observer' "$fixture_core" "$(printf '%s\n' "$preceding" | guide_scope)"
+fixture_telemetry=$(printf '%s\n' "$fixture_scope" | awk 'NR == 1 {print}')
+fixture_memory=$(printf '%s\n' "$fixture_scope" | sed '1d')
+runtime=$(printf '%s\n' '## Agent definition locations' '**Version-controlled surfaces — fixture:**' \
+  "$fixture_telemetry" '**Runtime-local surfaces — fixture:**' "$fixture_memory" \
+  '- Deployment configuration stays separate.' '## Authority model')
+reject runtime-placement 'guide omits the exact memory observer' "$fixture_core" "$(printf '%s\n' "$runtime" | guide_scope)"
 reject writable-reader 'memory observer lost read-only restriction' "$fixture_core" \
   "$(printf '%s\n' "$fixture_scope" | sed 's/read-only/read-write/')"
 reject open-source-grant 'unnamed sources are not excluded' "$fixture_core" \
@@ -93,4 +124,4 @@ reject open-source-grant 'unnamed sources are not excluded' "$fixture_core" \
 core=$(root_scope < "$observer_root/AGENTS.md")
 guide=$(guide_scope < "$observer_root/.claude/guides/definition-surfaces.md")
 check_scope "$core" "$guide" || { printf 'FAIL live observer grant: %s\n' "$observer_failure" >&2; exit 1; }
-printf 'PASS live observer grant and six negative controls\n'
+printf 'PASS live observer grant and eight negative controls\n'
