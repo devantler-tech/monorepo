@@ -209,7 +209,7 @@ expect_org() { # expect_org <fixture> <want-rc> <want-substring> [<must-not-cont
 }
 expect_org org-complete 0 'RUNG0-ORG devantler-tech repos=3 live=2' 'devantler-tech/old'
 cases=$((cases + 1))
-if grep -qx 'repos/devantler-tech/beta/commits/trunk' "${log}" && grep -c '^RUNG0 ' <<<"${got}" | grep -qx 2; then
+if grep -qx 'repos/devantler-tech/beta/commits/trunk' "${log}" && [ "$(grep -c '^RUNG0 ' <<<"${got}")" = 2 ]; then
   pass "org: each live repository is probed on its default branch, archived ones skipped"
 else flunk "org default branches: $(tr '\n' ' ' <"${log}") / ${got}"; fi
 expect_org org-truncated 2 'UNKNOWN truncated repos fetched=3 total=4' 'RUNG0 '
