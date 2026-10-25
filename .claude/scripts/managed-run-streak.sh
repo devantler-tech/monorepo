@@ -16,27 +16,38 @@
 #     - red is `failure`, `timed_out` OR `startup_failure` — a config that will not parse concludes
 #       `startup_failure` on every attempt and must still accumulate a streak;
 #     - only runs on `main` count: a pull-request scan must neither extend nor break a streak;
-#     - the streak's age comes from walking back to the first non-red run, never a two-run peek.
+#     - the streak's age comes from walking back to the first non-red run, never a two-run peek;
+#     - the history must be complete: see COMPLETENESS below.
 #   An unfinished run has no verdict yet, so it neither extends nor breaks a streak; order comes
-#   from `created_at` (then `id`), never from the order the API happened to return.
+#   from `created_at` (then `id`), never from the order the API happened to return. A run that two
+#   pages both returned is counted once.
 #
 # USAGE
 #   managed-run-streak.sh --input -
 #   stdin: a STREAM of JSON run objects, one per run of that workflow on main, exactly one of them
-#          marked `"judged": true` (the red run being judged), e.g.
-#          runs=$(set -o pipefail
+#          marked `"judged": true` (the red run being judged), each carrying its page's
+#          `total_count`. The surveyor's read-only guard admits it as one piped call (monorepo#3586):
 #            gh api --paginate "repos/<o>/<r>/actions/workflows/<id>/runs?branch=main&per_page=100" \
-#              --jq '.workflow_runs[] | {id, name, status, conclusion, created_at, head_branch,
-#                    judged: (.id == <red-run-id>)}') || { echo UNKNOWN; exit 2; }
-#          printf '%s\n' "$runs" | managed-run-streak.sh --input -
-#          Capture the read and check its status BEFORE classifying: this helper sees only the
-#          runs it is given, so a `gh` that fails after emitting some pages would otherwise hand
-#          it a partial history, and a missing earlier red run turns REPEATED into FIRST.
+#              --jq '.total_count as $total | .workflow_runs[] | {id, name, status, conclusion,
+#                    created_at, head_branch, total_count: $total, judged: (.id == <red-run-id>)}' \
+#              | managed-run-streak.sh --input -
 #          A stream, not an array: `--paginate` applies `--jq` per page, so one array per page
 #          would split the history. Each run needs `id` (number), `name` (string or null),
 #          `status` (string), `conclusion` (string or null), `created_at` (string),
-#          `head_branch` (string or null) and `judged` (boolean). The run name is read only from
-#          this data; it never enters a command line.
+#          `head_branch` (string or null), `total_count` (number) and `judged` (boolean). The run
+#          name is read only from this data; it never enters a command line.
+#
+# COMPLETENESS
+#   A pipe cannot see whether `gh` failed after some pages, and a missing earlier red run turns
+#   REPEATED into FIRST. So the helper checks the read itself, with the count every page already
+#   carries: it needs at least min(total_count, 1000) distinct runs, or it answers UNKNOWN. The
+#   1000 is GitHub's: a branch-filtered listing serves at most 1,000 runs (measured 2026-10-25 on
+#   ksail's code scanning, `total_count` 2500, page 10 full, page 11 empty). The largest
+#   `total_count` seen is used, so a run that arrives mid-read reads as incomplete, never as whole.
+#   With more than 1,000 runs the history is the newest 1,000. A streak that reaches that window's
+#   oldest edge with no non-red run of its unit behind it cannot prove where it started: a single
+#   red run there is UNKNOWN, never FIRST, because an earlier red run of the same unit may sit just
+#   outside the window; a longer one is still REPEATED, with `runs=` and `since=` as lower bounds.
 #
 # OUTPUT (one line on stdout)
 #   CLEAR                          the newest finished run of this unit on main is not red
@@ -47,11 +58,12 @@
 # EXIT CODES
 #   0  CLEAR or FIRST
 #   1  REPEATED
-#   2  usage error, malformed input, or the judged run is absent or not red on main
+#   2  usage error, malformed input, an incomplete history, a streak whose start a capped history
+#      cannot show, or the judged run is absent or not red on main
 set -euo pipefail
 
 usage() {
-  sed -n '23,45p' "$0" >&2
+  sed -n '25,62p' "$0" >&2
   exit 2
 }
 
@@ -71,9 +83,10 @@ jq -se 'length > 0
       and ((.conclusion | type) as $t | $t == "string" or $t == "null")
       and (.created_at | type == "string")
       and ((.head_branch | type) as $t | $t == "string" or $t == "null")
+      and (.total_count | type == "number")
       and (.judged | type == "boolean")))' \
   <<<"$payload" >/dev/null 2>&1 || {
-  echo "managed-run-streak: stdin must be a stream of run objects carrying id, name, status, conclusion, created_at, head_branch and a boolean judged, exactly one of them judged" >&2
+  echo "managed-run-streak: stdin must be a stream of run objects carrying id, name, status, conclusion, created_at, head_branch, total_count and a boolean judged, exactly one of them judged" >&2
   exit 2
 }
 
@@ -81,9 +94,14 @@ result="$(jq -rs '
   def unit: (.name // "") | sub("( - Update)? #[0-9]+$"; "");
   def red: .status == "completed" and (.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "startup_failure");
 
-  . as $runs
+  (map(.id) | unique | length) as $read
+  | (map(.total_count) | max) as $total
+  | ($total > 1000) as $capped
+  | ([$total, 1000] | min) as $expected
+  | (unique_by(.id)) as $runs
   | ([.[] | select(.judged)] | first) as $target
-  | if ($target.head_branch != "main") then "UNKNOWN judged run is not on main"
+  | if $read < $expected then "UNKNOWN history incomplete: read \($read) of \($expected) runs"
+    elif ($target.head_branch != "main") then "UNKNOWN judged run is not on main"
     elif ($target | red | not) then "UNKNOWN judged run is not red"
     else
       ($target | unit) as $u
@@ -93,6 +111,9 @@ result="$(jq -rs '
       # A judged run older than the current streak was already recovered by a newer green.
       | (map(.id) | index($target.id)) as $j
       | if $n == 0 or $j >= $n then "CLEAR"
+        # In a capped window, a lone red run with nothing of its unit behind it may be the
+        # newest of a longer streak that continues past the window edge.
+        elif $n == 1 and $capped and length == 1 then "UNKNOWN streak start lies outside the newest 1000 runs"
         elif $n == 1 then "FIRST since=\(.[0].created_at[0:10])"
         else "REPEATED runs=\($n) since=\(.[$n - 1].created_at[0:10])" end
     end

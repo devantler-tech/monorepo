@@ -2848,12 +2848,17 @@ grep -Fq 'not by `workflow_id` alone' "${surveyor}" ||
 # make the exemption permanent for every managed path instead of one run deep, destroying the safety
 # net that justifies the property test. Require the id to be stripped before grouping, and pin the
 # absence of the exact-match form so it cannot come back.
-# Pin the WHOLE executable recipe line, never an isolated fragment: a bare `sub(…)` token passes as
-# long as it appears anywhere in the document, including prose quoting a superseded shape. The line
-# strips the id null-safely (the corpus has NULL names, and `sub` on null aborts the filter) and emits
-# one TSV line per run, so --paginate cannot restart a grouping at a page boundary (#2704, #2939).
-grep -Fq "gh api --paginate \"repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?branch=main&per_page=100\" --jq '.workflow_runs[] | [((.name // \"\") | sub(\"( - Update)? #[0-9]+\$\"; \"\")), (.conclusion // \"none\"), .created_at, .id] | @tsv'" "${surveyor}" ||
-  fail "surveyor's streak walk must emit one id-stripped, null-safe TSV line per run (#2704, #2939)"
+# The id strip, the null-name guard, the red set and the main-only filter now live in
+# managed-run-streak.sh, whose own self-test proves each with an ablation. What this file pins is
+# that the survey CALLS it: the WHOLE executable line, never an isolated fragment, so a superseded
+# hand-count recipe quoted in prose cannot satisfy it. The call emits one object per run, so
+# --paginate cannot restart a grouping at a page boundary, and carries each page's total_count, so
+# the helper can refuse a read that died mid-pagination (#2704, #2939, #3586).
+grep -Fq "\`gh api --paginate \"repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?branch=main&per_page=100\" --jq '.total_count as \$total | .workflow_runs[] | {id, name, status, conclusion, created_at, head_branch, total_count: \$total, judged: (.id == <red-run-id>)}' | <repo-root>/.claude/scripts/managed-run-streak.sh --input -\`" "${surveyor}" ||
+  fail "surveyor's streak walk must call managed-run-streak.sh with one object per run and its page total_count (#2704, #2939, #3586)"
+
+grep -Fq "| [((.name // \"\") | sub(" "${surveyor}" &&
+  fail "surveyor must not prescribe the hand-counted TSV streak walk the helper replaced (#3586)"
 
 grep -Fq 'select(.name == $ENV.RUN_NAME)' "${surveyor}" &&
   fail "surveyor must not match the RAW run name — the per-run id caps every streak at 1 (#2704)"
