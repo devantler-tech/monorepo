@@ -55,7 +55,7 @@ small edit does not consume the last readable bytes.
 
 ## Latency discipline — overlap the waiting, never block on it
 
-The [run-loop read-boundary inventory](read-boundary-inventory.md) records which gate and
+The [run-loop read-boundary inventory](../assessments/read-boundary-inventory.md) records which gate and
 discovery reads have mechanical completeness controls, which still rely on their caller,
 and where an independent signal is missing. It is evidence for #3430, not an all-clear certificate.
 
