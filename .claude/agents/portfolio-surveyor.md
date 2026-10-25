@@ -1230,9 +1230,10 @@ public and private — no per-repo loop needed to enumerate):
    `gh api --paginate "repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?branch=main&per_page=100" --jq '.total_count as $total | .workflow_runs[] | {id, name, status, conclusion, created_at, head_branch, total_count: $total, judged: (.id == <red-run-id>)}' | <repo-root>/.claude/scripts/managed-run-streak.sh --input -`
    (the guard admits a declared helper only as this absolute, forge-first `--input -` call), where
    `<red-run-id>` is the red run's numeric `id`. Read its one line and its exit status:
-   `FIRST since=<YYYY-MM-DD>` (exit 0) is the exempt first failure; `REPEATED runs=<n>
-   since=<YYYY-MM-DD>` (exit 1) escalates as below, with `<n>` and that date as the streak's length
-   and start; `CLEAR` (exit 0) means a newer run of the same unit on `main` already recovered it.
+   `FIRST since=<YYYY-MM-DD>` (exit 0) is the exempt first failure;
+   `REPEATED runs=<n> since=<YYYY-MM-DD>` (exit 1) escalates as below, with `<n>` and that date as
+   the streak's length and start; `CLEAR` (exit 0) means a newer run of the same unit on `main`
+   already recovered it.
    Anything else — exit 2, no line, or a failed call — is `QUERY-UNKNOWN` for that repository,
    never `NO-ACTION` and never `nothing_on_fire: true`.
 
