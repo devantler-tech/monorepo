@@ -29,7 +29,9 @@
 #   A failed check run or workflow run is BREAKAGE even when the other kind is missing or truncated.
 #   Only the latest run of each workflow and event counts, so a failure a later run of the same
 #   workflow superseded at the same head is not breakage; another workflow's run never supersedes
-#   it. A cancelled run has no verdict, so a later successful run of the same workflow at the head
+#   it. A check run that a listed workflow run created (same check suite) is judged through that
+#   run, so superseding covers its job checks too; any other check run counts on its own. A
+#   cancelled run has no verdict, so a later successful run of the same workflow at the head
 #   replaces it whatever that run's event (monorepo#4527: a dispatch cancelled the push run it
 #   re-ran, and the stale cancel kept weekly pacing off). The latest MEANINGFUL run decides: runs
 #   without a verdict (pending, skipped, neutral) and replaced cancellations are dropped before the
@@ -168,7 +170,11 @@ probe() {
     [$r[].workflow_runs[]] as $runs
     | if all($runs[]; (.workflow_id | type) == "number" and (.event | type) == "string"
         and (.run_number | type) == "number") then . else error("shape") end
-    | [ ($c[].check_runs[] | select(.conclusion as $x | $f | index($x)) | "check:\(.name)=\(.conclusion)"),
+    | [$runs[].check_suite_id | numbers] as $suites
+    # A check run in the suite of a listed workflow run is judged through that run below, so superseding
+    # covers it; only check runs of any other suite (another app, an unlisted run) count on their own.
+    | [ ($c[].check_runs[] | select(.check_suite.id as $s | any($suites[]; . == $s) | not)
+        | select(.conclusion as $x | $f | index($x)) | "check:\(.name)=\(.conclusion)"),
         # Filter BEFORE choosing the latest run (monorepo#4529): choosing first let a cancellation, a
         # pending run or a non-deciding conclusion discard an earlier genuine failure.
         ($runs | group_by([.workflow_id, .event]) | .[]

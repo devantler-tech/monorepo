@@ -44,13 +44,16 @@ head_ok="{\"sha\":\"${sha}\"}"
 check_ok='{"name":"Lint","status":"completed","conclusion":"success"}'
 check_red='{"name":"Build","status":"completed","conclusion":"failure"}'
 check_skip='{"name":"Docs","status":"completed","conclusion":"skipped"}'
-# run <workflow_id> <path> <event> <run_number> <status> <conclusion|null>
+# run <workflow_id> <path> <event> <run_number> <status> <conclusion|null> [<check_suite_id>]
 run() {
-  local c="$6"
+  local c="$6" s=""
   [ "${c}" = null ] || c="\"${c}\""
-  printf '{"workflow_id":%s,"name":"w%s","path":"%s","event":"%s","run_number":%s,"status":"%s","conclusion":%s}' \
-    "$1" "$1" "$2" "$3" "$4" "$5" "${c}"
+  [ -z "${7:-}" ] || s=",\"check_suite_id\":$7"
+  printf '{"workflow_id":%s,"name":"w%s","path":"%s","event":"%s","run_number":%s,"status":"%s","conclusion":%s%s}' \
+    "$1" "$1" "$2" "$3" "$4" "$5" "${c}" "${s}"
 }
+# suite_check <name> <conclusion> <check_suite_id> — a check run an Actions workflow run created
+suite_check() { printf '{"name":"%s","status":"completed","conclusion":"%s","check_suite":{"id":%s}}' "$1" "$2" "$3"; }
 ci=.github/workflows/ci.yaml
 rel=.github/workflows/release.yaml
 run_ok="$(run 1 "${ci}" push 7 completed success)"
@@ -131,6 +134,18 @@ fixture failure-skipped-then-green "${head_ok}" "$(checks 1 "${check_ok}")" \
   "$(runs 3 "${red_push}" "$(run 1 "${ci}" push 8 completed skipped)" "$(run 1 "${ci}" push 9 completed success)")"
 fixture green-then-skipped "${head_ok}" "$(checks 1 "${check_ok}")" \
   "$(runs 2 "$(run 1 "${ci}" push 7 completed success)" "$(run 1 "${ci}" push 8 completed skipped)")"
+# A check run an Actions workflow run created is judged through that run, so superseding covers it
+# too (the cloudflare head, 2026-10-25: a failed dispatch re-run green kept weekly pacing off through
+# the failed run's job check). A check run of any other suite still counts on its own.
+fixture superseded-failure-job-check "${head_ok}" \
+  "$(checks 2 "$(suite_check check failure 501)" "$(suite_check check success 502)")" \
+  "$(runs 2 "$(run 4 probe.yaml workflow_dispatch 1 completed failure 501)" "$(run 4 probe.yaml workflow_dispatch 2 completed success 502)")"
+fixture live-failure-job-check "${head_ok}" \
+  "$(checks 1 "$(suite_check check failure 501)")" \
+  "$(runs 1 "$(run 4 probe.yaml workflow_dispatch 1 completed failure 501)")"
+fixture red-check-other-suite "${head_ok}" \
+  "$(checks 2 "$(suite_check Build failure 777)" "$(suite_check check success 502)")" \
+  "$(runs 1 "$(run 4 probe.yaml workflow_dispatch 2 completed success 502)")"
 # A failed head read is UNKNOWN unless the branch list proves the repository empty.
 fixture head-unreadable - "$(checks 1 "${check_ok}")" "$(runs 1 "${run_ok}")"
 fixture head-unreadable-branches-exist - "$(checks 1 "${check_ok}")" "$(runs 1 "${run_ok}")"
@@ -192,6 +207,9 @@ expect failure-then-neutral 1 "BREAKAGE workflow:${ci}=failure"
 expect failure-cancel-same-event-green 0 'runs=3 OK'
 expect failure-skipped-then-green 0 'runs=3 OK'
 expect green-then-skipped 0 'runs=2 OK'
+expect superseded-failure-job-check 0 'checks=2 runs=2 OK'
+expect live-failure-job-check 1 'BREAKAGE workflow:probe.yaml=failure'
+expect red-check-other-suite 1 'BREAKAGE check:Build=failure'
 expect head-unreadable 2 'UNKNOWN read-failed head'
 expect head-unreadable-branches-exist 2 'UNKNOWN read-failed head'
 expect empty-repo 0 'RUNG0 devantler-tech/monorepo EMPTY'
