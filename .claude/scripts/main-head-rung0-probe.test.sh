@@ -143,6 +143,10 @@ fixture superseded-failure-job-check "${head_ok}" \
 fixture live-failure-job-check "${head_ok}" \
   "$(checks 1 "$(suite_check check failure 501)")" \
   "$(runs 1 "$(run 4 probe.yaml workflow_dispatch 1 completed failure 501)")"
+# A failed job in a run that is still in progress has no workflow verdict yet, so it stays breakage.
+fixture failed-job-run-in-progress "${head_ok}" \
+  "$(checks 1 "$(suite_check check failure 501)")" \
+  "$(runs 1 "$(run 4 probe.yaml workflow_dispatch 1 in_progress null 501)")"
 fixture red-check-other-suite "${head_ok}" \
   "$(checks 2 "$(suite_check Build failure 777)" "$(suite_check check success 502)")" \
   "$(runs 1 "$(run 4 probe.yaml workflow_dispatch 2 completed success 502)")"
@@ -209,6 +213,7 @@ expect failure-skipped-then-green 0 'runs=3 OK'
 expect green-then-skipped 0 'runs=2 OK'
 expect superseded-failure-job-check 0 'checks=2 runs=2 OK'
 expect live-failure-job-check 1 'BREAKAGE workflow:probe.yaml=failure'
+expect failed-job-run-in-progress 1 'BREAKAGE check:check=failure'
 expect red-check-other-suite 1 'BREAKAGE check:Build=failure'
 expect head-unreadable 2 'UNKNOWN read-failed head'
 expect head-unreadable-branches-exist 2 'UNKNOWN read-failed head'

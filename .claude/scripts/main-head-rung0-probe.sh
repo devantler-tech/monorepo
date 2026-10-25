@@ -170,11 +170,17 @@ probe() {
     [$r[].workflow_runs[]] as $runs
     | if all($runs[]; (.workflow_id | type) == "number" and (.event | type) == "string"
         and (.run_number | type) == "number") then . else error("shape") end
-    | [$runs[].check_suite_id | numbers] as $suites
-    # A check run in the suite of a listed workflow run is judged through that run below, so superseding
-    # covers it; only check runs of any other suite (another app, an unlisted run) count on their own.
-    | [ ($c[].check_runs[] | select(.check_suite.id as $s | any($suites[]; . == $s) | not)
-        | select(.conclusion as $x | $f | index($x)) | "check:\(.name)=\(.conclusion)"),
+    # A failed check run in the suite of a listed workflow run is judged through that run below only
+    # once the run has a deciding verdict, or a later green run of the same workflow and event has
+    # superseded it. Until then (the run is still in progress) the failed job counts on its own, as does
+    # a failed check run of any other suite (another app, an unlisted run).
+    | [ ($c[].check_runs[] | select(.conclusion as $x | $f | index($x)) | . as $chk
+        | (if ($chk.check_suite.id | type) == "number"
+           then [$runs[] | select(.check_suite_id == $chk.check_suite.id)][0] else null end) as $own
+        | select($own == null or ((($own.conclusion as $x | ["success"] + $f | index($x)) | not)
+            and ([$runs[] | select(.workflow_id == $own.workflow_id and .event == $own.event
+                and .run_number > $own.run_number and .conclusion == "success")] | length) == 0))
+        | "check:\(.name)=\(.conclusion)"),
         # Filter BEFORE choosing the latest run (monorepo#4529): choosing first let a cancellation, a
         # pending run or a non-deciding conclusion discard an earlier genuine failure.
         ($runs | group_by([.workflow_id, .event]) | .[]
