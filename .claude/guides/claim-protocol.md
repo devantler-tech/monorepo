@@ -266,8 +266,10 @@ registered instance, so by default it does interactive work only. It takes lane 
 maintainer grants that for the session; under that grant it acts as `claude-local` for that session
 alone and counts against the `claude` lane's draft cap. Where
 [`lane-draft-count.sh`](../scripts/lane-draft-count.sh) cannot run, because the session has no `gh`,
-it counts the lane's open drafts through the connector's pull-request search, or treats the cap as
-UNKNOWN, which opens no new draft. What it cannot do itself it posts as a handoff on the artifact,
+it counts the lane's open drafts from the same source the helper reads — every repository's own
+complete open pull-request list, through the connector — or treats the cap as UNKNOWN, which opens
+no new draft. A search result is never that count: the index can lag and a page can be partial, so
+it proves no completeness. What it cannot do itself it posts as a handoff on the artifact,
 for a registered lane to finish: retiring a claim ref it acquired (the issue, the exact `retire`
 command and SHA), adding a new issue to the project board with
 [`board-add.sh`](../scripts/board-add.sh), and any note owed to durable memory. It removes any footer
