@@ -71,6 +71,27 @@ if grep -Fq 'problem → proposed direction → rough size' "${contract}"; then
   fail "canonical contract still permits evidence-free enhancement issues"
 fi
 
+# Retiring the label definitions is incomplete while a deployment guide still asks
+# writers to recreate them. Cover the memory and definition entry points too (#2242).
+for taxonomy_guidance in \
+  "${repo_root}/.claude/guides/durable-memory.md" \
+  "${repo_root}/.claude/guides/definition-and-plugin.md" \
+  "${run_loop}"; do
+  # Read once and inspect only complete bytes; a partial/error read must not
+  # look like the negative pattern was absent after a successful first grep.
+  if ! taxonomy_text="$(cat "${taxonomy_guidance}")"; then
+    echo "product value contract: UNKNOWN — cannot read ${taxonomy_guidance}" >&2
+    exit 2
+  fi
+  # shellcheck disable=SC2016 # Markdown classification names are literal data.
+  case "${taxonomy_text}" in
+    *'`roadmap`-labelled epics'*)
+      fail "${taxonomy_guidance} still prescribes the retired roadmap label (#2242)" ;;
+    *'native `Epic` issue types'*) ;;
+    *) fail "${taxonomy_guidance} must describe roadmaps with native Epic issue types (#2242)" ;;
+  esac
+done
+
 for documentation_contract in "${contract}" "${engineering}"; do
   # Literal Markdown; backticks must not execute shell command substitution.
   # shellcheck disable=SC2016
