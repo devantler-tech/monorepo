@@ -42,14 +42,14 @@ window: `percentUsed` and `resetsAt`. The elapsed share of the week is
 
 - **Ahead of pace** means `percentUsed` is more than 5 points above the elapsed share. An ahead run
   still checks rung 0 first, because the other entry may be deep in a long run. It runs
-  `.claude/scripts/platform-live-health.sh`. Then, for each Portfolio-map repository, it reads every
-  check run on the current `main` head with
-  `gh api --paginate 'repos/devantler-tech/<repo>/commits/main/check-runs?per_page=100' --jq '.total_count, (.check_runs[] | .conclusion)'`.
-  The latest run of any one workflow is not enough, because a newer green workflow can sit beside a
-  red one on the same commit. **When the health check exits non-zero, any check run concluded
-  `failure`, `timed_out`, `startup_failure` or `cancelled`, fewer conclusions came back than
-  `total_count`, or any read fails, the run is not paced**: it records `weekly_pace=rung0` and runs
-  as usual. Otherwise the run
+  `.claude/scripts/platform-live-health.sh`. Then it runs
+  `.claude/scripts/main-head-rung0-probe.sh` with one `--repo devantler-tech/<repo>` per
+  Portfolio-map repository. The probe reads every check run **and every workflow run** on each
+  current `main` head. Check runs alone are not enough: a workflow that fails before it creates a job
+  publishes no check run, so it can leave zero check runs, or only green ones beside it. Zero check
+  runs, zero workflow runs or a truncated list is UNKNOWN, never clean. **When the health check or
+  the probe exits non-zero, the run is not paced**: it records `weekly_pace=rung0` and runs as usual.
+  Otherwise the run
   is **paced**: it writes one run-report line,
   `weekly_pace=paced used=<percentUsed> elapsed=<share>`, and ends. It does no other pre-flight check,
   survey or work, and it writes no memory. The one-shipped-artifact floor does not apply to a paced

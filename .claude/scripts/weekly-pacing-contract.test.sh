@@ -83,9 +83,11 @@ for needle in \
   '`percentUsed` is more than 5 points above the elapsed share' \
   'An ahead run still checks rung 0 first' \
   '`.claude/scripts/platform-live-health.sh`' \
-  "\`gh api --paginate 'repos/devantler-tech/<repo>/commits/main/check-runs?per_page=100' --jq '.total_count, (.check_runs[] | .conclusion)'\`" \
-  'The latest run of any one workflow is not enough' \
-  '**When the health check exits non-zero, any check run concluded `failure`, `timed_out`, `startup_failure` or `cancelled`, fewer conclusions came back than `total_count`, or any read fails, the run is not paced**' \
+  '`.claude/scripts/main-head-rung0-probe.sh` with one `--repo devantler-tech/<repo>` per Portfolio-map repository' \
+  'every check run **and every workflow run** on each current `main` head' \
+  'a workflow that fails before it creates a job publishes no check run' \
+  'Zero check runs, zero workflow runs or a truncated list is UNKNOWN, never clean.' \
+  '**When the health check or the probe exits non-zero, the run is not paced**' \
   '`weekly_pace=rung0` and runs as usual' \
   '`weekly_pace=paced used=<percentUsed> elapsed=<share>`' \
   '`weekly_pace=normal used=<percentUsed> elapsed=<share>`' \
@@ -95,6 +97,10 @@ for needle in \
   '`daily-ai-assistant` is never paced'; do
   case "${section}" in *"${needle}"*) ;; *) fail "cadence guide pacing section lacks: ${needle}" ;; esac
 done
+
+# The guide sends the paced run to the probe, so the probe must exist and run.
+[ -x "${repo_root}/.claude/scripts/main-head-rung0-probe.sh" ] ||
+  fail "the cadence guide names .claude/scripts/main-head-rung0-probe.sh, which is missing or not executable"
 
 # The allowance passage must point at the section, so "lower that lane's cadence" has its mechanism.
 allowance="$(extract "${guide}" '^Both machine-local Agentic Engineer lanes are [*][*]scheduled[*][*]' '^### Weekly pacing')"
