@@ -85,6 +85,20 @@ expect() { # expect <name> <want-rc> <want-line> <payload> [args...]
   fi
 }
 
+# lone <older-run-of-unit:yes|no>  -> a capped listing (total_count 2500) of 1000 runs: the newest is
+# the judged red run of one dependency, and every other run belongs to another dependency, except,
+# with `yes`, the oldest, which is an earlier green of the judged one.
+lone() {
+  jq -nc --arg older "$1" 'range(1; 1001) as $i | {
+      id: $i,
+      name: (if $i == 1000 or ($i == 1 and $older == "yes") then "helm in /a - Update #\($i)"
+             else "docker in /b - Update #\($i)" end),
+      status: "completed", conclusion: (if $i == 1000 then "failure" else "success" end),
+      created_at: ("2026-09-01T00:00:00Z" | fromdate | . + $i * 60 | todate),
+      head_branch: "main", total_count: 2500, judged: ($i == 1000)
+    }'
+}
+
 refused() { # refused <name> <stderr-substring> <payload>  -> exit 2, no stdout, and the right reason
   local name="$1" reason="$2" p="$3"
   checks=$((checks + 1))
@@ -190,6 +204,12 @@ expect "the newest 1000 runs are complete when GitHub caps the listing" 1 "REPEA
 refused "fewer than 1000 runs of a capped listing are refused" "history incomplete: read 999 of 1000 runs" \
   "$(window 999 2500)"
 
+refused "a lone red at the edge of a capped listing cannot be proven FIRST" \
+  "streak start lies outside the newest 1000 runs" "$(lone no)"
+
+expect "a lone red with an earlier green of its unit in a capped listing is FIRST" 0 "FIRST since=2026-09-01" \
+  "$(lone yes)"
+
 # --- refusals ---------------------------------------------------------------------------------
 
 expect "a judged run absent from the input is refused" 2 "" \
@@ -255,9 +275,10 @@ ablate "finished runs only" '.status == "completed" and (unit == $u)' '(unit == 
 ablate "sort by created_at" 'sort_by(.created_at, .id) | reverse' '.'
 ablate "walk to the first non-red run" '"REPEATED runs=\($n) since=\(.[$n - 1].created_at[0:10])"' '"REPEATED runs=\($n) since=\(.[1].created_at[0:10])"'
 ablate "completeness check" 'if $read < $expected then' 'if false then'
-ablate "largest total_count" 'map(.total_count) | max' 'map(.total_count) | min'
-ablate "1000-run listing cap" ', 1000] | min' '] | min'
+ablate "largest total_count" '(map(.total_count) | max) as $total' '(map(.total_count) | min) as $total'
+ablate "1000-run listing cap" '([$total, 1000] | min) as $expected' '$total as $expected'
 ablate "one count per run" '(unique_by(.id)) as $runs' '. as $runs'
+ablate "unprovable FIRST at a capped edge" 'elif $n == 1 and $capped and length == 1 then' 'elif false then'
 
 completed=1
 echo "managed-run-streak: ${checks} checks, ${failures} failure(s)"

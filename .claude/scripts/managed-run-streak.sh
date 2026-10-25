@@ -44,8 +44,10 @@
 #   1000 is GitHub's: a branch-filtered listing serves at most 1,000 runs (measured 2026-10-25 on
 #   ksail's code scanning, `total_count` 2500, page 10 full, page 11 empty). The largest
 #   `total_count` seen is used, so a run that arrives mid-read reads as incomplete, never as whole.
-#   With more than 1,000 runs the history is the newest 1,000, so `runs=` and `since=` can stop at
-#   that edge; the verdict itself still needs only the runs back to the first non-red one.
+#   With more than 1,000 runs the history is the newest 1,000. A streak that reaches that window's
+#   oldest edge with no non-red run of its unit behind it cannot prove where it started: a single
+#   red run there is UNKNOWN, never FIRST, because an earlier red run of the same unit may sit just
+#   outside the window; a longer one is still REPEATED, with `runs=` and `since=` as lower bounds.
 #
 # OUTPUT (one line on stdout)
 #   CLEAR                          the newest finished run of this unit on main is not red
@@ -56,12 +58,12 @@
 # EXIT CODES
 #   0  CLEAR or FIRST
 #   1  REPEATED
-#   2  usage error, malformed input, an incomplete history, or the judged run is absent or not
-#      red on main
+#   2  usage error, malformed input, an incomplete history, a streak whose start a capped history
+#      cannot show, or the judged run is absent or not red on main
 set -euo pipefail
 
 usage() {
-  sed -n '25,60p' "$0" >&2
+  sed -n '25,62p' "$0" >&2
   exit 2
 }
 
@@ -93,7 +95,9 @@ result="$(jq -rs '
   def red: .status == "completed" and (.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "startup_failure");
 
   (map(.id) | unique | length) as $read
-  | ([map(.total_count) | max, 1000] | min) as $expected
+  | (map(.total_count) | max) as $total
+  | ($total > 1000) as $capped
+  | ([$total, 1000] | min) as $expected
   | (unique_by(.id)) as $runs
   | ([.[] | select(.judged)] | first) as $target
   | if $read < $expected then "UNKNOWN history incomplete: read \($read) of \($expected) runs"
@@ -107,6 +111,9 @@ result="$(jq -rs '
       # A judged run older than the current streak was already recovered by a newer green.
       | (map(.id) | index($target.id)) as $j
       | if $n == 0 or $j >= $n then "CLEAR"
+        # In a capped window, a lone red run with nothing of its unit behind it may be the
+        # newest of a longer streak that continues past the window edge.
+        elif $n == 1 and $capped and length == 1 then "UNKNOWN streak start lies outside the newest 1000 runs"
         elif $n == 1 then "FIRST since=\(.[0].created_at[0:10])"
         else "REPEATED runs=\($n) since=\(.[$n - 1].created_at[0:10])" end
     end
