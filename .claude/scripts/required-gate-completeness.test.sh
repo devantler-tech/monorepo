@@ -245,6 +245,11 @@ omitted_fixture list-omits-run-read-fails "${rules_check_and_workflow}" "${two_j
 omitted_fixture list-omits-run-malformed "${rules_check_and_workflow}" "${two_jobs}" "300=${ci_run}" '100=[1]'
 omitted_fixture list-omits-run-wrong-id "${rules_check_and_workflow}" "${two_jobs}" "300=${ci_run}" \
   "100=$(run_obj 101 .github/workflows/scan.yaml "${req_url}")"
+# A run object missing a field the gates read could otherwise pass a gate on what it left out.
+for field in created_at conclusion status path; do
+  omitted_fixture "list-omits-run-no-${field}" "${rules_check_and_workflow}" "${two_jobs}" "300=${ci_run}" \
+    "100=$(jq -c --arg f "${field}" 'del(.[$f])' <<<"${scan_run}")"
+done
 # A check-run another run created through the API can name a run at a different commit.
 omitted_fixture list-omits-run-other-head "${rules_check_and_workflow}" "${two_jobs}" "300=${ci_run}" \
   "100=$(run_obj 100 .github/workflows/scan.yaml "${req_url}" fedcba9876543210fedcba9876543210fedcba98)"
@@ -368,6 +373,10 @@ expect "a run read by its id that is not a run object is UNKNOWN" "${tool}" list
   "UNKNOWN malformed run 100"
 expect "a run read by its id that answers with another id is UNKNOWN" "${tool}" list-omits-run-wrong-id 2 \
   "UNKNOWN malformed run 100"
+for field in created_at conclusion status path; do
+  expect "a run read by its id without ${field} is UNKNOWN" "${tool}" "list-omits-run-no-${field}" 2 \
+    "UNKNOWN malformed run 100"
+done
 expect "a run read by its id at another commit does not count" "${tool}" list-omits-run-other-head 1 \
   "GATE workflow .github/workflows/scan.yaml MISSING"
 expect "a local run read by its id does not satisfy a required workflow" "${tool}" list-omits-local-run 1 \

@@ -180,8 +180,11 @@ extra_runs="[]"
 while IFS= read -r run_id; do
   [ -n "${run_id}" ] || continue
   one="$(read_json "repos/${repo}/actions/runs/${run_id}")" || unknown "read-failed run ${run_id}"
+  # Every field the gates below read must be present, or a partial object could pass a gate.
   extra_runs="$(jq -c --argjson kept "${extra_runs}" --arg head "${head}" --arg id "${run_id}" '
-    if type == "object" and ((.id // null) | tostring) == $id and (.head_sha | type) == "string"
+    if type == "object" and ((.id // null) | tostring) == $id
+      and all(.head_sha, .path, .workflow_url, .status, .created_at; type == "string")
+      and has("conclusion") and (.conclusion == null or (.conclusion | type) == "string")
     then (if .head_sha == $head then $kept + [.] else $kept end)
     else error("shape") end' <<<"${one}" 2>/dev/null)" || unknown "malformed run ${run_id}"
 done <<<"${omitted}"
