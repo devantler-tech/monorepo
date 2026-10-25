@@ -1518,6 +1518,9 @@ expect_review_gated "unsigned combined metadata" "${per_skill_args[@]}" "$signed
   "$(jq -c '.[-1].verified=false' <<< "$signed_metadata_commits")"
 expect_review_gated "combined metadata without native signature evidence" "${per_skill_args[@]}" "$signed_metadata_files" \
   "$(jq -c 'del(.[-1].verified)' <<< "$signed_metadata_commits")"
+expect_review_gated "combined metadata following a legacy unsigned sync" "${per_skill_args[@]}" "$signed_metadata_files" \
+  "$(jq -c --argjson legacy "$(jq -c '.[0]' <<< "$agent_plugins_skills_commits")" \
+    '.[0] |= (. + ($legacy | del(.sha,.message)))' <<< "$signed_metadata_commits" | jq -c 'del(.[0].verified)')"
 expect_review_gated "duplicate combined metadata" "${per_skill_args[@]}" "$signed_metadata_files" \
   "$(jq -c '. + [.[-1]]' <<< "$signed_metadata_commits")"
 expect_review_gated "combined metadata mixed with a legacy digest" "${per_skill_args[@]}" "$signed_metadata_files" \
