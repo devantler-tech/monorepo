@@ -1497,6 +1497,38 @@ per_skill_commits() {
 per_skill_commits_json="$(printf '%s\n' "${per_skill_sync}" "${per_skill_digest}" "${per_skill_bump}" | per_skill_commits)"
 per_skill_args=(agent-plugins app/botantler-1 "${per_skill_branch}" "${per_skill_title}" "${per_skill_head}")
 
+# monorepo#4531: the same App now combines generated metadata into one signed follow-up.
+# It must remain review-required (3), including when no desired-state digest changed.
+signed_metadata=$(jq -c --arg sha "$per_skill_head" '
+  .sha=$sha | .message="chore(deps): refresh plugin metadata for synced content"' <<< "$per_skill_sync")
+signed_metadata_commits=$(printf '%s\n' "$per_skill_sync" "$signed_metadata" | per_skill_commits)
+signed_metadata_files=$(jq -c '. + ["plugins/agentic-engineering/CHANGELOG.md"]' <<< "$per_skill_files")
+expect_review_required "App-signed combined skill metadata requires semantic review" \
+  "${per_skill_args[@]}" "$signed_metadata_files" "$signed_metadata_commits"
+expect_review_required "App-signed combined metadata without a moved digest" \
+  "${per_skill_args[@]}" \
+  "$(jq -c 'map(select(endswith(".desired-state.json")|not))' <<< "$signed_metadata_files")" \
+  "$signed_metadata_commits"
+for field in author_login author_name author_email committer_login committer_name committer_email; do
+  expect_review_gated "combined metadata with incorrect $field" \
+    "${per_skill_args[@]}" "$signed_metadata_files" \
+    "$(jq -c --arg field "$field" '.[-1][$field]="other"' <<< "$signed_metadata_commits")"
+done
+expect_review_gated "unsigned combined metadata" "${per_skill_args[@]}" "$signed_metadata_files" \
+  "$(jq -c '.[-1].verified=false' <<< "$signed_metadata_commits")"
+expect_review_gated "combined metadata without native signature evidence" "${per_skill_args[@]}" "$signed_metadata_files" \
+  "$(jq -c 'del(.[-1].verified)' <<< "$signed_metadata_commits")"
+expect_review_gated "combined metadata following a legacy unsigned sync" "${per_skill_args[@]}" "$signed_metadata_files" \
+  "$(jq -c --argjson legacy "$(jq -c '.[0]' <<< "$agent_plugins_skills_commits")" \
+    '.[0] |= (. + ($legacy | del(.sha,.message)))' <<< "$signed_metadata_commits" | jq -c 'del(.[0].verified)')"
+expect_review_gated "duplicate combined metadata" "${per_skill_args[@]}" "$signed_metadata_files" \
+  "$(jq -c '. + [.[-1]]' <<< "$signed_metadata_commits")"
+expect_review_gated "combined metadata mixed with a legacy digest" "${per_skill_args[@]}" "$signed_metadata_files" \
+  "$(jq -c --argjson digest "$per_skill_digest" '.[:1]+[$digest]+.[1:]' <<< "$signed_metadata_commits" | with_commit_dates)"
+expect_review_gated "combined metadata missing release notes" "${per_skill_args[@]}" "$per_skill_files" "$signed_metadata_commits"
+expect_review_gated "combined metadata with unrelated code" "${per_skill_args[@]}" \
+  "$(jq -c '. + ["scripts/unrelated.sh"]' <<< "$signed_metadata_files")" "$signed_metadata_commits"
+
 expect_review_required "agent-plugins per-skill update" \
   "${per_skill_args[@]}" "${per_skill_files}" "${per_skill_commits_json}"
 # Since agent-plugins#247 the bump commit also writes the plugin's release notes.
