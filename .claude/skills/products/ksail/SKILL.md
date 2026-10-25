@@ -22,6 +22,7 @@ reliability and the **Monthly KSail Strategy** (month start) — are defined in 
 ## Maintenance`.
 
 ## Real-cluster trials
+
 A provider fix whose user evaluation needs a real cluster (EKS, Hetzner) is tried within the
 portfolio's one autonomous real-cluster trial a day. When several finished pull requests for the same
 provider are waiting, evaluate them together in one trial of an **integration revision** that merges
