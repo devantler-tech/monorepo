@@ -29,7 +29,9 @@
 #   A failed check run or workflow run is BREAKAGE even when the other kind is missing or truncated.
 #   Only the latest run of each workflow and event counts, so a failure a later run of the same
 #   workflow superseded at the same head is not breakage; another workflow's run never supersedes
-#   it. Without breakage, UNKNOWN reasons are: read-failed <what>, malformed <what>,
+#   it. A cancelled run has no verdict, so a later successful run of the same workflow at the head
+#   replaces it whatever that run's event (monorepo#4527: a dispatch cancelled the push run it
+#   re-ran, and the stale cancel kept weekly pacing off). Without breakage, UNKNOWN reasons are: read-failed <what>, malformed <what>,
 #   truncated <what>, no-check-runs and no-workflow-runs. An unfinished run is not a failure; the
 #   next run re-reads it.
 #
@@ -166,7 +168,11 @@ probe() {
         and (.run_number | type) == "number") then . else error("shape") end
     | [ ($c[].check_runs[] | select(.conclusion as $x | $f | index($x)) | "check:\(.name)=\(.conclusion)"),
         ($runs | group_by([.workflow_id, .event]) | map(max_by(.run_number)) | .[]
-          | select(.conclusion as $x | $f | index($x)) | "workflow:\(.path // .name)=\(.conclusion)") ]
+          | select(.conclusion as $x | $f | index($x))
+          | select(. as $c | $c.conclusion != "cancelled" or ([$runs[] | select(.workflow_id == $c.workflow_id
+              and .run_number > $c.run_number and .conclusion == "success")]
+              | length) == 0)
+          | "workflow:\(.path // .name)=\(.conclusion)") ]
     | map(gsub("[^A-Za-z0-9_./:=@+-]"; "_")) | join(",")')" ||
     { echo "RUNG0 ${repo} UNKNOWN malformed conclusions"; return 2; }
 

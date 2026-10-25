@@ -99,6 +99,20 @@ fixture other-event-does-not-supersede "${head_ok}" "$(checks 1 "${check_ok}")" 
   "$(runs 2 "$(run 4 digest.yaml schedule 10 completed failure)" "$(run 4 digest.yaml workflow_dispatch 11 completed success)")"
 fixture other-workflow-does-not-supersede "${head_ok}" "$(checks 1 "${check_ok}")" \
   "$(runs 2 "$(run 4 digest.yaml push 10 completed failure)" "$(run 5 other.yaml push 11 completed success)")"
+# A cancelled run has no verdict (monorepo#4527, the unifi head): a LATER successful run of the same
+# workflow at the head replaces it whatever its event. Nothing else clears a cancelled run.
+cancelled_push="$(run 1 "${ci}" push 9 completed cancelled)"
+fixture cancelled-then-green-other-event "${head_ok}" "$(checks 1 "${check_ok}")" \
+  "$(runs 2 "${cancelled_push}" "$(run 1 "${ci}" workflow_dispatch 10 completed success)")"
+fixture cancelled-alone "${head_ok}" "$(checks 1 "${check_ok}")" "$(runs 1 "${cancelled_push}")"
+fixture cancelled-then-red-other-event "${head_ok}" "$(checks 1 "${check_ok}")" \
+  "$(runs 2 "${cancelled_push}" "$(run 1 "${ci}" workflow_dispatch 10 completed failure)")"
+fixture cancelled-then-unfinished-other-event "${head_ok}" "$(checks 1 "${check_ok}")" \
+  "$(runs 2 "${cancelled_push}" "$(run 1 "${ci}" workflow_dispatch 10 in_progress null)")"
+fixture cancelled-after-green-other-event "${head_ok}" "$(checks 1 "${check_ok}")" \
+  "$(runs 2 "${cancelled_push}" "$(run 1 "${ci}" workflow_dispatch 8 completed success)")"
+fixture cancelled-then-green-other-workflow "${head_ok}" "$(checks 1 "${check_ok}")" \
+  "$(runs 2 "${cancelled_push}" "$(run 5 other.yaml workflow_dispatch 10 completed success)")"
 # A failed head read is UNKNOWN unless the branch list proves the repository empty.
 fixture head-unreadable - "$(checks 1 "${check_ok}")" "$(runs 1 "${run_ok}")"
 fixture head-unreadable-branches-exist - "$(checks 1 "${check_ok}")" "$(runs 1 "${run_ok}")"
@@ -147,6 +161,12 @@ expect superseded-failure 0 'OK'
 expect later-failure 1 'BREAKAGE workflow:digest.yaml=failure'
 expect other-event-does-not-supersede 1 'BREAKAGE workflow:digest.yaml=failure'
 expect other-workflow-does-not-supersede 1 'BREAKAGE workflow:digest.yaml=failure'
+expect cancelled-then-green-other-event 0 'runs=2 OK'
+expect cancelled-alone 1 "BREAKAGE workflow:${ci}=cancelled"
+expect cancelled-then-red-other-event 1 "BREAKAGE workflow:${ci}=cancelled,workflow:${ci}=failure"
+expect cancelled-then-unfinished-other-event 1 "BREAKAGE workflow:${ci}=cancelled"
+expect cancelled-after-green-other-event 1 "BREAKAGE workflow:${ci}=cancelled"
+expect cancelled-then-green-other-workflow 1 "BREAKAGE workflow:${ci}=cancelled"
 expect head-unreadable 2 'UNKNOWN read-failed head'
 expect head-unreadable-branches-exist 2 'UNKNOWN read-failed head'
 expect empty-repo 0 'RUNG0 devantler-tech/monorepo EMPTY'
