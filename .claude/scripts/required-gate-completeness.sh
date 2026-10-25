@@ -35,6 +35,11 @@
 #   An active `code_quality` rule is always UNVERIFIED: no readable surface reports its analysis
 #   for a head. Its line is `GATE code_quality setup=<state|unreadable> UNVERIFIED`, and the setup
 #   state is the lead when a merge is refused.
+#   The list of workflow runs at the head can leave out runs that exist (monorepo#4434). Every run
+#   an Actions job's check-run at the head names is therefore read by its id when the list lacks
+#   it, and kept when it ran at this head. A line on stderr says how many were read that way. A
+#   required workflow whose jobs published no check-run cannot be recovered like this, so it can
+#   still read MISSING when the list leaves it out.
 #   Then one verdict line:
 #     COMPLETE required=<n>
 #     INCOMPLETE missing=<n> failed=<n> pending=<n>
@@ -136,7 +141,10 @@ check_pages="$(read_json --paginate "repos/${repo}/commits/${head}/check-runs?pe
   unknown "read-failed check-runs"
 status_pages="$(read_json --paginate "repos/${repo}/commits/${head}/statuses?per_page=100")" ||
   unknown "read-failed statuses"
-run_pages="$(read_json --paginate "repos/${repo}/actions/runs?head_sha=${head}&per_page=100")" ||
+# Pull-request runs are wanted: a required workflow on a pull request runs as one. Asking for them
+# by name documents that, although on its own it did not stop the list leaving runs out (#4434).
+run_pages="$(read_json --paginate \
+  "repos/${repo}/actions/runs?head_sha=${head}&exclude_pull_requests=false&per_page=100")" ||
   unknown "read-failed runs"
 
 # Every paginated list must be complete, or a gate on a later page reads as MISSING.
@@ -146,6 +154,44 @@ for pair in "check_runs:${check_pages}" "workflow_runs:${run_pages}"; do
     '"\([.[][$k][]] | length) \(.[0].total_count)"' 2>/dev/null)" || unknown "malformed ${key}"
   [ "${counts% *}" = "${counts#* }" ] || unknown "truncated ${key} fetched=${counts% *} total=${counts#* }"
 done
+
+# monorepo#4434: a complete-looking list can still leave runs out. On business-site#280 the list for
+# one head came back with `total_count: 0` while seven runs, four of them required workflows, had
+# passed at that head, and asking again returned them. That read the four required workflows as
+# MISSING. An Actions job's check-run names its own run in its URL, so a run named there but absent
+# from the list is read by its id. It counts only when it ran at this head: a check-run that another
+# run created through the API can name a run at a different commit. Reading more than a few dozen
+# runs one at a time would cost more than the survey's call budget, so past the bound it is UNKNOWN.
+max_omitted=30
+omitted="$(jq -n -r --arg prefix "https://github.com/${repo}/actions/runs/" \
+  --slurpfile c <(printf '%s\n' "${check_pages}") \
+  --slurpfile w <(printf '%s\n' "${run_pages}") '
+  (reduce ([$w[].workflow_runs[].id | tostring][]) as $id ({}; .[$id] = true)) as $listed
+  | ($prefix | ascii_downcase) as $p
+  | [$c[].check_runs[]
+     | select((.app.id // null) == 15368)
+     | (.html_url // "" | ascii_downcase) as $u
+     | select($u | startswith($p))
+     | $u[($p | length):] | capture("^(?<id>[0-9]+)/job/[0-9]+$") | .id]
+  | unique | .[] | select($listed[.] | not)' 2>/dev/null)" || unknown "malformed check_runs"
+n_omitted="$(grep -c . <<<"${omitted}" || true)"
+[ "${n_omitted}" -le "${max_omitted}" ] || unknown "omitted-runs=${n_omitted} over ${max_omitted}"
+extra_runs="[]"
+while IFS= read -r run_id; do
+  [ -n "${run_id}" ] || continue
+  one="$(read_json "repos/${repo}/actions/runs/${run_id}")" || unknown "read-failed run ${run_id}"
+  # Every field the gates below read must be present, or a partial object could pass a gate.
+  extra_runs="$(jq -c --argjson kept "${extra_runs}" --arg head "${head}" --arg id "${run_id}" '
+    if type == "object" and ((.id // null) | tostring) == $id
+      and all(.head_sha, .path, .workflow_url, .status, .created_at; type == "string")
+      and has("conclusion") and (.conclusion == null or (.conclusion | type) == "string")
+    then (if .head_sha == $head then $kept + [.] else $kept end)
+    else error("shape") end' <<<"${one}" 2>/dev/null)" || unknown "malformed run ${run_id}"
+done <<<"${omitted}"
+if [ "${n_omitted}" -gt 0 ]; then
+  printf 'note: the run list left out %s run(s) named by check-runs; read by id, %s at this head\n' \
+    "${n_omitted}" "$(jq 'length' <<<"${extra_runs}")" >&2
+fi
 
 required="$(jq -n -c \
   --slurpfile r <(printf '%s\n' "${rules}") \
@@ -175,6 +221,7 @@ gates="$(jq -n -r \
   --slurpfile c <(printf '%s\n' "${check_pages}") \
   --slurpfile s <(printf '%s\n' "${status_pages}") \
   --slurpfile w <(printf '%s\n' "${run_pages}") \
+  --argjson extra "${extra_runs}" \
   --arg cq "${cq_state}" '
   def ok: . == "success" or . == "neutral" or . == "skipped";
   def rank: if . == "PASS" then 3 elif . == "PENDING" then 2 elif . == "FAILED" then 1 else 0 end;
@@ -189,7 +236,7 @@ gates="$(jq -n -r \
   def actions_app: 15368;
   [$c[].check_runs[]] as $runs
   | [$s[][]] as $statuses
-  | [$w[].workflow_runs[]] as $wf
+  | ([$w[].workflow_runs[]] + $extra) as $wf
   | (any($wf[]; .status != "completed")
      or any($runs[]; .status != "completed" and (.app.slug // "") == "github-actions")) as $unfinished
   | $req[]

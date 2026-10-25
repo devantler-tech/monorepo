@@ -41,6 +41,7 @@ case "$path" in
   */branches/*) key=branch ;;
   */check-runs*) key=check-runs ;;
   */statuses*) key=statuses ;;
+  */actions/runs/[0-9]*) key="run-${path##*/}" ;;
   */actions/runs*) key=runs ;;
   *) exit 1 ;;
 esac
@@ -215,6 +216,61 @@ fixture control-character-name '[{"type":"required_status_checks","parameters":{
 fixture forged-line-name '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"x\nrequired=complete"}]}}]' \
   "${branch_off}" '{"total_count":0,"check_runs":[]}' '[]' '{"total_count":0,"workflow_runs":[]}'
 
+# monorepo#4434: the run list for a head came back with total_count 0 while its runs existed, so
+# four required workflows that had passed read MISSING. An Actions job's check-run names its run;
+# a run named there and absent from the list is read by its id. The list in these cases is empty.
+job_url() { printf 'https://github.com/devantler-tech/monorepo/actions/runs/%s/job/%s' "$1" "$2"; }
+job_in() { # job_in <run id> <job id> <name> [status] [app id] [url]
+  printf '{"id":%s,"name":"%s","status":"%s","conclusion":%s,"app":{"id":%s,"slug":"github-actions"},"html_url":"%s"}' \
+    "$2" "$3" "${4:-completed}" "$([ "${4:-completed}" = completed ] && echo '"success"' || echo null)" \
+    "${5:-15368}" "${6:-$(job_url "$1" "$2")}"
+}
+run_obj() { # run_obj <id> <path> <workflow url field> [head] [status]
+  printf '{"id":%s,"path":"%s",%s,"head_sha":"%s","status":"%s","conclusion":%s,"created_at":"2026-09-22T10:00:00Z"}' \
+    "$1" "$2" "$3" "${4:-${head_sha}}" "${5:-completed}" \
+    "$([ "${5:-completed}" = completed ] && echo '"success"' || echo null)"
+}
+two_jobs="{\"total_count\":2,\"check_runs\":[$(job_in 300 1 Build),$(job_in 100 2 scan)]}"
+ci_run="$(run_obj 300 .github/workflows/ci.yaml "${local_url}")"
+scan_run="$(run_obj 100 .github/workflows/scan.yaml "${req_url}")"
+# omitted_fixture <name> <rules> <check-runs> [run id=json …] — an empty list, and run objects by id
+omitted_fixture() {
+  local name="$1" rules="$2" checks_page="$3" pair
+  shift 3
+  fixture "${name}" "${rules}" "${branch_off}" "${checks_page}" '[]' '{"total_count":0,"workflow_runs":[]}'
+  for pair in "$@"; do printf '%s\n' "${pair#*=}" >"${tmp}/fx/${name}/run-${pair%%=*}"; done
+}
+omitted_fixture list-omits-runs "${rules_check_and_workflow}" "${two_jobs}" "300=${ci_run}" "100=${scan_run}"
+omitted_fixture list-omits-run-read-fails "${rules_check_and_workflow}" "${two_jobs}" "300=${ci_run}"
+omitted_fixture list-omits-run-malformed "${rules_check_and_workflow}" "${two_jobs}" "300=${ci_run}" '100=[1]'
+omitted_fixture list-omits-run-wrong-id "${rules_check_and_workflow}" "${two_jobs}" "300=${ci_run}" \
+  "100=$(run_obj 101 .github/workflows/scan.yaml "${req_url}")"
+# A run object missing a field the gates read could otherwise pass a gate on what it left out.
+for field in created_at conclusion status path; do
+  omitted_fixture "list-omits-run-no-${field}" "${rules_check_and_workflow}" "${two_jobs}" "300=${ci_run}" \
+    "100=$(jq -c --arg f "${field}" 'del(.[$f])' <<<"${scan_run}")"
+done
+# A check-run another run created through the API can name a run at a different commit.
+omitted_fixture list-omits-run-other-head "${rules_check_and_workflow}" "${two_jobs}" "300=${ci_run}" \
+  "100=$(run_obj 100 .github/workflows/scan.yaml "${req_url}" fedcba9876543210fedcba9876543210fedcba98)"
+# A run read by its id still has to be the required one, not a local workflow at the same path.
+omitted_fixture list-omits-local-run "${rules_check_and_workflow}" "${two_jobs}" "300=${ci_run}" \
+  "100=$(run_obj 100 .github/workflows/scan.yaml "${local_url}")"
+# A run read by its id that has not finished still holds an absent check at PENDING.
+omitted_fixture list-omits-unfinished-run "${rules_build_only}" \
+  "{\"total_count\":1,\"check_runs\":[$(job_in 300 1 Lint)]}" \
+  "300=$(run_obj 300 .github/workflows/ci.yaml "${local_url}" "${head_sha}" in_progress)"
+# Only an Actions job in this repository names a run to read: not another app, not another repository.
+omitted_fixture names-nothing-to-read "${rules_check_and_workflow}" \
+  "{\"total_count\":2,\"check_runs\":[$(job_in 300 1 Build completed 999),$(job_in 100 2 scan completed 15368 \
+    https://github.com/someone-else/monorepo/actions/runs/100/job/2)]}" "300=${ci_run}" "100=${scan_run}"
+many_jobs="$(for i in $(seq 1 31); do job_in "$((1000 + i))" "${i}" "job${i}"; echo; done | paste -s -d , -)"
+omitted_fixture too-many-omitted "${rules_build_only}" "{\"total_count\":31,\"check_runs\":[${many_jobs}]}"
+# The positive control: a list that holds every run its check-runs name is complete, so a required
+# workflow absent from it is MISSING and nothing more is read.
+fixture workflow-absent "${rules_check_and_workflow}" "${branch_off}" \
+  "{\"total_count\":1,\"check_runs\":[$(job_in 300 1 Build)]}" '[]' "{\"total_count\":1,\"workflow_runs\":[${ci_run}]}"
+
 run() { # run <tool> <fixture> [head] — prints stdout, returns the tool's exit status
   STUB_DIR="${tmp}/fx/$2" PATH="${tmp}/bin:${PATH}" bash "$1" \
     --repo devantler-tech/monorepo --base main --head "${3:-${head_sha}}" 2>/dev/null
@@ -308,6 +364,51 @@ expect "a setup read that is not an object is unreadable" "${tool}" code-quality
   "GATE code_quality setup=unreadable UNVERIFIED"
 expect "a setup read that is not JSON still ends in a verdict" "${tool}" code-quality-not-json 2 \
   "UNKNOWN unverified=1"
+# monorepo#4434: runs the list left out are read by the id their check-runs name.
+expect "a required workflow the list left out is read by its id and passes" "${tool}" list-omits-runs 0 \
+  "COMPLETE required=2"
+expect "a run read by its id that fails to read is UNKNOWN, never MISSING" "${tool}" list-omits-run-read-fails 2 \
+  "UNKNOWN read-failed run 100"
+expect "a run read by its id that is not a run object is UNKNOWN" "${tool}" list-omits-run-malformed 2 \
+  "UNKNOWN malformed run 100"
+expect "a run read by its id that answers with another id is UNKNOWN" "${tool}" list-omits-run-wrong-id 2 \
+  "UNKNOWN malformed run 100"
+for field in created_at conclusion status path; do
+  expect "a run read by its id without ${field} is UNKNOWN" "${tool}" "list-omits-run-no-${field}" 2 \
+    "UNKNOWN malformed run 100"
+done
+expect "a run read by its id at another commit does not count" "${tool}" list-omits-run-other-head 1 \
+  "GATE workflow .github/workflows/scan.yaml MISSING"
+expect "a local run read by its id does not satisfy a required workflow" "${tool}" list-omits-local-run 1 \
+  "GATE workflow .github/workflows/scan.yaml MISSING"
+expect "an unfinished run read by its id holds an absent check at PENDING" "${tool}" list-omits-unfinished-run 1 \
+  "GATE check Build PENDING"
+expect "more left-out runs than the bound is UNKNOWN" "${tool}" too-many-omitted 2 "UNKNOWN omitted-runs=31 over 30"
+expect "a required workflow absent from a complete list is MISSING" "${tool}" workflow-absent 1 \
+  "GATE workflow .github/workflows/scan.yaml MISSING"
+# reads_runs_by_id <fixture> — the run ids the tool read one at a time, one per line
+reads_runs_by_id() {
+  local log="${tmp}/by-id.log"
+  : >"${log}"
+  STUB_LOG="${log}" STUB_DIR="${tmp}/fx/$1" PATH="${tmp}/bin:${PATH}" bash "${tool}" \
+    --repo devantler-tech/monorepo --base main --head "${head_sha}" >/dev/null 2>&1 || true
+  sed -n 's|^api repos/devantler-tech/monorepo/actions/runs/\([0-9]*\)$|\1|p' "${log}"
+}
+expect_reads() { # expect_reads <label> <fixture> <want ids, space-separated>
+  local got
+  checks=$((checks + 1))
+  got="$(reads_runs_by_id "$2" | paste -s -d ' ' -)"
+  if [ "${got}" = "$3" ]; then echo "ok   $1"; else
+    echo "FAIL $1: want reads by id '$3', got '${got}'" >&2
+    failures=$((failures + 1))
+  fi
+}
+expect_reads "each run the list left out is read once, by its id" list-omits-runs "100 300"
+expect_reads "a complete list reads no run by its id" workflow-absent ""
+expect_reads "another app's or another repository's check-run names no run to read" names-nothing-to-read ""
+expect_reads "past the bound no run is read at all" too-many-omitted ""
+expect "a check-run that names nothing leaves the absent workflow MISSING" "${tool}" names-nothing-to-read 1 \
+  "GATE workflow .github/workflows/scan.yaml MISSING"
 
 checks=$((checks + 1))
 set +e
@@ -535,6 +636,9 @@ if cmp -s "${aborting}" "${aborting_no_backstop}"; then
 fi
 no_required_url="$(ablate no-required-url 's/ and \(\.workflow_url \/\/ "" \| contains\("\/actions\/required_workflows\/"\)\)//')"
 no_value_guard="$(ablate no-value-guard 's/\[ "\$#" -ge 2 \] \|\| usage; //g')"
+# monorepo#4434: judging the list alone, and keeping a run read by its id from any commit.
+list_only="$(ablate list-only 's/\(\[\$w\[\]\.workflow_runs\[\]\] \+ \$extra\) as \$wf/[\$w[].workflow_runs[]] as \$wf/')"
+any_head="$(ablate any-head 's/then \(if \.head_sha == \$head then \$kept \+ \[\.\] else \$kept end\)/then \$kept + [.]/')"
 
 expect_ablation_fails() { # <label> <ablated tool> <fixture> <rc the real tool gives>
   local got rc
@@ -578,6 +682,10 @@ expect_ablation_line "without the app-bound rule a passing status passes the gat
   "${status_passes_bound}" app-bound-status-only "COMPLETE required=1"
 expect_ablation_line "keeping the better of the two sources passes a failed check-run beside a passing status" \
   "${better_of_two}" same-name-failed-check-run-passing-status "COMPLETE required=1"
+expect_ablation_line "judging the run list alone reads a left-out required workflow MISSING" \
+  "${list_only}" list-omits-runs "GATE workflow .github/workflows/scan.yaml MISSING"
+expect_ablation_line "keeping a run read by its id from any commit passes a workflow that did not run here" \
+  "${any_head}" list-omits-run-other-head "COMPLETE required=2"
 expect_ablation_line "keeping the better of the two sources passes a failing status beside a passing check-run" \
   "${better_of_two}" same-name-passing-check-run-failed-status "COMPLETE required=1"
 
