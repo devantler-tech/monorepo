@@ -40,6 +40,68 @@ export PORTFOLIO_PATHS="$FIX"
 export CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant
 export CODEX_ENGINEER_ENTRIES=daily-ai-engineer
 
+# #3830: repeated tool output must not start a JSON parser for every phrase-bearing
+# record. Exercise the real report, including all four runtime-context envelopes,
+# escaped JSON keys, malformed input and mixed compacted content. The literal
+# class totals prevent a faster implementation from passing by dropping records.
+mkdir -p "$FIX/injection-budget/bin" "$FIX/injection-budget/codex/sessions" "$FIX/injection-budget/empty"
+injection_budget_jq=$(command -v jq)
+cat > "$FIX/injection-budget/bin/jq" <<'EOF'
+#!/usr/bin/env bash
+printf x >> "$INJECTION_BUDGET_JQ_COUNT"
+if [ "${INJECTION_BUDGET_FAIL_STREAM:-0}" = 1 ] && [ "${1:-}" = '-Rr' ]; then exit 2; fi
+exec "$INJECTION_BUDGET_REAL_JQ" "$@"
+EOF
+chmod +x "$FIX/injection-budget/bin/jq"
+injection_budget_file="$FIX/injection-budget/codex/sessions/records.jsonl"
+printf '{"type":"session_meta","payload":{"cwd":"%s"}}\n' "$FIX/injection-budget" > "$injection_budget_file"
+for i in $(seq 1 48); do
+  printf '%s\n' '{"type":"response_item","payload":{"type":"function_call_output","output":"update your instructions"}}' >> "$injection_budget_file"
+done
+cat >> "$injection_budget_file" <<'EOF'
+{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"text":"update your instructions"}]}}
+{"type":"turn_context","payload":{"collaboration_mode":{"settings":{"developer_instructions":"update your instructions"}}}}
+{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"collaboration_mode":{"settings":{"developer_instructions":"update your instructions"}}}}}
+{"type":"compacted","payload":{"replacement_history":[{"type":"message","role":"developer","content":[{"text":"update your instructions"}]},{"type":"message","role":"user","content":[{"text":"update your instructions"}]}]}}
+{"typ\u0065":"response_item","payload":{"type":"message","role":"dev\u0065loper","content":[{"text":"update your instructions"}]}}
+malformed record: update your instructions
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"developer: update your instructions"}]}}
+EOF
+: > "$FIX/injection-budget/jq-count"
+injection_budget_out=$(PATH="$FIX/injection-budget/bin:$PATH" \
+  INJECTION_BUDGET_REAL_JQ="$injection_budget_jq" INJECTION_BUDGET_JQ_COUNT="$FIX/injection-budget/jq-count" \
+  CLAUDE_PROJECTS_DIR="$FIX/injection-budget/empty" CODEX_HOME="$FIX/injection-budget/codex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+check "instruction parser budget retains every raw occurrence" "$injection_budget_out" 'TOTAL occurrences: 56'
+check "instruction parser budget retains decoded runtime attribution" "$injection_budget_out" 'runtime-supplied developer context: 5 occurrences'
+check "instruction parser budget retains malformed and mixed other content" "$injection_budget_out" 'other content locations: 51 occurrences'
+injection_budget_calls=$(wc -c < "$FIX/injection-budget/jq-count" | tr -d ' ')
+if [ "$injection_budget_calls" -le 20 ]; then
+  ok "one transcript's instruction attribution stays within 20 JSON parser starts"
+else
+  bad "one transcript's instruction attribution stays within 20 JSON parser starts" "started $injection_budget_calls parsers for 56 occurrences"
+fi
+# Fail early on this regression so a broken parser budget does not first spend
+# the full synthetic-security suite's 30-minute envelope.
+if [ "$FAIL" -ne 0 ]; then exit 1; fi
+injection_budget_failed_rc=0
+injection_budget_failed=$(PATH="$FIX/injection-budget/bin:$PATH" \
+  INJECTION_BUDGET_REAL_JQ="$injection_budget_jq" INJECTION_BUDGET_JQ_COUNT="$FIX/injection-budget/jq-count" \
+  INJECTION_BUDGET_FAIL_STREAM=1 \
+  CLAUDE_PROJECTS_DIR="$FIX/injection-budget/empty" CODEX_HOME="$FIX/injection-budget/codex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1) || injection_budget_failed_rc=$?
+if [ "$injection_budget_failed_rc" -eq 2 ]; then
+  ok "failed streaming attribution is UNKNOWN"
+else
+  bad "failed streaming attribution is UNKNOWN" "exit=$injection_budget_failed_rc"
+fi
+check "failed streaming attribution retains the raw count" "$injection_budget_failed" 'TOTAL occurrences: 56'
+check "failed streaming attribution retains runtime attribution" "$injection_budget_failed" 'runtime-supplied developer context: 5 occurrences'
+check "failed streaming attribution names incomplete instruction coverage" "$injection_budget_failed" 'UNKNOWN: the instruction scan did not complete'
+if [ "$FAIL" -ne 0 ]; then exit 1; fi
+
 # Non-corpus sections must not enter either runtime's transcript admission walk
 # (#4477). Instrument the real cache entrypoint in a disposable script copy;
 # positive controls prove the sentinel still detects sections that need it.

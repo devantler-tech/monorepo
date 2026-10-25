@@ -1078,15 +1078,74 @@ injection_snapshot_drift() {
 # reconciliation is uncertain, retain every raw occurrence as other content.
 emit_injection_classes() {
   local f="$1" len="$2" session line raw runtime_phrases phrase_locale line_base
+  local runtime_candidates runtime_index_ok=0 parse_runtime source_line
+  local runtime_text_defs='
+    def runtime_text:
+      if
+        (.type == "response_item"
+         and .payload.type == "message"
+         and .payload.role == "developer")
+      then
+        [.payload.content[]?.text]
+      elif
+        (.type == "turn_context")
+      then
+        [.payload.collaboration_mode.settings.developer_instructions]
+      elif
+        (.type == "event_msg" and .payload.type == "thread_settings_applied")
+      then
+        [.payload.thread_settings.collaboration_mode.settings.developer_instructions]
+      elif
+        (.type == "compacted")
+      then
+        [
+          .payload.replacement_history[]?
+          | select(.type == "message" and .role == "developer")
+          | .content[]?.text
+        ]
+      else
+        []
+      end;'
   session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
   [ -n "$session" ] || session=unknown
   # A Codex tail read from a window cut (#3830) starts after its skipped lines.
   line_base=$(cx_line_base "$f")
 
   phrase_locale=$(injection_locale "$f" "$len")
+  # Most phrase-bearing records are tool output, not runtime context (#3830).
+  # Parse their envelopes in one streaming process per file, retaining only line
+  # numbers. The same structural filter supplies the original attribution below;
+  # escaped JSON keys still decode, and uncertain records retain the original
+  # per-record path. No raw occurrence or independent reconciliation is removed.
+  # Bash read cannot retain NUL bytes, so the index mirrors that existing input
+  # normalization before asking the shared filter about a record.
+  if runtime_candidates=$(
+    injection_matching_lines "$f" "$len" "$phrase_locale" | tr -d '\000' \
+      | jq -Rr "$runtime_text_defs"'
+          index(":") as $colon
+          | if $colon == null or $colon < 1 then error("missing record number")
+            else .[0:$colon] as $record_line
+              | (try (.[$colon+1:] | fromjson | runtime_text
+                      | any(.[]; type == "string")) catch true)
+              | select(.) | $record_line
+            end
+        ' 2>/dev/null
+    runtime_index_status=("${PIPESTATUS[@]}")
+    [ "${#runtime_index_status[@]}" -eq 3 ] || exit 1
+    for runtime_stage_status in "${runtime_index_status[@]}"; do
+      [ "$runtime_stage_status" -eq 0 ] || exit 1
+    done
+  ); then
+    runtime_index_ok=1
+  else
+    # A failed optimization never supplies a known-empty attribution index.
+    # Keep the original path and fail the instruction measurement closed.
+    printf x >> "$XFINJ"
+  fi
   injection_matching_lines "$f" "$len" "$phrase_locale" \
     | while LC_ALL=C IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
+        source_line=$line
         line=$(printf '%s' "$line" | cut -c1-12)
         line=$((line + line_base))
         # Runtime-supplied developer context as STRINGS rather than a bare
@@ -1094,36 +1153,21 @@ emit_injection_classes() {
         # report can name WHICH phrase was fleet chatter. Any path this filter
         # cannot reach — a shape we do not model, a malformed record, a jq
         # failure — yields nothing here and stays fail-closed as other-content.
-        runtime_phrases=$(printf '%s' "$raw" | jq -r '
-          def runtime_text:
-            if
-              (.type == "response_item"
-               and .payload.type == "message"
-               and .payload.role == "developer")
-            then
-              [.payload.content[]?.text]
-            elif
-              (.type == "turn_context")
-            then
-              [.payload.collaboration_mode.settings.developer_instructions]
-            elif
-              (.type == "event_msg" and .payload.type == "thread_settings_applied")
-            then
-              [.payload.thread_settings.collaboration_mode.settings.developer_instructions]
-            elif
-              (.type == "compacted")
-            then
-              [
-                .payload.replacement_history[]?
-                | select(.type == "message" and .role == "developer")
-                | .content[]?.text
-              ]
-            else
-              []
-            end;
-          runtime_text | .[] | select(type == "string")
-        ' 2>/dev/null \
-          | grep -hoiE "$INJ_PHRASE_RE" 2>/dev/null || true)
+        parse_runtime=0
+        if [ "$runtime_index_ok" = 0 ]; then
+          parse_runtime=1
+        else
+          case $'\n'"$runtime_candidates"$'\n' in
+            *$'\n'"$source_line"$'\n'*) parse_runtime=1 ;;
+          esac
+        fi
+        runtime_phrases=''
+        if [ "$parse_runtime" = 1 ]; then
+          runtime_phrases=$(printf '%s' "$raw" | jq -r "$runtime_text_defs"'
+            runtime_text | .[] | select(type == "string")
+          ' 2>/dev/null \
+            | grep -hoiE "$INJ_PHRASE_RE" 2>/dev/null || true)
+        fi
         # Most matched records have no runtime phrases (#3830). Avoid starting
         # the normalisation pipeline on an empty stream; raw matches below
         # still take the unchanged detector, redactor and independent class walk.
