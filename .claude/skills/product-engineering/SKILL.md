@@ -56,16 +56,16 @@ Same work, fewer tokens.
 
 ## 1. Strategy & roadmaps
 The roadmap of record is **GitHub Issues** (Issues are enabled on every repo) — never a file.
-- **Label scheme:** epic / theme-level items get a **`roadmap`** label (create it once per repo:
-  `gh label create roadmap --repo devantler-tech/<repo> --description "Strategic roadmap item" --color 5319E7`);
-  their actionable children use the normal labels (`enhancement`, `performance`, `refactor`,
-  `security`, `bug`, `documentation`). Group a theme/release under a **milestone** when useful.
+- **Issue classification:** epic / theme-level items use the native `Epic` issue type;
+  their actionable children use the appropriate native issue type. Keep independent cross-cutting
+  labels, but never recreate duplicate classification labels. Group a theme/release under a
+  **milestone** when useful. This is the deployment of the reviewed upstream native-type preference.
 - **Strategy review** (per product, on the rotation cadence — weekly-to-monthly, oldest review first).
   Assess *where the product is vs. where it should be*: operator/user needs, ecosystem & dependency
   shifts (e.g. upstream Kubernetes/Flux/Astro/Go releases), accumulated tech debt, gaps in
   features / quality / performance / docs, and how it fits the portfolio. Read the repo's README,
   AGENTS.md, recent commits, open issues, and the actual code — not just metadata.
-- **Output:** create or refresh a small set (≈3–7) of `roadmap` issues using the contract's
+- **Output:** create or refresh a small set (≈3–7) of native Epic issues using the contract's
   evidence-led shape: evidence, audience/problem, hypothesis, success signal and window, smallest
   useful change, acceptance criteria, and rough size. Don't dump a huge backlog; a tight, current
   roadmap beats a long stale one.
@@ -162,8 +162,8 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    perform normal cleanup, **atomically renew the retained SHA** immediately before publishing the
    decision or follow-up issues with `claim_sha="$(.claude/scripts/agent-claim.sh renew <issue>
    "$claim_sha" --repo-dir <product-path>)"`, then **retire the acquired SHA after the decision and follow-up issue artifacts are recorded**
-   and before closing the Spike. **Size, difficulty, a `roadmap`/`enhancement`/
-   `security`/`repo-assist`/`automation` label, or a "maintainer-hot" feeling are NOT skip reasons** —
+   and before closing the Spike. **Size, difficulty, an issue type, a cross-cutting label,
+   or a "maintainer-hot" feeling are NOT skip reasons** —
    when the important issue is large, **decompose it into a valuable first child and ship that increment**
    (`Fixes #child`; add `Part of #experiment` when the parent stays open) so the big thing advances
    across runs. ("Repo Assist"/`automation`
@@ -383,7 +383,7 @@ at once** — the highest-leverage advance work is often cross-cutting (contract
     shared, tested catalog the platform and platform-template consume instead of vendoring copies).
 - **Extract & propagate.** Add the capability to the shared lib (with its own tests, **additive &
   backward-compatible** — blast radius is every consumer), then migrate consumers to it and retire the
-  per-repo copies. Land big extractions as a `roadmap`/`enhancement` issue + incremental PRs.
+  per-repo copies. Land big extractions as native Epic/Feature issues + incremental PRs.
 - **Reconcile drift.** Pinned action versions, toolchains, conventions, and `AGENTS.md ## Maintenance`
   sections should converge toward the best pattern across the suite.
 - **Native vs. standard** (contract → *Design principles*): keep anything generic in a portable/standard
@@ -409,7 +409,7 @@ maintainer direction 2026-07-05):
   walk-throughs, a real workload on the local cluster where the once-a-day cluster budget allows) and
   hunt friction: bugs, rough edges, missing affordances, slow paths, flaky behaviour, confusing UX.
 - **Output = well-formed issues, never ad-hoc PRs.** Each finding becomes an issue using the contract's
-  evidence-led shape (labelled; `roadmap` for theme-sized findings) per the *Issue-driven* rule, joining
+  evidence-led shape (native issue type; Epic for theme-sized findings) per the *Issue-driven* rule, joining
   value-led refinement. Research restocks the queue — it never displaces startable important work.
 - **Research position & cadence.** Record a per-product `last_research` cursor in native memory (pointer only).
   Dedupe against existing issues before filing; a research pass that files nothing new still updates
