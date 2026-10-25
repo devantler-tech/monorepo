@@ -275,6 +275,24 @@ not move the publication clock; never publish filler. The KSail Monthly Strategy
 and their standing temporary-cost authorization follow
 [Temporary engineering costs](spend-and-inference.md#temporary-engineering-costs); the daily autonomous
 cadence is not a reason to refuse such a trial.
+
+**One trial can evaluate several queued pull requests** (decision monorepo#4307). When finished pull
+requests for one provider wait only on a real-cluster trial, the day's single trial may test an
+**integration revision**: a temporary branch in your own lane namespace that merges those pull
+requests, in dependency order and then oldest first. It is still one trial: one cluster alive at a
+time, one finite deadline and verified cleanup, and it uses up the day's autonomous trial. Combine
+only pull requests that change separate files, so the revision is exactly their union.
+
+- **Record:** the trial record names the integration revision's commit and every pull request head
+  it merged.
+- **Pass:** each included pull request gets an evaluation comment naming the integration revision,
+  its own head and the trial steps that exercised its change. A head that moves afterwards needs a new
+  evaluation.
+- **Fail:** the failure belongs to the pull request whose step failed, when the trial log shows it.
+  When the log cannot attribute it, the next day's trial tests those pull requests one at a time,
+  starting with the one the failing step exercised.
+- **Afterwards:** delete the integration branch. It is never merged and never opened as a pull request.
+
 **Substantive-progress gate (guards against easy-work drift).** Coverage bumps, docs polish, and
 self-test guards are valuable but **must not become every tick's output**: do **not** let the advance
 pick be a small coverage/docs/guard artifact for **more than ~2 consecutive runs** while any substantive

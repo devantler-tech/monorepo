@@ -20,3 +20,12 @@ triage, implement, coverage, performance, refactor) follow
 [`product-engineering`](../../product-engineering/SKILL.md). KSail's heavy cadences — weekly E2E + live
 reliability and the **Monthly KSail Strategy** (month start) — are defined in its `AGENTS.md
 ## Maintenance`.
+
+## Real-cluster trials
+
+A provider fix whose user evaluation needs a real cluster (EKS, Hetzner) is tried within the
+portfolio's one autonomous real-cluster trial a day. When several finished pull requests for the same
+provider are waiting, evaluate them together in one trial of an **integration revision** that merges
+them, as the [cadence guide](../../../guides/cadence.md#cadence--focus--how-the-schedule-behaves)
+describes: one cluster, one deadline, verified cleanup, an evaluation comment on each included pull
+request naming the revision and its own head, and the integration branch deleted afterwards.
