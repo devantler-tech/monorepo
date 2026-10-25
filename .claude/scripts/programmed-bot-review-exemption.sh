@@ -239,7 +239,8 @@ matches_changelog_bump() {
     ([.[] | capture("^(?<p>plugins/[^/]+)/CHANGELOG\\.md$").p] | unique) as $logged |
     ([.[] | capture("^(?<p>plugins/[^/]+)/skills/").p] | unique) as $changed |
     if any($commits[1:][];
-         .message == "chore(deps): bump plugin versions and record skill updates")
+         .message == "chore(deps): bump plugin versions and record skill updates" or
+         .message == "chore(deps): refresh plugin metadata for synced content")
     then $logged == $changed
     else $logged == []
     end
@@ -249,11 +250,15 @@ matches_changelog_bump() {
 # The digest refresh job commits only when the sync moved a declared digest, and it is the only job
 # that writes a desired-state file. So a desired-state change and the refresh commit come together
 # or not at all: a head changing that file without the refresh, or carrying the refresh without the
-# file, is not untouched updater output.
+# file, is not untouched updater output. The combined App-signed publisher also refreshes
+# digests, but may have only version/release-note changes; its identity is checked below.
 matches_digest_refresh() {
   jq -e --argjson commits "${commits_json}" '
-    any(.[]; test("^plugins/[^/]+/resources/provider-neutral\\.desired-state\\.json$")) ==
+    if any($commits[1:][]; .message == "chore(deps): refresh plugin metadata for synced content")
+    then true
+    else any(.[]; test("^plugins/[^/]+/resources/provider-neutral\\.desired-state\\.json$")) ==
       any($commits[1:][]; .message == "chore(deps): refresh desired-state digests for synced content")
+    end
   ' <<<"${files_json}" >/dev/null
 }
 
@@ -352,7 +357,8 @@ matches_agent_skills_provenance() {
 # the App-signed one the updater writes once it signs through the API, which is recognised only with
 # GitHub's own signature verdict, as in the consumer arm above. After it, the caller's follow-up jobs
 # may add a digest refresh and a version bump, each at most once and in the order its job writes them
-# (refresh first, then bump); anything else, an adaptation commit included, is not the updater's head.
+# (refresh first, then bump). The corrected producer instead uses one combined follow-up,
+# signed by that same App. Mixing the two histories is never programmed output.
 matches_agent_plugins_review_provenance() {
   local sync_message="$1"
   jq -e --arg sync_message "${sync_message}" '
@@ -390,9 +396,13 @@ matches_agent_plugins_review_provenance() {
       else null end;
     length >= 1 and
     (.[0] | skill_update) and
-    all(.[1:][]; actions_bot_authored and actions_bot_committed and follow_up_kind != null) and
-    (.[1:] | map(follow_up_kind) | (unique | length) == length) and
-    (.[1:] | map(follow_up_kind) | IN([], ["digest"], ["bump"], ["digest", "bump"]))
+    (if any(.[1:][]; .message == "chore(deps): refresh plugin metadata for synced content")
+     then length == 2 and (.[0] | signed_skill_update) and
+       (.[1] | signed_skill_update and .message == "chore(deps): refresh plugin metadata for synced content")
+     else all(.[1:][]; actions_bot_authored and actions_bot_committed and follow_up_kind != null) and
+       (.[1:] | map(follow_up_kind) | (unique | length) == length) and
+       (.[1:] | map(follow_up_kind) | IN([], ["digest"], ["bump"], ["digest", "bump"]))
+     end)
   ' <<<"${commits_json}" >/dev/null
 }
 
