@@ -11,7 +11,8 @@
 #
 #   1. AGENTS.md's every-run list names the read for `agentic-engineer-2` and links the guide section;
 #   2. the guide section names the tool, the window, the threshold, the paced and UNKNOWN outcomes,
-#      and keeps `daily-ai-assistant` unpaced, so rung 0 keeps an hourly run.
+#      and keeps `daily-ai-assistant` unpaced, so rung 0 keeps an hourly run, and says that entry
+#      works the full ladder rather than stopping early when usage is ahead (monorepo#4550).
 #
 # Assertions are scoped to their section and fail closed when an anchor is missing: an empty
 # extraction would satisfy every substring check.
@@ -96,9 +97,18 @@ for needle in \
   '**A plan status other than `ok`, a missing window or a failed call** is UNKNOWN' \
   '`weekly_pace=UNKNOWN`, and run as usual' \
   'An unreadable reading never pauses the lane.' \
-  '`daily-ai-assistant` is never paced'; do
+  '`daily-ai-assistant` is never paced' \
+  'It ignores weekly usage and works the full work-selection ladder as usual, including new work.' \
+  'A run note that says it stops early when usage is ahead is out of date.'; do
   case "${section}" in *"${needle}"*) ;; *) fail "cadence guide pacing section lacks: ${needle}" ;; esac
 done
+
+# The unpaced entry must not be described as a rung-0-and-started-work run. On 2026-10-25, 6 of 9
+# `daily-ai-assistant` runs read that description as their scope and stopped early (monorepo#4550).
+case "${section}" in
+  *'covers rung 0 and finishes started work'*)
+    fail "cadence guide describes daily-ai-assistant as limited to rung 0 and started work (monorepo#4550)" ;;
+esac
 
 # The guide sends the paced run to the probe, so the probe must exist and run.
 [ -x "${repo_root}/.claude/scripts/main-head-rung0-probe.sh" ] ||

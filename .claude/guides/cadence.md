@@ -62,8 +62,10 @@ window: `percentUsed` and `resetsAt`. The elapsed share of the week is
 - **A plan status other than `ok`, a missing window or a failed call** is UNKNOWN. Record
   `weekly_pace=UNKNOWN`, and run as usual. An unreadable reading never pauses the lane.
 
-`daily-ai-assistant` is never paced, so the lane keeps an hourly run that covers rung 0 and finishes
-started work. Pacing therefore brings the lane down to the hourly cadence it had before 2026-10-13.
+`daily-ai-assistant` is never paced. It ignores weekly usage and works the full work-selection
+ladder as usual, including new work. It does not stop after rung 0 or started work, and it does not
+hold back new work because usage is ahead. A run note that says it stops early when usage is ahead
+is out of date. Pacing therefore brings the lane down to the hourly cadence it had before 2026-10-13.
 This happens only while usage is ahead of the week, and the lane goes back to two runs an hour once
 the week catches up. The Agent Improver and the Codex lane are not paced: the Improver used 2–16% of
 the week's tokens, and Codex has its own allowance and no `get_usage` tool.
