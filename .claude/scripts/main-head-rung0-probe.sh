@@ -29,7 +29,9 @@
 #   A failed check run or workflow run is BREAKAGE even when the other kind is missing or truncated.
 #   Only the latest run of each workflow and event counts, so a failure a later run of the same
 #   workflow superseded at the same head is not breakage; another workflow's run never supersedes
-#   it. A cancelled run has no verdict, so a later successful run of the same workflow at the head
+#   it. A check run that a listed workflow run created (same check suite) is judged through that
+#   run, so superseding covers its job checks too; any other check run counts on its own. A
+#   cancelled run has no verdict, so a later successful run of the same workflow at the head
 #   replaces it whatever that run's event (monorepo#4527: a dispatch cancelled the push run it
 #   re-ran, and the stale cancel kept weekly pacing off). The latest MEANINGFUL run decides: runs
 #   without a verdict (pending, skipped, neutral) and replaced cancellations are dropped before the
@@ -168,7 +170,17 @@ probe() {
     [$r[].workflow_runs[]] as $runs
     | if all($runs[]; (.workflow_id | type) == "number" and (.event | type) == "string"
         and (.run_number | type) == "number") then . else error("shape") end
-    | [ ($c[].check_runs[] | select(.conclusion as $x | $f | index($x)) | "check:\(.name)=\(.conclusion)"),
+    # A failed check run in the suite of a listed workflow run is judged through that run below only
+    # once the run has a deciding verdict, or a later green run of the same workflow and event has
+    # superseded it. Until then (the run is still in progress) the failed job counts on its own, as does
+    # a failed check run of any other suite (another app, an unlisted run).
+    | [ ($c[].check_runs[] | select(.conclusion as $x | $f | index($x)) | . as $chk
+        | (if ($chk.check_suite.id | type) == "number"
+           then [$runs[] | select(.check_suite_id == $chk.check_suite.id)][0] else null end) as $own
+        | select($own == null or ((($own.conclusion as $x | ["success"] + $f | index($x)) | not)
+            and ([$runs[] | select(.workflow_id == $own.workflow_id and .event == $own.event
+                and .run_number > $own.run_number and .conclusion == "success")] | length) == 0))
+        | "check:\(.name)=\(.conclusion)"),
         # Filter BEFORE choosing the latest run (monorepo#4529): choosing first let a cancellation, a
         # pending run or a non-deciding conclusion discard an earlier genuine failure.
         ($runs | group_by([.workflow_id, .event]) | .[]
