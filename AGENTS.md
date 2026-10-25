@@ -240,7 +240,7 @@ personalised investment advice, and never puts private financial data in a publi
 
 The Agent Improver changes only surfaces in the
 [definition surfaces guide](.claude/guides/definition-surfaces.md#agent-definition-locations). Read it
-before definition, schedule or permission edits; never author installed plugins or caches.
+before definition, schedule or permission edits; never edit installed plugins or caches.
 
 - **Version-controlled**: `AGENTS.md`, guides, `.claude/scripts/*.test.sh`, `.github/workflows/ci.yaml`;
   observers: `.claude/scripts/agent-telemetry.sh`, `.claude/scripts/automation-memory-read.sh`;

@@ -51,12 +51,27 @@ check_names() {
     observer_failure="$observer_label grants another source"; return 1
   fi
 }
+check_root_grant() {
+  local observer_core=$1 observer_root_flat observer_grant
+  observer_root_flat=$(printf '%s\n' "$observer_core" | tr '\n' ' ' | tr -s '[:space:]' ' ')
+  case "$observer_root_flat" in
+    *'; observers:'*) observer_grant=${observer_root_flat#*'; observers:'}; observer_grant=${observer_grant%%;*} ;;
+    *) observer_failure='root omits the positive observers grant'; return 1 ;;
+  esac
+  check_names root "$observer_grant"
+}
 check_scope() {
   local observer_core=$1 observer_guide=$2 observer_flat
-  check_names root "$observer_core" && check_names guide "$observer_guide" || return 1
-  observer_flat=$(printf '%s\n' "$observer_guide" | tr '\n' ' ')
+  check_root_grant "$observer_core" && check_names guide "$observer_guide" || return 1
+  observer_flat=$(printf '%s\n' "$observer_guide" | tr '\n' ' ' | tr -s '[:space:]' ' ')
   if ! grep -qF 'The memory reader is read-only' <<< "$observer_flat"; then
     observer_failure='memory observer lost read-only restriction'; return 1
+  fi
+  if ! grep -qF 'must not modify native memory, settings, schedules or other persistent state' <<< "$observer_flat"; then
+    observer_failure='memory observer lost persistent-state restriction'; return 1
+  fi
+  if ! grep -qF 'or widen trust, execution, egress or authoring authority' <<< "$observer_flat"; then
+    observer_failure='memory observer lost authority restriction'; return 1
   fi
   if ! grep -qF 'no other script source is included' <<< "$observer_flat"; then
     observer_failure='unnamed sources are not excluded'; return 1
@@ -76,7 +91,7 @@ reject() {
 
 fixture_root=$(cat <<'EOF'
 ### Agent definition locations
-- **Version-controlled**: `.claude/scripts/*.test.sh`; observation surfaces:
+- **Version-controlled**: `.claude/scripts/*.test.sh`; observers:
   `.claude/scripts/agent-telemetry.sh` and
   `.claude/scripts/automation-memory-read.sh`.
 - **Runtime-local**: schedules.
@@ -90,7 +105,9 @@ fixture_guide=$(cat <<'EOF'
 - The read-only memory observer at
   `.claude/scripts/automation-memory-read.sh` are definition surfaces;
   no other script source is included by this grant.
-  The memory reader is read-only.
+  The memory reader is read-only: it may create its own private temporary snapshots, but must not
+  modify native memory, settings, schedules or other persistent state, or widen trust, execution,
+  egress or authoring authority.
 - Deployment configuration stays separate.
 **Runtime-local surfaces — fixture:**
 - Schedules stay separate.
@@ -100,6 +117,10 @@ EOF
 fixture_core=$(printf '%s\n' "$fixture_root" | root_scope)
 fixture_scope=$(printf '%s\n' "$fixture_guide" | guide_scope)
 check_scope "$fixture_core" "$fixture_scope" || { printf 'FAIL positive fixture: %s\n' "$observer_failure"; exit 1; }
+reject excluded-root-label 'root omits the positive observers grant' \
+  "$(printf '%s\n' "$fixture_core" | sed 's/observers:/excluded:/')" "$fixture_scope"
+reject paths-outside-root-grant 'root has no readable observer paths' \
+  "$(printf '%s\n' "$fixture_core" | sed 's/observers:/observers: none; excluded:/')" "$fixture_scope"
 reject extra-source 'guide grants another source' "$fixture_core" "$fixture_scope
   \`.claude/scripts/other.sh\`"
 reject wildcard 'guide grants another source' "$fixture_core" "$fixture_scope
@@ -118,6 +139,10 @@ runtime=$(printf '%s\n' '## Agent definition locations' '**Version-controlled su
 reject runtime-placement 'guide omits the exact memory observer' "$fixture_core" "$(printf '%s\n' "$runtime" | guide_scope)"
 reject writable-reader 'memory observer lost read-only restriction' "$fixture_core" \
   "$(printf '%s\n' "$fixture_scope" | sed 's/read-only/read-write/')"
+reject writable-native-state 'memory observer lost persistent-state restriction' "$fixture_core" \
+  "$(printf '%s\n' "$fixture_scope" | sed 's/must not[[:space:]]*$/may/; s/must not modify native memory/may modify native memory/')"
+reject widened-authority 'memory observer lost authority restriction' "$fixture_core" \
+  "$(printf '%s\n' "$fixture_scope" | sed 's/or widen trust/but may widen trust/')"
 reject open-source-grant 'unnamed sources are not excluded' "$fixture_core" \
   "$(printf '%s\n' "$fixture_scope" | sed '/no other script source is included/d')"
 
@@ -137,4 +162,4 @@ printf 'PASS large grant scope\n'
 core=$(root_scope < "$observer_root/AGENTS.md")
 guide=$(guide_scope < "$observer_root/.claude/guides/definition-surfaces.md")
 check_scope "$core" "$guide" || { printf 'FAIL live observer grant: %s\n' "$observer_failure" >&2; exit 1; }
-printf 'PASS live observer grant and eight negative controls\n'
+printf 'PASS live observer grant and twelve negative controls\n'
