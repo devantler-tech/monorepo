@@ -238,13 +238,13 @@ personalised investment advice, and never puts private financial data in a publi
 
 ### Agent definition locations
 
-The Agent Improver may change only the surfaces named in the
+The Agent Improver changes only surfaces in the
 [definition surfaces guide](.claude/guides/definition-surfaces.md#agent-definition-locations). Read it
-before editing a definition, schedule or permission; installed and cached plugin copies are never
-authoring targets.
+before definition, schedule or permission edits; never edit installed plugins or caches.
 
-- **Version-controlled**: `AGENTS.md`, guides, `.claude/scripts/*.test.sh`, `.github/workflows/ci.yaml`; observation surface:
-  `.claude/scripts/agent-telemetry.sh`; deployment surfaces under `.claude/`.
+- **Version-controlled**: `AGENTS.md`, guides, `.claude/scripts/*.test.sh`, `.github/workflows/ci.yaml`;
+  observers: `.claude/scripts/agent-telemetry.sh`, `.claude/scripts/automation-memory-read.sh`;
+  deployment: `.claude/`.
 - **Runtime-local**: schedules, permissions and hooks.
 
 ### Authority model

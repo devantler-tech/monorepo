@@ -13,7 +13,7 @@ retain a hit that also names the local issue.
 
 ## Repo-specific conventions
 
-- **Labels** (apply only from this set): `automation`, `documentation`, `github_actions`, `dependencies`, `submodules`, `bug`, `enhancement`, `question`, `duplicate`, `wontfix`, `needs triage`, `needs investigation`, `performance`, `refactor`, `security`, `repo-assist`, `roadmap`, `good first issue`, `help wanted`, `spam`, `blocked`, `next`.
+- **Labels** (apply only from this set): `automation`, `github_actions`, `dependencies`, `submodules`, `question`, `duplicate`, `wontfix`, `needs triage`, `needs investigation`, `repo-assist`, `good first issue`, `help wanted`, `spam`, `blocked`, `next`.
   Read live taxonomy before applying labels. The label allowlist remains guarded by
   `.claude/scripts/product-value-contract.test.sh`.
 - **Validate:** `.claude/scripts/run-affected-tests.sh`; workflow changes also need `actionlint`.

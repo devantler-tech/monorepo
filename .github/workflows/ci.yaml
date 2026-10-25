@@ -3146,9 +3146,11 @@ jobs:
           persist-credentials: false
       - name: Lint the layout contract
         if: matrix.os == 'ubuntu-latest'
-        run: shellcheck .claude/scripts/contract-text.sh .claude/scripts/agent-instructions-layout-contract.test.sh
+        run: shellcheck .claude/scripts/contract-text.sh .claude/scripts/agent-instructions-layout-contract.test.sh .claude/scripts/memory-observer-surface-contract.test.sh
       - name: Verify the agent instructions layout
         run: bash .claude/scripts/agent-instructions-layout-contract.test.sh
+      - name: Check the exact read-only memory observer grant
+        run: bash .claude/scripts/memory-observer-surface-contract.test.sh
 
   test-maintainer-digest:
     name: Test maintainer digest

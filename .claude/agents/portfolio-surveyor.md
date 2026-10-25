@@ -1225,82 +1225,40 @@ public and private — no per-repo loop needed to enumerate):
    keep reporting `nothing_on_fire: true` while its security coverage is silently dead — the exact
    failure the *liveness-first* rule exists to prevent elsewhere in this survey.
 
-   So walk that workflow's own run history on `main`:
+   So judge the run's streak with the contract's helper, never by counting reds by eye
+   (monorepo#3586). Make one call, exactly
+   `gh api --paginate "repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?branch=main&per_page=100" --jq '.total_count as $total | .workflow_runs[] | {id, name, status, conclusion, created_at, head_branch, total_count: $total, judged: (.id == <red-run-id>)}' | <repo-root>/.claude/scripts/managed-run-streak.sh --input -`
+   (the guard admits a declared helper only as this absolute, forge-first `--input -` call), where
+   `<red-run-id>` is the red run's numeric `id`. Read its one line and its exit status:
+   `FIRST since=<YYYY-MM-DD>` (exit 0) is the exempt first failure;
+   `REPEATED runs=<n> since=<YYYY-MM-DD>` (exit 1) escalates as below, with `<n>` and that date as
+   the streak's length and start; `CLEAR` (exit 0) means a newer run of the same unit on `main`
+   already recovered it.
+   Anything else — exit 2, no line, or a failed call — is `QUERY-UNKNOWN` for that repository,
+   never `NO-ACTION` and never `nothing_on_fire: true`.
 
-   ```sh
-   gh api --paginate \
-     "repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?branch=main&per_page=100"
-   ```
-
-   Walk it newest-first and count consecutive **red** runs, stopping at the first run that is not red.
-   Four details are each load-bearing:
+   The helper encodes the traps that made the hand count wrong, and its self-test proves each one:
    - 🔴 **Group by the run's name with its per-run id STRIPPED, not by `workflow_id` alone** — one
-     managed `workflow_id` can aggregate many *independent* jobs. Measured 2026-08-07 on `ksail`: all
-     `dynamic/dependabot/` runs share **one** `workflow_id` (`107623015`) while carrying a distinct
-     name per dependency and directory (`helm in /pkg/svc/installer/awslbcontroller`,
-     `docker in /pkg/svc/installer/kyverno`, …). Counting consecutive reds across that mixed history
-     compares unrelated dependencies: two *first* failures of two different dependencies would read
-     as one 2-run streak and escalate to `(REPEATED — ACTIONABLE)`, while an unrelated green would
-     break a streak that is genuinely consecutive for the dependency that is actually broken.
+     managed `workflow_id` aggregates independent jobs (all of `ksail`'s `dynamic/dependabot/` runs
+     share one), and Dependabot appends a per-run id to every name, so `ksail`'s 48 runs on `main`
+     carried 48 distinct names on 2026-08-07: an exact-name match caps every streak at 1.
+   - **`branch=main`** — default setup also runs on pull requests, and a pull-request run must
+     neither extend nor break a streak on `main`.
+   - **Red means `failure`, `timed_out` OR `startup_failure`** — exactly the red set defined above. A
+     managed run whose configuration will not parse concludes `startup_failure` on every attempt,
+     which is the "ours to repair" case the escalation exists for.
+   - **The whole history, never a two-run peek** — the digest names the streak's real start and
+     length. A pipe cannot see a `gh` that failed after some pages, so the helper refuses a history
+     shorter than the pages' own `total_count` (GitHub serves at most the newest 1,000 runs of a
+     branch-filtered listing): a read that died mid-pagination is UNKNOWN, never a shorter streak.
 
-     🔴 **The raw `name` is NOT that unit — it carries a per-run id, so matching it exactly caps every
-     streak at 1.** Dependabot renders the name as
-     `helm in /pkg/svc/installer/awslbcontroller - Update #1510869626`, and the trailing id changes
-     on every run: measured the same day, ksail's 48 `dynamic/dependabot/` runs on `main` produced
-     **48 distinct names**. An exact-name filter therefore returns exactly one run, the streak can
-     never reach 2, and `(REPEATED — ACTIONABLE)` can never fire — which would make the exemption
-     permanent for every managed path rather than one run deep, destroying the very safety net that
-     justifies the property test below. Strip the trailing id and group on what remains:
-
-     ```sh
-     # logical unit = the name minus its per-run id: "… - Update #123" and "… #123" both reduce
-     # to the dependency+directory that actually has a history. Code scanning is unaffected — its
-     # names ("Push on main", "Scheduled") carry no id, so the strip is a no-op there.
-     # `// ""` is load-bearing, not defensive dressing: the live corpus contains runs with a NULL
-     # name, and `sub` on null aborts the whole filter ("null cannot be matched"), so without it
-     # the streak walk dies rather than returning a wrong answer. Measured, not anticipated.
-     # One line per run, newest first: stripped name, conclusion, created_at, run id.
-     gh api --paginate "repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?branch=main&per_page=100" --jq '.workflow_runs[] | [((.name // "") | sub("( - Update)? #[0-9]+$"; "")), (.conclusion // "none"), .created_at, .id] | @tsv'
-     ```
-
-     Then read the lines whose first field equals the red run's stripped name, newest first, and
-     count reds until the first line that is not red.
-
-     Verified against the live corpus: with the strip, `npm_and_yarn in /vsce for typescript` on
-     `ksail` resolves to a **3-run consecutive red streak** (2026-07-28, 07-29, 08-03, recovering
-     green on 08-04) which the exact-name form reports as three unrelated *first* failures — each
-     permanently `NO-ACTION`. The streak is historical rather than live, so it demonstrates the
-     mechanism rather than a current fire; the point is that the exact-name form could not have
-     escalated it at the time, and could not escalate its recurrence either.
-
-     🔴 **The run name never enters the command — the query takes no parameter, and you match by
-     reading its output.** A run name is GitHub-provided data the repository does not control: a
-     workflow's `run-name:` can be built from a pull-request title, so it is untrusted text. Pasted
-     into the `--jq` string, a quote in it ends the jq string and the rest is parsed as filter syntax.
-     Do not route it through the environment instead: the read-only guard refuses both an environment
-     read inside `--jq` (it would expose the whole environment, token included) and a variable
-     assignment in front of the verb, and both refusals are correct. Measured 2026-08-25 → 09-16, the
-     earlier environment-variable form was refused in about 54 surveyor dispatches, so the streak walk
-     never ran (monorepo#2939).
-     ⚠️ **Emit one line per run; never wrap the runs in an array.** `--paginate` applies `--jq` to
-     each page separately, so a `[...]` filter would restart at every 100-run page boundary and cut
-     a long streak short.
-   - **`branch=main`** — default setup also runs on pull requests, and an unfiltered history mixes
-     those in. A failed PR scan would then turn a *first* main failure into `REPEATED`, and an
-     intervening successful PR scan would hide two genuinely consecutive main failures. This is the
-     same filter, for the same reason, as the `branch=main` on the red-set query above.
-   - **Red means `failure`, `timed_out` OR `startup_failure`** — exactly the red set defined above,
-     never `failure` alone. A scan that times out repeatedly is as broken as one that fails, and a
-     mixed streak is still a streak. `startup_failure` is load-bearing here rather than pedantic: a
-     managed run whose configuration will not parse — a malformed `dependabot.yml`, say — concludes
-     that way on *every* attempt, and that is precisely the "ours to repair (dependency config)"
-     case the escalation below exists for. Omit it and such a run can never accumulate a streak, so
-     it reports `NO-ACTION` forever while its coverage is dead — the exact fail-open the first-failure
-     bound is meant to prevent.
-   - **`--paginate`, not a two-run peek** — the digest names the streak's start date and length, so it
-     must walk back to the first non-red run to know them. Reading only the newest two would report a
-     start date that is merely the previous run, and a count that is almost always `2`, understating
-     how long coverage has been dead.
+   🔴 **The run name never enters the command — the only parameter is the numeric run id, and the
+   helper matches names from the data.** A run name is GitHub-provided data the repository does not
+   control: a workflow's `run-name:` can be built from a pull-request title, so it is untrusted text.
+   Do not route it through the environment either: the read-only guard refuses an environment read
+   inside `--jq` and a variable assignment in front of the verb, and both refusals are correct
+   (monorepo#2939). ⚠️ **Emit one object per run; never wrap the runs in an array**: `--paginate`
+   applies `--jq` to each page separately.
 
    Two or more consecutive red runs escalate: it counts toward `nothing_on_fire` and is reported as
    actionable, naming the judged sha (as every red claim in this survey must) and the streak's real

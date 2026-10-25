@@ -844,6 +844,30 @@ INJ_PHRASE_RE='(ignore (all )?(prior|previous) (rules|instructions)|disregard (y
 # Encode the resulting scalars as byte alternatives for rg; it never supplies
 # its own Unicode semantics. A failed or empty probe retains the broad fallback.
 SAFETY_NONASCII_RE='[^\x00-\x7F]'
+# Every rg stage above and below is an accelerator in front of the authoritative
+# POSIX detector; without rg each walk falls back to BSD grep at about 10 MB/s.
+# In the Claude Code runtime `rg` is only a zsh function around the runtime's
+# bundled ripgrep, so this bash script never saw it and the Claude scope missed
+# its deadline (#4545). When PATH has no rg, use that bundled binary only after it
+# answers --version as ripgrep when invoked as rg, and always name the engine.
+SAFETY_RG_ENGINE='grep fallback (no rg found)'
+SAFETY_RG_BIN=''
+resolve_safety_rg() {
+  local bin="${CLAUDE_CODE_EXECPATH:-}" ver
+  if command -v rg >/dev/null 2>&1; then
+    SAFETY_RG_ENGINE='rg on PATH'
+    return 0
+  fi
+  [ -n "$bin" ] && [ -f "$bin" ] && [ -x "$bin" ] || return 0
+  ver=$( (exec -a rg "$bin" --version) 2>/dev/null) || return 0
+  case "${ver%%$'\n'*}" in
+    'ripgrep '[0-9]*) ;;
+    *) return 0 ;;
+  esac
+  SAFETY_RG_BIN="$bin"
+  rg() { (exec -a rg "$SAFETY_RG_BIN" "$@"); }
+  SAFETY_RG_ENGINE='Claude Code bundled ripgrep'
+}
 INJ_CASE_PROBED=0
 INJ_CASE_RE=''
 native_nonascii_candidates() {
@@ -4697,6 +4721,8 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
   echo "         Older records in resumed sessions are included (Codex: see the record"
   echo "         window line below); this is a superset of the record-time window."
   echo "  instance scope: ${SAFETY_SCOPE} transcripts."
+  resolve_safety_rg
+  echo "  rg engine: ${SAFETY_RG_ENGINE}."
   # Codex transcripts are read from their first in-window record (#3830; see
   # codex_window_cut). Each tail is copied under its own basename, so the
   # session identity every detector derives from the path is unchanged, into a
