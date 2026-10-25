@@ -11,8 +11,8 @@ root_scope() {
   awk '/^- \*\*Version-controlled\*\*/ {active=1} active {print} active && /^- \*\*Runtime-local\*\*/ {exit}'
 }
 guide_scope() {
-  awk '/^- The observation-plane implementations? at/ {active=1}
-    active && /^- / && !/^- The observation-plane implementations? at/ {exit}
+  awk '/^- The observation-plane implementation at/ {active=1}
+    active && /^- / && !/^- The (observation-plane implementation|read-only memory observer) at/ {exit}
     active {print}'
 }
 observer_paths() {
@@ -36,12 +36,13 @@ check_names() {
   fi
 }
 check_scope() {
-  local observer_core=$1 observer_guide=$2
+  local observer_core=$1 observer_guide=$2 observer_flat
   check_names root "$observer_core" && check_names guide "$observer_guide" || return 1
-  if ! printf '%s\n' "$observer_guide" | tr '\n' ' ' | grep -qF 'The memory reader is read-only'; then
+  observer_flat=$(printf '%s\n' "$observer_guide" | tr '\n' ' ')
+  if ! grep -qF 'The memory reader is read-only' <<< "$observer_flat"; then
     observer_failure='memory observer lost read-only restriction'; return 1
   fi
-  if ! printf '%s\n' "$observer_guide" | tr '\n' ' ' | grep -qF 'no other script source is included'; then
+  if ! grep -qF 'no other script source is included' <<< "$observer_flat"; then
     observer_failure='unnamed sources are not excluded'; return 1
   fi
 }
@@ -65,8 +66,8 @@ fixture_root=$(cat <<'EOF'
 EOF
 )
 fixture_guide=$(cat <<'EOF'
-- The observation-plane implementations at
-  `.claude/scripts/agent-telemetry.sh` and
+- The observation-plane implementation at `.claude/scripts/agent-telemetry.sh`.
+- The read-only memory observer at
   `.claude/scripts/automation-memory-read.sh` are definition surfaces;
   no other script source is included by this grant.
   The memory reader is read-only.

@@ -15,17 +15,20 @@ definition surface, and an installed/cache copy is never an authoring target.
 
 - This consumer contract — `AGENTS.md` and the agent guides under `.claude/guides/` that it indexes —
   and its enforcement tests under `.claude/scripts/*.test.sh` plus `.github/workflows/ci.yaml`.
-- The observation-plane implementations at `.claude/scripts/agent-telemetry.sh` and
-  `.claude/scripts/automation-memory-read.sh` are definition surfaces; no other script source is included
-  by this grant. Their behavioural tests remain covered by the enforcement-test grant above.
+- The observation-plane implementation at `.claude/scripts/agent-telemetry.sh` is a definition
+  surface; no other script source is included by that grant. This lets the Improver repair the
+  instrument that produces its evidence without turning every repository helper into self-modifiable
+  agent code. Its behavioural test remains covered by the enforcement-test grant above. This addition
+  records the maintainer's direct interactive direction on 2026-10-03 to root-cause and fix recurring
+  scheduled Agentic Engineer and Agent Improver holds and drive the repair to merge; telemetry
+  identified the defect but did not authorize the grant.
+- The read-only memory observer at `.claude/scripts/automation-memory-read.sh` is a definition
+  surface; no other script source is included by this grant. Its behavioural test is covered above.
   The memory reader is read-only: it may create its own private temporary snapshots, but must not
   modify native memory, settings, schedules or other persistent state, or widen trust, execution,
   egress or authoring authority. Its addition records the maintainer's direct interactive RCA request
   and full approval on 2026-10-25 to complete the correction tracked in monorepo#4533. Operational
-  evidence motivated the reader but did not authorize this grant. The existing telemetry grant records
-  the maintainer's direct interactive direction on 2026-10-03 to root-cause and fix recurring scheduled
-  Agentic Engineer and Agent Improver holds and drive the repair to merge. These exact paths let the
-  Improver maintain its observation instruments without making other repository helpers self-modifiable.
+  evidence motivated the reader but did not authorize this grant.
 - Deployment configuration and declared compatibility surfaces under `.claude/`: the thin
   `daily-maintainer` alias, the explicitly temporary surveyor and procedure overlays, the spend run
   loop at `.claude/skills/finops/SKILL.md` with its lifestyle floor and evidence script, the
