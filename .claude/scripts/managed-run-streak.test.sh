@@ -85,6 +85,18 @@ expect() { # expect <name> <want-rc> <want-line> <payload> [args...]
   fi
 }
 
+refused() { # refused <name> <stderr-substring> <payload>  -> exit 2, no stdout, and the right reason
+  local name="$1" reason="$2" p="$3"
+  checks=$((checks + 1))
+  run "${tool}" "${p}"
+  if [ "${rc}" != 2 ] || [ -n "${got}" ] || ! grep -qF -- "${reason}" "${tmp}/stderr"; then
+    echo "FAIL ${name}: want rc=2, no output and '${reason}', got rc=${rc} '${got}' ($(cat "${tmp}/stderr"))" >&2
+    failures=$((failures + 1))
+  else
+    echo "ok   ${name}"
+  fi
+}
+
 d="Code Quality: Push on main"
 dep_a="helm in /pkg/svc/installer/awslbcontroller"
 dep_b="docker in /pkg/svc/installer/kyverno"
@@ -164,18 +176,19 @@ expect "a run two pages both returned is counted once" 1 "REPEATED runs=2 since=
   "$(payload 3 "$(r 1 "$d" success 2026-09-01T05:00:00Z)" "$(r 2 "$d" failure 2026-09-02T05:00:00Z)" \
     "$(r 2 "$d" failure 2026-09-02T05:00:00Z)" "$(r 3 "$d" failure 2026-09-03T05:00:00Z)")"
 
-expect "a history shorter than its total_count is refused" 2 "" \
+refused "a history shorter than its total_count is refused" "history incomplete: read 2 of 3 runs" \
   "$(payload 2 "$(r 1 "$d" success 2026-09-01T05:00:00Z | jq -c '. + {total_count: 3}')" \
     "$(r 2 "$d" failure 2026-09-02T05:00:00Z | jq -c '. + {total_count: 3}')")"
 
-expect "a run that arrives mid-read makes the history incomplete" 2 "" \
+refused "a run that arrives mid-read makes the history incomplete" "history incomplete: read 2 of 3 runs" \
   "$(payload 2 "$(r 1 "$d" success 2026-09-01T05:00:00Z | jq -c '. + {total_count: 2}')" \
     "$(r 2 "$d" failure 2026-09-02T05:00:00Z | jq -c '. + {total_count: 3}')")"
 
 expect "the newest 1000 runs are complete when GitHub caps the listing" 1 "REPEATED runs=999 since=2026-09-01" \
   "$(window 1000 2500)"
 
-expect "fewer than 1000 runs of a capped listing are refused" 2 "" "$(window 999 2500)"
+refused "fewer than 1000 runs of a capped listing are refused" "history incomplete: read 999 of 1000 runs" \
+  "$(window 999 2500)"
 
 # --- refusals ---------------------------------------------------------------------------------
 
@@ -186,7 +199,8 @@ expect "a judged run that is not red is refused" 2 "" \
 expect "a judged run off main is refused" 2 "" \
   "$(payload 1 "$(r 1 "$d" failure 2026-09-01T05:00:00Z feature)")"
 expect "a run missing a field is refused" 2 "" '{"id":1,"name":"x","status":"completed","conclusion":"failure","created_at":"2026-09-01T05:00:00Z","total_count":1,"judged":true}'
-expect "a run missing total_count is refused" 2 "" '{"id":1,"name":"x","status":"completed","conclusion":"failure","created_at":"2026-09-01T05:00:00Z","head_branch":"main","judged":true}'
+refused "a run missing total_count is refused as malformed" "stdin must be a stream of run objects" \
+  '{"id":1,"name":"x","status":"completed","conclusion":"failure","created_at":"2026-09-01T05:00:00Z","head_branch":"main","judged":true}'
 expect "two judged runs are refused" 2 "" "$(payload 1 "$(r 1 "$d" failure 2026-09-01T05:00:00Z)") $(payload 1 "$(r 1 "$d" failure 2026-09-02T05:00:00Z)")"
 expect "a non-object value is refused" 2 "" "$(payload 1 "$(r 1 "$d" failure 2026-09-01T05:00:00Z)") [1]"
 expect "an array instead of a stream is refused" 2 "" "[$(payload 1 "$(r 1 "$d" failure 2026-09-01T05:00:00Z)")]"

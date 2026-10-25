@@ -1607,9 +1607,17 @@ relative_streak_command="${streak_command//${repo_root}\/.claude\/scripts\//.cla
 [ "${relative_streak_command}" != "${streak_command}" ] ||
   fail "negative control did not rewrite the run-streak helper path (monorepo#3586)"
 relative_streak_payload="$(jq -nc --arg cmd "${relative_streak_command}" '{tool_input: {command: $cmd}}')"
-if run_surveyor_hook "${relative_streak_payload}" >/dev/null 2>&1; then
-  fail "consumer surveyor hook admitted a RELATIVE managed-run-streak.sh call (monorepo#3586)"
-fi
+# Assert the refusal's REASON, so an unrelated hook error cannot pass as the path denial.
+set +e
+relative_streak_output="$(run_surveyor_hook "${relative_streak_payload}" 2>&1)"
+relative_streak_status=$?
+set -e
+[ "${relative_streak_status}" -eq 2 ] ||
+  fail "consumer surveyor hook admitted a RELATIVE managed-run-streak.sh call (exit ${relative_streak_status}, monorepo#3586)"
+case "${relative_streak_output}" in
+  *"'.claude/scripts/managed-run-streak.sh' is not on the read-only allowlist"*) ;;
+  *) fail "relative managed-run-streak.sh call was refused for the wrong reason: ${relative_streak_output}" ;;
+esac
 streak_sites="$(grep -o '[^[:space:]"`'"'"']*managed-run-streak\.sh[^[:space:]`]*' "${surveyor_agent}" |
   grep -vxF '<repo-root>/.claude/scripts/managed-run-streak.sh' || true)"
 [ -z "${streak_sites}" ] ||
