@@ -68,6 +68,83 @@ grep -q 'omitted_older=0 next_before_line=0 ' "$tmp/out" || fail 'final page omi
 cmp -s "$tmp/memory.md" "$tmp/original" || fail 'reader changed source bytes'
 unknown unbound-continuation --file "$tmp/memory.md" --before-line 4
 
+# Headings inside examples must not detach a note from the fence and context it belongs to.
+cat > "$tmp/fenced.md" <<'EOF'
+## Old
+old
+## New
+context
+```markdown
+## Example heading
+example
+```
+after example
+EOF
+cat > "$tmp/fenced-expected" <<'EOF'
+## New
+context
+```markdown
+## Example heading
+example
+```
+after example
+EOF
+run fenced-example 0 --file "$tmp/fenced.md" --sections 1
+sed '1,2d' "$tmp/out" > "$tmp/body"
+cmp -s "$tmp/body" "$tmp/fenced-expected" || fail 'fenced example detached from its note'
+grep -q 'sections=1 omitted_older=1 next_before_line=3 ' "$tmp/out" || fail 'example heading counted as a section'
+cat > "$tmp/tilde.md" <<'EOF'
+## Old
+old
+## New
+   ~~~~markdown
+## Example one
+~~~
+## Example two
+~~~~ trailing text
+## Example three
+   ~~~~
+after example
+EOF
+cat > "$tmp/tilde-expected" <<'EOF'
+## New
+   ~~~~markdown
+## Example one
+~~~
+## Example two
+~~~~ trailing text
+## Example three
+   ~~~~
+after example
+EOF
+run tilde-fence 0 --file "$tmp/tilde.md" --sections 1
+sed '1,2d' "$tmp/out" > "$tmp/body"
+cmp -s "$tmp/body" "$tmp/tilde-expected" || fail 'tilde fence ended on a short or non-closing line'
+cat > "$tmp/closed-example.md" <<'EOF'
+## Old
+```markdown
+## Literal example
+````
+## Latest
+keep only this
+EOF
+cat > "$tmp/latest-expected" <<'EOF'
+## Latest
+keep only this
+EOF
+run heading-after-fence 0 --file "$tmp/closed-example.md" --sections 1
+sed '1,2d' "$tmp/out" > "$tmp/body"
+cmp -s "$tmp/body" "$tmp/latest-expected" || fail 'closing fence hides a later real heading'
+cat > "$tmp/invalid-fence.md" <<'EOF'
+## Old
+``` invalid`info
+## Latest
+keep only this
+EOF
+run invalid-fence-info 0 --file "$tmp/invalid-fence.md" --sections 1
+sed '1,2d' "$tmp/out" > "$tmp/body"
+cmp -s "$tmp/body" "$tmp/latest-expected" || fail 'invalid fence opener hides a real heading'
+
 # A line count cannot bound this fixture. The complete newest section fits; the old one does not.
 { printf '## Huge old\n'; printf '%08000d\n' 0; printf '## Latest\nkeep this\n'; } > "$tmp/large.md"
 run byte-bound 0 --file "$tmp/large.md" --sections 10 --max-bytes 1024

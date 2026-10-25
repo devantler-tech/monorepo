@@ -82,11 +82,35 @@ after="$(fingerprint)" || unknown 'cannot re-stat source'
 [ -z "$expected" ] || [ "$sha" = "$expected" ] || unknown 'source digest changed; restart paging'
 
 # LC_ALL=C makes lengths byte counts without changing the source bytes. Keep whole sections,
-# including their original newlines. The fixed metadata allowance is checked again before output.
+# including their original newlines. Fenced examples are opaque, so their apparent headings never
+# detach from the containing note (CommonMark 0.31.2 section4.5). Native section headings are the
+# unindented ## lines outside those examples. The metadata allowance is checked before output.
 if ! awk -v cap="$((max_bytes - 512))" -v count="$sections" -v before="$before_line" -v sha="$sha" '
+  function example(line, probe, ch, n, rest, inside) {
+    inside=(fence_char != "")
+    probe=line
+    sub(/^ ? ? ?/, "", probe)
+    ch=substr(probe,1,1)
+    if (ch != "`" && ch != "~") return inside
+    n=0
+    while (substr(probe,n+1,1) == ch) n++
+    rest=substr(probe,n+1)
+    if (inside) {
+      if (ch == fence_char && n >= fence_size && rest ~ /^[ \t]*$/) fence_char=""
+      return 1
+    }
+    if (n >= 3 && (ch == "~" || index(rest,"`") == 0)) {
+      fence_char=ch; fence_size=n
+      return 1
+    }
+    return 0
+  }
   NR == 1 { part=1; start[part]=1 }
-  NR > 1 && /^##[[:space:]]/ { part++; start[part]=NR }
-  { text[part]=text[part] $0 "\n"; size[part]+=length($0)+1; end[part]=NR }
+  {
+    opaque=example($0)
+    if (NR > 1 && !opaque && /^##[[:space:]]/) { part++; start[part]=NR }
+    text[part]=text[part] $0 "\n"; size[part]+=length($0)+1; end[part]=NR
+  }
   END {
     last=part
     if (before != 0) {
