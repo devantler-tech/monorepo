@@ -1,38 +1,50 @@
 #!/usr/bin/env bash
-# main-head-rung0-probe.sh — is a portfolio repository's current `main` head free of red CI?
+# main-head-rung0-probe.sh — is every live devantler-tech repository's default-branch head free of red CI?
 # (monorepo#3623, monorepo#4518)
 #
 # WHY THIS EXISTS
 #   A weekly-paced `agentic-engineer-2` run ends after rung 0, so its rung-0 read must never call a
-#   broken `main` clean. Reading check runs alone misses a workflow that fails before it creates a
+#   broken head clean. Reading check runs alone misses a workflow that fails before it creates a
 #   job: such a run publishes no check run at all (the shape required-gate-completeness.sh already
 #   documents, ksail#6645). It can leave zero check runs at the head, or only green check runs from
 #   another workflow. So this probe reads the head's workflow runs as well as its check runs, and
-#   treats missing evidence of either kind as UNKNOWN rather than clean.
+#   treats missing evidence of either kind as UNKNOWN rather than clean. The rung-0 census is the
+#   live organization, not the Portfolio map (work-selection guide), so `--org` enumerates it and an
+#   incomplete enumeration is UNKNOWN too.
 #
 # USAGE
+#   main-head-rung0-probe.sh --org devantler-tech
 #   main-head-rung0-probe.sh --repo devantler-tech/<name> [--repo devantler-tech/<name> …]
+#   `--org` probes every non-archived repository on its default branch; `--repo` probes `main`.
 #   The owner is pinned to devantler-tech; any other target is a usage error.
 #
-# OUTPUT (one line per repository, in argument order)
+# OUTPUT
+#   With `--org`, first one line: `RUNG0-ORG devantler-tech repos=<n> live=<n>`, or
+#   `RUNG0-ORG devantler-tech UNKNOWN <reason>` when the list cannot be proven complete.
+#   Then one line per repository:
 #   RUNG0 <owner>/<repo> sha=<sha> checks=<n> runs=<n> OK
 #   RUNG0 <owner>/<repo> sha=<sha> checks=<n> runs=<n> BREAKAGE <kind>:<name>=<conclusion>[,…]
+#   RUNG0 <owner>/<repo> EMPTY          the repository has no branch, so no head can be red
 #   RUNG0 <owner>/<repo> UNKNOWN <reason>
 #   A failed check run or workflow run is BREAKAGE even when the other kind is missing or truncated.
-#   Without one, UNKNOWN reasons are: read-failed <what>, malformed <what>, truncated <what>,
-#   no-check-runs and no-workflow-runs. An unfinished run is not a failure; the next run re-reads it.
+#   Only the latest run of each workflow and event counts, so a failure a later run of the same
+#   workflow superseded at the same head is not breakage; another workflow's run never supersedes
+#   it. Without breakage, UNKNOWN reasons are: read-failed <what>, malformed <what>,
+#   truncated <what>, no-check-runs and no-workflow-runs. An unfinished run is not a failure; the
+#   next run re-reads it.
 #
 # EXIT CODES
-#   0  every repository read OK
-#   1  at least one repository has a failed check run or workflow run at its `main` head
-#   2  no breakage was found, but at least one repository is UNKNOWN (or a usage error)
+#   0  every repository read OK or EMPTY
+#   1  at least one repository has a failed check run or workflow run at its head
+#   2  no breakage was found, but the organization list or a repository is UNKNOWN (or a usage error)
 set -euo pipefail
 
 usage() {
-  sed -n '/^# USAGE$/,/^# OUTPUT/p' "$0" | sed '$d' >&2
+  sed -n '/^# USAGE$/,/^# OUTPUT$/p' "$0" | sed '$d' >&2
   exit 2
 }
 
+org=""
 repos=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -40,13 +52,19 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] || usage
       [[ "$2" =~ ^devantler-tech/[A-Za-z0-9_.-]+$ ]] || usage
       case "${2#*/}" in . | ..) usage ;; esac
-      repos+=("$2")
+      repos+=("$2 main")
+      shift 2
+      ;;
+    --org)
+      [ "$#" -ge 2 ] && [ "$2" = devantler-tech ] && [ -z "${org}" ] || usage
+      org="$2"
       shift 2
       ;;
     *) usage ;;
   esac
 done
-[ "${#repos[@]}" -gt 0 ] || usage
+# Exactly one form: an org census, or an explicit repository list.
+if [ -n "${org}" ]; then [ "${#repos[@]}" = 0 ] || usage; else [ "${#repos[@]}" -gt 0 ] || usage; fi
 
 # A conclusion that means the head is red. `startup_failure` exists only on workflow runs.
 failed='["failure","timed_out","cancelled","action_required","startup_failure"]'
@@ -57,12 +75,69 @@ read_json() {
   out="$(gh api "$@" 2>/dev/null)" && [ -n "${out}" ] && printf '%s\n' "${out}"
 }
 
-# probe <owner/repo> — prints one RUNG0 line and returns 0 (OK), 1 (BREAKAGE) or 2 (UNKNOWN).
+worst=0
+note() { # note <rc> — keep the worst outcome: breakage beats UNKNOWN beats OK
+  case "$1" in
+    0) ;;
+    1) worst=1 ;;
+    *) [ "${worst}" = 1 ] || worst=2 ;;
+  esac
+}
+
+if [ -n "${org}" ]; then
+  # The repository list has no total_count, so its length is proven against the org's own counts.
+  census() {
+    local meta expected pages listed
+    meta="$(read_json "orgs/${org}")" || { echo "RUNG0-ORG ${org} UNKNOWN read-failed org"; return 2; }
+    expected="$(jq -r 'if (.public_repos | type) == "number" and (.total_private_repos | type) == "number"
+      then .public_repos + .total_private_repos else error("count") end' <<<"${meta}" 2>/dev/null)" ||
+      { echo "RUNG0-ORG ${org} UNKNOWN malformed org-count"; return 2; }
+    pages="$(read_json --paginate "orgs/${org}/repos?type=all&per_page=100")" ||
+      { echo "RUNG0-ORG ${org} UNKNOWN read-failed repos"; return 2; }
+    listed="$(jq -s -r 'if all(.[]; type == "array") then [.[][]] else error("shape") end
+      | if all(.[]; (.name | type) == "string" and (.archived | type) == "boolean"
+          and (.default_branch | type) == "string")
+        then .[] | select(.archived | not) | "\(.name) \(.default_branch)" else error("shape") end' \
+      <<<"${pages}" 2>/dev/null)" || { echo "RUNG0-ORG ${org} UNKNOWN malformed repos"; return 2; }
+    local total
+    total="$(jq -s '[.[][]] | length' <<<"${pages}")"
+    [ "${total}" = "${expected}" ] ||
+      { echo "RUNG0-ORG ${org} UNKNOWN truncated repos fetched=${total} total=${expected}"; return 2; }
+    local name branch
+    while read -r name branch; do
+      [ -n "${name}" ] || continue
+      # A forge-supplied name or branch only reaches a request path once it passes the allowlist.
+      if [[ "${name}" =~ ^[A-Za-z0-9_.-]+$ ]] && [ "${name}" != . ] && [ "${name}" != .. ] &&
+        [[ "${branch}" =~ ^[A-Za-z0-9._/-]+$ ]] && [[ "${branch}" != *..* ]]; then
+        repos+=("${org}/${name} ${branch}")
+      else
+        echo "RUNG0-ORG ${org} UNKNOWN unsupported-name"
+        return 2
+      fi
+    done <<<"${listed}"
+    echo "RUNG0-ORG ${org} repos=${total} live=${#repos[@]}"
+  }
+  rc=0
+  census || rc=$?
+  note "${rc}"
+  # An unproven list never probes a partial set as if it were the whole organization.
+  [ "${rc}" = 0 ] || exit "${worst}"
+fi
+
+# probe <owner/repo> <branch> — prints one RUNG0 line and returns 0 (OK), 1 (BREAKAGE) or 2 (UNKNOWN).
 probe() {
-  local repo="$1" commit sha check_pages run_pages pages checks_seen runs_seen counts bad gap=""
-  commit="$(read_json "repos/${repo}/commits/main")" || { echo "RUNG0 ${repo} UNKNOWN read-failed main"; return 2; }
+  local repo="$1" branch="$2" commit sha check_pages run_pages pages checks_seen runs_seen counts bad gap=""
+  if ! commit="$(read_json "repos/${repo}/commits/${branch}")"; then
+    # An empty repository has no head to be red; any other failed read stays UNKNOWN.
+    if [ "$(read_json "repos/${repo}/branches?per_page=1" | jq -c . 2>/dev/null)" = "[]" ]; then
+      echo "RUNG0 ${repo} EMPTY"
+      return 0
+    fi
+    echo "RUNG0 ${repo} UNKNOWN read-failed head"
+    return 2
+  fi
   sha="$(jq -r '.sha // empty' <<<"${commit}" 2>/dev/null)" || sha=""
-  [[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "RUNG0 ${repo} UNKNOWN malformed main"; return 2; }
+  [[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "RUNG0 ${repo} UNKNOWN malformed head"; return 2; }
 
   check_pages="$(read_json --paginate "repos/${repo}/commits/${sha}/check-runs?per_page=100")" ||
     { echo "RUNG0 ${repo} UNKNOWN read-failed check-runs"; return 2; }
@@ -82,10 +157,16 @@ probe() {
     if [ "${key}" = check_runs ]; then checks_seen="${counts% *}"; else runs_seen="${counts% *}"; fi
   done
 
+  # Superseding needs to know which runs are the same workflow and event: a run without those
+  # fields cannot be grouped, and grouping it with others could hide a failure, so it is malformed.
   bad="$(jq -n -r --argjson f "${failed}" \
     --slurpfile c <(printf '%s\n' "${check_pages}") --slurpfile r <(printf '%s\n' "${run_pages}") '
-    [ ($c[].check_runs[] | select(.conclusion as $x | $f | index($x)) | "check:\(.name)=\(.conclusion)"),
-      ($r[].workflow_runs[] | select(.conclusion as $x | $f | index($x)) | "workflow:\(.path // .name)=\(.conclusion)") ]
+    [$r[].workflow_runs[]] as $runs
+    | if all($runs[]; (.workflow_id | type) == "number" and (.event | type) == "string"
+        and (.run_number | type) == "number") then . else error("shape") end
+    | [ ($c[].check_runs[] | select(.conclusion as $x | $f | index($x)) | "check:\(.name)=\(.conclusion)"),
+        ($runs | group_by([.workflow_id, .event]) | map(max_by(.run_number)) | .[]
+          | select(.conclusion as $x | $f | index($x)) | "workflow:\(.path // .name)=\(.conclusion)") ]
     | map(gsub("[^A-Za-z0-9_./:=@+-]"; "_")) | join(",")')" ||
     { echo "RUNG0 ${repo} UNKNOWN malformed conclusions"; return 2; }
 
@@ -97,14 +178,9 @@ probe() {
   echo "${head} OK"
 }
 
-worst=0
-for repo in "${repos[@]}"; do
+for entry in "${repos[@]}"; do
   rc=0
-  probe "${repo}" || rc=$?
-  case "${rc}" in
-    0) ;;
-    1) worst=1 ;;
-    *) [ "${worst}" = 1 ] || worst=2 ;;
-  esac
+  probe "${entry% *}" "${entry##* }" || rc=$?
+  note "${rc}"
 done
 exit "${worst}"

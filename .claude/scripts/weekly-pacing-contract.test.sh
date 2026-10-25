@@ -83,10 +83,12 @@ for needle in \
   '`percentUsed` is more than 5 points above the elapsed share' \
   'An ahead run still checks rung 0 first' \
   '`.claude/scripts/platform-live-health.sh`' \
-  '`.claude/scripts/main-head-rung0-probe.sh` with one `--repo devantler-tech/<repo>` per Portfolio-map repository' \
-  'every check run **and every workflow run** on each current `main` head' \
+  '`.claude/scripts/main-head-rung0-probe.sh --org devantler-tech`' \
+  'The rung-0 census is the live organization, not the Portfolio map' \
+  'every check run **and every workflow run** on each default-branch head' \
+  'Only a later run of the same workflow and event supersedes a failure.' \
   'a workflow that fails before it creates a job publishes no check run' \
-  'Zero check runs, zero workflow runs or a truncated list is UNKNOWN, never clean.' \
+  'An incomplete repository list, zero check runs, zero workflow runs or a truncated list is UNKNOWN, never clean.' \
   '**When the health check or the probe exits non-zero, the run is not paced**' \
   '`weekly_pace=rung0` and runs as usual' \
   '`weekly_pace=paced used=<percentUsed> elapsed=<share>`' \
