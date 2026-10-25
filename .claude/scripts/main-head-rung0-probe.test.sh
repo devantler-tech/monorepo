@@ -113,6 +113,24 @@ fixture cancelled-after-green-other-event "${head_ok}" "$(checks 1 "${check_ok}"
   "$(runs 2 "${cancelled_push}" "$(run 1 "${ci}" workflow_dispatch 8 completed success)")"
 fixture cancelled-then-green-other-workflow "${head_ok}" "$(checks 1 "${check_ok}")" \
   "$(runs 2 "${cancelled_push}" "$(run 5 other.yaml workflow_dispatch 10 completed success)")"
+# monorepo#4529: an earlier genuine failure survives anything that is not a later qualifying
+# success of the same workflow and event. Filtering happens BEFORE the latest run is chosen, so a
+# cancellation, a pending run or a non-deciding conclusion can never stand in for the failure.
+red_push="$(run 1 "${ci}" push 7 completed failure)"
+fixture failure-cancel-other-event-green "${head_ok}" "$(checks 1 "${check_ok}")" \
+  "$(runs 3 "${red_push}" "$(run 1 "${ci}" push 8 completed cancelled)" "$(run 1 "${ci}" workflow_dispatch 9 completed success)")"
+fixture failure-then-pending "${head_ok}" "$(checks 1 "${check_ok}")" \
+  "$(runs 2 "${red_push}" "$(run 1 "${ci}" push 8 in_progress null)")"
+fixture failure-then-skipped "${head_ok}" "$(checks 1 "${check_ok}")" \
+  "$(runs 2 "${red_push}" "$(run 1 "${ci}" push 8 completed skipped)")"
+fixture failure-then-neutral "${head_ok}" "$(checks 1 "${check_ok}")" \
+  "$(runs 2 "${red_push}" "$(run 1 "${ci}" push 8 completed neutral)")"
+fixture failure-cancel-same-event-green "${head_ok}" "$(checks 1 "${check_ok}")" \
+  "$(runs 3 "${red_push}" "$(run 1 "${ci}" push 8 completed cancelled)" "$(run 1 "${ci}" push 9 completed success)")"
+fixture failure-skipped-then-green "${head_ok}" "$(checks 1 "${check_ok}")" \
+  "$(runs 3 "${red_push}" "$(run 1 "${ci}" push 8 completed skipped)" "$(run 1 "${ci}" push 9 completed success)")"
+fixture green-then-skipped "${head_ok}" "$(checks 1 "${check_ok}")" \
+  "$(runs 2 "$(run 1 "${ci}" push 7 completed success)" "$(run 1 "${ci}" push 8 completed skipped)")"
 # A failed head read is UNKNOWN unless the branch list proves the repository empty.
 fixture head-unreadable - "$(checks 1 "${check_ok}")" "$(runs 1 "${run_ok}")"
 fixture head-unreadable-branches-exist - "$(checks 1 "${check_ok}")" "$(runs 1 "${run_ok}")"
@@ -167,6 +185,13 @@ expect cancelled-then-red-other-event 1 "BREAKAGE workflow:${ci}=cancelled,workf
 expect cancelled-then-unfinished-other-event 1 "BREAKAGE workflow:${ci}=cancelled"
 expect cancelled-after-green-other-event 1 "BREAKAGE workflow:${ci}=cancelled"
 expect cancelled-then-green-other-workflow 1 "BREAKAGE workflow:${ci}=cancelled"
+expect failure-cancel-other-event-green 1 "BREAKAGE workflow:${ci}=failure"
+expect failure-then-pending 1 "BREAKAGE workflow:${ci}=failure"
+expect failure-then-skipped 1 "BREAKAGE workflow:${ci}=failure"
+expect failure-then-neutral 1 "BREAKAGE workflow:${ci}=failure"
+expect failure-cancel-same-event-green 0 'runs=3 OK'
+expect failure-skipped-then-green 0 'runs=3 OK'
+expect green-then-skipped 0 'runs=2 OK'
 expect head-unreadable 2 'UNKNOWN read-failed head'
 expect head-unreadable-branches-exist 2 'UNKNOWN read-failed head'
 expect empty-repo 0 'RUNG0 devantler-tech/monorepo EMPTY'

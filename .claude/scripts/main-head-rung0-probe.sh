@@ -31,7 +31,9 @@
 #   workflow superseded at the same head is not breakage; another workflow's run never supersedes
 #   it. A cancelled run has no verdict, so a later successful run of the same workflow at the head
 #   replaces it whatever that run's event (monorepo#4527: a dispatch cancelled the push run it
-#   re-ran, and the stale cancel kept weekly pacing off). Without breakage, UNKNOWN reasons are: read-failed <what>, malformed <what>,
+#   re-ran, and the stale cancel kept weekly pacing off). The latest MEANINGFUL run decides: runs
+#   without a verdict (pending, skipped, neutral) and replaced cancellations are dropped before the
+#   latest run is chosen, so they never hide an earlier failure (monorepo#4529). Without breakage, UNKNOWN reasons are: read-failed <what>, malformed <what>,
 #   truncated <what>, no-check-runs and no-workflow-runs. An unfinished run is not a failure; the
 #   next run re-reads it.
 #
@@ -167,11 +169,15 @@ probe() {
     | if all($runs[]; (.workflow_id | type) == "number" and (.event | type) == "string"
         and (.run_number | type) == "number") then . else error("shape") end
     | [ ($c[].check_runs[] | select(.conclusion as $x | $f | index($x)) | "check:\(.name)=\(.conclusion)"),
-        ($runs | group_by([.workflow_id, .event]) | map(max_by(.run_number)) | .[]
-          | select(.conclusion as $x | $f | index($x))
-          | select(. as $c | $c.conclusion != "cancelled" or ([$runs[] | select(.workflow_id == $c.workflow_id
+        # Filter BEFORE choosing the latest run (monorepo#4529): choosing first let a cancellation, a
+        # pending run or a non-deciding conclusion discard an earlier genuine failure.
+        ($runs | group_by([.workflow_id, .event]) | .[]
+          | map(select(.conclusion as $x | ["success"] + $f | index($x)))
+          | map(select(. as $c | $c.conclusion != "cancelled" or ([$runs[] | select(.workflow_id == $c.workflow_id
               and .run_number > $c.run_number and .conclusion == "success")]
-              | length) == 0)
+              | length) == 0))
+          | select(length > 0) | max_by(.run_number)
+          | select(.conclusion as $x | $f | index($x))
           | "workflow:\(.path // .name)=\(.conclusion)") ]
     | map(gsub("[^A-Za-z0-9_./:=@+-]"; "_")) | join(",")')" ||
     { echo "RUNG0 ${repo} UNKNOWN malformed conclusions"; return 2; }
