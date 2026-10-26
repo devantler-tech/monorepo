@@ -17,6 +17,10 @@ jobs:
     permissions:
       pull-requests: read
     outputs:
+      macos-batch-1: ${{ steps.filter.outputs.macos-batch-1 }}
+      macos-batch-2: ${{ steps.filter.outputs.macos-batch-2 }}
+      macos-batch-3: ${{ steps.filter.outputs.macos-batch-3 }}
+      macos-batch-4: ${{ steps.filter.outputs.macos-batch-4 }}
       business-site-integration: ${{ steps.filter.outputs.business-site-integration }}
       active-projects: ${{ steps.filter.outputs.active-projects }}
       safe-clone: ${{ steps.filter.outputs.safe-clone }}
@@ -115,6 +119,83 @@ jobs:
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           filters: |
+            macos-batch-1:
+              - '.claude/guides/**'
+              - '.claude/guides/git-and-worktrees.md'
+              - '.claude/plugin-consumption/agent-instances.json'
+              - '.claude/scripts/contract-text.sh'
+              - '.claude/scripts/gh-json-read.sh'
+              - '.claude/scripts/gh-json-read.test.sh'
+              - '.claude/scripts/security-advisory-sweep.sh'
+              - '.claude/scripts/security-advisory-sweep.test.sh'
+              - '.claude/scripts/shared-checkout-freshness.sh'
+              - '.claude/scripts/shared-checkout-freshness.test.sh'
+              - '.claude/scripts/unsigned-commit-report.sh'
+              - '.claude/scripts/unsigned-commit-report.test.sh'
+              - '.claude/scripts/worktree-lane-sweep.sh'
+              - '.claude/scripts/worktree-lane-sweep.test.sh'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - '.github/workflows/ci.yaml'
+              - 'AGENTS.md'
+            macos-batch-2:
+              - '.claude/guides/**'
+              - '.claude/guides/issues-and-board.md'
+              - '.claude/plugin-consumption/agent-instances.json'
+              - '.claude/scripts/board-add.sh'
+              - '.claude/scripts/board-add.test.sh'
+              - '.claude/scripts/claude-lane-liveness.sh'
+              - '.claude/scripts/codex-lane-liveness.sh'
+              - '.claude/scripts/finops-snapshot.sh'
+              - '.claude/scripts/flow-scorecard.sh'
+              - '.claude/scripts/flow-scorecard.test.sh'
+              - '.claude/scripts/platform-live-health.sh'
+              - '.claude/scripts/platform-live-health.test.sh'
+              - '.claude/scripts/prod-kube-context.sh'
+              - '.claude/scripts/prod-kube-context.test.sh'
+              - '.claude/scripts/sibling-lane-watch.sh'
+              - '.claude/scripts/sibling-lane-watch.test.sh'
+              - '.claude/scripts/squash-closing-keywords.sh'
+              - '.claude/scripts/squash-closing-keywords.test.sh'
+              - '.github/workflows/ci.yaml'
+              - 'AGENTS.md'
+            macos-batch-3:
+              - '.claude/guides/**'
+              - '.claude/guides/cadence.md'
+              - '.claude/loaders/portable-agentic-engineer.md'
+              - '.claude/scripts/board-archive.sh'
+              - '.claude/scripts/board-archive.test.sh'
+              - '.claude/scripts/claude-task-live-runs.sh'
+              - '.claude/scripts/claude-task-live-runs.test.sh'
+              - '.claude/scripts/contract-text.sh'
+              - '.claude/scripts/disk-preflight.sh'
+              - '.claude/scripts/disk-preflight.test.sh'
+              - '.claude/scripts/graphql-availability.sh'
+              - '.claude/scripts/graphql-availability.test.sh'
+              - '.claude/scripts/plugin-definition-currency.sh'
+              - '.claude/scripts/plugin-definition-currency.test.sh'
+              - '.claude/scripts/review-lane-health.sh'
+              - '.claude/scripts/review-lane-health.test.sh'
+              - '.claude/scripts/worktree-claim.sh'
+              - '.github/workflows/ci.yaml'
+              - 'AGENTS.md'
+            macos-batch-4:
+              - '.claude/guides/**'
+              - '.claude/guides/durable-memory.md'
+              - '.claude/scripts/blocked-label-blocker-line.sh'
+              - '.claude/scripts/claude-dispatch-rate.sh'
+              - '.claude/scripts/claude-dispatch-rate.test.sh'
+              - '.claude/scripts/claude-lane-liveness.sh'
+              - '.claude/scripts/claude-lane-liveness.test.sh'
+              - '.claude/scripts/contract-text.sh'
+              - '.claude/scripts/hypothesis-id-reserve.sh'
+              - '.claude/scripts/hypothesis-id-reserve.test.sh'
+              - '.claude/scripts/lane-draft-count.sh'
+              - '.claude/scripts/lane-draft-count.test.sh'
+              - '.claude/scripts/submodule-pin-currency.sh'
+              - '.claude/scripts/submodule-pin-currency.test.sh'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - '.github/workflows/ci.yaml'
+              - 'AGENTS.md'
             business-site-integration:
               - 'applications/business-site'
               - '.gitmodules'
@@ -1089,7 +1170,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -1111,7 +1192,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -1178,7 +1259,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -1353,7 +1434,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -1375,7 +1456,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -1398,7 +1479,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -1479,7 +1560,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -1501,7 +1582,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -1550,7 +1631,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -2413,7 +2494,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -2479,7 +2560,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -2498,7 +2579,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -2517,7 +2598,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -2536,7 +2617,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -2555,7 +2636,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -2574,7 +2655,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -2612,7 +2693,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -2631,7 +2712,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -2676,7 +2757,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -2863,7 +2944,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -2882,7 +2963,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -2901,7 +2982,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -3065,6 +3146,8 @@ jobs:
         run: |
           shellcheck .claude/scripts/contract-test-invocation.sh .claude/scripts/contract-test-invocation.test.sh
           bash .claude/scripts/contract-test-invocation.test.sh
+      - name: Check short macOS batch coverage and failure propagation
+        run: bash .claude/scripts/ci-macos-batches.test.sh
       - name: Check every contract test is executed
         run: bash .claude/scripts/contract-test-invocation.sh .github/workflows/ci.yaml .claude/scripts
 
@@ -3179,11 +3262,117 @@ jobs:
       - name: Check every digest file
         run: bash .claude/scripts/maintainer-digest.sh check docs/digests/*.md
 
+  # These short cases share setup; every child runs and a failure fails the batch.
+  test-macos-batch-1:
+    name: Test short macOS contracts 1
+    needs: changes
+    if: needs.changes.outputs.macos-batch-1 == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run every batch member and report any failure
+        shell: bash
+        run: |
+          batch_status=0
+          bash .claude/scripts/worktree-lane-sweep.test.sh || batch_status=1
+          bash .claude/scripts/unsigned-commit-report.test.sh || batch_status=1
+          bash .claude/scripts/shared-checkout-freshness.test.sh || batch_status=1
+          bash .claude/scripts/security-advisory-sweep.test.sh || batch_status=1
+          bash .claude/scripts/gh-json-read.test.sh || batch_status=1
+          exit "$batch_status"
+
+  # These short cases share setup; every child runs and a failure fails the batch.
+  test-macos-batch-2:
+    name: Test short macOS contracts 2
+    needs: changes
+    if: needs.changes.outputs.macos-batch-2 == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run every batch member and report any failure
+        shell: bash
+        run: |
+          batch_status=0
+          bash .claude/scripts/sibling-lane-watch.test.sh || batch_status=1
+          bash .claude/scripts/platform-live-health.test.sh || batch_status=1
+          bash .claude/scripts/squash-closing-keywords.test.sh || batch_status=1
+          bash .claude/scripts/board-add.test.sh || batch_status=1
+          bash .claude/scripts/prod-kube-context.test.sh || batch_status=1
+          bash .claude/scripts/flow-scorecard.test.sh || batch_status=1
+          exit "$batch_status"
+
+  # These short cases share setup; every child runs and a failure fails the batch.
+  test-macos-batch-3:
+    name: Test short macOS contracts 3
+    needs: changes
+    if: needs.changes.outputs.macos-batch-3 == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run every batch member and report any failure
+        shell: bash
+        run: |
+          batch_status=0
+          bash .claude/scripts/review-lane-health.test.sh || batch_status=1
+          bash .claude/scripts/plugin-definition-currency.test.sh || batch_status=1
+          bash .claude/scripts/board-archive.test.sh || batch_status=1
+          bash .claude/scripts/disk-preflight.test.sh || batch_status=1
+          bash .claude/scripts/claude-task-live-runs.test.sh || batch_status=1
+          bash .claude/scripts/graphql-availability.test.sh || batch_status=1
+          exit "$batch_status"
+
+  # These short cases share setup; every child runs and a failure fails the batch.
+  test-macos-batch-4:
+    name: Test short macOS contracts 4
+    needs: changes
+    if: needs.changes.outputs.macos-batch-4 == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run every batch member and report any failure
+        shell: bash
+        run: |
+          batch_status=0
+          bash .claude/scripts/claude-dispatch-rate.test.sh || batch_status=1
+          bash .claude/scripts/claude-lane-liveness.test.sh || batch_status=1
+          bash .claude/scripts/lane-draft-count.test.sh || batch_status=1
+          bash .claude/scripts/submodule-pin-currency.test.sh || batch_status=1
+          bash .claude/scripts/hypothesis-id-reserve.test.sh || batch_status=1
+          exit "$batch_status"
+
   status:
     name: "CI - Required Checks"
     runs-on: ubuntu-latest
     if: always()
     needs:
+      - test-macos-batch-1
+      - test-macos-batch-2
+      - test-macos-batch-3
+      - test-macos-batch-4
       - changes
       - test-business-site-integration
       - drift-check-active-projects
@@ -3283,6 +3472,10 @@ jobs:
         uses: devantler-tech/.github/actions/aggregate-job-checks@7bf35c4fb0c2ccd8d1c08585e6ec5979a819d18e # v12.0.4
         with:
           job-results: >-
+            ${{ needs.test-macos-batch-1.result }}
+            ${{ needs.test-macos-batch-2.result }}
+            ${{ needs.test-macos-batch-3.result }}
+            ${{ needs.test-macos-batch-4.result }}
             ${{ needs.changes.result }}
             ${{ needs.test-business-site-integration.result }}
             ${{ needs.drift-check-active-projects.result }}

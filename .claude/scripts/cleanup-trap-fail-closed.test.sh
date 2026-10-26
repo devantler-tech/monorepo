@@ -240,6 +240,7 @@ bash-parse-guard.sh|$repo_root
 bot-pr-adaptation-push.sh|
 business-site-publication.test.sh||exit:2
 ci-job-wiring.sh|$repo_root/.github/workflows/ci.yaml
+ci-macos-batches.test.sh|
 contract-test-invocation.sh|$repo_root/.github/workflows/ci.yaml $script_dir
 disk-preflight.sh|
 gnu-only-syntax-guard.sh|
