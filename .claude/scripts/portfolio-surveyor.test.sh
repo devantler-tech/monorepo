@@ -1054,11 +1054,8 @@ war_cask_commits_json() {
     | with_commit_dates
 }
 
-# Measured from devantler-tech/ksail#7249, exactly as the documented REST recipe reports it: the
-# release workflow commits through the API as the ksail-bot App, so GitHub's `web-flow` identity
-# commits and signs it. Every release since 2026-08-29 has this shape; the fixture used to carry the
-# retired `devantler-tech-bot[bot]` identity, which the classifier agreed with while matching no real
-# release (#3173).
+# Historical signed shape from devantler-tech/ksail#7249. KSail#7248 retired this publisher;
+# even the formerly exact branch, files and GitHub-signed identity must stay review-gated (#4523).
 ksail_head="db7284e781375d8c68a20824977aad788b6a7fa2"
 ksail_files='[".claude-plugin/marketplace.json",".github/plugin/marketplace.json","copilot-plugin/.claude-plugin/plugin.json","copilot-plugin/plugin.json"]'
 ksail_commits="$(jq -cn --arg head "${ksail_head}" '[{
@@ -1324,8 +1321,8 @@ adapted_cask_commits="$(jq -c --arg head "${adapted_cask_head}" '. + [{
 ksail_args=("ksail" "app/ksail-bot" "chore/copilot-plugin-v7.192.11"
   "chore(copilot-plugin): release v7.192.11" "${ksail_head}" "${ksail_files}")
 
-expect_exempt \
-  "KSail programmed plugin release" \
+expect_not_release_exempt \
+  "retired KSail programmed plugin release remains untrusted" \
   "ksail" \
   "app/ksail-bot" \
   "chore/copilot-plugin-v7.192.11" \
@@ -2060,11 +2057,9 @@ elif [[ "${err}" == *release-cask-ripeness* ]]; then
   fail "a review-gated tap cask PR printed the ripeness reminder: '${err}'"
 fi
 
-# The KSail release arm is a trust boundary pinned to one exact signed identity (#3173). Its names are
-# only what a commit claims, so without GitHub's signature verdict, or with an unsigned commit, the
-# release stays review-gated. Every identity field is compared exactly — changing any one of them, a
-# noreply address without its numeric prefix, or the bot committing for itself loses the exemption —
-# and the retired devantler-tech-bot identity is not kept as a second accepted shape.
+# These historical identity variants remain untrusted along with the formerly exact signed
+# shape. Retiring the publisher removes the exemption rather than admitting a replacement identity
+# or preserving a dormant bypass (#4523).
 expect_review_gated "KSail plugin release without the verified field" "devantler-tech/ksail" \
   "${ksail_args[@]:1}" "$(jq -c 'map(del(.verified))' <<<"${ksail_commits}")"
 expect_review_gated "KSail plugin release GitHub did not sign" "devantler-tech/ksail" "${ksail_args[@]:1}" \

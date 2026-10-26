@@ -303,7 +303,6 @@ prod-kube-context.test.sh|
 claude-lane-liveness.test.sh|
 submodule-agents-drift.test.sh|
 inference-routing-scorecard.test.sh|
-release-exemption-identity-currency.test.sh|
 submodule-pin-currency.test.sh|
 unsigned-commit-report.test.sh|
 ci-job-wiring.test.sh|
