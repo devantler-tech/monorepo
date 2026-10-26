@@ -160,8 +160,14 @@ grep -Fq 'There is no pre-trigger reservation surface to scan' "${surveyor}" ||
   fail "surveyor can resurrect a reservation surface from stray legacy markers"
 ! grep -Fq 'review_reservation=' "${surveyor}" ||
   fail "surveyor still reports a retired reservation field"
-grep -Fq 'pair it with the next exact-author bare `@cursor review` trigger while ignoring interleaved comments' "${surveyor}" ||
-  fail "Cursor request markers break when another comment lands before the bare trigger"
+assert_prose "${surveyor}" 'pair it with the next exact-author comment whose first nonblank line names `@cursor review`' \
+  'Cursor request accounting can lose a first-line trigger with a connector footer'
+for pairing_definition in "${surveyor}" "${maintenance_skill}" "${constitution}"; do
+  assert_prose "${pairing_definition}" 'command below a disclosure line neither pairs nor closes' \
+    'a below-disclosure command can consume an authenticated pending marker'
+  assert_absent "${pairing_definition}" 'next exact-author bare' \
+    'bare-only pairing contradicts the actual first-line request boundary'
+done
 grep -Fq 'review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>' "${surveyor}" ||
   fail "a completed provider outcome without a green artifact is not durable across runs"
 grep -Fq 'review-progress-head: <full sha> provider=<lane> outcome=no-gate' "${surveyor}" ||

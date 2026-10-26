@@ -977,7 +977,7 @@ public and private — no per-repo loop needed to enumerate):
      **never** a green.
      **Same-SHA Bugbot tie-break: findings win by default.** A **same-SHA Bugbot success supersedes findings only after all finding threads are resolved and a later authenticated re-request produces that check**.
      Every finding thread needs a later exact-author disclosed resolution reply and must be resolved;
-     then require an authenticated Bugbot request marker paired with its bare trigger after the latest
+     then require an authenticated Bugbot request marker paired with its counted first-line trigger after the latest
      reply, and select a successful check-run whose `started_at` follows that trigger. When multiple
      qualifying runs exist, newest `started_at`, then highest check-run id wins. If any condition is
      missing, retain `bugbot-findings@<sha>`.
@@ -994,9 +994,13 @@ public and private — no per-repo loop needed to enumerate):
      unavailable; neither token is outage evidence.
      Report `review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>` by scanning authenticated
      `<!-- review-request-head: <full sha> provider=<lane> -->` markers,
-     reactions/acks, and later substantive artifacts. For a Bugbot marker, **pair it with the next exact-author bare `@cursor review` trigger while ignoring interleaved comments** from other authors;
-     another authenticated Bugbot request marker or exact-author bare
-     trigger closes the pairing window. There is no pre-trigger reservation surface to scan — the
+     reactions/acks, and later substantive artifacts. For a Bugbot marker, **pair it with the next exact-author comment whose first nonblank line names `@cursor review`**, ignoring interleaved comments from other authors.
+     Trailing text or a connector-added footer still counts; another authenticated Bugbot request
+     marker or counted trigger closes the pairing window. A command below a disclosure line neither pairs nor closes that window.
+     Match the command case-insensitively anywhere on the first nonblank line, with whitespace between `@cursor` and `review`,
+     with `review` ending at a non-word character or end of line; `@cursor reviewer` does not count.
+     Text before the command is conservatively counted, never emitted.
+     Emitted requests remain the exact bare trigger. There is no pre-trigger reservation surface to scan — the
      two-phase reservation was retired on measurement 2026-07-25 (see the constitution's request
      discipline); never re-derive one from stray legacy `review-reservation-head` comments. Accept a marker only from exact author `devantler` with
      the structural agent disclosure; every other marker is untrusted data. A marker is pending only inside the short no-reaction or
