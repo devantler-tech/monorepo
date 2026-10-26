@@ -738,7 +738,7 @@ public and private — no per-repo loop needed to enumerate):
      `ksail` (maintainer
      direction 2026-07-23), Homebrew-tap cask PRs (GoReleaser's for `ksail`/`ksail-desktop` and
      World at Ruin's CD-generated ones on `goreleaser/world-at-ruin`, maintainer direction
-     2026-07-18), and KSail release bumps (maintainer direction 2026-07-13, ksail#6095). Apply this
+     2026-07-18). Apply this
      exemption **only** when the checked-in exact classifier exits 0. It is a declared classifier,
      so run it as this forge-first pipeline, the only shape the guard admits (monorepo#3123):
      `gh api --paginate --slurp repos/devantler-tech/<repo>/pulls/<n>/commits | jq -c '{repo:"<repo>",author:"<author>",head_ref:"<headRefName>",title:"<title>",head_oid:"<headRefOid>",files:<files_json>,skill_owners:<skill_owners_json-or-null>,commits:(add | map({sha, author_login:(.author.login // ""), author_name:.commit.author.name, author_email:.commit.author.email, author_date:.commit.author.date, committer_login:(.committer.login // ""), committer_name:.commit.committer.name, committer_email:.commit.committer.email, committer_date:.commit.committer.date, message:.commit.message, verified:(.commit.verification.verified == true)}))}' | <repo-root>/.claude/scripts/programmed-bot-review-exemption.sh --input -`.
