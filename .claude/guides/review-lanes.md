@@ -376,10 +376,15 @@ result at the current head — self-promotion is forbidden before that. Request 
   so the visible record of a live request is exactly as timely as the request itself. For Cursor, put
   `<!-- review-request-head: <full headRefOid> provider=bugbot -->` in the disclosure comment that
   immediately precedes the bare trigger (the bare-trigger carve-out below is why Cursor needs two
-  comments and the other lanes need one). Associate that marker with the next exact-author bare
-  `@cursor review` command, ignoring interleaved comments from other authors; another authenticated
-  Bugbot request marker or bare trigger ends the pairing window. The request marker is what lets
+  comments and the other lanes need one). For accounting, associate that marker with the next
+  exact-author comment whose first nonblank line names `@cursor review`, including trailing text
+  or a connector-added footer. Ignore interleaved comments from other authors; another authenticated
+  Bugbot request marker or counted trigger ends the pairing window. A command below a disclosure line neither pairs nor closes
+  that window. Emitted requests remain the exact bare command. The request marker is what lets
   overlapping instances distinguish a live request from a stale-head request.
+  Accounting matches the command case-insensitively anywhere on that first nonblank line,
+  with whitespace between `@cursor` and `review`, and `review` ending at a non-word character or end of line;
+  `@cursor reviewer` does not count. Text before the command is conservatively counted, never emitted.
   🔴 **Take the review-request lock immediately before posting, and stand down when it is held.**
   The marker re-read is not atomic with the post: an instance that read the comments seconds before a
   sibling posted cannot see that request, and rung 1 sends every instance to the same PR. Measured
@@ -581,7 +586,7 @@ result at the current head — self-promotion is forbidden before that. Request 
   connector threads are resolved, a later authenticated re-request is posted, and its later clean
   marker names that SHA; otherwise findings continue to win. Apply the same ordering to Bugbot: all
   same-head finding threads need later authenticated disclosed resolution replies and must be
-  resolved; then a later authenticated Bugbot request marker paired to its bare trigger must precede
+  resolved; then a later authenticated Bugbot request marker paired to its counted first-line trigger must precede
   the successful check-run. Select that later run deterministically by `started_at`, then check-run
   id; otherwise the earlier neutral finding run continues to win. For either lane, a later successful
   provider in the authenticated CodeRabbit-first restarted sequence also clears the earlier

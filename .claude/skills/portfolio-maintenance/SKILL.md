@@ -796,8 +796,10 @@ measurement the first valuable slice when evidence is missing. Record `last_valu
    means inspect or retry promptly; either wait is a watcher or one read, never a foreground loop (#3660); put the current-head request marker in the **same comment as the
    trigger** — compose it with `.claude/scripts/review-request-comment.sh`, never by hand (#3319) —
    re-reading the repository-visible current-head request markers immediately before
-   posting it (each marker names its provider; pair Cursor's marker to the next exact-author bare
-   trigger, ignoring interleaved other-author comments), then taking
+   posting it (each marker names its provider; pair Cursor's marker to the next exact-author
+   comment whose first nonblank line names the command, including trailing text or a footer,
+   ignoring interleaved other-author comments; a command below a disclosure line neither pairs nor closes
+   the window), then taking
    `.claude/scripts/review-request-lock.sh acquire` and standing down on its exit `1` (#2894);
    accept markers only from exact author `devantler`
    with the structural agent disclosure; **never post a separate pre-trigger reservation comment** —
