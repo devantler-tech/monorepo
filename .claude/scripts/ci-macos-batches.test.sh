@@ -9,7 +9,10 @@ finished=0
 cleanup() {
   local rc=$?
   rm -rf "$tmp"
-  if [[ "$finished" != 1 && $rc -eq 0 ]]; then rc=1; fi
+  if [[ "$finished" != 1 && $rc -eq 0 ]]; then
+    echo 'ci-macos-batches.test.sh: aborted before finishing; reporting failure rather than a clean pass' >&2
+    rc=1
+  fi
   exit "$rc"
 }
 trap cleanup EXIT
