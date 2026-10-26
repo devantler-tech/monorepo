@@ -3520,6 +3520,58 @@ if grep -q 'line=22 record=response_item shape=aws-access-key-id' <<<"$CRED"; th
   ok "a payload also spelled as a counted key keeps its locator"
 else bad "a payload also spelled as a counted key keeps its locator" "$CRED"; fi
 
+# (3d) 🔴 Claude `thinking` signatures are excluded on the SAME structural
+# predicate as image payloads (monorepo#4566). A `signature` whose DIRECT parent
+# is a `thinking` block is an opaque base64 value the model API generates; the
+# agent never writes it, and random `+`/`/` boundaries in it manufactured a
+# high-signal `aws-access-key-id` row about three times a week on the live
+# corpus. The table and both raw-line surfaces must drop it together, while the
+# same shape in the `thinking` TEXT, in a `signature` on any other block type,
+# under a duplicate key whose effective type is not `thinking`, or in a counted
+# sibling still keeps its row and its locator.
+mkdir -p "$FIX/thinksig" "$FIX/thinksignc"
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"plan","signature":"'"${_B64RUN}"'/__AWS__BB"}]}}' \
+  > "$FIX/thinksig/s.jsonl"
+subst "$FIX/thinksig/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/thinksig" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+CRED=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/build\/codegen/p')
+# CONTROL: the fixture really carries the credential shape on disk, or every
+# assertion below passes on a corpus with nothing to exclude.
+if grep -qF "$(ex __AWS__)" "$FIX/thinksig/s.jsonl"; then
+  ok "control: the thinking-signature fixture carries an aws-shaped run"
+else bad "control: the thinking-signature fixture carries an aws-shaped run" "$(cat "$FIX/thinksig/s.jsonl")"; fi
+if grep -q 'aws-access-key-id' <<<"$CRED"; then
+  bad "a thinking signature produces no credential row or locator" "$CRED"
+else ok "a thinking signature produces no credential row or locator"; fi
+if grep -q 'across 0 transcript records' <<<"$CRED"; then
+  ok "a thinking signature is not counted by the concentration line"
+else bad "a thinking signature is not counted by the concentration line" "$CRED"; fi
+# Line 1 excluded; lines 2–5 must each keep a locator.
+{
+  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"plan","signature":"'"${_B64RUN}"'/__AWS__BB"}]}}'
+  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"key __AWS__ here","signature":"'"${_B64RUN}"'"}]}}'
+  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"x","signature":"'"${_B64RUN}"'/__AWS__BB"}]}}'
+  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"thinking","type":"text","signature":"'"${_B64RUN}"'/__AWS__BB"}]}}'
+  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"","signature":"'"${_B64RUN}"'/__AWS__BB"},{"type":"text","text":"'"${_B64RUN}"'/__AWS__BB"}]}}'
+} > "$FIX/thinksignc/s.jsonl"
+subst "$FIX/thinksignc/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/thinksignc" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+CRED=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/build\/codegen/p')
+if grep -qE 'line=1 [^ ]* ?shape=aws-access-key-id|line=1 record=[^ ]* shape=aws' <<<"$CRED"; then
+  bad "the excluded thinking signature emits no locator beside counted rows" "$CRED"
+else ok "the excluded thinking signature emits no locator beside counted rows"; fi
+for _case in '2:in the thinking text' \
+             '3:in a signature on a non-thinking block' \
+             '4:under a duplicate key whose effective type is text' \
+             '5:also held by a counted sibling'; do
+  _n=${_case%%:*}; _what=${_case#*:}
+  if grep -qE "line=${_n} record=[^ ]* shape=aws-access-key-id" <<<"$CRED"; then
+    ok "an aws-shaped run ${_what} keeps its locator"
+  else bad "an aws-shaped run ${_what} keeps its locator" "$CRED"; fi
+done
+
 # (4) 🔴 A value with BOTH a blob occurrence AND a plain one must NOT be
 # labelled. The label's stated rule is that ambiguity falls through to the plain
 # high-signal row, but membership alone made the set "values with *a* blob

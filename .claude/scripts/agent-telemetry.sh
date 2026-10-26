@@ -1279,9 +1279,10 @@ emit_credential_hits() {
   # (Codex P2 on #2520; reproduced before fixing.)
   # `strip_ansi` runs BEFORE the scan so a styled credential is locatable at all;
   # it is line-for-line, so grep's `-n` numbering still names the real record.
-  # `cred_mask_image_payloads` excludes the same complete image payloads the
-  # table does; without it the locator points at encoded image bytes for a
-  # credential the table never counted (#2522).
+  # `cred_mask_excluded_payloads` excludes the same opaque payloads the table
+  # does (complete image data URLs, thinking signatures); without it the
+  # locator points at encoded bytes for a credential the table never counted
+  # (#2522, monorepo#4566).
   #
   # 🔴 THE ORDER OF THESE TWO IS LOAD-BEARING and mirrors the table exactly: the
   # table parses the RAW file and strips ANSI afterwards, so the mask must also
@@ -1292,7 +1293,7 @@ emit_credential_hits() {
   # table counted -- a table row with no locator, the unsafe direction. Masking
   # first means the mask's parse question is asked of the same bytes the table
   # asks it of, which is the whole point of asking it.
-  cred_mask_image_payloads < "$f" 2>/dev/null | strip_ansi \
+  cred_mask_excluded_payloads < "$f" 2>/dev/null | strip_ansi \
     | grep -naiE "$CRED_TABLE_RE" 2>/dev/null | tr '\000' ' ' \
     | while IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
@@ -2070,7 +2071,7 @@ strip_ansi() {
 #
 # What this does NOT do is make the textual locator agree with the parse in
 # general; it removes one specific way they can disagree. The parse-derived pass
-# in cred_mask_image_payloads (monorepo#2741) covers the spellings no pattern can
+# in cred_mask_excluded_payloads (monorepo#2741) covers the spellings no pattern can
 # reach; the perf constraint on multi-megabyte lines is monorepo#2740.
 #
 # The counting runs inside the SAME `jq -R` pass that already asks the parse
@@ -2085,12 +2086,23 @@ CRED_MASK_RESPELL_RE='"type"[[:space:]]*:[[:space:]]*"[^"]*\\u|"[^"]*\\u[^"]*"[[
 # The ONE statement of which values the credential table excludes. The table's
 # decode filter and the mask below both prepend it, so the two cannot disagree
 # about the predicate itself — only about locating the value in raw text.
-CRED_IMAGE_PAYLOAD_DEF='
-        def image_payload_entry($parent):
-          if (($parent.type? // "") == "input_image"
-              and .key == "image_url"
-              and (.value | type) == "string")
+#
+# Two opaque encoded values are excluded, each only in its measured storage
+# shape and each judged on the PARSED object, never the line:
+#   - a complete base64 data URL in `input_image.image_url` (Codex; #2522);
+#   - the `signature` of a Claude `thinking` block (monorepo#4566). The model
+#     API generates it as plain base64; the agent never writes it, so it cannot
+#     carry a leaked credential, while random `+`/`/` boundaries in it made a
+#     false high-signal `aws-access-key-id` row about three times a week. The
+#     `thinking` text beside it, a `signature` on any other block type, and a
+#     value that is not pure base64 all stay counted.
+CRED_EXCLUDED_PAYLOAD_DEF='
+        def excluded_payload_entry($parent):
+          if ((.value | type) != "string") then false
+          elif (($parent.type? // "") == "input_image" and .key == "image_url")
           then (.value | test("^data:image/[^,]*;base64,[A-Za-z0-9+/]*={0,2}$"; "i"))
+          elif (($parent.type? // "") == "thinking" and .key == "signature")
+          then (.value | test("^[A-Za-z0-9+/]+={0,2}$"))
           else false
           end;
 '
@@ -2115,13 +2127,13 @@ CRED_IMAGE_PAYLOAD_DEF='
 # byte-identical, so line counts, numbering and every non-excluded byte are kept,
 # and it all happens in the jq pass that already parses the line — no new process
 # and no second decode.
-cred_mask_image_payloads() {
+cred_mask_excluded_payloads() {
   jq -R -r --arg ok "$CRED_MASK_ELIGIBLE" --arg no "$CRED_MASK_DECLINED" \
      --arg marker "$CRED_MASK_MARKER_RE" --arg respell "$CRED_MASK_RESPELL_RE" \
-     "$CRED_IMAGE_PAYLOAD_DEF"'
+     "$CRED_EXCLUDED_PAYLOAD_DEF"'
       def excluded_values:
         [.. | objects | . as $p | to_entries[]
-            | select(image_payload_entry($p)) | .value];
+            | select(excluded_payload_entry($p)) | .value];
       def blank_unambiguous($doc):
         ($doc | excluded_values) as $ex
         | reduce ($ex | unique[]) as $v (.;
@@ -5084,7 +5096,9 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
     # and random `/` or `+` boundaries in image bytes manufacture high-signal
     # token shapes. Requiring a full base64 data URL keeps trailing ordinary text
     # visible, and a malformed line is still scanned whole because its field
-    # boundaries cannot be established safely.
+    # boundaries cannot be established safely. A pure-base64 `signature` on a
+    # Claude `thinking` block is excluded on the same structural terms
+    # (monorepo#4566): it is API-generated, never agent-written.
     # Per-SHAPE counts, never one redacted bucket. The first live run printed a
     # single line `871 <redacted-key-material>` — every shape collapsed into one
     # opaque number that needed an hour of ad-hoc probing to triage (verdict: 89%
@@ -5103,9 +5117,9 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
     # AFTER decoding, so JSON-escaped matches remain visible. One awk process per batch restores
     # a trailing record separator at every file boundary; without it, jq -R
     # joins an unterminated live-session record to the next file.
-    # `image_payload_entry` comes from CRED_IMAGE_PAYLOAD_DEF, shared with
-    # cred_mask_image_payloads so the table and the mask cannot drift apart.
-    CRED_DECODE_FILTER="$CRED_IMAGE_PAYLOAD_DEF"'
+    # `excluded_payload_entry` comes from CRED_EXCLUDED_PAYLOAD_DEF, shared with
+    # cred_mask_excluded_payloads so the table and the mask cannot drift apart.
+    CRED_DECODE_FILTER="$CRED_EXCLUDED_PAYLOAD_DEF"'
         # Most transcript keys are ASCII. Compiling the same case-insensitive
         # regex for every field dominates the decoder on the live corpus
         # (#3830). Substring checks are equivalent for ASCII keys; retain the
@@ -5129,10 +5143,10 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
                  # field as `key=value` would double the scan volume.
                  | select(((.value | type) == "string")
                           and (.key | credential_key)
-                          and (image_payload_entry($parent) | not))
+                          and (excluded_payload_entry($parent) | not))
                  | "\(.key)=\(.value)"),
                 (to_entries[]
-                 | select(image_payload_entry($parent) | not)
+                 | select(excluded_payload_entry($parent) | not)
                  | .value
                  | decoded_strings)
               )
@@ -5520,7 +5534,7 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
       # all three surfaces count the same corpus (#2522) — and in the same ORDER
       # as the locator, mask before strip, so the mask's parse question is asked
       # of the raw bytes the table asks it of. See the locator for why.
-      cred_mask_image_payloads < "$f" 2>/dev/null | strip_ansi \
+      cred_mask_excluded_payloads < "$f" 2>/dev/null | strip_ansi \
         | grep -naoEi "$CRED_TABLE_RE" 2>/dev/null \
         | awk -F: -v s="$cred_sess" '
             $1 ~ /^[0-9]+$/ {
@@ -5540,7 +5554,8 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
     echo "       directions, so read it as a pointer, never as a second count."
     echo "       UNDER: the table scans DECODED strings, so an escaped-quote"
     echo "       match is counted there with no locator line here. OVER: complete"
-    echo "       base64 image payloads are excluded from this scan too. The"
+    echo "       base64 image payloads and Claude thinking-block signatures are"
+    echo "       excluded from this scan too (monorepo#4566). The"
     echo "       parser decides which records that exclusion may apply to, so a"
     echo "       record whose spelling it cannot vouch for is scanned rather"
     echo "       than blanked — but WHERE the payload sits is still found"
