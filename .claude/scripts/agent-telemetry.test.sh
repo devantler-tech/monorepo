@@ -3532,6 +3532,11 @@ else bad "a payload also spelled as a counted key keeps its locator" "$CRED"; fi
 mkdir -p "$FIX/thinksig" "$FIX/thinksignc"
 printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"plan","signature":"'"${_B64RUN}"'/__AWS__BB"}]}}' \
   > "$FIX/thinksig/s.jsonl"
+# The same signature with every solidus spelled `\/`, a legal JSON escape
+# that the parse normalises. The raw scans must blank that spelling too, or
+# the locator reports a value the table excluded (CodeRabbit on #4567).
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"plan","signature":"'"${_B64RUN}"''"${_BS}"'/__AWS__BB"}]}}' \
+  >> "$FIX/thinksig/s.jsonl"
 subst "$FIX/thinksig/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/thinksig" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
@@ -3541,19 +3546,27 @@ CRED=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/build\/codegen/p')
 if grep -qF "$(ex __AWS__)" "$FIX/thinksig/s.jsonl"; then
   ok "control: the thinking-signature fixture carries an aws-shaped run"
 else bad "control: the thinking-signature fixture carries an aws-shaped run" "$(cat "$FIX/thinksig/s.jsonl")"; fi
+# CONTROL: line 2 really spells the solidus as a literal JSON escape, and the
+# parse really normalises it, so the case is not the plain one in disguise.
+_TL2=$(sed -n '2p' "$FIX/thinksig/s.jsonl")
+if grep -qF "${_B64RUN}${_BS}/" <<<"$_TL2" &&
+   jq -e --arg r "${_B64RUN}/" '.message.content[0].signature | startswith($r)' <<<"$_TL2" >/dev/null; then
+  ok "control: the escaped-solidus signature fixture parses to a plain solidus"
+else bad "control: the escaped-solidus signature fixture parses to a plain solidus" "$_TL2"; fi
 if grep -q 'aws-access-key-id' <<<"$CRED"; then
   bad "a thinking signature produces no credential row or locator" "$CRED"
 else ok "a thinking signature produces no credential row or locator"; fi
 if grep -q 'across 0 transcript records' <<<"$CRED"; then
   ok "a thinking signature is not counted by the concentration line"
 else bad "a thinking signature is not counted by the concentration line" "$CRED"; fi
-# Line 1 excluded; lines 2–5 must each keep a locator.
+# Line 1 excluded; lines 2–6 must each keep a locator.
 {
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"plan","signature":"'"${_B64RUN}"'/__AWS__BB"}]}}'
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"key __AWS__ here","signature":"'"${_B64RUN}"'"}]}}'
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"x","signature":"'"${_B64RUN}"'/__AWS__BB"}]}}'
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"thinking","type":"text","signature":"'"${_B64RUN}"'/__AWS__BB"}]}}'
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"","signature":"'"${_B64RUN}"'/__AWS__BB"},{"type":"text","text":"'"${_B64RUN}"'/__AWS__BB"}]}}'
+  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"","signature":"'"${_B64RUN}"''"${_BS}"'/__AWS__BB"},{"type":"text","text":"'"${_B64RUN}"''"${_BS}"'/__AWS__BB"}]}}'
 } > "$FIX/thinksignc/s.jsonl"
 subst "$FIX/thinksignc/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/thinksignc" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
@@ -3565,7 +3578,8 @@ else ok "the excluded thinking signature emits no locator beside counted rows"; 
 for _case in '2:in the thinking text' \
              '3:in a signature on a non-thinking block' \
              '4:under a duplicate key whose effective type is text' \
-             '5:also held by a counted sibling'; do
+             '5:also held by a counted sibling' \
+             '6:spelled with escaped solidi and also held by a counted sibling'; do
   _n=${_case%%:*}; _what=${_case#*:}
   if grep -qE "line=${_n} record=[^ ]* shape=aws-access-key-id" <<<"$CRED"; then
     ok "an aws-shaped run ${_what} keeps its locator"
