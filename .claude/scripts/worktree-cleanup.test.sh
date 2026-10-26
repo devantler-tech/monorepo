@@ -103,11 +103,23 @@ cat > "$CTIME_SHIM_DIR/stat" <<EOF
 path="\${!#}"
 if grep -qxF -- "\$path" '$CTIME_FRESH'; then exec '$REAL_STAT' "\$@"; fi
 if grep -qxF -- "\$path" '$CTIME_BROKEN'; then
+  # Keep mtime readable when the paired ctime fails: accepting only the first
+  # field would otherwise let this negative control pass on a wholly bad read.
+  case "\${2:-}" in
+    '%Y %Z') exec '$REAL_STAT' "\$1" '%Y ?' "\$path" ;;
+    '%m %c') exec '$REAL_STAT' "\$1" '%m ?' "\$path" ;;
+  esac
   case " \$* " in *" %Z "*|*" %c "*) echo "?"; exit 0 ;; esac
 fi
 args=()
 for a in "\$@"; do
-  case "\$a" in %Z) args+=(%Y) ;; %c) args+=(%m) ;; *) args+=("\$a") ;; esac
+  case "\$a" in
+    %Z) args+=(%Y) ;;
+    %c) args+=(%m) ;;
+    '%Y %Z') args+=('%Y %Y') ;;
+    '%m %c') args+=('%m %m') ;;
+    *) args+=("\$a") ;;
+  esac
 done
 exec '$REAL_STAT' "\${args[@]}"
 EOF

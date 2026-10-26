@@ -1304,14 +1304,24 @@ file_mtime() {
 # Metadata-only activity (`chmod +x`, a rename, a hard link) moves ctime but not mtime, and
 # `touch` can set an mtime in the past but never a ctime (#3642). Fails when mtime cannot
 # be read and when ctime cannot: mtime alone would let a fresh chmod read as old.
+# Read both fields together: salvage checks every submodule repository file twice,
+# and separate stat processes made those scans a measured hot path (#4394).
 file_changed() {
-  local m c
-  m=$(file_mtime "$1") || return 1
-  c=$(stat -c %Z "$1" 2>/dev/null || true)
-  case "$c" in ''|*[!0-9]*) c=$(stat -f %c "$1" 2>/dev/null || true) ;; esac
-  case "$c" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$c" -gt "$m" ] && m=$c
-  printf '%s\n' "$m"
+  local times m c style
+  for style in gnu bsd; do
+    case "$style" in
+      gnu) times=$(stat -c '%Y %Z' "$1" 2>/dev/null) || continue ;;
+      bsd) times=$(stat -f '%m %c' "$1" 2>/dev/null) || continue ;;
+    esac
+    IFS=' ' read -r m c <<< "$times"
+    case "$m" in ''|*[!0-9]*) continue ;; esac
+    case "$c" in ''|*[!0-9]*) continue ;; esac
+    [ "$times" = "$m $c" ] || continue
+    [ "$c" -gt "$m" ] && m=$c
+    printf '%s\n' "$m"
+    return 0
+  done
+  return 1
 }
 
 # reflog_newest <reflog-file> -> seconds since the epoch of the reflog's newest entry, 0 when
