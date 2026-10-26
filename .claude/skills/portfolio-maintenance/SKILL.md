@@ -817,8 +817,8 @@ measurement the first valuable slice when evidence is missing. Record `last_valu
    with inline comments** (`event: COMMENT`, disclosure line, `## Self-review (fallback` heading,
    verdict line) so the sibling agent can see and act on it, incremental re-reviews,
    green-while-draft as the promotion precondition, the **dependency-PR self-progressing/intervention boundary**, and the trusted programmed
-   **bot carve-out** — exact-classifier-matched exit-0 agent-skills updater PRs, tap cask PRs, and
-   KSail release bumps are check-gated, need NO review, and are never review-chased;
+   **bot carve-out** — exact-classifier-matched exit-0 agent-skills updater PRs and tap cask PRs
+   are check-gated, need NO review, and are never review-chased;
    `agent-plugins` updater PRs require semantic review when their classifier returns the trusted
    exit-3 state) is the contract's
    **green-review gate** (review-lanes guide, *AUTO-REVIEW IS

@@ -1054,11 +1054,8 @@ war_cask_commits_json() {
     | with_commit_dates
 }
 
-# Measured from devantler-tech/ksail#7249, exactly as the documented REST recipe reports it: the
-# release workflow commits through the API as the ksail-bot App, so GitHub's `web-flow` identity
-# commits and signs it. Every release since 2026-08-29 has this shape; the fixture used to carry the
-# retired `devantler-tech-bot[bot]` identity, which the classifier agreed with while matching no real
-# release (#3173).
+# Historical signed shape from devantler-tech/ksail#7249. KSail#7248 retired this publisher;
+# even the formerly exact branch, files and GitHub-signed identity must stay review-gated (#4523).
 ksail_head="db7284e781375d8c68a20824977aad788b6a7fa2"
 ksail_files='[".claude-plugin/marketplace.json",".github/plugin/marketplace.json","copilot-plugin/.claude-plugin/plugin.json","copilot-plugin/plugin.json"]'
 ksail_commits="$(jq -cn --arg head "${ksail_head}" '[{
@@ -1321,8 +1318,11 @@ adapted_cask_commits="$(jq -c --arg head "${adapted_cask_head}" '. + [{
   message: "fix: adapt generated cask"
 }]' <<<"${ksail_cask_commits}" | with_commit_dates)"
 
-expect_exempt \
-  "KSail programmed plugin release" \
+ksail_args=("ksail" "app/ksail-bot" "chore/copilot-plugin-v7.192.11"
+  "chore(copilot-plugin): release v7.192.11" "${ksail_head}" "${ksail_files}")
+
+expect_not_release_exempt \
+  "retired KSail programmed plugin release remains untrusted" \
   "ksail" \
   "app/ksail-bot" \
   "chore/copilot-plugin-v7.192.11" \
@@ -1331,105 +1331,6 @@ expect_exempt \
   "${ksail_files}" \
   "${ksail_commits}"
 
-# The stdin shape's own contract, anchored on the exempt fixture above so each negative case
-# differs from a known exit 0 by exactly one change: keys are exact, the only argv is `--input -`,
-# and a null skill_owners map is an omission rather than an empty map.
-ksail_stdin_payload="$(jq -nc \
-  --arg head "${ksail_head}" --argjson files "${ksail_files}" --argjson commits "${ksail_commits}" \
-  '{repo: "ksail", author: "app/ksail-bot", head_ref: "chore/copilot-plugin-v7.192.11",
-    title: "chore(copilot-plugin): release v7.192.11", head_oid: $head, files: $files,
-    commits: $commits}')"
-expect_stdin_rc() {
-  local name="$1" want="$2" payload="$3"
-  shift 3
-  local rc
-  if "${classifier}" "$@" <<<"${payload}"; then rc=0; else rc=$?; fi
-  [[ "${rc}" -eq "${want}" ]] || fail "classifier stdin ${name}: exit ${rc}, want ${want}"
-}
-expect_stdin_rc "baseline" 0 "${ksail_stdin_payload}" --input -
-expect_stdin_rc "null skill_owners" 0 \
-  "$(jq -c '.skill_owners = null' <<<"${ksail_stdin_payload}")" --input -
-expect_stdin_rc "unknown key" 2 \
-  "$(jq -c '.extra = "x"' <<<"${ksail_stdin_payload}")" --input -
-expect_stdin_rc "missing key" 2 "$(jq -c 'del(.title)' <<<"${ksail_stdin_payload}")" --input -
-expect_stdin_rc "non-string scalar" 2 "$(jq -c '.repo = 1' <<<"${ksail_stdin_payload}")" --input -
-expect_stdin_rc "non-object input" 2 '[]' --input -
-expect_stdin_rc "path instead of stdin" 2 "${ksail_stdin_payload}" --input /dev/stdin
-expect_stdin_rc "trailing argument" 2 "${ksail_stdin_payload}" --input - extra
-
-# Exit 2 names its failed check in one stderr line, so a caller can tell a payload it built wrongly
-# from an environment it cannot fix (monorepo#3101). The verdicts above stay silent on stderr.
-expect_error_reason() {
-  local name="$1" want="$2" payload="$3" rc err
-  shift 3
-  if err="$("${classifier}" "$@" 2>&1 >/dev/null <<<"${payload}")"; then rc=0; else rc=$?; fi
-  [[ "${rc}" -eq 2 ]] || fail "classifier ${name}: exit ${rc}, want 2"
-  [[ "${err}" == "programmed-bot-review-exemption: ${want}" ]] ||
-    fail "classifier ${name}: stderr '${err}', want '${want}'"
-}
-ksail_args=("ksail" "app/ksail-bot" "chore/copilot-plugin-v7.192.11"
-  "chore(copilot-plugin): release v7.192.11" "${ksail_head}" "${ksail_files}")
-if err="$("${classifier}" --input - 2>&1 >/dev/null <<<"${ksail_stdin_payload}")"; then
-  [[ -z "${err}" ]] || fail "classifier writes stderr on an exempt verdict: ${err}"
-else
-  fail "classifier stdin baseline no longer exempt"
-fi
-expect_error_reason "stdin missing key" "stdin is missing key title" \
-  "$(jq -c 'del(.title)' <<<"${ksail_stdin_payload}")" --input -
-expect_error_reason "stdin unknown key" "stdin has unexpected key extra" \
-  "$(jq -c '.extra = "x"' <<<"${ksail_stdin_payload}")" --input -
-expect_error_reason "stdin non-string" "stdin repo is number, not a string" \
-  "$(jq -c '.repo = 1' <<<"${ksail_stdin_payload}")" --input -
-expect_error_reason "stdin files" "stdin files is string, not an array" \
-  "$(jq -c '.files = "x"' <<<"${ksail_stdin_payload}")" --input -
-expect_error_reason "stdin skill_owners" "stdin skill_owners is array, not an object or null" \
-  "$(jq -c '.skill_owners = []' <<<"${ksail_stdin_payload}")" --input -
-expect_error_reason "stdin non-object" "stdin is not one JSON object" '[]' --input -
-expect_error_reason "stdin not JSON" "stdin is not one JSON object" 'not json' --input -
-expect_error_reason "arity" "expected 7 or 8 arguments or --input -, got 2" \
-  "${ksail_stdin_payload}" --input /dev/stdin
-expect_error_reason "head-oid" "head-oid is not a full 40-character lowercase hex SHA" "" \
-  "${ksail_args[@]:0:4}" "${ksail_head:0:10}" "${ksail_files}" "${ksail_commits}"
-expect_error_reason "files" "files-json is not a JSON array of strings" "" \
-  "${ksail_args[@]:0:5}" '[1]' "${ksail_commits}"
-expect_error_reason "commits not JSON" "commits-json is not valid JSON" "" "${ksail_args[@]}" '['
-expect_error_reason "commits object" "commits-json is object, not an array" "" "${ksail_args[@]}" '{}'
-expect_error_reason "commits empty" "commits-json is empty" "" "${ksail_args[@]}" '[]'
-expect_error_reason "commit not object" "commit[0] is string, not an object" "" "${ksail_args[@]}" '["x"]'
-expect_error_reason "partial commit" "commit[0] is missing key author_date" "" "${ksail_args[@]}" \
-  "$(jq -c --arg head "${ksail_head}" '[{sha: $head, message: "m"}]' <<<'null')"
-expect_error_reason "extra commit key" "commit[0] has unexpected key login" "" "${ksail_args[@]}" \
-  "$(jq -c '.[0].login = "x"' <<<"${ksail_commits}")"
-expect_error_reason "null login" "commit[0].author_login is null, not a string" "" "${ksail_args[@]}" \
-  "$(jq -c '.[0].author_login = null' <<<"${ksail_commits}")"
-expect_error_reason "short sha" "commit[0].sha is not a 40-character lowercase hex SHA" "" \
-  "${ksail_args[@]}" "$(jq -c '.[0].sha = "abc"' <<<"${ksail_commits}")"
-expect_error_reason "bad date" "commit[0].committer_date is not YYYY-MM-DDTHH:MM:SSZ" "" \
-  "${ksail_args[@]}" "$(jq -c '.[0].committer_date = "2026-07-18"' <<<"${ksail_commits}")"
-expect_error_reason "second commit" "commit[1] is missing key sha" "" "${ksail_args[@]}" \
-  "$(jq -c '. + [.[0] | del(.sha)]' <<<"${ksail_commits}")"
-expect_error_reason "stale head" "the last commit in commits-json is not head-oid (stale or partial commit list)" "" \
-  "${ksail_args[@]:0:4}" "${ksail_cask_head}" "${ksail_files}" "${ksail_commits}"
-expect_error_reason "skill owners" "skill-owners-json is not a JSON object of string or null values" "" \
-  "${ksail_args[@]}" "${ksail_commits}" '[]'
-expect_error_reason "foreign owner" "repo must be a bare name or devantler-tech/<name>" "" \
-  "other-org/ksail" "${ksail_args[@]:1}" "${ksail_commits}"
-expect_error_reason "empty repo" "repo must be a bare name or devantler-tech/<name>" "" \
-  "" "${ksail_args[@]:1}" "${ksail_commits}"
-no_jq_path="$(mktemp -d)"
-if err="$(PATH="${no_jq_path}" "${BASH}" "${classifier}" --input - 2>&1 >/dev/null <<<'{}')"; then
-  fail "classifier ran without jq"
-else
-  rc=$?
-  [[ "${rc}" -eq 2 && "${err}" == "programmed-bot-review-exemption: jq is not installed" ]] ||
-    fail "classifier without jq: exit ${rc}, stderr '${err}'"
-fi
-rmdir "${no_jq_path}"
-
-# `devantler-tech/<name>` is the form the survey digest and `gh --repo` print. It names the same
-# repository, so it must reach the same verdict, never a "not exempt" the arms never examined
-# (monorepo#3140).
-expect_exempt "owner-qualified repo" "devantler-tech/ksail" "${ksail_args[@]:1}" "${ksail_commits}"
 
 expect_review_required \
   "agent-plugins skill-only update" \
@@ -1743,6 +1644,110 @@ expect_exempt \
   "${platform_skills_head}" "${allowed_skills_files}" "${platform_signed_commits}" \
   "${allowed_skills_owners}"
 
+# The stdin shape's own contract, anchored on the live allowlisted updater above (#4523) so each negative case
+# differs from a known exit 0 by exactly one change: keys are exact, the only argv is `--input -`,
+# and a null or omitted skill_owners map keeps the updater review-required.
+updater_stdin_payload="$(jq -nc \
+  --arg head "${platform_skills_head}" --argjson files "${allowed_skills_files}" --argjson commits "${platform_signed_commits}" \
+  --argjson owners "${allowed_skills_owners}" \
+  '{repo: "platform", author: "app/botantler-1", head_ref: "deps/agent-skills-update",
+    title: "chore(deps): update agent skills", head_oid: $head, files: $files,
+    commits: $commits, skill_owners: $owners}')"
+expect_stdin_rc() {
+  local name="$1" want="$2" payload="$3"
+  shift 3
+  local rc
+  if "${classifier}" "$@" <<<"${payload}"; then rc=0; else rc=$?; fi
+  [[ "${rc}" -eq "${want}" ]] || fail "classifier stdin ${name}: exit ${rc}, want ${want}"
+}
+expect_stdin_rc "baseline" 0 "${updater_stdin_payload}" --input -
+expect_stdin_rc "null skill_owners" 3 \
+  "$(jq -c '.skill_owners = null' <<<"${updater_stdin_payload}")" --input -
+expect_stdin_rc "omitted skill_owners" 3 \
+  "$(jq -c 'del(.skill_owners)' <<<"${updater_stdin_payload}")" --input -
+expect_stdin_rc "unknown key" 2 \
+  "$(jq -c '.extra = "x"' <<<"${updater_stdin_payload}")" --input -
+expect_stdin_rc "missing key" 2 "$(jq -c 'del(.title)' <<<"${updater_stdin_payload}")" --input -
+expect_stdin_rc "non-string scalar" 2 "$(jq -c '.repo = 1' <<<"${updater_stdin_payload}")" --input -
+expect_stdin_rc "non-object input" 2 '[]' --input -
+expect_stdin_rc "path instead of stdin" 2 "${updater_stdin_payload}" --input /dev/stdin
+expect_stdin_rc "trailing argument" 2 "${updater_stdin_payload}" --input - extra
+
+# Exit 2 names its failed check in one stderr line, so a caller can tell a payload it built wrongly
+# from an environment it cannot fix (monorepo#3101). The verdicts above stay silent on stderr.
+expect_error_reason() {
+  local name="$1" want="$2" payload="$3" rc err
+  shift 3
+  if err="$("${classifier}" "$@" 2>&1 >/dev/null <<<"${payload}")"; then rc=0; else rc=$?; fi
+  [[ "${rc}" -eq 2 ]] || fail "classifier ${name}: exit ${rc}, want 2"
+  [[ "${err}" == "programmed-bot-review-exemption: ${want}" ]] ||
+    fail "classifier ${name}: stderr '${err}', want '${want}'"
+}
+updater_args=("platform" "app/botantler-1" "deps/agent-skills-update"
+  "chore(deps): update agent skills" "${platform_skills_head}" "${allowed_skills_files}")
+if err="$("${classifier}" --input - 2>&1 >/dev/null <<<"${updater_stdin_payload}")"; then
+  [[ -z "${err}" ]] || fail "classifier writes stderr on an exempt verdict: ${err}"
+else
+  fail "classifier stdin baseline no longer exempt"
+fi
+expect_error_reason "stdin missing key" "stdin is missing key title" \
+  "$(jq -c 'del(.title)' <<<"${updater_stdin_payload}")" --input -
+expect_error_reason "stdin unknown key" "stdin has unexpected key extra" \
+  "$(jq -c '.extra = "x"' <<<"${updater_stdin_payload}")" --input -
+expect_error_reason "stdin non-string" "stdin repo is number, not a string" \
+  "$(jq -c '.repo = 1' <<<"${updater_stdin_payload}")" --input -
+expect_error_reason "stdin files" "stdin files is string, not an array" \
+  "$(jq -c '.files = "x"' <<<"${updater_stdin_payload}")" --input -
+expect_error_reason "stdin skill_owners" "stdin skill_owners is array, not an object or null" \
+  "$(jq -c '.skill_owners = []' <<<"${updater_stdin_payload}")" --input -
+expect_error_reason "stdin non-object" "stdin is not one JSON object" '[]' --input -
+expect_error_reason "stdin not JSON" "stdin is not one JSON object" 'not json' --input -
+expect_error_reason "arity" "expected 7 or 8 arguments or --input -, got 2" \
+  "${updater_stdin_payload}" --input /dev/stdin
+expect_error_reason "head-oid" "head-oid is not a full 40-character lowercase hex SHA" "" \
+  "${updater_args[@]:0:4}" "${platform_skills_head:0:10}" "${allowed_skills_files}" "${platform_signed_commits}"
+expect_error_reason "files" "files-json is not a JSON array of strings" "" \
+  "${updater_args[@]:0:5}" '[1]' "${platform_signed_commits}"
+expect_error_reason "commits not JSON" "commits-json is not valid JSON" "" "${updater_args[@]}" '['
+expect_error_reason "commits object" "commits-json is object, not an array" "" "${updater_args[@]}" '{}'
+expect_error_reason "commits empty" "commits-json is empty" "" "${updater_args[@]}" '[]'
+expect_error_reason "commit not object" "commit[0] is string, not an object" "" "${updater_args[@]}" '["x"]'
+expect_error_reason "partial commit" "commit[0] is missing key author_date" "" "${updater_args[@]}" \
+  "$(jq -c --arg head "${platform_skills_head}" '[{sha: $head, message: "m"}]' <<<'null')"
+expect_error_reason "extra commit key" "commit[0] has unexpected key login" "" "${updater_args[@]}" \
+  "$(jq -c '.[0].login = "x"' <<<"${platform_signed_commits}")"
+expect_error_reason "null login" "commit[0].author_login is null, not a string" "" "${updater_args[@]}" \
+  "$(jq -c '.[0].author_login = null' <<<"${platform_signed_commits}")"
+expect_error_reason "short sha" "commit[0].sha is not a 40-character lowercase hex SHA" "" \
+  "${updater_args[@]}" "$(jq -c '.[0].sha = "abc"' <<<"${platform_signed_commits}")"
+expect_error_reason "bad date" "commit[0].committer_date is not YYYY-MM-DDTHH:MM:SSZ" "" \
+  "${updater_args[@]}" "$(jq -c '.[0].committer_date = "2026-07-18"' <<<"${platform_signed_commits}")"
+expect_error_reason "second commit" "commit[1] is missing key sha" "" "${updater_args[@]}" \
+  "$(jq -c '. + [.[0] | del(.sha)]' <<<"${platform_signed_commits}")"
+expect_error_reason "stale head" "the last commit in commits-json is not head-oid (stale or partial commit list)" "" \
+  "${updater_args[@]:0:4}" "${ksail_cask_head}" "${allowed_skills_files}" "${platform_signed_commits}"
+expect_error_reason "skill owners" "skill-owners-json is not a JSON object of string or null values" "" \
+  "${updater_args[@]}" "${platform_signed_commits}" '[]'
+expect_error_reason "foreign owner" "repo must be a bare name or devantler-tech/<name>" "" \
+  "other-org/platform" "${updater_args[@]:1}" "${platform_signed_commits}"
+expect_error_reason "empty repo" "repo must be a bare name or devantler-tech/<name>" "" \
+  "" "${updater_args[@]:1}" "${platform_signed_commits}"
+no_jq_path="$(mktemp -d)"
+if err="$(PATH="${no_jq_path}" "${BASH}" "${classifier}" --input - 2>&1 >/dev/null <<<'{}')"; then
+  fail "classifier ran without jq"
+else
+  rc=$?
+  [[ "${rc}" -eq 2 && "${err}" == "programmed-bot-review-exemption: jq is not installed" ]] ||
+    fail "classifier without jq: exit ${rc}, stderr '${err}'"
+fi
+rmdir "${no_jq_path}"
+
+# `devantler-tech/<name>` is the form the survey digest and `gh --repo` print. It names the same
+# repository, so it must reach the same verdict, never a "not exempt" the arms never examined
+# (monorepo#3140).
+expect_exempt "owner-qualified repo" "devantler-tech/platform" "${updater_args[@]:1}" "${platform_signed_commits}" "${allowed_skills_owners}"
+
+
 expect_review_required \
   "KSail App-signed update touching a third-party skill" \
   "ksail" "app/ksail-bot" "deps/agent-skills-update" "chore(deps): update agent skills" \
@@ -2052,11 +2057,9 @@ elif [[ "${err}" == *release-cask-ripeness* ]]; then
   fail "a review-gated tap cask PR printed the ripeness reminder: '${err}'"
 fi
 
-# The KSail release arm is a trust boundary pinned to one exact signed identity (#3173). Its names are
-# only what a commit claims, so without GitHub's signature verdict, or with an unsigned commit, the
-# release stays review-gated. Every identity field is compared exactly — changing any one of them, a
-# noreply address without its numeric prefix, or the bot committing for itself loses the exemption —
-# and the retired devantler-tech-bot identity is not kept as a second accepted shape.
+# These historical identity variants remain untrusted along with the formerly exact signed
+# shape. Retiring the publisher removes the exemption rather than admitting a replacement identity
+# or preserving a dormant bypass (#4523).
 expect_review_gated "KSail plugin release without the verified field" "devantler-tech/ksail" \
   "${ksail_args[@]:1}" "$(jq -c 'map(del(.verified))' <<<"${ksail_commits}")"
 expect_review_gated "KSail plugin release GitHub did not sign" "devantler-tech/ksail" "${ksail_args[@]:1}" \

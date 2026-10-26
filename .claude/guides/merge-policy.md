@@ -43,7 +43,7 @@ Conventional-Commit title, then **merge with the command that matches the author
   author-scoped list, which is what made the unsafe arming look prescribed.
   For an unconditional author, use
   `gh pr merge <n> --repo devantler-tech/<repo> --auto --squash --match-head-commit <sha>`; for **trusted programmed bot PRs** (exit-0 agent-skills updater PRs,
-  tap cask PRs, and KSail release bumps — the carve-out below) the review parts are intentionally absent and
+  and tap cask PRs — the carve-out below) the review parts are intentionally absent and
   are NOT required — their required checks, zero threads, and no-conflict state alone gate the merge,
   which for the exit-0 updater is the head-pinned **direct** merge above, never `--auto`;
 - a **human-trusted author** (`devantler`, i.e. **every machine-local agent-own PR**) **cannot use `--auto`**
@@ -874,8 +874,7 @@ gated by required CI and auto-merge rather than an AI review:
   **and only where every changed skill is owned by the reviewed suite upstream** (see below).
 - **Programmed release PRs** (maintainer direction 2026-07-13, ksail#6095; widened 2026-07-18):
   every product's Homebrew-tap cask PR, including World at Ruin's CD-generated
-  `chore(cask): update world-at-ruin to vX.Y.Z` PRs on `goreleaser/world-at-ruin`, plus KSail release
-  version bumps.
+  `chore(cask): update world-at-ruin to vX.Y.Z` PRs on `goreleaser/world-at-ruin`.
 
 **`agent-plugins` updater PRs require semantic review.** Bundled skills are executable agent
 instructions sourced from several upstreams, so path and commit provenance prove who produced an
