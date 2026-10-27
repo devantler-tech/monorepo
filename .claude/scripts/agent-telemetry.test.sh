@@ -3445,6 +3445,18 @@ else ok "an input_image payload masks with image_url before type"; fi
 if grep -q 'line=8 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
   bad "an escaped-solidus image payload is masked" "$CRED"
 else ok "an escaped-solidus image payload is masked"; fi
+# 🔴 ...and the escaped spelling must be built in linear time. jq 1.7's `gsub`
+# is quadratic in the number of matches: one ~790 KB screenshot payload (about
+# 12,000 `/`) took 119 s to respell, two of them pushed the whole Codex safety
+# scope past its 600 s deadline, and the scope reported UNKNOWN in three slots
+# running. `split("/") | join("\\/")` yields the same string in 0.3 s. The test
+# above proves the spelling; this one keeps the quadratic form out of the mask.
+MASK_BODY=$(sed -n '/def blank_unambiguous/,/\. as \$raw/p' "$TARGET")
+if [ -z "$MASK_BODY" ]; then
+  bad "the escaped-solidus respelling is linear" "blank_unambiguous not found in $TARGET"
+elif grep -q 'gsub(' <<<"$MASK_BODY" || ! grep -qF 'split("/") | join("\\/")' <<<"$MASK_BODY"; then
+  bad "the escaped-solidus respelling is linear" "$(grep -n 'escaped' <<<"$MASK_BODY")"
+else ok "the escaped-solidus respelling is linear"; fi
 # 🔴 The mask must DECLINE a record whose escaping it cannot vouch for. An
 # invalid JSON escape makes `fromjson` fail, so the table falls back to scanning
 # the whole raw record and counts the credential — masking it here would leave a
