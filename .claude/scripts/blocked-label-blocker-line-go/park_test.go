@@ -107,6 +107,14 @@ func (f *fakeForge) write(method, endpoint string, payload []byte) error {
 		f.add(recordAuthor, body.Body)
 	case key == "POST "+parkIssuePath+"/labels":
 		f.labels = append(f.labels, body.Labels...)
+	case key == "DELETE "+parkIssuePath+"/labels/blocked":
+		var kept []string
+		for _, label := range f.labels {
+			if !strings.EqualFold(label, "blocked") {
+				kept = append(kept, label)
+			}
+		}
+		f.labels = kept
 	case method == "PATCH" && strings.HasPrefix(endpoint, "repos/o/r/issues/comments/"):
 		id, _ := strconv.ParseInt(strings.TrimPrefix(endpoint, "repos/o/r/issues/comments/"), 10, 64)
 		for i := range f.comments {

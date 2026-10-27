@@ -174,10 +174,13 @@ The record is intake, never proof of bot notification.
 
 On every later run, **re-verify the blocker against live state and edit that comment in place**
 (run `park` again with today's result: it edits the one record and never posts a second):
-update the date and result, or, when
-the blocker has cleared, remove the label, delete the record comment and drive the PR (the check
-does not read an unlabelled PR, so a record left behind would be the stale one found if the label
-ever came back). Never post a second record or a new comment restating the blocker, and leave
+update the date and result, or, when the blocker has cleared, run
+`.claude/scripts/blocked-label-blocker-line.sh unpark --org devantler-tech --target <owner/repo#N> --result <live-check result>`.
+It edits the same comment to `**Blocker:** none`, preserves its previous text and edit history,
+verifies the cleared record, then removes only the `blocked` label and reads both back. A failed
+or incomplete write is UNKNOWN: inspect its partial-write message before retrying. Drive the PR
+only after this succeeds. A cleared record cannot park a PR if its label returns; `park` reuses
+that same comment when a new verified blocker exists. Never post a second record or a new comment restating the blocker, and leave
 earlier prose alone: it has no marker and is not read. The record replaces the re-diagnosis, never
 the re-check.
 [`blocked-label-blocker-line.sh --org devantler-tech`](../scripts/blocked-label-blocker-line.sh)
@@ -204,7 +207,7 @@ counts them:
   when the record's date comes due is yours.
 - `ACTIONABLE <repo>#<n>  record=<reason>`: the label is there and the park is not. The PR is ordinary
   rung-1 work this run. `record=BLOCKER-CLOSED` means an issue or PR the record names has closed:
-  remove the label, delete the record comment and drive the PR, or park it again on what really
+  run `unpark` and drive the PR, or park it again on what really
   blocks it now. `BLOCKER-SELF` and `BLOCKER-UNREADABLE` mean the record names the PR itself or a
   reference with no usable number: write a real blocker or unpark. Any other reason is the record's
   own verdict from the paragraph above: repair the record, or unpark the PR.

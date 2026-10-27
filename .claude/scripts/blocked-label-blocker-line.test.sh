@@ -1157,9 +1157,14 @@ if [ -z "$PARK_RULE" ]; then
   bad "the merge policy defines the parked-PR record" "no paragraph starting '**A parked PR carries one blocker record' in $MERGE_GUIDE"
 else
   ok "the merge policy defines the parked-PR record"
-  for token in '<!-- pr-blocker-record -->' '`blocked` label' 'on a line of its own' 'edit that comment in place' '`MISSING`' '`DUPLICATE`' 'by `devantler`' 'delete the record comment' 'blocked-label-blocker-line.sh --org devantler-tech' 'blocked-label-blocker-line.sh compose --target' 'blocked-label-blocker-line.sh park --org devantler-tech --target' 'only after reading both' 'never a blocker'; do
+  for token in '<!-- pr-blocker-record -->' '`blocked` label' 'on a line of its own' 'edit that comment in place' '`MISSING`' '`DUPLICATE`' 'by `devantler`' '**Blocker:** none' 'blocked-label-blocker-line.sh --org devantler-tech' 'blocked-label-blocker-line.sh compose --target' 'blocked-label-blocker-line.sh park --org devantler-tech --target' 'blocked-label-blocker-line.sh unpark --org devantler-tech --target' 'only after reading both' 'never a blocker'; do
     if grep -qF -- "$token" <<<"$PARK_RULE"; then ok "the parked-PR rule states: $token"; else bad "the parked-PR rule states: $token" "not found in the rule paragraph"; fi
   done
+  if grep -qF -- 'delete the record comment' <<<"$PARK_RULE"; then
+    bad "unparking preserves the blocker record" "the guide still requires irreversible comment deletion"
+  else
+    ok "unparking preserves the blocker record"
+  fi
   for token in '<!-- pr-blocker-record -->' 'DUPLICATE' 'devantler' 'on a line of its own'; do
     if grep -qF -- "$token" <<<"$HELP"; then ok "--help states: $token"; else bad "--help states: $token" "not found in --help"; fi
   done
