@@ -3288,10 +3288,11 @@ t_salvage_carries_a_claude_base_on_the_remote() {
 }
 
 t_salvage_keeps_a_claude_base_that_is_not_a_pushed_commit() {
-  # Only an object id of a commit some remote-tracking ref reaches is known to carry nothing:
-  # an unpushed commit, other content, a symlink or a directory under that name is kept.
+  # Only an object id of a pushed commit HEAD descends from is known to carry nothing: an
+  # unpushed commit, one only a (possibly stale) tracking ref reaches off HEAD's history,
+  # other content, a symlink or a directory under that name is kept.
   local kind
-  for kind in unpushed content symlink directory; do
+  for kind in unpushed off-history content symlink directory; do
     local name="salvage dry-run KEEPs a worktree whose CLAUDE_BASE is $kind"
     local root; root=$(make_repo)
     abandoned_wt "$root" base || { bad "$name" "FIXTURE"; rm -rf "$root"; continue; }
@@ -3299,6 +3300,12 @@ t_salvage_keeps_a_claude_base_that_is_not_a_pushed_commit() {
     admin=$(git -C "$wt" rev-parse --absolute-git-dir)
     case "$kind" in
       unpushed) git -C "$wt" rev-parse HEAD | tr -d '\n' > "$admin/CLAUDE_BASE" ;;
+      off-history)
+        # A root commit outside HEAD's history that only a stale tracking ref still reaches.
+        local side
+        side=$(git -C "$root/repo" commit-tree -m side "origin/main^{tree}") \
+          && git -C "$root/repo" update-ref refs/remotes/origin/stale "$side" \
+          && printf '%s' "$side" > "$admin/CLAUDE_BASE" ;;
       content) echo data > "$admin/CLAUDE_BASE" ;;
       symlink) git -C "$root/repo" rev-parse origin/main > "$root/base" && ln -s "$root/base" "$admin/CLAUDE_BASE" ;;
       directory) mkdir "$admin/CLAUDE_BASE" ;;

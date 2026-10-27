@@ -125,8 +125,10 @@
 # content, or as a link or directory, it keeps the worktree like any unlisted entry.
 # The other is `CLAUDE_BASE`, where Claude Code records the commit a subagent worktree
 # started from (#2831). Salvage deletes it only when it holds one object id of a commit a
-# remote-tracking ref reaches, so the commit itself survives on that remote; only the pointer
-# is lost. Any other content, a link or a directory keeps the worktree.
+# remote-tracking ref reaches and the worktree's HEAD descends from, so the commit itself
+# survives in the salvaged or reaped HEAD as well as on that remote; only the pointer is lost.
+# Any other content, a link or a directory keeps the worktree; a failed read keeps it and ends
+# the sweep UNKNOWN.
 # Restore a submodule's work from the manifest row alone, with D=<git directory>/<label>
 # (the git directory is the main checkout's .git):
 #   git --git-dir="$D" --work-tree="$D" worktree add --detach <dir> refs/salvaged/<id>/head
@@ -795,6 +797,8 @@ reaped=0; kept=0; stuck=0; salvaged=0; freed_kb=0; unmeasured=0
 # What the pending manifest row says of the desktop app's marker (empty|absent); "" before a row.
 DESKTOP_MARKER_RECORDED=""
 DESKTOP_MARKER_UNREAD=0; DESKTOP_MARKER_NOW=""; DESKTOP_MARKER_NOTE=""
+# Set when a worktree's CLAUDE_BASE could not be read: that worktree was kept unexamined.
+CLAUDE_BASE_UNREAD=0
 
 # record <path> <branch> <sha> <evidence> <outcome>
 # The outcome column is what stops a row claiming a removal that never happened. The
@@ -2913,10 +2917,15 @@ worktree_state_blocker() {
              SALVAGE_NOTE="cannot read the worktree's git state for the desktop app's marker"; return 0 ;;
         esac ;;
       # Claude Code records the commit a subagent worktree started from (#2831). Naming a
-      # commit a remote-tracking ref reaches, it carries nothing the removal could lose.
+      # pushed commit HEAD descends from, it carries nothing the removal could lose.
       CLAUDE_BASE)
-        claude_base_on_remote "$wt" "$entry" \
-          || { SALVAGE_NOTE="the worktree's CLAUDE_BASE does not name a commit a remote holds (salvage cannot carry it)"; return 0; } ;;
+        claude_base_on_remote "$wt" "$entry"
+        case $? in
+          0) ;;
+          1) SALVAGE_NOTE="the worktree's CLAUDE_BASE does not name a pushed commit its HEAD descends from (salvage cannot carry it)"; return 0 ;;
+          *) CLAUDE_BASE_UNREAD=1
+             SALVAGE_NOTE="cannot read the worktree's CLAUDE_BASE"; return 0 ;;
+        esac ;;
       *) SALVAGE_NOTE="the worktree's git state holds ${entry##*/} (salvage cannot carry it)"; return 0 ;;
     esac
   done
@@ -2979,18 +2988,23 @@ worktree_state_blocker() {
 }
 
 # claude_base_on_remote <worktree> <file> -> 0 only when <file> is a regular file holding one
-# object id, at most newline-terminated, of a commit some remote-tracking ref reaches. Any
-# other content, a link, a directory or a failed read is 1, so the worktree is kept.
+# object id, at most newline-terminated, of a commit some remote-tracking ref reaches and the
+# worktree's HEAD descends from. A remote-tracking ref can be stale, so the remote alone does
+# not prove the commit survives; descending from HEAD, it is kept by the HEAD salvage or
+# reaped ref either way. Any other content, a link or a directory is 1 (keep); a failed read
+# is 2 (keep, unexamined).
 claude_base_on_remote() {
-  local wt=$1 file=$2 id size unreached
+  local wt=$1 file=$2 id size unreached rc
   [ -f "$file" ] && [ ! -L "$file" ] || return 1
-  id=$(cat "$file" 2>/dev/null) && size=$(wc -c < "$file" 2>/dev/null) || return 1
+  id=$(cat "$file" 2>/dev/null) && size=$(wc -c < "$file" 2>/dev/null) || return 2
   size=$((size + 0))
   [[ "$id" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || return 1
   [ "$size" -eq "${#id}" ] || [ "$size" -eq $((${#id} + 1)) ] || return 1
   [ "$(git -C "$wt" cat-file -t "$id" 2>/dev/null)" = commit ] || return 1
-  unreached=$(git -C "$wt" rev-list --max-count=1 "$id" --not --remotes 2>/dev/null) || return 1
-  [ -z "$unreached" ]
+  unreached=$(git -C "$wt" rev-list --max-count=1 "$id" --not --remotes 2>/dev/null) || return 2
+  [ -z "$unreached" ] || return 1
+  git -C "$wt" merge-base --is-ancestor "$id" HEAD 2>/dev/null; rc=$?
+  case "$rc" in 0) return 0 ;; 1) return 1 ;; *) return 2 ;; esac
 }
 
 # desktop_marker_lookup <admin directory> -> prints `empty` or `absent`. 1 when the name
@@ -4152,6 +4166,11 @@ fi
 if [ "$DESKTOP_MARKER_UNREAD" -ne 0 ]; then
   # A worktree whose admin directory could not be read was kept without a verdict (#4152).
   printf 'worktree-cleanup: UNKNOWN — could not read a worktree'"'"'s git state for the desktop app'"'"'s marker, so it was kept unexamined (#4152)\n'
+  [ "$REMOTE_MODULE_FAILED" -ne 0 ] || [ "$REMOTE_HELD_FAILED" -ne 0 ] || [ "$CLAUDE_BASE_UNREAD" -ne 0 ] || exit 2
+fi
+if [ "$CLAUDE_BASE_UNREAD" -ne 0 ]; then
+  # The same reasoning, for Claude Code's CLAUDE_BASE pointer (#2831).
+  printf 'worktree-cleanup: UNKNOWN — could not read a worktree'"'"'s CLAUDE_BASE, so it was kept unexamined (#2831)\n'
   [ "$REMOTE_MODULE_FAILED" -ne 0 ] || [ "$REMOTE_HELD_FAILED" -ne 0 ] || exit 2
 fi
 if [ "$REMOTE_MODULE_FAILED" -ne 0 ]; then
