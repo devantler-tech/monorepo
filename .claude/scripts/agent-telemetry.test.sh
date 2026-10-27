@@ -3451,12 +3451,22 @@ else ok "an escaped-solidus image payload is masked"; fi
 # scope past its 600 s deadline, and the scope reported UNKNOWN in three slots
 # running. `split("/") | join("\\/")` yields the same string in 0.3 s. The test
 # above proves the spelling; this one keeps the quadratic form out of the mask.
+respell_is_linear() {
+  ! grep -q 'gsub(' <<<"$1" && grep -qF 'split("/") | join("\\/")' <<<"$1"
+}
 MASK_BODY=$(sed -n '/def blank_unambiguous/,/\. as \$raw/p' "$TARGET")
 if [ -z "$MASK_BODY" ]; then
   bad "the escaped-solidus respelling is linear" "blank_unambiguous not found in $TARGET"
-elif grep -q 'gsub(' <<<"$MASK_BODY" || ! grep -qF 'split("/") | join("\\/")' <<<"$MASK_BODY"; then
+elif ! respell_is_linear "$MASK_BODY"; then
   bad "the escaped-solidus respelling is linear" "$(grep -n 'escaped' <<<"$MASK_BODY")"
 else ok "the escaped-solidus respelling is linear"; fi
+# Negative control: the same body with the quadratic form put back must fail.
+MASK_BODY_BAD=$(sed 's#split("/") | join("\\\\/")#gsub("/"; "\\\\/")#' <<<"$MASK_BODY")
+if [ "$MASK_BODY_BAD" = "$MASK_BODY" ]; then
+  bad "the linearity check rejects a gsub respelling" "the mutation did not apply"
+elif respell_is_linear "$MASK_BODY_BAD"; then
+  bad "the linearity check rejects a gsub respelling" "a gsub body passed"
+else ok "the linearity check rejects a gsub respelling"; fi
 # 🔴 The mask must DECLINE a record whose escaping it cannot vouch for. An
 # invalid JSON escape makes `fromjson` fail, so the table falls back to scanning
 # the whole raw record and counts the credential — masking it here would leave a
