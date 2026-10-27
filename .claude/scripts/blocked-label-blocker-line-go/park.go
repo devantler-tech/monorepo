@@ -49,7 +49,7 @@ Exit: 0 parked, the label and exactly one conforming record read back (or this
       2 refused or unproven: the message says what, if anything, was written.
 `
 
-// forgeWrite is the one place park changes the forge; tests replace it.
+// forgeWrite is the one place park and unpark change the forge; tests replace it.
 var forgeWrite = func(method, endpoint string, payload []byte) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -238,7 +238,7 @@ func parkRun(args []string, stdout, stderr io.Writer) int {
 	}
 	existing := ownRecords(comments)
 	if len(existing) > 1 {
-		return refuse(nothing, fmt.Errorf("the target already carries %d record comments: delete all but one, then park again", len(existing)))
+		return refuse(nothing, fmt.Errorf("the target already carries %d record comments: retain one marker and edit the others to historical prose, then park again", len(existing)))
 	}
 	payload, err := json.Marshal(map[string]string{"body": body})
 	if err != nil {

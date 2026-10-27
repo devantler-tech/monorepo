@@ -108,6 +108,8 @@ Options: --today <YYYY-MM-DD> (default UTC today)
 Write a record with the compose subcommand (compose --help), never by hand.
 Park a pull request with the park subcommand (park --help): it writes the
 record and the blocked label together and reads both back.
+Clear a verified blocker with unpark (unpark --help): it preserves the record
+comment, marks it cleared and removes only the blocked label.
 Lend the conditional reads to another helper with the read subcommand
 (read <endpoint>...): one line per endpoint, the JSON array of its pages, for
 an orgs/ or repos/ path; nothing is printed unless every endpoint was read.
@@ -1042,9 +1044,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "compose" {
 		return composeRun(args[1:], stdout, stderr)
 	}
-	// park is the only path that changes the forge, and it names its one target.
+	// The writing paths each name one target under their declared owner.
 	if len(args) > 0 && args[0] == "park" {
 		return parkRun(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "unpark" {
+		return unparkRun(args[1:], stdout, stderr)
 	}
 	// read lends the conditional forge reads to the other helpers here.
 	if len(args) > 0 && args[0] == "read" {
