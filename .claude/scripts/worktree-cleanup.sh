@@ -117,12 +117,16 @@
 # salvage age. Which branch or tag held a commit is in the parent's
 # module-files tree (<label>/refs/..., packed-refs, logs/...).
 # The Claude desktop app writes an empty `claude-desktop-worktree` file into the admin
-# directory of each session worktree it creates (#4152). That empty regular file is the one
-# entry git did not write that the removal may delete: the manifest row of any reaped
+# directory of each session worktree it creates (#4152). That empty regular file is one of
+# two entries git did not write that the removal may delete: the manifest row of any reaped
 # worktree that held it gains a `desktop-marker=empty` field. To restore the marker, recreate
 # the worktree first (the restore steps above), then run, against that existing directory,
 # `: > "$(git -C <dir> rev-parse --absolute-git-dir)/claude-desktop-worktree"`. With
 # content, or as a link or directory, it keeps the worktree like any unlisted entry.
+# The other is `CLAUDE_BASE`, where Claude Code records the commit a subagent worktree
+# started from (#2831). Salvage deletes it only when it holds one object id of a commit a
+# remote-tracking ref reaches, so the commit itself survives on that remote; only the pointer
+# is lost. Any other content, a link or a directory keeps the worktree.
 # Restore a submodule's work from the manifest row alone, with D=<git directory>/<label>
 # (the git directory is the main checkout's .git):
 #   git --git-dir="$D" --work-tree="$D" worktree add --detach <dir> refs/salvaged/<id>/head
@@ -2908,6 +2912,11 @@ worktree_state_blocker() {
           *) DESKTOP_MARKER_UNREAD=1
              SALVAGE_NOTE="cannot read the worktree's git state for the desktop app's marker"; return 0 ;;
         esac ;;
+      # Claude Code records the commit a subagent worktree started from (#2831). Naming a
+      # commit a remote-tracking ref reaches, it carries nothing the removal could lose.
+      CLAUDE_BASE)
+        claude_base_on_remote "$wt" "$entry" \
+          || { SALVAGE_NOTE="the worktree's CLAUDE_BASE does not name a commit a remote holds (salvage cannot carry it)"; return 0; } ;;
       *) SALVAGE_NOTE="the worktree's git state holds ${entry##*/} (salvage cannot carry it)"; return 0 ;;
     esac
   done
@@ -2967,6 +2976,21 @@ worktree_state_blocker() {
     SALVAGE_NOTE="ORIG_HEAD or FETCH_HEAD names a tag (salvage cannot carry it)"; return 0
   fi
   return 1
+}
+
+# claude_base_on_remote <worktree> <file> -> 0 only when <file> is a regular file holding one
+# object id, at most newline-terminated, of a commit some remote-tracking ref reaches. Any
+# other content, a link, a directory or a failed read is 1, so the worktree is kept.
+claude_base_on_remote() {
+  local wt=$1 file=$2 id size unreached
+  [ -f "$file" ] && [ ! -L "$file" ] || return 1
+  id=$(cat "$file" 2>/dev/null) && size=$(wc -c < "$file" 2>/dev/null) || return 1
+  size=$((size + 0))
+  [[ "$id" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || return 1
+  [ "$size" -eq "${#id}" ] || [ "$size" -eq $((${#id} + 1)) ] || return 1
+  [ "$(git -C "$wt" cat-file -t "$id" 2>/dev/null)" = commit ] || return 1
+  unreached=$(git -C "$wt" rev-list --max-count=1 "$id" --not --remotes 2>/dev/null) || return 1
+  [ -z "$unreached" ]
 }
 
 # desktop_marker_lookup <admin directory> -> prints `empty` or `absent`. 1 when the name

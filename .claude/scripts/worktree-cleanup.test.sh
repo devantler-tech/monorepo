@@ -3266,6 +3266,54 @@ t_salvage_keeps_a_desktop_marker_that_is_not_empty() {
 }
 
 
+
+t_salvage_carries_a_claude_base_on_the_remote() {
+  # Claude Code writes CLAUDE_BASE, the commit a subagent worktree started from, into that
+  # worktree's admin directory (#2831). Naming a commit a remote already holds, it carries
+  # nothing the removal could lose; a worktree without one is the control.
+  local name="salvage apply reaps a worktree whose CLAUDE_BASE names a commit on the remote"
+  local root; root=$(make_repo)
+  abandoned_wt "$root" base || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  abandoned_wt "$root" plain || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/base" admin
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  printf '%s' "$(git -C "$root/repo" rev-parse origin/main)" > "$admin/CLAUDE_BASE"
+  local out; out=$(run_salvage "$root" apply 1)
+  local problems=""
+  [ -e "$wt" ] && problems="$problems worktree-still-present"
+  grep -q '^SALVAGED .*base .*refs/salvaged/' <<<"$out" || problems="$problems no-SALVAGED-line"
+  grep -q '^SALVAGED .*plain .*refs/salvaged/' <<<"$out" || problems="$problems control-not-salvaged"
+  if [ -z "$problems" ]; then ok "$name"; else bad "$name" "$problems :: $out"; fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_claude_base_that_is_not_a_pushed_commit() {
+  # Only an object id of a commit some remote-tracking ref reaches is known to carry nothing:
+  # an unpushed commit, other content, a symlink or a directory under that name is kept.
+  local kind
+  for kind in unpushed content symlink directory; do
+    local name="salvage dry-run KEEPs a worktree whose CLAUDE_BASE is $kind"
+    local root; root=$(make_repo)
+    abandoned_wt "$root" base || { bad "$name" "FIXTURE"; rm -rf "$root"; continue; }
+    local wt="$root/repo/.claude/worktrees/base" admin
+    admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+    case "$kind" in
+      unpushed) git -C "$wt" rev-parse HEAD | tr -d '\n' > "$admin/CLAUDE_BASE" ;;
+      content) echo data > "$admin/CLAUDE_BASE" ;;
+      symlink) git -C "$root/repo" rev-parse origin/main > "$root/base" && ln -s "$root/base" "$admin/CLAUDE_BASE" ;;
+      directory) mkdir "$admin/CLAUDE_BASE" ;;
+    esac
+    local out; out=$(run_salvage "$root" dry-run 1)
+    if grep -q 'KEEP .*base .*CLAUDE_BASE' <<<"$out" \
+       && ! grep -q '^SALVAGE .*base ' <<<"$out" && [ -e "$wt" ]; then
+      ok "$name"
+    else
+      bad "$name" "$out"
+    fi
+    rm -rf "$root"
+  done
+}
+
 t_plain_reap_keeps_a_desktop_marker_that_is_not_empty() {
   # A clean, pushed worktree is reaped without salvage, yet its admin directory dies all the
   # same: a marker holding data keeps it, the empty one is recorded, none says nothing.
@@ -6726,6 +6774,8 @@ t_salvage_keeps_a_hidden_edit_in_an_embedded_submodule
 t_salvage_keeps_unlisted_git_state
 t_salvage_carries_the_empty_desktop_marker
 t_salvage_keeps_a_desktop_marker_that_is_not_empty
+t_salvage_carries_a_claude_base_on_the_remote
+t_salvage_keeps_a_claude_base_that_is_not_a_pushed_commit
 t_plain_reap_keeps_a_desktop_marker_that_is_not_empty
 t_keeps_a_desktop_marker_written_after_the_manifest_row
 t_unreadable_desktop_marker_state_ends_unknown
