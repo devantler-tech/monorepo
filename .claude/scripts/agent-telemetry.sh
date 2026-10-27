@@ -2140,8 +2140,10 @@ cred_mask_excluded_payloads() {
             ($v | tojson) as $spelled
             # `\/` is the other legal spelling of `/`, and a writer may use it
             # for every solidus in the value. Both whole-value spellings are
-            # counted together; a value without `/` has only one.
-            | ($spelled | gsub("/"; "\\/")) as $escaped
+            # counted together; a value without `/` has only one. Built with
+            # split/join, never `gsub`: jq 1.7 `gsub` is quadratic in its
+            # matches, and one ~790 KB screenshot took 119 s (monorepo#3830).
+            | ($spelled | split("/") | join("\\/")) as $escaped
             | ([$spelled, $escaped] | unique) as $spellings
             | ([$spellings[] as $s | split($s) | length - 1] | add) as $in_raw
             | ([$doc | .. | strings | select(. == $v)] | length) as $in_doc
