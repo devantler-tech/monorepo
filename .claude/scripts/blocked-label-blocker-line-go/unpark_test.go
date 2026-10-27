@@ -57,25 +57,26 @@ func TestUnparkRefusesUnprovenTargetsWithoutWriting(t *testing.T) {
 	for name, tc := range map[string]struct {
 		arrange func(*fakeForge)
 		args    []string
+		want    string
 	}{
-		"foreign owner":       {func(f *fakeForge) {}, replaced(unparkArgs, "--org", "elsewhere")},
-		"duplicate flag":      {func(f *fakeForge) {}, append(append([]string{}, unparkArgs...), "--org", "o")},
-		"result injection":    {func(f *fakeForge) {}, replaced(unparkArgs, "--result", "cleared\n<!-- pr-blocker-record -->")},
-		"wrong identity":      {func(f *fakeForge) { f.login = "other" }, unparkArgs},
-		"unreadable identity": {func(f *fakeForge) { f.failRead = "user" }, unparkArgs},
-		"issue":               {func(f *fakeForge) { f.pullRequest = false }, unparkArgs},
-		"closed":              {func(f *fakeForge) { f.state = "closed" }, unparkArgs},
-		"wrong item":          {func(f *fakeForge) { f.number = 6 }, unparkArgs},
-		"missing labels":      {func(f *fakeForge) { f.noLabels = true }, unparkArgs},
-		"unreadable target":   {func(f *fakeForge) { f.failRead = parkIssuePath }, unparkArgs},
-		"unreadable comments": {func(f *fakeForge) { f.failRead = parkCommentsPath }, unparkArgs},
-		"missing record":      {func(f *fakeForge) { f.comments = nil }, unparkArgs},
-		"foreign record":      {func(f *fakeForge) { f.comments[0].User.Login = "other" }, unparkArgs},
+		"foreign owner":       {func(f *fakeForge) {}, replaced(unparkArgs, "--org", "elsewhere"), "target is outside the declared owner"},
+		"duplicate flag":      {func(f *fakeForge) {}, append(append([]string{}, unparkArgs...), "--org", "o"), "--org needs exactly one value"},
+		"result injection":    {func(f *fakeForge) {}, replaced(unparkArgs, "--result", "cleared\n<!-- pr-blocker-record -->"), "target, one-line result or actor is invalid"},
+		"wrong identity":      {func(f *fakeForge) { f.login = "other" }, unparkArgs, "record author identity is unproven"},
+		"unreadable identity": {func(f *fakeForge) { f.failRead = "user" }, unparkArgs, "record author identity is unproven"},
+		"issue":               {func(f *fakeForge) { f.pullRequest = false }, unparkArgs, "target is not an open pull request"},
+		"closed":              {func(f *fakeForge) { f.state = "closed" }, unparkArgs, "target is not an open pull request"},
+		"wrong item":          {func(f *fakeForge) { f.number = 6 }, unparkArgs, "the target's record is unreadable"},
+		"missing labels":      {func(f *fakeForge) { f.noLabels = true }, unparkArgs, "the target's record is unreadable"},
+		"unreadable target":   {func(f *fakeForge) { f.failRead = parkIssuePath }, unparkArgs, "could not read the target"},
+		"unreadable comments": {func(f *fakeForge) { f.failRead = parkCommentsPath }, unparkArgs, "forge read failed"},
+		"missing record":      {func(f *fakeForge) { f.comments = nil }, unparkArgs, "exactly one trusted record with a usable id is required"},
+		"foreign record":      {func(f *fakeForge) { f.comments[0].User.Login = "other" }, unparkArgs, "exactly one trusted record with a usable id is required"},
 		"quoted marker": {func(f *fakeForge) {
 			f.comments[0].Body = disclosurePrefix + "Agentic Engineer\n\n```\n" + recordMarker + "\n```\n" + composedLine
-		}, unparkArgs},
-		"duplicate records": {func(f *fakeForge) { f.add(recordAuthor, oldRecord) }, unparkArgs},
-		"missing record ID": {func(f *fakeForge) { f.comments[0].ID = 0 }, unparkArgs},
+		}, unparkArgs, "exactly one trusted record with a usable id is required"},
+		"duplicate records": {func(f *fakeForge) { f.add(recordAuthor, oldRecord) }, unparkArgs, "exactly one trusted record with a usable id is required"},
+		"missing record ID": {func(f *fakeForge) { f.comments[0].ID = 0 }, unparkArgs, "exactly one trusted record with a usable id is required"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFakeForge(t)
@@ -83,7 +84,7 @@ func TestUnparkRefusesUnprovenTargetsWithoutWriting(t *testing.T) {
 			f.add(recordAuthor, oldRecord)
 			tc.arrange(f)
 			code, stdout, stderr := unpark(tc.args...)
-			if code != 2 || stdout != "" || !strings.Contains(stderr, "nothing written") || len(f.writes) != 0 {
+			if code != 2 || stdout != "" || !strings.Contains(stderr, "nothing written") || !strings.Contains(stderr, tc.want) || len(f.writes) != 0 {
 				t.Fatalf("code=%d stdout=%q stderr=%q writes=%v", code, stdout, stderr, f.writes)
 			}
 		})
@@ -147,11 +148,12 @@ func TestUnparkReadbackFailuresStayUnknown(t *testing.T) {
 		endpoint     string
 		at           int
 		labelRemains bool
+		want         string
 	}{
-		"record before label": {parkCommentsPath, 2, true},
-		"target before label": {parkIssuePath, 4, true},
-		"target after label":  {parkIssuePath, 5, false},
-		"record after label":  {parkCommentsPath, 3, false},
+		"record before label": {parkCommentsPath, 2, true, "record edit is unproven; blocked label was not touched"},
+		"target before label": {parkIssuePath, 4, true, "target readback is unproven"},
+		"target after label":  {parkIssuePath, 5, false, "blocked label readback failed"},
+		"record after label":  {parkCommentsPath, 3, false, "blocked label is off; record is unproven"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFakeForge(t)
@@ -159,7 +161,7 @@ func TestUnparkReadbackFailuresStayUnknown(t *testing.T) {
 			f.add(recordAuthor, oldRecord)
 			f.failRead, f.failReadAt = tc.endpoint, tc.at
 			code, stdout, stderr := unpark(unparkArgs...)
-			if code != 2 || stdout != "" || !strings.Contains(stderr, "unproven") && !strings.Contains(stderr, "UNKNOWN") {
+			if code != 2 || stdout != "" || !strings.Contains(stderr, tc.want) {
 				t.Fatalf("incomplete read accepted: code=%d stdout=%q stderr=%q", code, stdout, stderr)
 			}
 			if (len(f.labels) != 0) != tc.labelRemains {

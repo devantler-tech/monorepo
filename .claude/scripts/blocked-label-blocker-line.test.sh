@@ -1160,7 +1160,7 @@ else
   for token in '<!-- pr-blocker-record -->' '`blocked` label' 'on a line of its own' 'edit that comment in place' '`MISSING`' '`DUPLICATE`' 'by `devantler`' '**Blocker:** none' 'blocked-label-blocker-line.sh --org devantler-tech' 'blocked-label-blocker-line.sh compose --target' 'blocked-label-blocker-line.sh park --org devantler-tech --target' 'blocked-label-blocker-line.sh unpark --org devantler-tech --target' 'only after reading both' 'never a blocker'; do
     if grep -qF -- "$token" <<<"$PARK_RULE"; then ok "the parked-PR rule states: $token"; else bad "the parked-PR rule states: $token" "not found in the rule paragraph"; fi
   done
-  if grep -qF -- 'delete the record comment' <<<"$PARK_RULE"; then
+  if tr -s '[:space:]' ' ' <<<"$PARK_RULE" | grep -qiE 'delet(e[sd]?|ing|ion)[^.!?;]*(comment|record)'; then
     bad "unparking preserves the blocker record" "the guide still requires irreversible comment deletion"
   else
     ok "unparking preserves the blocker record"
