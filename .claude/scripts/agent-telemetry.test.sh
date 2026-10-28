@@ -1094,15 +1094,22 @@ deny_display=$(printf '%0300s' '' | tr ' ' L)
     jq -cn --arg id "$suffix" --arg msg "$deny_pre[$deny_display$suffix]" \
       '{type:"user",timestamp:"2026-10-27T10:00:01Z",message:{content:[{type:"tool_result",tool_use_id:$id,is_error:true,content:$msg}]}}'
   done
+  for number in 1 2; do
+    jq -cn --arg id "ordinary$number" \
+      '{type:"assistant",timestamp:"2026-10-27T10:00:00Z",message:{content:[{type:"tool_use",id:$id,name:"Bash",input:{}}]}}'
+    jq -cn --arg id "ordinary$number" --arg msg "auto-mode denial [Policy $number]" \
+      '{type:"user",timestamp:"2026-10-27T10:00:01Z",message:{content:[{type:"tool_result",tool_use_id:$id,is_error:true,content:$msg}]}}'
+  done
 } > "$FIX/denials/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/denials" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section reliability 2>&1)
-check "counts both display-bounded reasons" "$OUT" "tool errors in window: 2"
+check "counts denial and ordinary prefix-collision errors" "$OUT" "tool errors in window: 4"
 deny_display_rows=$(grep -Ec '^ +1 Bash: auto-mode denial \[' <<<"$OUT" || true)
 [ "$deny_display_rows" -eq 2 ] && ok "counts before bounding denial display" \
   || bad "counts before bounding denial display" "$OUT"
 check "keeps the first reason tail visible" "$OUT" "first]"
 check "keeps the second reason tail visible" "$OUT" "second]"
+check "normalises an ordinary error that mimics the display prefix" "$OUT" "2 Bash: auto-mode denial [Policy <n>]"
 if awk '/Bash: auto-mode denial \[/ && length($0)>=300 {exit 1}' <<<"$OUT"; then
   ok "bounds long denial display"
 else

@@ -4006,7 +4006,8 @@ if want reliability; then
             # one row (monorepo#4625). Key a denial by its bracketed Reason, or
             # by [unexplained] when the classifier gave none. This rewrites the
             # grouping key only: each errored result is still exactly one row.
-            | (if ($raw | test("^Permission for this action (was|has been) denied by the Claude Code auto mode classifier"))
+            | ($raw | test("^Permission for this action (was|has been) denied by the Claude Code auto mode classifier")) as $denial
+            | (if $denial
                then "auto-mode denial ["
                     + (($raw | capture("Reason: \\[(?<r>[^\\]]+)\\]") | .r) // "unexplained")
                     + "]"
@@ -4023,8 +4024,8 @@ if want reliability; then
             # characters and leaves the control bytes, because jq decodes the
             # escapes before Oniguruma sees the class. That would have corrupted
             # every message rather than sanitising it.
-            | "D\t\($tool)\t\($msg | gsub("[[:cntrl:]]+";" ")
-                | if startswith("auto-mode denial [") then . else .[0:100] end)"
+            | "D\t\($tool)\t\(if $denial then "denial" else "error" end)\t\($msg | gsub("[[:cntrl:]]+";" ")
+                | if $denial then . else .[0:100] end)"
           else empty end
       ' "$f" 2>/dev/null || printf x >> "$XFREL"
     done | redact > "$RAWTMP" || true
@@ -4066,10 +4067,14 @@ if want reliability; then
     # Denial reasons are category names, not variable error-message data:
     # group by the whole redacted reason, including its digits and hashes.
     # Bound display only AFTER counting, so a shared prefix cannot merge keys.
-    awk -F'\t' '{print $1": "($2 ~ /^auto-mode denial \[/ ? $2 : substr($2,1,72))}' "$ERRTMP" \
+    # Carry the classifier decision separately: ordinary error text may itself
+    # start with the displayed denial label and must retain normal grouping.
+    awk -F'\t' '{print ($2=="denial" ? "D " : "E ") $1": "($2=="denial" ? $3 : substr($3,1,72))}' "$ERRTMP" \
       | redact \
-      | sed -E '/^[^:]*: auto-mode denial \[/! { s/[0-9a-f]{8,}/<hash>/g; s/[0-9]+/<n>/g; }' \
-      | sort | uniq -c | sort -rn | head -12 \
+      | sed -E '/^E / { s/[0-9a-f]{8,}/<hash>/g; s/[0-9]+/<n>/g; }' \
+      | sort | uniq -c \
+      | sed -E 's/^([[:space:]]*[0-9]+) [DE] /\1 /' \
+      | sort -rn | head -12 \
       | awk '{if (length($0)>200) print substr($0,1,160)" ... "substr($0,length($0)-30); else print}' \
       | sed 's/^/    /'
     rm -f "$ERRTMP" "$RAWTMP"
