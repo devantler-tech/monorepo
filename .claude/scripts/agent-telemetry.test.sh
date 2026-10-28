@@ -1183,6 +1183,17 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/denials" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR=
 check "keeps a denial whose tool name holds a tab" "$OUT" "auto-mode denials by reason (every category, 1 total):"
 check "prints that tool name without the tab" "$OUT" "1 Ba sh: auto-mode denial [Tabbed]"
 
+# A tool name that is not a string must not break the file read.
+{
+  jq -cn '{type:"assistant",timestamp:"2026-10-27T10:00:00Z",message:{content:[{type:"tool_use",id:"num1",name:7,input:{}}]}}'
+  jq -cn --arg msg "${deny_pre}[Numbered]" \
+    '{type:"user",timestamp:"2026-10-27T10:00:01Z",message:{content:[{type:"tool_result",tool_use_id:"num1",is_error:true,content:$msg}]}}'
+} > "$FIX/denials/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/denials" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section reliability 2>&1)
+check "keeps a denial whose tool name is a number" "$OUT" "1 7: auto-mode denial [Numbered]"
+nocheck "reads a numeric tool name without an extraction failure" "$OUT" "extraction failed"
+
 # ── 3. safety: real denials matched, prose-faked ones NOT ─────────────────────
 echo
 echo "safety"

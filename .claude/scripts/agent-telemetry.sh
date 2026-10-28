@@ -4010,7 +4010,7 @@ if want reliability; then
             $errs[]
             # A tab inside a tool name would shift the kind field of this
             # tab-separated row and hide a denial (monorepo#4629).
-            | ($names[.tool_use_id] // "unknown" | gsub("[[:cntrl:]]+";" ")) as $tool
+            | (($names[.tool_use_id] // "unknown") | scalar_text | gsub("[[:cntrl:]]+";" ")) as $tool
             | (block_text) as $raw
             # An auto-mode denial opens with a fixed ~85-character sentence, so
             # the 72-character signature head below folded every category into
