@@ -4000,7 +4000,17 @@ if want reliability; then
           elif $rts >= $since then
             $errs[]
             | ($names[.tool_use_id] // "unknown") as $tool
-            | (block_text) as $msg
+            | (block_text) as $raw
+            # An auto-mode denial opens with a fixed ~85-character sentence, so
+            # the 72-character signature head below folded every category into
+            # one row (monorepo#4625). Key a denial by its bracketed Reason, or
+            # by [unexplained] when the classifier gave none. This rewrites the
+            # grouping key only: each errored result is still exactly one row.
+            | (if ($raw | test("^Permission for this action (was|has been) denied by the Claude Code auto mode classifier"))
+               then "auto-mode denial ["
+                    + (($raw | capture("Reason: \\[(?<r>[^\\]]{1,60})\\]") | .r) // "unexplained")
+                    + "]"
+               else $raw end) as $msg
             # Strip ALL control characters, not just newline and tab. A NUL
             # reaching the scratch file makes `grep` treat it as binary and
             # print "Binary file . matches" INSTEAD of the rows, collapsing the

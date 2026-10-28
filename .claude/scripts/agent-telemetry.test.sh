@@ -1044,6 +1044,32 @@ check "attributes errors to Edit"     "$OUT" "Edit"
 check "surfaces the gh --repo defect" "$OUT" "argument required when using the --repo flag"
 check "normalises digits for grouping" "$OUT" "<n>"
 
+# monorepo#4625: every auto-mode denial shares an ~85-character preamble, so a
+# 72-character signature head folded every category into ONE row. Each denial
+# must group by its bracketed Reason, an unbracketed one as [unexplained], and
+# the total must still count every errored result exactly once.
+mkdir -p "$FIX/denials"
+deny_pre='Permission for this action was denied by the Claude Code auto mode classifier. Reason: '
+{
+  n=0
+  for reason in '[Merge Without Review]. If you have other tasks' \
+                '[Merge Without Review]. If you have other tasks' \
+                '[Self-Modification]. If you have other tasks' \
+                'The server-side auto mode classifier judged this action dangerous (it gave no explanation).'; do
+    n=$((n+1))
+    jq -cn --arg id "d$n" \
+      '{type:"assistant",timestamp:"2026-10-27T10:00:00Z",message:{content:[{type:"tool_use",id:$id,name:"Bash",input:{}}]}}'
+    jq -cn --arg id "d$n" --arg msg "${deny_pre}${reason}" \
+      '{type:"user",timestamp:"2026-10-27T10:00:01Z",message:{content:[{type:"tool_result",tool_use_id:$id,is_error:true,content:$msg}]}}'
+  done
+} > "$FIX/denials/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/denials" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section reliability 2>&1)
+check "keeps every denial in the error total" "$OUT" "tool errors in window: 4"
+check "groups a denial by its bracketed reason" "$OUT" "2 Bash: auto-mode denial [Merge Without Review]"
+check "separates a second denial reason" "$OUT" "1 Bash: auto-mode denial [Self-Modification]"
+check "labels an unbracketed denial unexplained" "$OUT" "1 Bash: auto-mode denial [unexplained]"
+
 # ── 3. safety: real denials matched, prose-faked ones NOT ─────────────────────
 echo
 echo "safety"
