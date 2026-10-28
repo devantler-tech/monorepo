@@ -2101,6 +2101,35 @@ MODULE_NOTE=""
 VERIFIED_CHECKOUTS=""
 MODULE_LOG_IDS=""
 MODULE_PACKED_IDS=""
+
+# borrows_only_from_main_checkout <git-dir> <admin> — exit 0 when <git-dir>'s
+# objects/info/alternates is a plain file whose one entry is exactly the object store of the
+# main checkout's repository for the same submodule (the same path under the shared git
+# directory as <git-dir> has under <admin>, the one module_durable carries work into), and
+# that store is a plain directory that borrows from nothing itself. A submodule checkout in a
+# worktree writes exactly this (91 of the host's worktree submodule repositories did,
+# 2026-10-28, and it refused salvage for 5 worktrees, #2831). Removing the worktree then
+# loses no object the worktree's repository reads through it: the store it borrows from is
+# the main checkout's, which the removal never touches. Any other entry, a second entry, a
+# relative or quoted path, a link, or a store that borrows in turn is exit 1. Read-only.
+borrows_only_from_main_checkout() {
+  local g=$1 admin=${2:-} rel want f line name n=0 got=""
+  [ -n "$admin" ] || return 1
+  case "$g" in "$admin"/modules/?*) rel=${g#"$admin"/} ;; *) return 1 ;; esac
+  want="$COMMON_DIR/$rel/objects"
+  f="$g/objects/info/alternates"
+  [ -f "$f" ] && [ ! -L "$f" ] && [ -r "$f" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    n=$((n + 1)); got=$line
+  done < "$f"
+  [ "$n" -eq 1 ] && [ "$got" = "$want" ] || return 1
+  [ -d "$want" ] && [ ! -L "$want" ] && [ "$(physical_path "$want")" = "$want" ] || return 1
+  for name in alternates http-alternates; do
+    if [ -e "$want/info/$name" ] || [ -L "$want/info/$name" ]; then return 1; fi
+  done
+  return 0
+}
 module_repository_pristine() {
   local g=$1 wt_real=$2 entry name co out ids rc line carry=0 carry_ids=""
   [ "${4:-}" != carry ] || carry=1
@@ -2130,7 +2159,8 @@ module_repository_pristine() {
   [ -f "$g/HEAD" ] && [ -f "$g/config" ] && [ -d "$g/objects" ] \
     || { MODULE_NOTE="it lacks a HEAD, config or object store"; return 1; }
   # 2. hooks/ holds git's own samples only; info/ only an exclude file with no rule of its own;
-  #    branches/ nothing; and the object store borrows from no other.
+  #    branches/ nothing; and the object store borrows from no other, except from the main
+  #    checkout's own repository for the same submodule (borrows_only_from_main_checkout).
   for entry in "$g/hooks"/* "$g/hooks"/.[!.]* "$g/hooks"/..?*; do
     [ -e "$entry" ] || [ -L "$entry" ] || continue
     case "${entry##*/}" in
@@ -2152,11 +2182,13 @@ module_repository_pristine() {
     [ -e "$entry" ] || [ -L "$entry" ] || continue
     MODULE_NOTE="it holds branches/${entry##*/}"; return 1
   done
-  for name in alternates http-alternates; do
-    if [ -e "$g/objects/info/$name" ] || [ -L "$g/objects/info/$name" ]; then
-      MODULE_NOTE="its object store borrows from another (objects/info/$name)"; return 1
-    fi
-  done
+  if [ -e "$g/objects/info/http-alternates" ] || [ -L "$g/objects/info/http-alternates" ]; then
+    MODULE_NOTE="its object store borrows from another (objects/info/http-alternates)"; return 1
+  fi
+  if [ -e "$g/objects/info/alternates" ] || [ -L "$g/objects/info/alternates" ]; then
+    borrows_only_from_main_checkout "$g" "${3:-}" \
+      || { MODULE_NOTE="its object store borrows from another (objects/info/alternates)"; return 1; }
+  fi
   # 3. Its configuration is what a clone and a submodule checkout write, plus an identity.
   #    A filter, a hooks path, a second remote or an include is not.
   local keys='core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|worktree)|extensions\.worktreeconfig|remote\.origin\.(url|fetch)|branch\..*\.(remote|merge)|submodule\..*\.(url|active)|user\.(name|email)'
