@@ -4000,7 +4000,18 @@ if want reliability; then
           elif $rts >= $since then
             $errs[]
             | ($names[.tool_use_id] // "unknown") as $tool
-            | (block_text) as $msg
+            | (block_text) as $raw
+            # An auto-mode denial opens with a fixed ~85-character sentence, so
+            # the 72-character signature head below folded every category into
+            # one row (monorepo#4625). Key a denial by its bracketed Reason, or
+            # by [unexplained] when the classifier gave none. This rewrites the
+            # grouping key only: each errored result is still exactly one row.
+            | ($raw | test("^Permission for this action (was|has been) denied by the Claude Code auto mode classifier")) as $denial
+            | (if $denial
+               then "auto-mode denial ["
+                    + (($raw | capture("Reason: \\[(?<r>[^\\]]+)\\]") | .r) // "unexplained")
+                    + "]"
+               else $raw end) as $msg
             # Strip ALL control characters, not just newline and tab. A NUL
             # reaching the scratch file makes `grep` treat it as binary and
             # print "Binary file . matches" INSTEAD of the rows, collapsing the
@@ -4013,7 +4024,8 @@ if want reliability; then
             # characters and leaves the control bytes, because jq decodes the
             # escapes before Oniguruma sees the class. That would have corrupted
             # every message rather than sanitising it.
-            | "D\t\($tool)\t\($msg | gsub("[[:cntrl:]]+";" ") | .[0:100])"
+            | "D\t\($tool)\t\(if $denial then "denial" else "error" end)\t\($msg | gsub("[[:cntrl:]]+";" ")
+                | if $denial then . else .[0:100] end)"
           else empty end
       ' "$f" 2>/dev/null || printf x >> "$XFREL"
     done | redact > "$RAWTMP" || true
@@ -4052,10 +4064,19 @@ if want reliability; then
     echo "  top recurring error signatures (tool + message head):"
     # redact BEFORE printing: a failed tool result routinely carries the command
     # that failed, and that command can carry a token.
-    awk -F'\t' '{print $1": "substr($2,1,72)}' "$ERRTMP" \
+    # Denial reasons are category names, not variable error-message data:
+    # group by the whole redacted reason, including its digits and hashes.
+    # Bound display only AFTER counting, so a shared prefix cannot merge keys.
+    # Carry the classifier decision separately: ordinary error text may itself
+    # start with the displayed denial label and must retain normal grouping.
+    awk -F'\t' '{print ($2=="denial" ? "D " : "E ") $1": "($2=="denial" ? $3 : substr($3,1,72))}' "$ERRTMP" \
       | redact \
-      | sed -E 's/[0-9a-f]{8,}/<hash>/g; s/[0-9]+/<n>/g' \
-      | sort | uniq -c | sort -rn | head -12 | sed 's/^/    /'
+      | sed -E '/^E / { s/[0-9a-f]{8,}/<hash>/g; s/[0-9]+/<n>/g; }' \
+      | sort | uniq -c \
+      | sed -E 's/^([[:space:]]*[0-9]+) [DE] /\1 /' \
+      | sort -rn | head -12 \
+      | awk '{if (length($0)>200) print substr($0,1,160)" ... "substr($0,length($0)-30); else print}' \
+      | sed 's/^/    /'
     rm -f "$ERRTMP" "$RAWTMP"
     echo
     echo "  NOTE: tool-attributed errors are Claude-schema only (tool_use/tool_result)."
