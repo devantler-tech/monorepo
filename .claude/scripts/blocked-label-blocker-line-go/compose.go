@@ -208,6 +208,9 @@ func composeRecord(c composition, maxAge, verifyMaxAge int64) (line, body string
 		if !oneLine(c.blocker) || !namesAnEvent(c.blocker) {
 			return "", "", errors.New("an outcome --blocker must say on one line, in words, which event the delivered work waits on; a tracked item that must move first is --kind upstream")
 		}
+		if namesReadinessWork(c.blocker) {
+			return "", "", errors.New("an outcome --blocker cannot be review, CI, checks or evaluation: that is the target's own unfinished work, not an event")
+		}
 		if c.asked {
 			return "", "", errors.New("--asked records a maintainer ask and belongs to --kind authority only")
 		}
