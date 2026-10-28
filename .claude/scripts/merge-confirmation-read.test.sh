@@ -208,6 +208,41 @@ bad_lists_in() {
   printf '%s' "${out}"
 }
 
+# Capture each real surface once, in the main shell, before parsing it (#4657).
+# A readability check followed by an unchecked read races deletion/permission changes;
+# skipping either failure lets the remaining counts manufacture a successful audit.
+capture_surface() {
+  if ! cat "$1" >"$2" 2>/dev/null; then
+    printf 'cannot read definition surface: %s\n' "$1" >&2
+    return 1
+  fi
+}
+
+# Exercise the actual read and prove the refusal control detects a neutralized reader.
+assert_surface_read_refusal() {
+  if "$1" "${self_test_dir}/missing-surface.md" "${self_test_dir}/missing-copy.md" \
+      2>"${self_test_dir}/read-error"; then
+    echo 'surface read refusal did not fire' >&2
+    return 1
+  fi
+  grep -qF 'cannot read definition surface:' "${self_test_dir}/read-error" || {
+    echo 'surface read failed for the wrong reason' >&2
+    return 1
+  }
+}
+accept_missing_surface() { :; } # Deliberately broken reader, used only by the ablation.
+printf '%s\n' '--json state,mergedAt' >"${self_test_dir}/read-source.md"
+capture_surface "${self_test_dir}/read-source.md" "${self_test_dir}/read-copy.md" ||
+  fail 'the readable surface control failed'
+cmp -s "${self_test_dir}/read-source.md" "${self_test_dir}/read-copy.md" ||
+  fail 'capturing a readable surface changed its bytes'
+assert_surface_read_refusal capture_surface || fail 'the surface read refusal is not guarded'
+if assert_surface_read_refusal accept_missing_surface 2>"${self_test_dir}/read-ablation"; then
+  fail 'the read-failure control accepted a reader that ignores failures'
+fi
+grep -qF 'surface read refusal did not fire' "${self_test_dir}/read-ablation" ||
+  fail 'the read-failure ablation failed for the wrong reason'
+
 # ── 4a. SELF-TEST THE EXTRACTOR FIRST — otherwise this whole control is vacuous ─────────────────────
 # `scanned` counts readable FILES, not successfully parsed field lists. So if the extraction pattern
 # ever stops matching, every surface yields nothing, no offender is found, and the control prints OK
@@ -406,31 +441,26 @@ scan_surfaces="$(
 )"
 plugin_surfaces="$(printf '%s\n' "${scan_surfaces}" | grep -c "^${plugin_root}/" || true)"
 
-# PREFLIGHT, in the main shell: every JSON surface must actually parse. This cannot live inside
-# `normalise_and_extract`, which runs inside command substitution where `exit` only leaves the subshell.
-# An unparseable surface must fail the run, never be scanned as an empty string.
-while IFS= read -r surface; do
-  case "${surface}" in
-    *.json)
-      [ -r "${surface}" ] || continue
-      jq empty "${surface}" >/dev/null 2>&1 ||
-        fail "JSON surface ${surface#"${repo_root}/"} does not parse — refusing to scan it, since an unparseable surface would silently contribute nothing and hide any escaped field"
-      ;;
-  esac
-done <<EOF
-${scan_surfaces}
-EOF
-
 offenders=""
 scanned=0
 lists_seen=0
 while IFS= read -r surface; do
-  [ -r "${surface}" ] || continue          # a surface may legitimately not exist in every checkout
   scanned=$((scanned + 1))
-  lists_seen=$(( lists_seen + $(normalise_and_extract "${surface}" | grep -c . || true) ))
+  snapshot="${self_test_dir}/surface-${scanned}.md"
+  case "${surface}" in *.json) snapshot="${snapshot%.md}.json" ;; esac
+  capture_surface "${surface}" "${snapshot}" ||
+    fail "cannot read discovered definition ${surface#"${repo_root}/"} — refusing an incomplete scan"
+  # Parsing errors must reach the main shell, not disappear inside a substitution.
+  case "${surface}" in
+    *.json)
+      jq empty "${snapshot}" >/dev/null 2>&1 ||
+        fail "JSON surface ${surface#"${repo_root}/"} does not parse — refusing to scan it, since an unparseable surface would silently contribute nothing and hide any escaped field"
+      ;;
+  esac
+  lists_seen=$(( lists_seen + $(normalise_and_extract "${snapshot}" | grep -c . || true) ))
   while IFS= read -r bad; do
     [ -n "${bad}" ] && offenders="${offenders}  ${surface#"${repo_root}/"}: ${bad}"$'\n'
-  done < <(bad_lists_in "${surface}")
+  done < <(bad_lists_in "${snapshot}")
 done <<EOF
 ${scan_surfaces}
 EOF
