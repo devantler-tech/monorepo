@@ -4008,7 +4008,7 @@ if want reliability; then
             # grouping key only: each errored result is still exactly one row.
             | (if ($raw | test("^Permission for this action (was|has been) denied by the Claude Code auto mode classifier"))
                then "auto-mode denial ["
-                    + (($raw | capture("Reason: \\[(?<r>[^\\]]{1,60})\\]") | .r) // "unexplained")
+                    + (($raw | capture("Reason: \\[(?<r>[^\\]]+)\\]") | .r) // "unexplained")
                     + "]"
                else $raw end) as $msg
             # Strip ALL control characters, not just newline and tab. A NUL
@@ -4023,7 +4023,8 @@ if want reliability; then
             # characters and leaves the control bytes, because jq decodes the
             # escapes before Oniguruma sees the class. That would have corrupted
             # every message rather than sanitising it.
-            | "D\t\($tool)\t\($msg | gsub("[[:cntrl:]]+";" ") | .[0:100])"
+            | "D\t\($tool)\t\($msg | gsub("[[:cntrl:]]+";" ")
+                | if startswith("auto-mode denial [") then . else .[0:100] end)"
           else empty end
       ' "$f" 2>/dev/null || printf x >> "$XFREL"
     done | redact > "$RAWTMP" || true
@@ -4062,10 +4063,15 @@ if want reliability; then
     echo "  top recurring error signatures (tool + message head):"
     # redact BEFORE printing: a failed tool result routinely carries the command
     # that failed, and that command can carry a token.
-    awk -F'\t' '{print $1": "substr($2,1,72)}' "$ERRTMP" \
+    # Denial reasons are category names, not variable error-message data:
+    # group by the whole redacted reason, including its digits and hashes.
+    # Bound display only AFTER counting, so a shared prefix cannot merge keys.
+    awk -F'\t' '{print $1": "($2 ~ /^auto-mode denial \[/ ? $2 : substr($2,1,72))}' "$ERRTMP" \
       | redact \
-      | sed -E 's/[0-9a-f]{8,}/<hash>/g; s/[0-9]+/<n>/g' \
-      | sort | uniq -c | sort -rn | head -12 | sed 's/^/    /'
+      | sed -E '/^[^:]*: auto-mode denial \[/! { s/[0-9a-f]{8,}/<hash>/g; s/[0-9]+/<n>/g; }' \
+      | sort | uniq -c | sort -rn | head -12 \
+      | awk '{if (length($0)>200) print substr($0,1,160)" ... "substr($0,length($0)-30); else print}' \
+      | sed 's/^/    /'
     rm -f "$ERRTMP" "$RAWTMP"
     echo
     echo "  NOTE: tool-attributed errors are Claude-schema only (tool_use/tool_result)."
