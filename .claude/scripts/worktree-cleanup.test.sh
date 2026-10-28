@@ -6132,6 +6132,31 @@ t_salvage_keeps_submodule_work_when_the_main_checkout_repository_borrows_objects
     'mkdir -p "$d/objects/info" && echo "$root/subsrc/.git/objects" > "$d/objects/info/alternates"'
 }
 
+t_salvage_carries_submodule_work_that_borrows_from_the_main_checkout() {
+  # What a submodule checkout in a worktree writes on the host: its object store borrows from
+  # the main checkout's repository for the same submodule, which outlives the worktree (#2831).
+  carries_submodule_work "salvage carries submodule work whose object store borrows only from the main checkout's repository" carryalt \
+    'echo dirty >> "$wt/sub/f" && a=$(git -C "$wt/sub" rev-parse --absolute-git-dir) \
+       && mkdir -p "$a/objects/info" && (cd "$d/objects" && /bin/pwd -P) > "$a/objects/info/alternates"' \
+    '[ "$(git --git-dir="$d" show "$base/worktree:f" | tail -1)" = dirty ]'
+}
+
+t_salvage_keeps_submodule_work_that_borrows_from_elsewhere() {
+  keeps_uncarried "salvage KEEPs submodule work whose object store borrows from another repository" altother \
+    'modules/sub: its object store borrows from another \(objects/info/alternates\)' \
+    'a=$(git -C "$wt/sub" rev-parse --absolute-git-dir) && mkdir -p "$a/objects/info" \
+       && (cd "$root/subsrc/.git/objects" && /bin/pwd -P) > "$a/objects/info/alternates"'
+}
+
+t_salvage_keeps_submodule_work_that_borrows_from_the_main_checkout_and_elsewhere() {
+  # The main checkout's store is one entry of two: the other still holds objects the removal
+  # would not lose but nothing here vouches for, so the whole file is refused.
+  keeps_uncarried "salvage KEEPs submodule work whose object store borrows from the main checkout and another" alttwo \
+    'modules/sub: its object store borrows from another \(objects/info/alternates\)' \
+    'a=$(git -C "$wt/sub" rev-parse --absolute-git-dir) && mkdir -p "$a/objects/info" \
+       && { (cd "$d/objects" && /bin/pwd -P); (cd "$root/subsrc/.git/objects" && /bin/pwd -P); } > "$a/objects/info/alternates"'
+}
+
 t_salvage_keeps_submodule_work_when_the_main_checkout_repository_is_read_only() {
   local name="salvage KEEPs submodule work when the main checkout's repository cannot be written"
   if [ "$(id -u)" = 0 ]; then ok "$name (skipped: root ignores permissions)"; return; fi
@@ -6936,6 +6961,9 @@ t_salvage_keeps_submodule_work_when_the_main_checkout_names_another_origin
 t_salvage_keeps_submodule_work_when_the_main_checkout_origin_is_local
 t_salvage_keeps_submodule_work_when_the_main_checkout_repository_is_a_symlink
 t_salvage_keeps_submodule_work_when_the_main_checkout_repository_borrows_objects
+t_salvage_carries_submodule_work_that_borrows_from_the_main_checkout
+t_salvage_keeps_submodule_work_that_borrows_from_elsewhere
+t_salvage_keeps_submodule_work_that_borrows_from_the_main_checkout_and_elsewhere
 t_salvage_keeps_submodule_work_when_the_main_checkout_repository_is_read_only
 t_salvage_keeps_submodule_work_when_the_copy_fails
 t_salvage_keeps_submodule_work_when_the_copy_does_not_verify
