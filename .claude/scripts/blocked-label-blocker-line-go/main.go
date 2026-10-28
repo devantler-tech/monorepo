@@ -311,15 +311,20 @@ func visibleRecord(body string) string {
 var (
 	eventReferenceRE = regexp.MustCompile(`(?i)(?:[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]*#[0-9]+|gh-[0-9]+|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+`)
 	eventWordRE      = regexp.MustCompile(`\p{L}{3,}`)
-	readinessWorkRE  = regexp.MustCompile(`(?i)\b(?:reviews?|reviewed|reviewing|ci|checks?|evaluations?|evaluated|readiness|pentad)\b`)
+	readinessWorkRE  = regexp.MustCompile(`(?i)\b(?:reviews?|reviewed|reviewing|ci|checks?|evaluat(?:e|es|ed|ing|ion|ions)|readiness|pentad)\b`)
 )
 
 // namesReadinessWork reports whether an outcome's event is the target's own
 // review, CI, checks or evaluation. That work an agent can still do, so it is
 // never an outcome: parked on it, a pull request is skipped by every run while
-// nothing it waits for is outside the agents' hands (#3879).
+// nothing it waits for is outside the agents' hands (#3879). Links and tracked
+// items are taken out first, as namesAnEvent does, so a reference such as
+// org/ci#7 is not read as CI; underscores separate words, so a check name
+// such as required_status_checks is.
 func namesReadinessWork(text string) bool {
-	return readinessWorkRE.MatchString(html.UnescapeString(text))
+	text = urlRE.ReplaceAllString(html.UnescapeString(text), " ")
+	text = strings.ReplaceAll(eventReferenceRE.ReplaceAllString(text, " "), "_", " ")
+	return readinessWorkRE.MatchString(text)
 }
 
 // namesAnEvent reports whether text still says something in words once every
