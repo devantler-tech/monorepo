@@ -4069,7 +4069,7 @@ if want reliability; then
     # Bound display only AFTER counting, so a shared prefix cannot merge keys.
     # Carry the classifier decision separately: ordinary error text may itself
     # start with the displayed denial label and must retain normal grouping.
-    awk -F'\t' '{print ($2=="denial" ? "D " : "E ") $1": "($2=="denial" ? $3 : substr($3,1,72))}' "$ERRTMP" \
+    awk -F'\t' '$2!="denial" {print "E " $1": " substr($3,1,72)}' "$ERRTMP" \
       | redact \
       | sed -E '/^E / { s/[0-9a-f]{8,}/<hash>/g; s/[0-9]+/<n>/g; }' \
       | sort | uniq -c \
@@ -4077,6 +4077,20 @@ if want reliability; then
       | sort -rn | head -12 \
       | awk '{if (length($0)>200) print substr($0,1,160)" ... "substr($0,length($0)-30); else print}' \
       | sed 's/^/    /'
+    # Denial categories get their own uncapped block (monorepo#4629). They are
+    # rare — usually one or two a day each — so in the capped table above they
+    # ranked below busier ordinary errors and were cut off, leaving most
+    # categories invisible even though they were grouped correctly.
+    DENIAL_TOTAL=$(awk -F'\t' '$2=="denial"' "$ERRTMP" | wc -l | tr -d ' ')
+    if [ "$DENIAL_TOTAL" -gt 0 ]; then
+      echo
+      echo "  auto-mode denials by reason (every category, ${DENIAL_TOTAL} total):"
+      awk -F'\t' '$2=="denial" {print $1": "$3}' "$ERRTMP" \
+        | redact \
+        | sort | uniq -c | sort -rn \
+        | awk '{if (length($0)>200) print substr($0,1,160)" ... "substr($0,length($0)-30); else print}' \
+        | sed 's/^/    /'
+    fi
     rm -f "$ERRTMP" "$RAWTMP"
     echo
     echo "  NOTE: tool-attributed errors are Claude-schema only (tool_use/tool_result)."

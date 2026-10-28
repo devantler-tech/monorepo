@@ -1116,6 +1116,36 @@ else
   bad "bounds long denial display" "$OUT"
 fi
 
+# monorepo#4629: denial categories are rare, so the 12-row signature limit cut
+# them off whenever 12 busier ordinary signatures existed. Every category must
+# still be printed, in its own block, and the total must not change.
+{
+  for sig in alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike; do
+    for copy in 1 2; do
+      jq -cn --arg id "$sig$copy" \
+        '{type:"assistant",timestamp:"2026-10-27T10:00:00Z",message:{content:[{type:"tool_use",id:$id,name:"Bash",input:{}}]}}'
+      jq -cn --arg id "$sig$copy" --arg msg "ordinary failure $sig" \
+        '{type:"user",timestamp:"2026-10-27T10:00:01Z",message:{content:[{type:"tool_result",tool_use_id:$id,is_error:true,content:$msg}]}}'
+    done
+  done
+  for reason in '[Auto-Mode Bypass]. If you have other tasks' \
+                'The server-side auto mode classifier judged this action dangerous (it gave no explanation).'; do
+    jq -cn --arg id "deny-$reason" \
+      '{type:"assistant",timestamp:"2026-10-27T10:00:00Z",message:{content:[{type:"tool_use",id:$id,name:"Bash",input:{}}]}}'
+    jq -cn --arg id "deny-$reason" --arg msg "${deny_pre}${reason}" \
+      '{type:"user",timestamp:"2026-10-27T10:00:01Z",message:{content:[{type:"tool_result",tool_use_id:$id,is_error:true,content:$msg}]}}'
+  done
+} > "$FIX/denials/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/denials" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section reliability 2>&1)
+check "counts denials beside busier signatures" "$OUT" "tool errors in window: 28"
+check "names the denial block with its total" "$OUT" "auto-mode denials by reason (every category, 2 total):"
+check "shows a rare denial category past the signature limit" "$OUT" "1 Bash: auto-mode denial [Auto-Mode Bypass]"
+check "shows a rare unexplained denial past the signature limit" "$OUT" "1 Bash: auto-mode denial [unexplained]"
+sig_rows=$(awk '/top recurring error signatures/{f=1;next} f&&/^$/{exit} f' <<<"$OUT" | grep -c 'ordinary failure' || true)
+[ "$sig_rows" -eq 12 ] && ok "keeps the ordinary signature limit at 12" \
+  || bad "keeps the ordinary signature limit at 12 (got $sig_rows)" "$OUT"
+
 # ── 3. safety: real denials matched, prose-faked ones NOT ─────────────────────
 echo
 echo "safety"
