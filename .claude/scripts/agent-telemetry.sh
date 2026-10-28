@@ -2160,15 +2160,23 @@ cred_mask_excluded_payloads() {
             | if $in_raw == $in_doc and $in_doc == $in_ex
               then reduce $spellings[] as $s (.; split($s) | join("\" \""))
               else . end);
+      # An excluded value requires one of these exact parsed type values.
+      # JSON unicode escapes can respell any type/key, so all such records keep
+      # the complete parser/walk. jq -R still normalizes every raw line, including
+      # invalid UTF-8 and missing final newlines; a file-wide cat shortcut would not.
+      def excluded_payload_candidate:
+        contains("input_image") or contains("thinking") or contains("\\u");
       . as $raw
-      | (try ($raw | fromjson) catch null) as $doc
+      | if excluded_payload_candidate then
+        (try ($raw | fromjson) catch null) as $doc
       | (if $doc != null then $raw | blank_unambiguous($doc) else $raw end) as $line
       | (if $doc != null
              and ($raw | test($marker))
              and ([$raw | scan($marker)] | length)
                  == ([$doc | .. | objects | select(.type == "input_image")] | length)
              and ($raw | test($respell) | not)
-          then $ok else $no end) + $line' 2>/dev/null \
+          then $ok else $no end) + $line
+        else $no + $raw end' 2>/dev/null \
   | sed -E \
     -e "/^${CRED_MASK_ELIGIBLE}/{" \
     -e 's#('"$CRED_MASK_MARKER_RE"'[^{}]*"image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+=;-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}(")#\1 \4#g' \

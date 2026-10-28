@@ -44,6 +44,117 @@ export PORTFOLIO_PATHS="$FIX"
 export CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant
 export CODEX_ENGINEER_ENTRIES=daily-ai-engineer
 
+# monorepo#2740: ordinary raw records must avoid the expensive structural walk.
+# Instrument only the real parse operation on synthetic data; output equivalence
+# and encoded-kind controls protect the mask's existing visibility boundary.
+echo
+echo 'excluded-payload structural parse budget (#2740)'
+mask_case="$FIX/mask-parse-budget"
+mkdir -p "$mask_case/bin"
+mask_source=$(awk '/^CRED_MASK_ELIGIBLE=/{inside=1} inside && /^# Portable mtime listing\./{exit} inside{print}' "$TARGET")
+if [[ "$mask_source" != *'cred_mask_excluded_payloads() {'* ]]; then
+  bad 'mask budget exercises the shipped implementation' 'mask source boundary missing'
+else
+  printf '%s\n' "$mask_source" > "$mask_case/source.sh"
+  IFS= read -r mask_parse <<'MASK_PARSE'
+(try ($raw | fromjson) catch null)
+MASK_PARSE
+  IFS= read -r mask_traced <<'MASK_TRACED'
+(try ($raw | debug | fromjson) catch null)
+MASK_TRACED
+  mask_instrumented="${mask_source/$mask_parse/$mask_traced}"
+  if [[ "$mask_instrumented" == "$mask_source" ]]; then
+    bad 'mask budget observes actual structural parses' 'parse instrumentation changed nothing'
+  else
+    printf '%s\n' "$mask_instrumented" > "$mask_case/traced.sh"
+    mask_real_jq=$(command -v jq)
+    cat > "$mask_case/bin/jq" <<'MASK_JQ'
+#!/usr/bin/env bash
+exec "$MASK_REAL_JQ" "$@" 2>> "$MASK_PARSE_TRACE"
+MASK_JQ
+    chmod +x "$mask_case/bin/jq"
+    cat > "$mask_case/run.sh" <<'MASK_RUNNER'
+#!/usr/bin/env bash
+set -euo pipefail
+. "$1"
+cred_mask_excluded_payloads < "$2"
+MASK_RUNNER
+    cat > "$mask_case/ordinary.jsonl" <<'MASK_PLAIN'
+{"type":"message","value":"ordinary tool output"}
+{"type":"user","value":"api_key=fictional-credential"}
+{"type":"message","value":"Danish text æøå and emoji 🌊"}
+not-json remains visible
+MASK_PLAIN
+    # jq -R normalizes invalid UTF-8; bypassing the parser with cat is unsafe.
+    printf 'invalid byte: \377\n' >> "$mask_case/ordinary.jsonl"
+    cat > "$mask_case/ordinary.expected" <<'MASK_EXPECTED'
+{"type":"message","value":"ordinary tool output"}
+{"type":"user","value":"api_key=fictional-credential"}
+{"type":"message","value":"Danish text æøå and emoji 🌊"}
+not-json remains visible
+invalid byte: �
+MASK_EXPECTED
+    printf 'no final newline' >> "$mask_case/ordinary.jsonl"
+    printf 'no final newline\n' >> "$mask_case/ordinary.expected"
+    : > "$mask_case/parses"
+    env MASK_REAL_JQ="$mask_real_jq" MASK_PARSE_TRACE="$mask_case/parses" \
+      PATH="$mask_case/bin:$PATH" bash "$mask_case/run.sh" \
+      "$mask_case/traced.sh" "$mask_case/ordinary.jsonl" > "$mask_case/ordinary.actual"
+    if cmp -s "$mask_case/ordinary.expected" "$mask_case/ordinary.actual" && [[ ! -s "$mask_case/parses" ]]; then
+      ok 'ordinary raw records retain every byte/normalized character without structural parsing'
+    else
+      bad 'ordinary raw records retain every byte/normalized character without structural parsing' \
+        "output comparison or parse budget failed (observed $(wc -l < "$mask_case/parses" | tr -d ' ') parses)"
+    fi
+    cat > "$mask_case/payloads.jsonl" <<'MASK_PAYLOADS'
+{"type":"input_image","image_url":"data:image/png;base64,QUJDRA=="}
+{"type":"input_\u0069mage","image_url":"data:image/png;base64,QUJDRA=="}
+{"\u0074ype":"input_image","image_url":"data:image/png;base64,QUJDRA=="}
+{"type":"thinking","signature":"QUJDRA==","thinking":"ordinary visible text"}
+{"type":"th\u0069nking","signature":"QUJDRA=="}
+{"type":"message","signature":"QUJDRA=="}
+{"type":"thinking","signature":"not base64!"}
+{"type":"input_image","image_url":"data:image/png;base64,QUJDRA==","invalid":"\q"}
+MASK_PAYLOADS
+    cat > "$mask_case/payloads.expected" <<'MASK_PAYLOAD_EXPECTED'
+{"type":"input_image","image_url":" "}
+{"type":"input_\u0069mage","image_url":" "}
+{"\u0074ype":"input_image","image_url":" "}
+{"type":"thinking","signature":" ","thinking":"ordinary visible text"}
+{"type":"th\u0069nking","signature":" "}
+{"type":"message","signature":"QUJDRA=="}
+{"type":"thinking","signature":"not base64!"}
+{"type":"input_image","image_url":"data:image/png;base64,QUJDRA==","invalid":"\q"}
+MASK_PAYLOAD_EXPECTED
+    env MASK_REAL_JQ="$mask_real_jq" MASK_PARSE_TRACE="$mask_case/parses" \
+      PATH="$mask_case/bin:$PATH" bash "$mask_case/run.sh" \
+      "$mask_case/traced.sh" "$mask_case/payloads.jsonl" > "$mask_case/payloads.actual"
+    if cmp -s "$mask_case/payloads.expected" "$mask_case/payloads.actual"; then
+      ok 'image, signature, encoded kinds and malformed records retain their exact visibility'
+    else
+      bad 'image, signature, encoded kinds and malformed records retain their exact visibility' 'mask output changed'
+    fi
+    # Neutralize the fast path without removing any code. The budget control
+    # must observe structural work again, proving it can detect the regression.
+    if grep -Fq 'def excluded_payload_candidate:' "$mask_case/traced.sh"; then
+      sed 's/if excluded_payload_candidate then/if true then/' "$mask_case/traced.sh" > "$mask_case/ablated.sh"
+      : > "$mask_case/parses"
+      env MASK_REAL_JQ="$mask_real_jq" MASK_PARSE_TRACE="$mask_case/parses" \
+        PATH="$mask_case/bin:$PATH" bash "$mask_case/run.sh" \
+        "$mask_case/ablated.sh" "$mask_case/ordinary.jsonl" > "$mask_case/ablated.actual"
+      if ! cmp -s "$mask_case/traced.sh" "$mask_case/ablated.sh" && [[ -s "$mask_case/parses" ]] \
+        && cmp -s "$mask_case/ordinary.expected" "$mask_case/ablated.actual"; then
+        ok 'neutralizing the fast path exposes unnecessary parses without changing visible output'
+      else
+        bad 'neutralizing the fast path exposes unnecessary parses without changing visible output' 'vacuous or incorrect budget ablation'
+      fi
+    else
+      bad 'neutralizing the fast path exposes unnecessary parses without changing visible output' 'fast-path definition missing'
+    fi
+  fi
+fi
+# End monorepo#2740 parse-budget fixtures.
+
 # #3830: repeated tool output must not start a JSON parser for every phrase-bearing
 # record. Exercise the real report, including all four runtime-context envelopes,
 # escaped JSON keys, malformed input and mixed compacted content. The literal
