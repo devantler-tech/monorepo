@@ -933,6 +933,7 @@ jobs:
               - '.claude/**/*.md'
               - '.claude/**/*.json'
               - '.claude/scripts/merge-confirmation-read.test.sh'
+              - '.claude/scripts/merge-confirmation-read-go/**'
               # the consumed plugin definitions: a gitlink bump changes what the agent reads
               - 'libraries/agent-plugins'
               - '.github/workflows/ci.yaml'
@@ -2902,6 +2903,11 @@ jobs:
         run: |
           git -c 'url.https://github.com/.insteadOf=git@github.com:' \
             submodule update --init libraries/agent-plugins
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/merge-confirmation-read-go/go.mod
+          cache: false
       - name: Verify the merge-confirmation read contract
         run: bash .claude/scripts/merge-confirmation-read.test.sh
 
