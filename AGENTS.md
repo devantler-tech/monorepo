@@ -35,9 +35,10 @@ Populate a submodule with `.claude/scripts/submodule-init.sh <path>` — never a
 | .NET template | `devantler-tech/dotnet-template` | `templates/dotnet-template` | `AGENTS.md` |
 | Platform-tenant template | `devantler-tech/platform-tenant-template` | `templates/platform-tenant-template` | `AGENTS.md` |
 | Platform template | `devantler-tech/platform-template` | `templates/platform-template` | `AGENTS.md` |
-| Homebrew tap | `devantler-tech/homebrew-tap` (repo renamed from `homebrew-formulas`) | `homebrew-tap` | `AGENTS.md` |
+| Homebrew tap | `devantler-tech/homebrew-tap` | `homebrew-tap` | `AGENTS.md` |
 | Agent skills (shared lib) | `devantler-tech/agent-skills` | `libraries/agent-skills` | `AGENTS.md` |
-| Agent plugins (shared lib) | `devantler-tech/agent-plugins` (renamed from `copilot-plugins`) | `libraries/agent-plugins` | `AGENTS.md` |
+| Agent plugins (shared lib) | `devantler-tech/agent-plugins` | `libraries/agent-plugins` | `AGENTS.md` |
+| Skill actions | `devantler-tech/setup-agent-skills-action`, `update-agent-skills-action`, `guard-installed-skill-edits-action` | — | `AGENTS.md`, [product card](.claude/skills/products/agent-skills/SKILL.md) |
 | UniFi Crossplane provider (shared lib) | `devantler-tech/provider-upjet-unifi` | `libraries/provider-upjet-unifi` | `AGENTS.md` |
 | Kyverno policy library (shared lib) | `devantler-tech/kyverno-policies` | `libraries/kyverno-policies` | `AGENTS.md` |
 | World at Ruin (game) | `devantler-tech/world-at-ruin` | `applications/world-at-ruin` | `AGENTS.md` |
@@ -61,9 +62,7 @@ cards carry the settled decisions. Details:
 The buildable catalogue for **conversational (vibe-coding) sessions**: the `needs-stack-mapping`
 and `allowed-stack-guardrail` skills (bundled by `devantler-tech/agent-plugins`' vibe-coding
 plugin) read this section to decide what may be built here and where out-of-stack wishes are
-filed. Each row names a building block in plain language, what it is **good for** (the matching
-surface, in the user's vocabulary), and the repo that owns suggested issues for it. Needs matching
-no row are filed on the **default intake repo** below.
+filed. Needs matching no row are filed on the **default intake repo** below.
 
 | Building block | Good for | Owning repo |
 |---|---|---|
@@ -95,8 +94,7 @@ no row are filed on the **default intake repo** below.
 
 The scheduled **Agentic Engineer** is the primary engineer for every product above: it **operates**,
 **advances**, **hardens** and **stewards the spend** of each one. The **Agent Improver** improves the
-engineer from the outside. (Once *Daily AI …*; `daily-maintainer` slug and task
-ids unchanged.)
+engineer from the outside. Slug and task ids: `daily-maintainer`.
 
 The deployed definition is assembled, never copied: the reviewed
 [`agentic-engineering`](libraries/agent-plugins/plugins/agentic-engineering/agents/agentic-engineer.agent.md)

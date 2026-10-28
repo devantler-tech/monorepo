@@ -20,6 +20,10 @@ to it:
 - `devantler-tech/agent-plugins` — the tool-neutral marketplace at submodule path
   `libraries/agent-plugins`.
   Task menu: <https://github.com/devantler-tech/agent-plugins/blob/main/AGENTS.md>.
+- `devantler-tech/setup-agent-skills-action`, `devantler-tech/update-agent-skills-action` and
+  `devantler-tech/guard-installed-skill-edits-action` — the GitHub Actions that install, update and
+  guard a repository's agent skills. They are not submodules, so work on them through the GitHub API
+  or a fresh clone; each repository's own `AGENTS.md` carries its task menu.
   This monorepo consumes `agentic-engineering@devantler-plugins` via
   [`.claude/settings.json`](../../../settings.json) (see monorepo#2363). Keep plugins
   additive & backward-compatible; generic role improvements land here so every consumer inherits them.
