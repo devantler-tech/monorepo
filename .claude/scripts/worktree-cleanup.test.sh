@@ -5055,6 +5055,50 @@ t_salvage_keeps_a_submodule_replace_ref() {
   rm -rf "$root"
 }
 
+t_salvage_admits_a_submodule_reaped_pin() {
+  # worktree-cleanup-all.sh hands refs/reaped/<sha> into a nested submodule repository
+  # before a removal (#2831). A pin naming exactly its own commit is the sweep's own
+  # recovery ref, not someone's work: it must not keep the worktree by its name alone.
+  local name="salvage admits a submodule holding refs/reaped/<sha> that names <sha>"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subpin || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subpin" h
+  h=$(git -C "$wt/sub" rev-parse HEAD)
+  git -C "$wt/sub" update-ref "refs/reaped/$h" "$h" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  age_tree "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q '^SALVAGE .*subpin ' <<<"$out" && ! grep -q 'it holds the ref refs/reaped/' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_submodule_reaped_ref_naming_another_commit() {
+  # Negative control: a refs/reaped name whose id is not the commit it points at is not a
+  # pin this sweep wrote, so the namespace rule still keeps the worktree.
+  local name="salvage KEEPs a submodule whose refs/reaped/<sha> names a different commit"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subpinx || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subpinx" h other
+  h=$(git -C "$wt/sub" rev-parse HEAD)
+  other=$(git -C "$wt/sub" commit-tree 'HEAD^{tree}' -p HEAD -m other) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  git -C "$wt/sub" update-ref "refs/reaped/$other" "$h" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  age_tree "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -Eq "KEEP .*subpinx .*it holds the ref refs/reaped/$other" <<<"$out" && ! grep -q '^SALVAGE .*subpinx ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_salvage_keeps_a_whitelisted_admin_name_of_the_wrong_type() {
   local name="salvage KEEPs a worktree whose admin modules is a file, not a directory"
   local root; root=$(make_repo)
@@ -6824,6 +6868,8 @@ t_salvage_keeps_resolve_undo_entries_in_a_submodule
 t_salvage_preserves_an_uppercase_fetch_head_commit
 t_salvage_handles_a_very_long_basename
 t_salvage_keeps_a_submodule_replace_ref
+t_salvage_admits_a_submodule_reaped_pin
+t_salvage_keeps_a_submodule_reaped_ref_naming_another_commit
 t_salvage_keeps_a_whitelisted_admin_name_of_the_wrong_type
 t_salvage_keeps_a_tag_a_symlinked_submodule_reflog_names
 t_salvage_keeps_a_staged_blob_in_a_checkout_less_submodule_repository
