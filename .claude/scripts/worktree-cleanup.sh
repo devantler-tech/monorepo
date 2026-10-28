@@ -2222,8 +2222,13 @@ module_repository_pristine() {
   fi
   SALVAGE_NOTE=$saved_note
   # 5. Its refs are branches, remote-tracking refs and tags, each a plain file or packed;
-  #    a stash, a replace ref, notes or a bisect ref is none of those. Every reflog is a
-  #    plain file too: git reads through a symlinked one, and the walk below would not.
+  #    a stash, a replace ref, notes or a bisect ref is none of those. The one other name
+  #    allowed is the recovery pin this sweep writes before a removal: refs/reaped/<id>,
+  #    naming exactly the commit <id> (worktree-cleanup-all.sh hands those into a nested
+  #    submodule's repository, #2831). Its commit is checked in 8 like a branch tip, held by
+  #    the remote or carried, and its name is kept with the carried repository files. A pin
+  #    naming anything else keeps the worktree. Every reflog is a plain file too: git reads
+  #    through a symlinked one, and the walk below would not.
   out=""
   for name in logs refs; do
     [ -d "$g/$name" ] || continue
@@ -2241,9 +2246,14 @@ module_repository_pristine() {
     out=$(grep -Ev '^(#.*|\^[0-9a-f]{40,64}|[0-9a-f]{40,64} refs/[^ ]+)$' "$g/packed-refs" | sed -n '1p') || true
     if [ -n "$out" ]; then MODULE_NOTE="its packed-refs holds a malformed record"; return 1; fi
   fi
-  out=$(module_git "$g" for-each-ref --format='%(refname)' 2>/dev/null) \
+  out=$(module_git "$g" for-each-ref --format='%(objectname) %(objecttype) %(refname)' 2>/dev/null) \
     || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its refs cannot be read"; return 1; }
-  out=$(grep -Ev '^refs/(heads|remotes|tags)/' <<< "$out" | grep -v '^$' | head -1) || true
+  out=$(awk 'NF == 0 { next }
+             NF != 3 { print "(unreadable)"; exit }
+             $3 ~ /^refs\/(heads|remotes|tags)\// { next }
+             $3 == "refs/reaped/" $1 && $2 == "commit" { next }
+             { print $3; exit }' <<< "$out") \
+    || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its refs cannot be read"; return 1; }
   if [ -n "$out" ]; then MODULE_NOTE="it holds the ref $out"; return 1; fi
   # A tag ref may name a tag object, which is compared with the remote's. HEAD and every
   # other ref must name a commit: the walk in 8 peels a tag object to its commit, so a tag
