@@ -1468,8 +1468,17 @@ function mask_line(s) {
   # to redact and nothing to preserve — return it whole. Masking it to PH would
   # destroy the very marker the undated count is derived from.
   if (s == "U") return s
-  if (match(s, TAG_RE)) return "D" TAB PH TAB PH
+  if (match(s, TAG_RE)) return masked_tag(s)
   return PH
+}
+# A reliability row is `D<TAB>tool<TAB>kind<TAB>message`, where kind is this
+# script own `denial` or `error` label, not transcript text. Keep it when the
+# row is masked, or a masked denial is counted as an ordinary error and drops
+# out of the denial block (monorepo#4629). Any other row keeps the old shape.
+function masked_tag(s,    rest) {
+  rest = substr(s, RLENGTH + 1)
+  if (match(rest, "^(denial|error)" TAB)) return "D" TAB PH TAB substr(rest, 1, RLENGTH - 1) TAB PH
+  return "D" TAB PH TAB PH
 }
 # ⚠️ ACCEPTED MEMORY BOUND. This buffers every emitted line to EOF — the same
 # trade the private-key spans force, since a block cannot be classified as
@@ -1704,7 +1713,7 @@ END {
     # (Same class as the bounded-search defect above: when a guard is added,
     # check every OTHER path that walks the same structure — which is also why
     # the tool field is masked here exactly as mask_line() now masks it.)
-    if (match(s, TAG_RE)) L[close_at] = "D" TAB PH TAB PH tail
+    if (match(s, TAG_RE)) L[close_at] = masked_tag(s) tail
     else                  L[close_at] = PH tail
   }
   for (i = 1; i <= n; i++) print L[i]
@@ -3999,7 +4008,9 @@ if want reliability; then
         | if ($rts | usable_ts | not) then ($errs[] | "U")
           elif $rts >= $since then
             $errs[]
-            | ($names[.tool_use_id] // "unknown") as $tool
+            # A tab inside a tool name would shift the kind field of this
+            # tab-separated row and hide a denial (monorepo#4629).
+            | (($names[.tool_use_id] // "unknown") | scalar_text | gsub("[[:cntrl:]]+";" ")) as $tool
             | (block_text) as $raw
             # An auto-mode denial opens with a fixed ~85-character sentence, so
             # the 72-character signature head below folded every category into
@@ -4069,7 +4080,7 @@ if want reliability; then
     # Bound display only AFTER counting, so a shared prefix cannot merge keys.
     # Carry the classifier decision separately: ordinary error text may itself
     # start with the displayed denial label and must retain normal grouping.
-    awk -F'\t' '{print ($2=="denial" ? "D " : "E ") $1": "($2=="denial" ? $3 : substr($3,1,72))}' "$ERRTMP" \
+    awk -F'\t' '$2!="denial" {print "E " $1": " substr($3,1,72)}' "$ERRTMP" \
       | redact \
       | sed -E '/^E / { s/[0-9a-f]{8,}/<hash>/g; s/[0-9]+/<n>/g; }' \
       | sort | uniq -c \
@@ -4077,6 +4088,29 @@ if want reliability; then
       | sort -rn | head -12 \
       | awk '{if (length($0)>200) print substr($0,1,160)" ... "substr($0,length($0)-30); else print}' \
       | sed 's/^/    /'
+    # Denial categories get their own uncapped block (monorepo#4629). They are
+    # rare — usually one or two a day each — so in the capped table above they
+    # ranked below busier ordinary errors and were cut off, leaving most
+    # categories invisible even though they were grouped correctly.
+    # A failed read must not print as "no denials": either read failing, or
+    # the listed rows not adding up to the total, is UNKNOWN (exit 2).
+    DENIAL_ROWS=''
+    if DENIAL_TOTAL=$(awk -F'\t' '$2=="denial" {n++} END {print n+0}' "$ERRTMP") \
+      && DENIAL_ROWS=$(awk -F'\t' '$2=="denial" {print $1": "$3}' "$ERRTMP" \
+           | redact | sort | uniq -c | sort -rn) \
+      && [ "$(printf '%s\n' "$DENIAL_ROWS" | awk '{n+=$1} END {print n+0}')" = "$DENIAL_TOTAL" ]; then
+      if [ "$DENIAL_TOTAL" -gt 0 ]; then
+        echo
+        echo "  auto-mode denials by reason (every category, ${DENIAL_TOTAL} total):"
+        printf '%s\n' "$DENIAL_ROWS" \
+          | awk '{if (length($0)>200) print substr($0,1,160)" ... "substr($0,length($0)-30); else print}' \
+          | sed 's/^/    /'
+      fi
+    else
+      echo
+      echo "  auto-mode denials by reason: UNKNOWN — the error rows could not be read or did not add up"
+      main_rc=2
+    fi
     rm -f "$ERRTMP" "$RAWTMP"
     echo
     echo "  NOTE: tool-attributed errors are Claude-schema only (tool_use/tool_result)."
