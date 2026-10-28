@@ -203,6 +203,20 @@ extract_atx_headings() {
   ' "$1"
 }
 
+# Name why a forge read failed without echoing the raw response (#4055). A spent request budget or a
+# failed connection is not an access problem, and reporting it as one sends the reader after the
+# wrong cause. Every class still fails closed; only the explanation differs.
+lookup_cause() {
+  local error_file="$1"
+  if grep -Eqi '(rate limit|HTTP 429)' "${error_file}"; then
+    echo 'request-budget: the GitHub request budget is exhausted; retry after it resets'
+  elif grep -Eq '(HTTP (401|403|404)|Not Found)' "${error_file}"; then
+    echo 'access: GitHub refused access or did not find it'
+  else
+    echo 'transport: no usable answer from GitHub (connection or server error)'
+  fi
+}
+
 fetch_raw() {
   local source_repo="$1"
   local source_path="$2"
@@ -221,7 +235,7 @@ fetch_raw() {
   if grep -Eq '(HTTP 404|Not Found)' "${error_file}"; then
     return 1
   fi
-  fail "template lookup failed for ${source_repo}/${source_path}"
+  fail "template lookup failed for ${source_repo}/${source_path} — $(lookup_cause "${error_file}")"
 }
 
 discovered_path=''
@@ -242,7 +256,7 @@ find_template_path() {
     if grep -Eq '(HTTP 404|Not Found)' "${error_file}"; then
       return 1
     fi
-    fail "template directory lookup failed for ${source_repo}/${source_directory}"
+    fail "template directory lookup failed for ${source_repo}/${source_directory} — $(lookup_cause "${error_file}")"
   fi
 
   awk 'tolower($0) ~ /^pull_request_template[.](md|txt)$/ { print }' \
@@ -266,7 +280,10 @@ resolve_template() {
 
   if ! canonical_repo="$(gh api "repos/${target_repo}" --jq '.full_name' \
     2>"${error_file}")"; then
-    fail "target repository is not accessible: ${target_repo}"
+    case "$(lookup_cause "${error_file}")" in
+      access:*) fail "target repository is not accessible: ${target_repo}" ;;
+      *) fail "target repository lookup failed for ${target_repo} — $(lookup_cause "${error_file}")" ;;
+    esac
   fi
   case "${canonical_repo}" in
     */*) ;;

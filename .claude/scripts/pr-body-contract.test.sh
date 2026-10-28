@@ -224,6 +224,14 @@ if [[ "$*" == *'repos/devantler-tech/platform --jq .full_name'* ]]; then
   if [ "${GH_MODE:-}" = 'missing-repo' ]; then
     not_found
   fi
+  if [ "${GH_MODE:-}" = 'ratelimit-repo' ]; then
+    echo 'gh: API rate limit exceeded for user ID 1. (HTTP 403)' >&2
+    exit 1
+  fi
+  if [ "${GH_MODE:-}" = 'transport-repo' ]; then
+    echo 'error connecting to api.github.com' >&2
+    exit 1
+  fi
   echo 'devantler-tech/platform'
   exit 0
 fi
@@ -296,6 +304,15 @@ case "${GH_MODE:-}" in
         ;;
       *'repos/devantler-tech/platform/contents/.github --jq'*)
         echo 'PULL_REQUEST_TEMPLATE.md'
+        ;;
+      *) not_found ;;
+    esac
+    ;;
+  ratelimit-dir)
+    case "$*" in
+      *'repos/devantler-tech/platform/contents/.github --jq'*)
+        echo 'gh: You have exceeded a secondary rate limit (HTTP 403)' >&2
+        exit 1
         ;;
       *) not_found ;;
     esac
@@ -5324,6 +5341,28 @@ expect_fail "template lookup authorization failure" \
   "template directory lookup failed for devantler-tech/platform/.github" env \
   PATH="${fixture_root}/bin:${PATH}" GH_MODE=authfail GH_TEMPLATE_FIXTURE="${fixture_root}/template.md" \
   "${subject}" seed --repo devantler-tech/platform --output "${fixture_root}/authfail.md"
+
+# A spent request budget or a failed connection is named as such, never as an access problem (#4055).
+expect_fail "repository lookup under an exhausted request budget" \
+  "target repository lookup failed for devantler-tech/platform — request-budget:" env \
+  PATH="${fixture_root}/bin:${PATH}" GH_MODE=ratelimit-repo GH_TEMPLATE_FIXTURE="${fixture_root}/template.md" \
+  "${subject}" seed --repo devantler-tech/platform --output "${fixture_root}/ratelimit-repo.md"
+! grep -Fq 'not accessible' "${fixture_root}/stderr" ||
+  fail "an exhausted request budget was reported as an inaccessible repository"
+expect_fail "repository lookup with no answer from GitHub" \
+  "target repository lookup failed for devantler-tech/platform — transport:" env \
+  PATH="${fixture_root}/bin:${PATH}" GH_MODE=transport-repo GH_TEMPLATE_FIXTURE="${fixture_root}/template.md" \
+  "${subject}" seed --repo devantler-tech/platform --output "${fixture_root}/transport-repo.md"
+! grep -Fq 'not accessible' "${fixture_root}/stderr" ||
+  fail "a failed connection was reported as an inaccessible repository"
+expect_fail "template directory lookup under a secondary rate limit" \
+  "template directory lookup failed for devantler-tech/platform/.github — request-budget:" env \
+  PATH="${fixture_root}/bin:${PATH}" GH_MODE=ratelimit-dir GH_TEMPLATE_FIXTURE="${fixture_root}/template.md" \
+  "${subject}" seed --repo devantler-tech/platform --output "${fixture_root}/ratelimit-dir.md"
+expect_fail "template lookup authorization failure names access" \
+  "template directory lookup failed for devantler-tech/platform/.github — access:" env \
+  PATH="${fixture_root}/bin:${PATH}" GH_MODE=authfail GH_TEMPLATE_FIXTURE="${fixture_root}/template.md" \
+  "${subject}" seed --repo devantler-tech/platform --output "${fixture_root}/authfail-cause.md"
 
 test_run_finished=1
 echo "pr-body contract test: PASS"
