@@ -1149,15 +1149,16 @@ else
   bad "keeps the ordinary signature limit at 12 (got $sig_rows)" "$OUT"
 fi
 
-# A key block that spans rows masks every row inside it. The block can open
-# and close only in ordinary error rows, because a denial row carries just its
-# Reason. A masked denial must stay a denial, or it drops out of the denial
-# block while the total still counts it.
+# A key block that spans rows masks every row inside it and its closing row.
+# Here it opens in an ordinary error and closes inside a denial Reason, so both
+# the inner-row and the closing-row paths are covered. A masked denial must
+# stay a denial, or it drops out of the denial block while the total still
+# counts it.
 {
   n=0
   for msg in 'ordinary leak -----BEGIN RSA PRIVATE KEY-----' \
              "${deny_pre}[Second]" "${deny_pre}[Third]" \
-             'ordinary -----END RSA PRIVATE KEY----- done'; do
+             "${deny_pre}[-----END RSA PRIVATE KEY----- done]"; do
     n=$((n+1))
     jq -cn --arg id "mask$n" \
       '{type:"assistant",timestamp:"2026-10-27T10:00:00Z",message:{content:[{type:"tool_use",id:$id,name:"Bash",input:{}}]}}'
@@ -1168,8 +1169,19 @@ fi
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/denials" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section reliability 2>&1)
 check "counts masked rows in the total" "$OUT" "tool errors in window: 4"
-check "keeps masked denials in the denial block" "$OUT" "auto-mode denials by reason (every category, 2 total):"
+check "keeps masked denials in the denial block" "$OUT" "auto-mode denials by reason (every category, 3 total):"
 check "masks the denials inside the key block" "$OUT" "2 <redacted-key-material>: <redacted-key-material>"
+
+# A tab inside a tool name must not shift the denial label out of its field.
+{
+  jq -cn '{type:"assistant",timestamp:"2026-10-27T10:00:00Z",message:{content:[{type:"tool_use",id:"tab1",name:"Ba\tsh",input:{}}]}}'
+  jq -cn --arg msg "${deny_pre}[Tabbed]" \
+    '{type:"user",timestamp:"2026-10-27T10:00:01Z",message:{content:[{type:"tool_result",tool_use_id:"tab1",is_error:true,content:$msg}]}}'
+} > "$FIX/denials/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/denials" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section reliability 2>&1)
+check "keeps a denial whose tool name holds a tab" "$OUT" "auto-mode denials by reason (every category, 1 total):"
+check "prints that tool name without the tab" "$OUT" "1 Ba sh: auto-mode denial [Tabbed]"
 
 # ── 3. safety: real denials matched, prose-faked ones NOT ─────────────────────
 echo
