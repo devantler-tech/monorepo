@@ -255,6 +255,7 @@ worktree-inventory-merged-check.sh|$tmp/converted|exit:2
 worktree-lane-sweep.sh|
 business-site-ci.test.sh|
 memory-backup.sh|
+memory-archive.sh|
 memory-hygiene.sh|
 automation-memory-read.sh|--file $tmp/converted/memory.md
 automation-memory-read.test.sh|
@@ -286,6 +287,7 @@ branch-cleanup.test.sh|
 ci-aggregate-contract.test.sh|
 flow-scorecard.test.sh|
 memory-backup.test.sh|
+memory-archive.test.sh|
 memory-rewrite.test.sh|
 platform-live-health.test.sh|
 python-ban-guard-build-surfaces.test.sh|
