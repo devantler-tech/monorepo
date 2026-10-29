@@ -236,6 +236,8 @@ func TestParkRefusalsWriteNothing(t *testing.T) {
 	}{
 		"readiness work as the blocker":      {func(*fakeForge) {}, replaced(upstreamArgs, "--blocker", "review and CI"), "its own unfinished work"},
 		"publication plus unfinished review": {func(*fakeForge) {}, replaced(outcomeArgs, "--blocker", "Publication after the current head is reviewed"), "own unfinished work"},
+		"publication plus negated review":    {func(*fakeForge) {}, replaced(outcomeArgs, "--blocker", "Publication of the not yet reviewed release for the current head"), "own unfinished work"},
+		"publication plus future review":     {func(*fakeForge) {}, replaced(outcomeArgs, "--blocker", "Publication of the yet to be reviewed release for the current head"), "own unfinished work"},
 		"the target as its own blocker":      {func(*fakeForge) {}, replaced(upstreamArgs, "--blocker", "o/r#5"), "its own blocker"},
 		"an issue body line":                 {func(*fakeForge) {}, append(append([]string{}, upstreamArgs...), "--line-only"), "compose --line-only"},
 		"an issue":                           {func(f *fakeForge) { f.pullRequest = false }, upstreamArgs, "is an issue"},

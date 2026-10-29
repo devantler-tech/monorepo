@@ -309,11 +309,11 @@ func visibleRecord(body string) string {
 }
 
 var (
-	eventReferenceRE  = regexp.MustCompile(`(?i)(?:[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]*#[0-9]+|gh-[0-9]+|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+`)
-	eventWordRE       = regexp.MustCompile(`\p{L}{3,}`)
-	readinessWorkRE   = regexp.MustCompile(`(?i)\b(?:reviews?|reviewed|reviewing|ci|checks?|evaluat(?:e|es|ed|ing|ion|ions)|readiness|pentad)\b`)
-	publicationRE     = regexp.MustCompile(`(?i)\b(?:publication|publish(?:ed|es|ing)?)\b`)
-	reviewedReleaseRE = regexp.MustCompile(`(?i)\breviewed([[:space:]]+releases?\b)`)
+	eventReferenceRE               = regexp.MustCompile(`(?i)(?:[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]*#[0-9]+|gh-[0-9]+|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+`)
+	eventWordRE                    = regexp.MustCompile(`\p{L}{3,}`)
+	readinessWorkRE                = regexp.MustCompile(`(?i)\b(?:reviews?|reviewed|reviewing|ci|checks?|evaluat(?:e|es|ed|ing|ion|ions)|readiness|pentad)\b`)
+	publicationOfReviewedReleaseRE = regexp.MustCompile(`(?i)\b(publication[[:space:]]+of[[:space:]]+(?:(?:the|a|an)[[:space:]]+)?(?:(?:already|tagged)[[:space:]]+)*)reviewed([[:space:]]+releases?\b)`)
+	reviewedReleasePublicationRE   = regexp.MustCompile(`(?i)\b((?:the|a|an)[[:space:]]+)reviewed([[:space:]]+release(?:'s|s')[[:space:]]+publication\b)`)
 )
 
 // namesReadinessWork reports whether an outcome's event is the target's own
@@ -326,11 +326,11 @@ var (
 func namesReadinessWork(text string) bool {
 	text = urlRE.ReplaceAllString(html.UnescapeString(text), " ")
 	text = strings.ReplaceAll(eventReferenceRE.ReplaceAllString(text, " "), "_", " ")
-	// A publication event can describe its already-reviewed release. Remove only
-	// that adjective: predicate "is reviewed" and any other readiness work remain.
-	if publicationRE.MatchString(text) {
-		text = reviewedReleaseRE.ReplaceAllString(text, "$1")
-	}
+	// Exempt the adjective only in completed-review publication noun phrases.
+	// Negated/future modifiers cannot match either phrase, so their "reviewed"
+	// word, readiness predicates and any additional review work remain refusals.
+	text = publicationOfReviewedReleaseRE.ReplaceAllString(text, "$1$2")
+	text = reviewedReleasePublicationRE.ReplaceAllString(text, "$1$2")
 	return readinessWorkRE.MatchString(text)
 }
 
