@@ -309,9 +309,11 @@ func visibleRecord(body string) string {
 }
 
 var (
-	eventReferenceRE = regexp.MustCompile(`(?i)(?:[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]*#[0-9]+|gh-[0-9]+|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+`)
-	eventWordRE      = regexp.MustCompile(`\p{L}{3,}`)
-	readinessWorkRE  = regexp.MustCompile(`(?i)\b(?:reviews?|reviewed|reviewing|ci|checks?|evaluat(?:e|es|ed|ing|ion|ions)|readiness|pentad)\b`)
+	eventReferenceRE  = regexp.MustCompile(`(?i)(?:[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]*#[0-9]+|gh-[0-9]+|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+`)
+	eventWordRE       = regexp.MustCompile(`\p{L}{3,}`)
+	readinessWorkRE   = regexp.MustCompile(`(?i)\b(?:reviews?|reviewed|reviewing|ci|checks?|evaluat(?:e|es|ed|ing|ion|ions)|readiness|pentad)\b`)
+	publicationRE     = regexp.MustCompile(`(?i)\b(?:publication|publish(?:ed|es|ing)?)\b`)
+	reviewedReleaseRE = regexp.MustCompile(`(?i)\breviewed([[:space:]]+releases?\b)`)
 )
 
 // namesReadinessWork reports whether an outcome's event is the target's own
@@ -324,6 +326,11 @@ var (
 func namesReadinessWork(text string) bool {
 	text = urlRE.ReplaceAllString(html.UnescapeString(text), " ")
 	text = strings.ReplaceAll(eventReferenceRE.ReplaceAllString(text, " "), "_", " ")
+	// A publication event can describe its already-reviewed release. Remove only
+	// that adjective: predicate "is reviewed" and any other readiness work remain.
+	if publicationRE.MatchString(text) {
+		text = reviewedReleaseRE.ReplaceAllString(text, "$1")
+	}
 	return readinessWorkRE.MatchString(text)
 }
 

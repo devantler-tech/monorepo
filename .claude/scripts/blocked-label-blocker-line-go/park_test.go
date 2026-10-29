@@ -213,17 +213,33 @@ func TestParkIgnoresAnotherAuthorsRecord(t *testing.T) {
 	}
 }
 
+func TestParkReviewedReleasePublication(t *testing.T) {
+	f := newFakeForge(t)
+	args := replaced(outcomeArgs, "--blocker", "Publication of the already tagged reviewed release")
+	if code, _, stderr := park(args...); code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	want := "**Blocker:** Publication of the already tagged reviewed release | outcome | last-verified 2026-10-06: tag exists, release not published"
+	if got := parkRecords(f.comments); len(got) != 1 || got[0] != want {
+		t.Errorf("records=%q, want one publication-wait record", got)
+	}
+	if len(f.labels) != 1 || f.labels[0] != "blocked" {
+		t.Errorf("labels=%q, want exactly blocked", f.labels)
+	}
+}
+
 func TestParkRefusalsWriteNothing(t *testing.T) {
 	for name, tc := range map[string]struct {
 		arrange func(*fakeForge)
 		args    []string
 		want    string
 	}{
-		"readiness work as the blocker": {func(*fakeForge) {}, replaced(upstreamArgs, "--blocker", "review and CI"), "its own unfinished work"},
-		"the target as its own blocker": {func(*fakeForge) {}, replaced(upstreamArgs, "--blocker", "o/r#5"), "its own blocker"},
-		"an issue body line":            {func(*fakeForge) {}, append(append([]string{}, upstreamArgs...), "--line-only"), "compose --line-only"},
-		"an issue":                      {func(f *fakeForge) { f.pullRequest = false }, upstreamArgs, "is an issue"},
-		"a closed pull request":         {func(f *fakeForge) { f.state = "closed" }, upstreamArgs, "not open"},
+		"readiness work as the blocker":      {func(*fakeForge) {}, replaced(upstreamArgs, "--blocker", "review and CI"), "its own unfinished work"},
+		"publication plus unfinished review": {func(*fakeForge) {}, replaced(outcomeArgs, "--blocker", "Publication after the current head is reviewed"), "own unfinished work"},
+		"the target as its own blocker":      {func(*fakeForge) {}, replaced(upstreamArgs, "--blocker", "o/r#5"), "its own blocker"},
+		"an issue body line":                 {func(*fakeForge) {}, append(append([]string{}, upstreamArgs...), "--line-only"), "compose --line-only"},
+		"an issue":                           {func(f *fakeForge) { f.pullRequest = false }, upstreamArgs, "is an issue"},
+		"a closed pull request":              {func(f *fakeForge) { f.state = "closed" }, upstreamArgs, "not open"},
 		"two record comments": {func(f *fakeForge) {
 			f.add(recordAuthor, oldRecord)
 			f.add(recordAuthor, oldRecord)

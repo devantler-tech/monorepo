@@ -41,7 +41,10 @@ func replaced(args []string, flag, value string) []string {
 // The composed comment must be the one the sweep accepts: fed back through the
 // --input seam as a parked pull request's only comment, it reports no finding.
 func TestComposedRecordIsAcceptedByTheSweep(t *testing.T) {
-	for name, args := range map[string][]string{"upstream": upstreamArgs, "authority": authorityArgs, "outcome": outcomeArgs} {
+	for name, args := range map[string][]string{
+		"upstream": upstreamArgs, "authority": authorityArgs, "outcome": outcomeArgs,
+		"reviewed release publication": replaced(outcomeArgs, "--blocker", "Publication of the already tagged reviewed release"),
+	} {
 		t.Run(name, func(t *testing.T) {
 			code, body, stderr := compose(args...)
 			if code != 0 || stderr != "" {
