@@ -71,44 +71,54 @@ run_guard() {
 # ---------------------------------------------------------------------------
 # 1. The behavioural proof: the class is real, and the fix works.
 # ---------------------------------------------------------------------------
-# Needle first, then a payload large enough that grep exits while the writer
-# still has bytes to push. This is a race, so it is size-BIASED and not
-# size-determined; the loop below reports how often it fired rather than
-# asserting a single run, and the assertion is "at least once in 50".
+# Synchronize the last write after the successful reader has closed its pipe.
+# A finite payload can fit in a kernel buffer before grep runs, so neither its
+# size nor repeated attempts proves SIGPIPE (monorepo#4663).
 probe_payload="$tmp/payload"
+printf 'NEEDLE\nTAIL\n' >"$probe_payload"
+mkfifo "$tmp/reader-closed"
+# Open both ends in the parent so a missing signal reaches read's deadline
+# instead of hanging while opening the FIFO. Children inherit only this probe.
+exec 3<>"$tmp/reader-closed"
+set +e
 {
-  echo NEEDLE
-  head -c 200000 /dev/zero | tr '\0' 'x'
-  echo
-} >"$probe_payload"
+  printf 'NEEDLE\n'
+  IFS= read -r -t 5 signal <&3 || exit 92
+  [[ "$signal" == closed ]] || exit 93
+  LC_ALL=C printf 'TAIL\n'
+} 2>"$tmp/writer-error" | (
+  command grep -q NEEDLE
+  consumer_rc=$?
+  exec 0<&-
+  printf 'closed\n' >&3
+  exit "$consumer_rc"
+)
+# Capture both pipeline stages and pipefail's result before any command resets them.
+probe_status=("$?" "${PIPESTATUS[@]}")
+command grep -q NEEDLE <"$probe_payload" >/dev/null 2>&1
+here_rc=$?
+set -e
+exec 3>&-
 
-piped_failures=0
-herestring_failures=0
-matched=0
-for _ in $(seq 1 50); do
-  set +e
-  # `command grep`, never bare `grep`: under an agent harness the bare name can
-  # resolve to a shim that drains its input instead of exiting at the first
-  # match, and this probe is the one assertion that must exercise the REAL grep.
-  # Through such a shim the piped form never fails, so the proof reports the
-  # class refuted while it is live — the guard's own header measured 0/200 that
-  # way against 200/200 through the system binary.
-  cat "$probe_payload" | command grep -q NEEDLE >/dev/null 2>&1
-  piped_rc=$?
-  command grep -q NEEDLE <"$probe_payload" >/dev/null 2>&1
-  here_rc=$?
-  set -e
-  ((piped_rc != 0)) && piped_failures=$((piped_failures + 1))
-  ((here_rc != 0)) && herestring_failures=$((herestring_failures + 1))
-  ((here_rc == 0)) && matched=$((matched + 1))
-done
-
+# An inherited ignored SIGPIPE makes Bash report EPIPE as status 1 instead of
+# signal status 141. Only accept that alternative with the closed-pipe error;
+# timeout, bad synchronization and an unrelated exit 1 are not proof.
+piped_failure=no
+case "${probe_status[0]}:${probe_status[1]}:${probe_status[2]}" in
+141:141:0) piped_failure=yes ;;
+1:1:0)
+  if command grep -F 'Broken pipe' "$tmp/writer-error" >/dev/null; then
+    piped_failure=yes
+  fi
+  ;;
+esac
 report "behaviour: the needle IS present (so any failure is spurious, not a real no-match)" \
-  "$(yn test "$matched" -eq 50)" "unpiped grep matched $matched/50"
+  "$(yn test "${probe_status[2]}" -eq 0)" "consumer rc=${probe_status[2]}"
 report "behaviour: piping a writer into 'grep -q' reports FAILURE on a successful match" \
-  "$(yn test "$piped_failures" -gt 0)" "piped form failed $piped_failures/50"
+  "$piped_failure" \
+  "pipeline/producer/consumer rc=${probe_status[*]}"
 report "behaviour: the pipe-free form the guard asks for never reports that failure" \
-  "$(yn test "$herestring_failures" -eq 0)" "pipe-free form failed $herestring_failures/50"
+  "$(yn test "$here_rc" -eq 0)" "pipe-free rc=$here_rc"
 
 # ---------------------------------------------------------------------------
 # 2a. Must FLAG — each early-exit spelling.
@@ -955,7 +965,10 @@ report "a comment attached to the pipe does not stop the join" \
 # hung this required job; it must fail in a controlled way instead.
 ln -s /dev/zero "$tmp/hang.sh" 2>/dev/null || true
 if [[ -L "$tmp/hang.sh" ]]; then
-  out="$(ulimit -t 10; "$guard" "$tmp/hang.sh" 2>&1)" && rc=0 || rc=$?
+  out="$(
+    ulimit -t 10
+    "$guard" "$tmp/hang.sh" 2>&1
+  )" && rc=0 || rc=$?
   report "a non-regular tracked script is a controlled error, not a hang" \
     "$(yn test "$rc" -eq 2)" "rc=$rc out=$out"
 fi
@@ -1381,4 +1394,3 @@ if ((fail != 0)); then
 fi
 echo "pipefail-grep-guard self-test: all cases passed"
 completed=1
-
