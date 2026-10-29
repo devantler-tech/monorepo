@@ -7116,6 +7116,104 @@ if want drift; then
   echo "    cursor loader: UNKNOWN (deployed prompt is server-side; its source file is not evidence of it)"
 fi
 
+# Resolve forge admission from the loaded, reviewed consumer definition, never
+# from the corpus root or its .gitmodules. Environment paths select observations;
+# they cannot grant access. This is portfolio-v1's compatibility check for the
+# canonical policy, not an interpreter that turns arbitrary prose into authority.
+# Transcript admission is a separate, still-open part of monorepo#4139.
+outcome_authorized_repositories() {
+  local agents="$DEFINITION_ROOT/AGENTS.md" indexed mapped pages
+  local selection="$DEFINITION_ROOT/.claude/guides/work-selection.md"
+  local privacy="$DEFINITION_ROOT/.claude/guides/egress-and-privacy.md"
+  [ "$PORTFOLIO_ORG" = devantler-tech ] || return 1
+  [ -r "$agents" ] && [ -r "$selection" ] && [ -r "$privacy" ] || return 1
+  indexed=$(awk '
+    /^## Agent guides[[:space:]]*$/ { inside = 1; next }
+    inside && /^## / { inside = 0 }
+    inside { print }
+  ' "$agents") || return 1
+  grep -Fq '](.claude/guides/work-selection.md)' <<<"$indexed" || return 1
+  grep -Fq '](.claude/guides/egress-and-privacy.md)' <<<"$indexed" || return 1
+  grep -Fxq '## Portfolio scope — visibility and archived repositories' "$selection" || return 1
+  grep -Fq '**Archived repositories are outside the active portfolio.**' "$selection" || return 1
+  grep -Fq '**The census is the live org, not this table.** Every non-archived `devantler-tech` repository is' "$selection" || return 1
+  grep -Fxq '## Professional-work repository boundary — hard exclusion' "$privacy" || return 1
+  grep -Fq '**categorically out of scope**.' "$privacy" || return 1
+  grep -Fq '**The single exception is a product of this portfolio**' "$privacy" || return 1
+
+  # Parse the whole Repo cell in the one canonical map table. Same-owner short
+  # names in multi-product rows are explicit entries, including pathless ones.
+  # Buffer until END: a later malformed row must not leave a partial grant.
+  mapped=$(awk -F'|' '
+    function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
+    /^```/ || /^~~~/ {
+      marker = substr($0, 1, 3)
+      if (fenced == "") fenced = marker
+      else if (fenced == marker) fenced = ""
+      next
+    }
+    fenced { next }
+    /^## Portfolio map[[:space:]]*$/ { maps++; inside = 1; stage = 0; next }
+    inside && /^## / { inside = 0 }
+    inside && /^[[:space:]]*\|/ {
+      if (NF != 6) { invalid = 1; next }
+      for (i = 2; i <= 5; i++) if (trim($i) == "") invalid = 1
+      if (stage == 0) {
+        if (trim($2) != "Product" || trim($3) != "Repo" || trim($4) != "Path" || trim($5) != "Instructions") invalid = 1
+        stage = 1; next
+      }
+      if (stage == 1) {
+        for (i = 2; i <= 5; i++) if (trim($i) !~ /^:?-+:?$/) invalid = 1
+        stage = 2; next
+      }
+      cell = trim($3)
+      if (cell ~ /^— \(not a repo;/ && cell !~ /`/) next
+      while (cell != "") {
+        if (!match(cell, /^`[^`]+`/)) { invalid = 1; break }
+        name = substr(cell, 2, RLENGTH - 2)
+        cell = trim(substr(cell, RLENGTH + 1))
+        if (index(name, "/") == 0) name = "devantler-tech/" name
+        if (name !~ /^devantler-tech\/[A-Za-z0-9._-]+$/ || name ~ /\/\.\.?$/) invalid = 1
+        name = tolower(name)
+        if (!(name in seen)) { seen[name] = 1; names[++count] = name }
+        if (cell == "") break
+        if (substr(cell, 1, 1) != ",") { invalid = 1; break }
+        cell = trim(substr(cell, 2))
+        if (cell == "") invalid = 1
+      }
+      stage = 3
+    }
+    END {
+      if (invalid || fenced != "" || maps != 1 || stage != 3 || count == 0) exit 2
+      for (i = 1; i <= count; i++) print names[i]
+    }
+  ' "$agents") || return 1
+
+  # gh traverses every Link page. Do not parse or query any member until that
+  # command has succeeded and the entire response passes shape/identity checks.
+  # An error after a valid first page must not authorize that partial inventory.
+  pages=$(gh api --paginate --slurp "orgs/${PORTFOLIO_ORG}/repos?type=all&per_page=100" 2>/dev/null) || return 1
+  printf '%s' "$pages" | jq -er --arg mapped "$mapped" '
+    if type != "array" or length == 0 or any(.[]; type != "array")
+    then error("malformed inventory pages") else add end
+    | if length == 0 then error("empty inventory") else . end
+    | map(if (.id | type) != "number" or .id < 1 or .id != (.id | floor)
+              or (.full_name | type) != "string"
+              or (.private | type) != "boolean" or (.archived | type) != "boolean"
+          then error("malformed repository metadata") else . end)
+    | if any(.[]; (.full_name | test("^devantler-tech/[A-Za-z0-9._-]+$") | not)
+                    or (.full_name | test("/\\.\\.?$")))
+         or ([.[].id] | unique | length) != length
+         or ([.[].full_name | ascii_downcase] | unique | length) != length
+      then error("ambiguous repository inventory") else . end
+    | ($mapped | split("\n")) as $products
+    | [.[] | select(.archived == false)
+           | select(.private == false or ((.full_name | ascii_downcase) as $repo | $products | index($repo) != null))
+           | .full_name | ascii_downcase]
+    | if length == 0 then error("no authorized repositories") else sort[] end
+  ' 2>/dev/null
+}
+
 # ── 6. OUTCOMES ───────────────────────────────────────────────────────────────
 # Did the work actually hold? Reverts and post-merge red are the quality signal
 # that no amount of green pre-merge CI can substitute for.
@@ -7129,14 +7227,9 @@ if want outcomes; then
     # PORTFOLIO-WIDE, not monorepo-only. Quality is the signal these counts feed,
     # and both agents ship most of their work in the product repos — measuring
     # only the monorepo scored the definition work and ignored the products.
-    # The census is the LIVE org, not the checkout (work-selection guide, "The
-    # census is the live org"; monorepo#4139): every non-archived repository,
-    # whether or not it is a submodule. The submodule list missed repositories
-    # without a checkout (2 of 25 on 2026-10-18), so their merges, reverts and
-    # red main never reached this section. One REST listing (no GraphQL).
-    # A failed or malformed listing leaves the portfolio inventory UNKNOWN. The
-    # section then counts only the submodule cohort, whose archive state it has
-    # not read, so every portfolio verdict below stays UNKNOWN or INCOMPLETE.
+    # The census is the authorized LIVE org, not the checkout: active public
+    # infrastructure plus the canonical map's private-product exceptions. A
+    # failed admission never falls back to querying an unverified legacy cohort.
     echo "  Registered-writer merged PR activity since ${SINCE_ISO} (legacy namespace series; includes interactive sessions):"
     # The submodule cohort is kept as its own total so the series measured
     # before monorepo#4139 stays comparable; a wider denominator is not a gain.
@@ -7149,22 +7242,17 @@ if want outcomes; then
                    | grep -i "^${PORTFOLIO_ORG}/" | sort -u)
     COHORT_REPOS=$(printf '%s/monorepo\n%s\n' "$PORTFOLIO_ORG" "$COHORT_REPOS" | grep -v '^$' | sort -u)
     REPO_INVENTORY=live
-    if ! REPOS=$(gh api --paginate "orgs/${PORTFOLIO_ORG}/repos?type=all&per_page=100" --jq '
-           .[] | if (.archived | type) != "boolean" or (.full_name | type) != "string"
-                 then error("malformed repository listing") else . end
-               | select(.archived == false) | .full_name' 2>/dev/null) \
-       || [ -z "$REPOS" ] \
-       || grep -Evq "^${PORTFOLIO_ORG}/[A-Za-z0-9._-]+\$" <<<"$REPOS"; then
-      REPO_INVENTORY=submodules
-      REPOS=$COHORT_REPOS
+    if ! REPOS=$(outcome_authorized_repositories) || [ -z "$REPOS" ]; then
+      REPO_INVENTORY=unknown
+      REPOS=''
       main_rc=2
     fi
     # The live listing is used as read: re-adding the monorepo here would bring
     # it back if it were ever archived.
     REPOS=$(sort -u <<<"$REPOS")
     COHORT_TOTAL=0; COHORT_FAIL=0
-    # Cohort repositories the live listing left out (archived, or gone) are not
-    # queried, so the cohort series is then active-only and says so. (awk, not
+    # Cohort members outside current admission are never queried to reconstruct
+    # an unsafe historical denominator. Label its authorized intersection. (awk, not
     # `grep -vxF -f`: BSD grep misreports that set difference.)
     COHORT_EXCLUDED=$(awk 'NR == FNR { seen[$0] = 1; next } $0 != "" && !($0 in seen) { n++ } END { print n + 0 }' \
                       <(printf '%s\n' "$REPOS") <(printf '%s\n' "$COHORT_REPOS"))
@@ -7180,8 +7268,9 @@ if want outcomes; then
     }
     if [ "$REPO_INVENTORY" = live ]; then
       echo "    repository inventory: live org, $(printf '%s\n' "$REPOS" | grep -c .) non-archived repositories"
+      echo "    authorization policy: portfolio-v1 (active public infrastructure and mapped private products); changed coverage is not improved performance"
     else
-      echo "    repository inventory: UNKNOWN (live org listing failed) — counting the submodule cohort only, archive state unread; no portfolio total follows"
+      echo "    repository inventory: UNKNOWN (live org listing failed) — authorization or inventory unresolved; no individual repository queries"
     fi
     TOTAL=0; APIFAIL=0; REPO_COUNT=0; REST_USED=0
     # A failed repository read leaves the cohort incomplete only when that
@@ -7298,8 +7387,10 @@ EOF
     else
       echo "    merged PRs: UNKNOWN (live repository inventory unavailable)"
     fi
-    if [ "$COHORT_FAIL" -eq 0 ] && [ "$COHORT_EXCLUDED" -gt 0 ]; then
-      echo "    submodule cohort (the series before monorepo#4139): ${COHORT_TOTAL} — ACTIVE ONLY, ${COHORT_EXCLUDED} cohort repositories not in the live inventory were not queried"
+    if [ "$REPO_INVENTORY" != live ]; then
+      echo "    submodule cohort (the series before monorepo#4139): UNKNOWN (authorization unresolved; historical raw observations retained)"
+    elif [ "$COHORT_FAIL" -eq 0 ] && [ "$COHORT_EXCLUDED" -gt 0 ]; then
+      echo "    submodule cohort (the series before monorepo#4139): ${COHORT_TOTAL} — AUTHORIZED SUBSET, ${COHORT_EXCLUDED} cohort repositories outside current admission were not queried; not comparable to the historical total"
     elif [ "$COHORT_FAIL" -eq 0 ]; then
       echo "    submodule cohort (the series before monorepo#4139): ${COHORT_TOTAL}"
     else
