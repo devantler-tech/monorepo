@@ -361,11 +361,13 @@ if [ "$pages" -eq 1 ] && [ "$held" -eq 1 ] && [ "$rcs" = "0 1 " ]; then ok; else
 
 # Older multicall mkdir can report success after a raced EEXIST. Reproduce that
 # result deterministically, then hold each actual state read until its competitor
-# has also read (or a bounded wait expires). A correct lock admits only one read;
+# has also read (or a bounded wait expires). A correct lock serializes the reads;
 # a mkdir-only lock lets both consume the same unclaimed state and page twice.
 race_tools="$FIX/race-tools"
 mkdir -p "$race_tools" "$FIX/race-barrier"
-export WATCH_REAL_MKDIR="$(command -v mkdir)" WATCH_REAL_JQ="$(command -v jq)"
+WATCH_REAL_MKDIR="$(command -v mkdir)"
+WATCH_REAL_JQ="$(command -v jq)"
+export WATCH_REAL_MKDIR WATCH_REAL_JQ
 export WATCH_RACE_STATE="$STATE" WATCH_RACE_BARRIER="$FIX/race-barrier"
 cat > "$race_tools/mkdir" <<'EOF'
 #!/usr/bin/env bash
@@ -394,16 +396,36 @@ chmod +x "$race_tools/mkdir" "$race_tools/jq"
 if "$race_tools/mkdir" "$FIX/control.lock" 2>/dev/null &&
   ! "$WATCH_REAL_MKDIR" "$FIX/control.lock" 2>/dev/null; then ok
 else bad 'the raced-EEXIST fixture must really report false mkdir success'; fi
-reset; liveness 1 "$DOWN_NO_SESSION"
-watch 0 >/dev/null; watch $SLOT >/dev/null
-(rc=0; PATH="$race_tools:$PATH" watch $((2 * SLOT)) > "$FIX/race.a" 2>&1 || rc=$?; echo "$rc" > "$FIX/race.a.rc") &
-(rc=0; PATH="$race_tools:$PATH" watch $((2 * SLOT + 5)) > "$FIX/race.b" 2>&1 || rc=$?; echo "$rc" > "$FIX/race.b.rc") &
-wait
-pages=$(cat "$FIX/race.a" "$FIX/race.b" | grep -c 'verdict=ESCALATE ' || true)
-held=$(cat "$FIX/race.a" "$FIX/race.b" | grep -c 'verdict=ESCALATION-CLAIMED ' || true)
-rcs=$(cat "$FIX/race.a.rc" "$FIX/race.b.rc" | sort | tr '\n' ' ')
-if [ "$pages" -eq 1 ] && [ "$held" -eq 1 ] && [ "$rcs" = "0 1 " ]; then ok
-else bad "raced EEXIST must not double-page: $pages paged, $held held, exits '$rcs'"; fi
+run_raced_eexist() {
+  local candidate=$1
+  reset; liveness 1 "$DOWN_NO_SESSION"
+  watch 0 >/dev/null; watch $SLOT >/dev/null
+  rm -f "$FIX/race-barrier/"*
+  (rc=0; STUBBED="$candidate" PATH="$race_tools:$PATH" watch $((2 * SLOT)) > "$FIX/race.a" 2>&1 || rc=$?; echo "$rc" > "$FIX/race.a.rc") &
+  (rc=0; STUBBED="$candidate" PATH="$race_tools:$PATH" watch $((2 * SLOT + 5)) > "$FIX/race.b" 2>&1 || rc=$?; echo "$rc" > "$FIX/race.b.rc") &
+  wait
+  pages=$(cat "$FIX/race.a" "$FIX/race.b" | grep -c 'verdict=ESCALATE ' || true)
+  held=$(cat "$FIX/race.a" "$FIX/race.b" | grep -c 'verdict=ESCALATION-CLAIMED ' || true)
+  rcs=$(cat "$FIX/race.a.rc" "$FIX/race.b.rc" | sort | tr '\n' ' ')
+  reads=$(find "$FIX/race-barrier" -type f | wc -l | tr -d ' ')
+}
+run_raced_eexist "$STUBBED"
+if [ "$pages" -eq 1 ] && [ "$held" -eq 1 ] && [ "$rcs" = '0 1 ' ] && [ "$reads" -eq 2 ]; then ok
+else bad "raced EEXIST must not double-page: $pages paged, $held held, exits '$rcs', reads=$reads"; fi
+
+# Ablate the actual lock mechanism, not merely the mkdir shim: this same race must expose two
+# concurrent owners when mkdir's false success is allowed to grant the lock.
+mkdir -p "$FIX/lock-mutant"
+cp "$FIX/bin/"*-lane-liveness.sh "$FIX/lock-mutant/"
+awk '
+  /^try_lock_file\(\) \{$/ { print; print "  mkdir \"$1\""; replacing=1; changed++; next }
+  replacing && /^}$/ { print; replacing=0; next }
+  !replacing { print }
+  END { if (changed != 1 || replacing) exit 2 }
+' "$STUBBED" > "$FIX/lock-mutant/sibling-lane-watch.sh"
+run_raced_eexist "$FIX/lock-mutant/sibling-lane-watch.sh"
+if [ "$pages" -eq 2 ] && [ "$held" -eq 0 ] && [ "$rcs" = '1 1 ' ] && [ "$reads" -eq 2 ]; then ok
+else bad "mkdir lock ablation must double-page: $pages paged, $held held, exits '$rcs', reads=$reads"; fi
 
 # A lock nobody will release: a fresh one is respected, an old one is taken over.
 reset; liveness 1 "$DOWN_NO_SESSION"

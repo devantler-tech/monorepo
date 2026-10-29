@@ -254,11 +254,13 @@ for racer in 1 2; do
   ) &
 done
 wait
+ready_count=$(find "$FIX/race-ready" -type f | wc -l | tr -d ' ')
+forced_ids=$(cat "$FIX/forced-1.out" "$FIX/forced-2.out" | sort | tr '\n' ' ')
 if [ "$(cat "$FIX/forced-1.rc")" = 0 ] && [ "$(cat "$FIX/forced-2.rc")" = 0 ] &&
-   [ "$(cat "$FIX/forced-1.out")" != "$(cat "$FIX/forced-2.out")" ]; then
+   [ "$ready_count" = 2 ] && [ "$forced_ids" = 'H95 H96 ' ]; then
   ok "false-success mkdir still gives both callers distinct identifiers"
 else
-  bad "false-success mkdir issued duplicate identifiers or failed a caller"
+  bad "false-success race failed: ready=$ready_count ids='$forced_ids'"
 fi
 for racer in 1 2; do
   forced_id=$(cat "$FIX/forced-$racer.out")

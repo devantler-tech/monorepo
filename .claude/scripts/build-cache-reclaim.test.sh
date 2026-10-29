@@ -1358,7 +1358,9 @@ func main() {
 }
 GO
 native_go=$(command -v go) || { fail 'fixture: Go compiler unavailable'; exit 1; }
-if ! GOTOOLCHAIN=local GOWORK=off GO111MODULE=off GOCACHE="${procs}/build-cache" \
+native_goos=$("$native_go" env GOHOSTOS) || { fail 'fixture: cannot resolve Go host OS'; exit 1; }
+native_goarch=$("$native_go" env GOHOSTARCH) || { fail 'fixture: cannot resolve Go host architecture'; exit 1; }
+if ! GOOS="$native_goos" GOARCH="$native_goarch" GOTOOLCHAIN=local GOWORK=off GO111MODULE=off GOCACHE="${procs}/build-cache" \
   "$native_go" build -trimpath -o "${procs}/golangci-lint" "${procs}/holder.go"; then
   fail 'fixture: cannot build the bounded process holder'
   exit 1
