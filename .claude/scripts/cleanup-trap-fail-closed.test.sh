@@ -236,6 +236,7 @@ printf '{"scheduledTasks":[{"id":"alpha","enabled":true,"lastRunAt":1,"createdAt
 # <script>|<arguments that reach the trap>|<optional backstop text or exit:status>
 converted_scripts="
 cleanup-trap-fail-closed.test.sh|
+agent-telemetry-outcome-scope.test.sh|
 bash-parse-guard.sh|$repo_root
 bot-pr-adaptation-push.sh|
 business-site-publication.test.sh||exit:2

@@ -218,6 +218,66 @@ if [ "${rc}" -eq 0 ] && grep -q '^PASS .*scripts/alpha.test.sh' <<<"${out}"; the
 else bad "passing run: ${out} (rc=${rc})"; fi
 git checkout -q -- scripts/alpha.test.sh
 
+# Reproduce cancellation reaching the watchdog's sleep before its shell. The real runner must
+# not interpret that interrupted sleep as expiry, even when the shell survives the cancellation.
+timer_bin="${tmp}/timer-bin"
+timer_state="${tmp}/timer-state"
+mkdir "${timer_bin}" "${timer_state}"
+cat > "${timer_bin}/sleep" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+printf '%s %s\n' "$PPID" "$$" > "$AFFECTED_TIMER_STATE/ids"
+[ "${AFFECTED_TIMER_FAIL:-0}" != 1 ] || exit 2
+trap 'exit 143' TERM
+limit=0
+while [ "$limit" -lt 500 ]; do /bin/sleep 0.01; limit=$((limit + 1)); done
+exit 2
+EOF
+chmod +x "${timer_bin}/sleep"
+cat > "${tmp}/cancel-order.bash" <<'EOF'
+kill() {
+  local leader sleeper
+  if [ "$#" -eq 3 ] && [ "$1" = -TERM ] && [ "$2" = -- ] &&
+     [ -s "$AFFECTED_TIMER_STATE/ids" ]; then
+    IFS=' ' read -r leader sleeper < "$AFFECTED_TIMER_STATE/ids"
+    if [ "$3" = "-$leader" ]; then
+      builtin kill -TERM "$sleeper"
+      return
+    fi
+  fi
+  builtin kill "$@"
+}
+EOF
+cat > scripts/alpha.test.sh <<'EOF'
+#!/usr/bin/env bash
+attempt=0
+while [ ! -s "$AFFECTED_TIMER_STATE/ids" ]; do
+  attempt=$((attempt + 1))
+  [ "$attempt" -lt 500 ] || exit 2
+  /bin/sleep 0.01
+done
+exit 0
+EOF
+out="$(PATH="${timer_bin}:$PATH" BASH_ENV="${tmp}/cancel-order.bash" \
+  AFFECTED_TIMER_STATE="$timer_state" "${runner}" --root "$repo" --base main \
+  --ci-file .github/workflows/gated-only.yaml --timeout 30)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -q '^PASS .*scripts/alpha.test.sh' <<<"$out" &&
+   ! grep -q '^TIMEOUT' <<<"$out"; then
+  ok "cancelling a completed test's sleep cannot invent a timeout"
+else bad "cancelled watchdog: $out (rc=$rc)"; fi
+
+# A broken timer is different from intentional cancellation: stop the actual process group and
+# report UNKNOWN instead of silently running a test without its deadline or calling it timed out.
+printf '#!/usr/bin/env bash\n/bin/sleep 30\n' > scripts/alpha.test.sh
+rm -f "${timer_state}/ids"
+out="$(PATH="${timer_bin}:$PATH" AFFECTED_TIMER_FAIL=1 AFFECTED_TIMER_STATE="$timer_state" \
+  "${runner}" --root "$repo" --base main --ci-file .github/workflows/gated-only.yaml \
+  --timeout 30)"; rc=$?
+if [ "$rc" -eq 2 ] && grep -q '^UNKNOWN .*scripts/alpha.test.sh' <<<"$out"; then
+  ok "an unexpected timer failure stops the test and reports UNKNOWN"
+else bad "broken watchdog: $out (rc=$rc)"; fi
+git checkout -q -- scripts/alpha.test.sh
+
 # A suite may declare a measured deadline in its initial comment header.
 cat > scripts/alpha.test.sh <<'EOF'
 #!/usr/bin/env bash

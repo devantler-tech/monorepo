@@ -117,8 +117,9 @@ expect "a finding section after the informational section still counts" 1 "FINDI
 metadata_section="<!-- <summary>Nitpick comments (2)</summary> -->
 ${clean}"
 expect "a summary inside a leading comment is not a finding" 0 "GREEN" "$(payload "${metadata_section}")"
-# jq's index/1 returns a byte offset on multibyte text, so a strip built on it cuts a leading
-# comment carrying an emoji in the wrong place and loses the marker behind it.
+# Older jq returned byte offsets from index/1; jq 1.8 uses code-point offsets.
+# Keep the Unicode control on both, and make the ablation explicitly use bytes
+# rather than relying on a bug that newer jq has already fixed.
 multibyte_comment="<!-- 🤖 agent hint -->
 ${clean}"
 expect "a leading comment with multibyte text is still stripped" 0 "GREEN" "$(payload "${multibyte_comment}")"
@@ -224,7 +225,7 @@ ablate "sections read from the full body" '[$lead | scan("<details' '[$body | sc
   "$(payload "${metadata_section}")" "GREEN"
 ablate "comment strip by byte offset" \
   'if test("^<!--[\\s\\S]*?-->") then sub("^<!--[\\s\\S]*?-->"; "") | strip else . end' \
-  'if startswith("<!--") then (index("-->")) as $i | if $i == null then . else (.[$i + 3:] | strip) end else . end' \
+  'if startswith("<!--") and contains("-->") then (split("-->")[0] | utf8bytelength) as $i | (.[$i + 3:] | strip) else . end' \
   "$(payload "${multibyte_comment}")" "GREEN"
 ablate "no balance check" '($walk.d == 0 and $walk.skip == null and ($walk.under | not)) as $balanced' 'true as $balanced' \
   "$(payload "${unbalanced}")" "NONE unbalanced-sections"

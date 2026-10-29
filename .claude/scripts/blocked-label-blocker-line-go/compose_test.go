@@ -41,7 +41,10 @@ func replaced(args []string, flag, value string) []string {
 // The composed comment must be the one the sweep accepts: fed back through the
 // --input seam as a parked pull request's only comment, it reports no finding.
 func TestComposedRecordIsAcceptedByTheSweep(t *testing.T) {
-	for name, args := range map[string][]string{"upstream": upstreamArgs, "authority": authorityArgs, "outcome": outcomeArgs} {
+	for name, args := range map[string][]string{
+		"upstream": upstreamArgs, "authority": authorityArgs, "outcome": outcomeArgs,
+		"reviewed release publication": replaced(outcomeArgs, "--blocker", "Publication of the already tagged reviewed release"),
+	} {
 		t.Run(name, func(t *testing.T) {
 			code, body, stderr := compose(args...)
 			if code != 0 || stderr != "" {
@@ -90,6 +93,8 @@ func TestComposeRefusals(t *testing.T) {
 		{"an outcome that is two tracked items", replaced(outcomeArgs, "--blocker", "o/other#7, o/other#8"), "is --kind upstream"},
 		{"an outcome with no words", replaced(outcomeArgs, "--blocker", "2026-10-08"), "which event the delivered work waits on"},
 		{"an outcome that is the target's own checks and review", replaced(outcomeArgs, "--blocker", "Current-head diagnostics checks and review complete"), "own unfinished work, not an event"},
+		{"publication of a not yet reviewed release", replaced(outcomeArgs, "--blocker", "Publication of the not yet reviewed release for the current head"), "own unfinished work, not an event"},
+		{"publication of a release to be reviewed", replaced(outcomeArgs, "--blocker", "Publication of the yet to be reviewed release for the current head"), "own unfinished work, not an event"},
 		{"an outcome that is evaluating the head", replaced(outcomeArgs, "--blocker", "evaluating the current head"), "own unfinished work, not an event"},
 		{"an outcome that is a check name", replaced(outcomeArgs, "--blocker", "required_status_checks are passing"), "own unfinished work, not an event"},
 		{"an outcome that is CI", replaced(outcomeArgs, "--blocker", "green CI on the current head"), "own unfinished work, not an event"},

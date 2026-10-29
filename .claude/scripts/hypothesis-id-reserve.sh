@@ -8,8 +8,9 @@
 #
 # How: the identifier is claimed before it is written. The next number is one above the highest
 # `H<n>` found in the headings of the stores the caller names and in the reservations directory, and
-# it is taken by creating a directory of that name — an operation only one of two concurrent callers
-# can win. The loser moves on to the next number. A reservation is never removed: a number that was
+# it is taken by exclusively creating the owner record in a directory of that name. Some mkdir
+# implementations can report success to both racing creators; the owner record cannot. The loser
+# moves on to the next number. A reservation is never removed: a number that was
 # handed out stays handed out, even when its run wrote nothing, so no later run can mint it again.
 #
 # Only heading lines are read, because running text is not reliable: one store packs its notes
@@ -112,18 +113,22 @@ if [ "$found" -eq 0 ] && [ "$first" -ne 1 ]; then
   die "no identifier found in any store heading or reservation; pass --at-least <n>, or --first only when this really is the first"
 fi
 
-# Take the first free number above the highest. A concurrent caller that wins a number makes this
-# mkdir fail with the directory present, and the loop moves on; any other failure is UNKNOWN.
+# Take the first free number above the highest. Keep the existing directory/owner format and never
+# reclaim an abandoned reservation. A competing creator may also get mkdir success, so noclobber
+# must arbitrate the owner record before either caller can return the identifier.
 attempt=0
 while [ "$attempt" -lt 100 ]; do
   attempt=$((attempt + 1))
   id="H$((max + attempt))"
   if mkdir "$reservations/$id" 2>/dev/null; then
-    if ! printf '%s\n' "$owner" > "$reservations/$id/owner"; then
-      die "reserved $id but could not record its owner; treat $id as taken and do not use it"
+    if (set -C; printf '%s\n' "$owner" > "$reservations/$id/owner") 2>/dev/null; then
+      printf '%s\n' "$id"
+      exit 0
     fi
-    printf '%s\n' "$id"
-    exit 0
+    # A present owner (including an entry we refuse to follow) belongs to another reservation.
+    # A failed write without one is UNKNOWN; retain the directory so nobody reuses that number.
+    [ -e "$reservations/$id/owner" ] || [ -L "$reservations/$id/owner" ] ||
+      die "reserved $id but could not record its owner; treat $id as taken and do not use it"
   fi
   [ -d "$reservations/$id" ] || die "could not create the reservation $reservations/$id"
 done
