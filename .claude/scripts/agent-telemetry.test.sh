@@ -6,6 +6,9 @@
 # Runs against synthetic fixtures in an isolated temp HOME, so the tests neither
 # read the real agent corpus nor depend on whatever happens to be in it today.
 set -uo pipefail
+# Keep the parent in the same UTC zone already pinned by run(). Restoring an
+# unset TZ can block a forked Bash in macOS timezone-notification registration.
+export TZ=UTC
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="$SCRIPT_DIR/agent-telemetry.sh"

@@ -567,6 +567,15 @@ GIT_CONFIG_SYSTEM="$FIX/routing.config" SCOPE_PROJECTS="$FIX/no-projects" transc
 check excluded
 GIT_CONFIG_GLOBAL="$FIX/routing.config" SCOPE_PROJECTS="$FIX/no-projects" transcript_run
 check excluded
+# A matching project slug cannot grant a symlink target admission.
+rm "$FIX/home/codex/sessions/scope.jsonl"
+mkdir -p "$FIX/linked-projects" "$FIX/foreign-store/subagents"
+printf '%s\n' '{"type":"user","message":{"content":"SYMLINK_ADMISSION_CANARY"}}' > "$FIX/foreign-store/subagents/agent-foreign.jsonl"
+ln -s "$FIX/foreign-store" "$FIX/linked-projects/$allowed_slug"
+SCOPE_PROJECTS="$FIX/linked-projects" transcript_run
+check test "$RC" = 2
+check not_measured
+check not_walked "$FIX/linked-projects/$allowed_slug/subagents"
 printf 'outcome authorization: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
 scope_test_finished=1

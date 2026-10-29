@@ -2675,6 +2675,9 @@ scoped_session_paths() {
 
 claude_project_authorized() {
   local name=$1 p slug suffix root sub presence
+  # A project slug identifies its checkout, not a different transcript store
+  # reached through a link. Refuse before delegated discovery can enter it.
+  [ ! -L "$CLAUDE_PROJECTS/$name" ] || return 2
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     slug=$(path_to_slug "$p")
