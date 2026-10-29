@@ -646,6 +646,26 @@ cp "$FIX/before-colon-gitmodules" "$FIX/corpus/.gitmodules"
 write_codex "$FIX/corpus/allowed"
 SCOPE_PROJECTS="$FIX/no-projects" transcript_run
 check measured
+# A JSON NUL cannot be part of a real cwd. Shell read must not discard it and
+# turn malformed metadata into an admitted existing path.
+jq -cn --arg p "$FIX/corpus/allowed" '{type:"session_meta",payload:{cwd:($p+"\u0000")}}' > "$FIX/home/codex/sessions/scope.jsonl"
+printf '%s\n' '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"NUL_ADMISSION_CANARY"}]}}' >> "$FIX/home/codex/sessions/scope.jsonl"
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check excluded
+check not_measured
+write_codex "$FIX/corpus/allowed"
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check measured
+# A removed native worktree relies on the recorded remote, so apply the same
+# complete-value requirement there and retain the legitimate historical case.
+nul_worktree="$FIX/home/codex/worktrees/nul/corpus"
+jq -cn --arg p "$nul_worktree" '{type:"session_meta",payload:{cwd:$p,git:{repository_url:("https://github.com/devantler-tech/monorepo.git"+"\u0000")}}}' > "$FIX/home/codex/sessions/scope.jsonl"
+printf '%s\n' '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"NUL_ADMISSION_CANARY"}]}}' >> "$FIX/home/codex/sessions/scope.jsonl"
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check not_measured
+write_codex "$nul_worktree" https://github.com/devantler-tech/monorepo.git
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check measured
 printf 'outcome authorization: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
 scope_test_finished=1

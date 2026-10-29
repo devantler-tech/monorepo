@@ -3134,7 +3134,10 @@ codex_session_walk() {
         # as the address — a transcript with no recorded address admitting itself.
         cwd=''; rurl=''
         { IFS= read -r cwd; IFS= read -r rurl; } < <(head -n 1 "$f" 2>/dev/null \
-              | jq -r 'def oneline: if type == "string" and (test("[\n\r]") | not) then . else "" end;
+              | jq -r 'def oneline:
+                         if type == "string" and (test("[\n\r]") | not)
+                            and (contains("\u0000") | not)
+                         then . else "" end;
                        select(.type=="session_meta")
                        | ((.payload.cwd? // .cwd? // "") | oneline),
                          (((.payload.git? | objects | .repository_url? | strings) // "") | oneline)' 2>/dev/null) || true
