@@ -217,6 +217,58 @@ else
   bad "wanted $callers reservations, found $(reserved_count "$race")"
 fi
 
+echo "== a racing mkdir must not grant the same reservation twice =="
+# Older uutils mkdir can return success after another caller creates the directory between its
+# existence check and mkdir syscall. Synchronize both actual helpers before creating H95, then
+# reproduce that false-success result. Owner records must arbitrate the reservation itself.
+race_bin="$FIX/race-bin"
+mkdir "$race_bin" "$FIX/race-ready"
+real_mkdir=$(command -v mkdir)
+cat > "$race_bin/mkdir" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "$#" -eq 1 ] && [ "$1" = "$HYPOTHESIS_RACE_RES/H95" ]; then
+  : > "$HYPOTHESIS_RACE_READY/$$"
+  attempts=0
+  while [ "$(find "$HYPOTHESIS_RACE_READY" -type f | wc -l | tr -d ' ')" -lt 2 ]; do
+    attempts=$((attempts + 1))
+    [ "$attempts" -lt 500 ] || exit 2
+    sleep 0.01
+  done
+  "$HYPOTHESIS_REAL_MKDIR" -p "$1"
+  exit 0
+fi
+exec "$HYPOTHESIS_REAL_MKDIR" "$@"
+SH
+chmod +x "$race_bin/mkdir"
+race_res="$FIX/res-false-success"
+mkdir "$race_res"
+for racer in 1 2; do
+  (
+    rc=0
+    PATH="$race_bin:$PATH" HYPOTHESIS_REAL_MKDIR="$real_mkdir" \
+      HYPOTHESIS_RACE_RES="$race_res" HYPOTHESIS_RACE_READY="$FIX/race-ready" \
+      bash "$SCRIPT" --reservations "$race_res" --owner "forced-$racer" --scan "$store" \
+      > "$FIX/forced-$racer.out" 2> "$FIX/forced-$racer.err" || rc=$?
+    printf '%s\n' "$rc" > "$FIX/forced-$racer.rc"
+  ) &
+done
+wait
+if [ "$(cat "$FIX/forced-1.rc")" = 0 ] && [ "$(cat "$FIX/forced-2.rc")" = 0 ] &&
+   [ "$(cat "$FIX/forced-1.out")" != "$(cat "$FIX/forced-2.out")" ]; then
+  ok "false-success mkdir still gives both callers distinct identifiers"
+else
+  bad "false-success mkdir issued duplicate identifiers or failed a caller"
+fi
+for racer in 1 2; do
+  forced_id=$(cat "$FIX/forced-$racer.out")
+  if [ "$(cat "$race_res/$forced_id/owner" 2>/dev/null)" = "forced-$racer" ]; then
+    ok "forced racer $racer retains its own immutable owner record"
+  else
+    bad "forced racer $racer lost its owner record"
+  fi
+done
+
 echo "== contract: the memory guide states the rule =="
 # Scoped to the paragraph that carries the rule, and fail-closed when it cannot be found: an empty
 # extraction would pass every substring check.
