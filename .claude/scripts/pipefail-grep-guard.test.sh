@@ -85,7 +85,7 @@ set +e
   printf 'NEEDLE\n'
   IFS= read -r -t 5 signal <&3 || exit 92
   [[ "$signal" == closed ]] || exit 93
-  printf 'TAIL\n'
+  LC_ALL=C printf 'TAIL\n'
 } 2>"$tmp/writer-error" | (
   command grep -q NEEDLE
   consumer_rc=$?
@@ -100,10 +100,22 @@ here_rc=$?
 set -e
 exec 3>&-
 
+# An inherited ignored SIGPIPE makes Bash report EPIPE as status 1 instead of
+# signal status 141. Only accept that alternative with the closed-pipe error;
+# timeout, bad synchronization and an unrelated exit 1 are not proof.
+piped_failure=no
+case "${probe_status[0]}:${probe_status[1]}:${probe_status[2]}" in
+141:141:0) piped_failure=yes ;;
+1:1:0)
+  if command grep -F 'Broken pipe' "$tmp/writer-error" >/dev/null; then
+    piped_failure=yes
+  fi
+  ;;
+esac
 report "behaviour: the needle IS present (so any failure is spurious, not a real no-match)" \
   "$(yn test "${probe_status[2]}" -eq 0)" "consumer rc=${probe_status[2]}"
 report "behaviour: piping a writer into 'grep -q' reports FAILURE on a successful match" \
-  "$(yn test "${probe_status[0]}:${probe_status[1]}:${probe_status[2]}" = 141:141:0)" \
+  "$piped_failure" \
   "pipeline/producer/consumer rc=${probe_status[*]}"
 report "behaviour: the pipe-free form the guard asks for never reports that failure" \
   "$(yn test "$here_rc" -eq 0)" "pipe-free rc=$here_rc"
