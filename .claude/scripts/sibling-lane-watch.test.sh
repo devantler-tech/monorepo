@@ -359,6 +359,52 @@ held=$(cat "$FIX/race.a" "$FIX/race.b" | grep -c 'verdict=ESCALATION-CLAIMED ' |
 rcs=$(cat "$FIX/race.a.rc" "$FIX/race.b.rc" | sort | tr '\n' ' ')
 if [ "$pages" -eq 1 ] && [ "$held" -eq 1 ] && [ "$rcs" = "0 1 " ]; then ok; else bad "two runs at the threshold: $pages paged, $held held, exits '$rcs'"; fi
 
+# Older multicall mkdir can report success after a raced EEXIST. Reproduce that
+# result deterministically, then hold each actual state read until its competitor
+# has also read (or a bounded wait expires). A correct lock admits only one read;
+# a mkdir-only lock lets both consume the same unclaimed state and page twice.
+race_tools="$FIX/race-tools"
+mkdir -p "$race_tools" "$FIX/race-barrier"
+export WATCH_REAL_MKDIR="$(command -v mkdir)" WATCH_REAL_JQ="$(command -v jq)"
+export WATCH_RACE_STATE="$STATE" WATCH_RACE_BARRIER="$FIX/race-barrier"
+cat > "$race_tools/mkdir" <<'EOF'
+#!/usr/bin/env bash
+"$WATCH_REAL_MKDIR" "$@" && exit 0
+rc=$?
+case "${1:-}" in *.lock) [ $# = 1 ] && [ -d "$1" ] && exit 0 ;; esac
+exit "$rc"
+EOF
+cat > "$race_tools/jq" <<'EOF'
+#!/usr/bin/env bash
+last=''
+for arg in "$@"; do last=$arg; done
+if [ "$last" != "$WATCH_RACE_STATE" ]; then exec "$WATCH_REAL_JQ" "$@"; fi
+result="${WATCH_RACE_BARRIER}/../query.$PPID"
+"$WATCH_REAL_JQ" "$@" > "$result" || exit $?
+: > "$WATCH_RACE_BARRIER/read.$PPID"
+n=0
+while [ "$(find "$WATCH_RACE_BARRIER" -type f | wc -l)" -lt 2 ] && [ "$n" -lt 100 ]; do
+  sleep 0.01
+  n=$((n + 1))
+done
+cat "$result"
+EOF
+chmod +x "$race_tools/mkdir" "$race_tools/jq"
+"$WATCH_REAL_MKDIR" "$FIX/control.lock"
+if "$race_tools/mkdir" "$FIX/control.lock" 2>/dev/null &&
+  ! "$WATCH_REAL_MKDIR" "$FIX/control.lock" 2>/dev/null; then ok
+else bad 'the raced-EEXIST fixture must really report false mkdir success'; fi
+reset; liveness 1 "$DOWN_NO_SESSION"
+watch 0 >/dev/null; watch $SLOT >/dev/null
+(rc=0; PATH="$race_tools:$PATH" watch $((2 * SLOT)) > "$FIX/race.a" 2>&1 || rc=$?; echo "$rc" > "$FIX/race.a.rc") &
+(rc=0; PATH="$race_tools:$PATH" watch $((2 * SLOT + 5)) > "$FIX/race.b" 2>&1 || rc=$?; echo "$rc" > "$FIX/race.b.rc") &
+wait
+pages=$(cat "$FIX/race.a" "$FIX/race.b" | grep -c 'verdict=ESCALATE ' || true)
+held=$(cat "$FIX/race.a" "$FIX/race.b" | grep -c 'verdict=ESCALATION-CLAIMED ' || true)
+rcs=$(cat "$FIX/race.a.rc" "$FIX/race.b.rc" | sort | tr '\n' ' ')
+if [ "$pages" -eq 1 ] && [ "$held" -eq 1 ] && [ "$rcs" = "0 1 " ]; then ok
+else bad "raced EEXIST must not double-page: $pages paged, $held held, exits '$rcs'"; fi
+
 # A lock nobody will release: a fresh one is respected, an old one is taken over.
 reset; liveness 1 "$DOWN_NO_SESSION"
 watch 0 >/dev/null
@@ -368,6 +414,23 @@ state_has "a held lock leaves the count where it was" '.observations == 1'
 touch -t 202001010000 "$STATE.lock"
 check "a lock left by a dead run is taken over" 0 "observations=2/3" $SLOT
 if [ ! -e "$STATE.lock" ]; then ok; else bad "the lock was not released"; fi
+# The new exclusive-create format has the same bounded recovery behavior.
+reset; liveness 1 "$DOWN_NO_SESSION"
+watch 0 >/dev/null
+printf 'another-owner\n' > "$STATE.lock"
+check "a held file lock is UNKNOWN" 2 "verdict=UNKNOWN" $SLOT
+state_has "a held file lock leaves the count where it was" '.observations == 1'
+touch -t 202001010000 "$STATE.lock"
+printf 'dead-reaper\n' > "$STATE.reap"
+touch -t 202001010000 "$STATE.reap"
+check "dead file and reaper locks are recovered" 0 "observations=2/3" $SLOT
+if [ ! -e "$STATE.lock" ] && [ ! -e "$STATE.reap" ]; then ok
+else bad "recovered file locks were stranded"; fi
+reset; liveness 1 "$DOWN_NO_SESSION"
+watch 0 >/dev/null
+mkfifo "$STATE.lock"
+check "a FIFO at the lock path is UNKNOWN rather than opened" 2 "verdict=UNKNOWN" $SLOT
+state_has "a refused FIFO leaves the count unchanged" '.observations == 1'
 # Many waiters meeting one dead lock: exactly one of them may reap it, so the lock is never held
 # twice (which would page twice) and never left behind (which would blind the next runs).
 doubles=0; stranded=0; unpaged=0

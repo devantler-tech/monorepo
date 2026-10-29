@@ -1333,11 +1333,36 @@ grep -q 'carries no golangci-lint README marker' <<<"$out" ||
 mv "${lint_cache}/README.away" "${lint_cache}/README" || fail 'fixture: restore lint marker'
 
 # 16d. a RUNNING golangci-lint keeps it -- against the REAL ps, which also proves the
-# process-table parser on this platform. A symlink named golangci-lint to `sleep` shows
-# under that name on both macOS and Linux (a copied macOS system binary is killed on exec).
+# process-table parser on this platform. Build our own bounded holder: current
+# Ubuntu sleep is a multicall executable that refuses a different utility name.
 procs="${fixture_root}/procs"
 mkdir -p "$procs" || fail 'fixture: procs dir'
-ln -s "$(command -v sleep)" "${procs}/golangci-lint" || fail 'fixture: golangci-lint link'
+cat > "${procs}/holder.go" <<'GO'
+package main
+
+import (
+	"os"
+	"strconv"
+	"time"
+)
+
+func main() {
+	if len(os.Args) != 2 {
+		os.Exit(2)
+	}
+	seconds, err := strconv.ParseInt(os.Args[1], 10, 32)
+	if err != nil || seconds < 1 || seconds > 3600 {
+		os.Exit(2)
+	}
+	time.Sleep(time.Duration(seconds) * time.Second)
+}
+GO
+native_go=$(command -v go) || { fail 'fixture: Go compiler unavailable'; exit 1; }
+if ! GOTOOLCHAIN=local GOWORK=off GO111MODULE=off GOCACHE="${procs}/build-cache" \
+  "$native_go" build -trimpath -o "${procs}/golangci-lint" "${procs}/holder.go"; then
+  fail 'fixture: cannot build the bounded process holder'
+  exit 1
+fi
 "${procs}/golangci-lint" 30 &
 lint_pid=$!
 sleep 1
@@ -2861,18 +2886,12 @@ make_loose "$lf_keep" 2 "$lf_old" || fail 'fixture: 27 keep-list name'
 make_loose "$lf_image" 2 "$lf_old" || fail 'fixture: 27 disk image'
 # A running executable: the snapshot lists it among the open paths even with no descriptor.
 lf_exe="${lf_root}/ksail-running"
-{ cp "$(command -v sleep)" "$lf_exe" && chmod u+x "$lf_exe"; } || {
+{ cp "${procs}/golangci-lint" "$lf_exe" && chmod u+x "$lf_exe"; } || {
   fail 'fixture: 27 executable'
   exit 1
 }
-# macOS kills this copied system executable with its original signature. Refresh
-# only our disposable copy, without a credential or any change to the system binary.
-if [ "$(uname -s)" = Darwin ]; then
-  codesign --force --sign - "$lf_exe" >/dev/null 2>&1 || {
-    fail 'fixture: 27 cannot prepare the copied executable signature'
-    exit 1
-  }
-fi
+# This is the fixture-owned Go binary, including Go's local macOS signature;
+# no renamed system utility or system-code signing exception is involved.
 touch -t "$lf_old" "$lf_exe" || {
   fail 'fixture: 27 aging the executable'
   exit 1

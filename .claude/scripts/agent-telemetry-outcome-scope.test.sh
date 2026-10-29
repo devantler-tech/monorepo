@@ -6,7 +6,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 FIX=$(mktemp -d)
-trap 'rm -rf "$FIX"' EXIT
+scope_test_finished=0
+cleanup() {
+  local rc=$?
+  rm -rf "$FIX"
+  if [ "$scope_test_finished" != 1 ] && [ "$rc" -eq 0 ]; then
+    echo 'outcome authorization: aborted before finishing' >&2
+    rc=1
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
 mkdir -p "$FIX/definition/.claude/scripts" "$FIX/definition/.claude/guides" \
   "$FIX/bin" "$FIX/corpus/.git" "$FIX/home"
 cp "$SCRIPT_DIR/agent-telemetry.sh" "$FIX/definition/.claude/scripts/"
@@ -168,3 +178,4 @@ check unknown
 check no_repo_queries
 printf 'outcome authorization: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
+scope_test_finished=1
