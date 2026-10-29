@@ -58,7 +58,8 @@
 #   scheduled entry at all is UNKNOWN, as it was with one entry.
 #
 # READ-ONLY toward both runtimes. Everything it writes sits beside its own state file: the file, its
-# `.lock` and `.reap` directories, and a `.corrupt` copy of a state file it had to set aside. The
+# `.lock` and `.reap` files (recovering older empty directories), and a `.corrupt` copy of a state
+# file it had to set aside. The
 # state holds a lane name, a count, a slot number and three timestamps — nothing from a transcript
 # or a store. It prints only that same summary, never the liveness report itself,
 # so its output is safe to quote in a run report.
@@ -125,10 +126,28 @@ LOCK_STALE_MINUTES=2
 sibling_lane_watch_finished=0
 lock_dir=""
 lock_held=0
+lock_token="$$.$RANDOM.$RANDOM"
+# Use the shell's exclusive create, rather than mkdir's exit status. Some
+# multicall mkdir versions report success when a competing create wins EEXIST.
+try_lock_file() {
+  # Refuse existing nonregular entries before redirection (a FIFO could block).
+  # This check is only a refusal; noclobber still arbitrates concurrent creates.
+  [ ! -e "$1" ] && [ ! -L "$1" ] || return 1
+  (set -C; printf '%s\n' "$lock_token" > "$1") 2>/dev/null
+}
+release_lock_file() {
+  local held_token=''
+  [ -f "$1" ] && [ ! -L "$1" ] || return 0
+  # Bash 3.2 command substitution can lose the token when stdout is closed.
+  # Cleanup must still release our lock after a failed summary write.
+  IFS= read -r held_token < "$1" || return 0
+  [ "$held_token" = "$lock_token" ] || return 0
+  rm -f "$1" 2>/dev/null || true
+}
 # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
 sibling_lane_watch_cleanup() {
   local rc=$?
-  if [ "$lock_held" -eq 1 ]; then rmdir "$lock_dir" 2>/dev/null || true; fi
+  if [ "$lock_held" -eq 1 ]; then release_lock_file "$lock_dir"; fi
   # Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0 (monorepo#3414), and bash 5
   # reports it as 1, which here would read as a page. Only `finish` may choose the status.
   if [ "$sibling_lane_watch_finished" != 1 ] && [ "$rc" -ne 2 ]; then
@@ -248,6 +267,14 @@ is_stale() {
   [ -n "$(find "$1" -maxdepth 0 -mmin "+${LOCK_STALE_MINUTES}" 2>/dev/null || true)" ]
 }
 
+# Keep recovery of an empty directory left by the previous lock format. A
+# symlink or an unrecognized nonempty directory never grants ownership.
+remove_stale_lock() {
+  [ ! -L "$1" ] || return 0
+  if [ -d "$1" ]; then rmdir "$1" 2>/dev/null || true
+  elif [ -f "$1" ]; then rm -f "$1" 2>/dev/null || true; fi
+}
+
 lock_state() {
   local dir reap_dir tries=0
   dir="$(dirname "$STATE_FILE")"
@@ -255,18 +282,18 @@ lock_state() {
   [ -w "$dir" ] || unknown "the state directory is not writable: $dir"
   lock_dir="${STATE_FILE}.lock"
   reap_dir="${STATE_FILE}.reap"
-  until mkdir "$lock_dir" 2>/dev/null; do
+  until try_lock_file "$lock_dir"; do
     # A lock older than any run of this script was left by one that died. Testing its age and then
     # removing it are two steps, and between them another waiter can have removed it and a third
     # run taken a live lock in its place. So only ONE waiter at a time may reap: the age test and the
     # removal both happen under a second, short mutex, and nothing but a reaper ever removes a
     # lock it does not hold. A reaper mutex left by a killed run ages out the same way.
     if is_stale "$lock_dir"; then
-      if mkdir "$reap_dir" 2>/dev/null; then
-        if is_stale "$lock_dir"; then rmdir "$lock_dir" 2>/dev/null || true; fi
-        rmdir "$reap_dir" 2>/dev/null || true
+      if try_lock_file "$reap_dir"; then
+        if is_stale "$lock_dir"; then remove_stale_lock "$lock_dir"; fi
+        release_lock_file "$reap_dir"
       elif is_stale "$reap_dir"; then
-        rmdir "$reap_dir" 2>/dev/null || true
+        remove_stale_lock "$reap_dir"
       fi
     fi
     tries=$((tries + 1))

@@ -40,7 +40,7 @@
 # EXIT: 0 every selected script passed (including when none was selected — the count of
 #       changed files is printed so an empty selection is visible), 1 at least one FAILED
 #       or TIMED OUT, 2 cannot tell (bad usage, unreadable workflow, git failure, or a
-#       selected script that does not exist, which CI would fail running).
+#       selected script that does not exist, which CI would fail running, or a broken watchdog).
 set -uo pipefail
 
 me="$(basename "$0")"
@@ -257,6 +257,7 @@ logdir="$(mktemp -d)" || die "cannot create a log directory"
 trap 'rm -rf "${logdir}"' EXIT
 set -m   # each background script gets its own process group, so a timeout kills its children too
 failed=0
+unknown=0
 i=0
 while IFS=$'\t' read -r run_wd rel s how test_timeout; do
   [ -n "${s}" ] || continue
@@ -273,14 +274,39 @@ while IFS=$'\t' read -r run_wd rel s how test_timeout; do
   # TERM first, then KILL after a short grace, so a script that ignores TERM cannot outlive
   # its deadline.
   # The marker records that the deadline fired, so a script that exits 0 on TERM is still a TIMEOUT.
-  ( sleep "${test_timeout}"; : >"${log}.timeout"; kill -TERM -- "-${pid}" 2>/dev/null; sleep "${kill_grace_s}"; kill -KILL -- "-${pid}" 2>/dev/null ) &
+  (
+    timer_failed=0
+    if sleep "${test_timeout}"; then
+      : >"${log}.timeout"
+    else
+      # Cancellation can reach sleep before the subshell on macOS. Its nonzero return is
+      # not a deadline. Only the parent, after reaping the test, may authorize cancellation.
+      [ ! -e "${log}.cancelled" ] || exit 0
+      : >"${log}.timer-error"
+      timer_failed=1
+    fi
+    kill -TERM -- "-${pid}" 2>/dev/null
+    sleep "${kill_grace_s}"
+    kill -KILL -- "-${pid}" 2>/dev/null
+    [ "$timer_failed" -eq 0 ] || exit 2
+  ) &
   watchdog=$!
   wait "${pid}"
   rc=$?
+  if ! : >"${log}.cancelled"; then
+    kill -TERM -- "-${watchdog}" 2>/dev/null
+    wait "${watchdog}" 2>/dev/null
+    die "cannot record watchdog cancellation"
+  fi
   kill -TERM -- "-${watchdog}" 2>/dev/null
   wait "${watchdog}" 2>/dev/null
+  watchdog_rc=$?
   secs=$(( $(date +%s) - start ))
-  if [ "${rc}" -eq 0 ] && [ ! -e "${log}.timeout" ]; then
+  if [ -e "${log}.timer-error" ] || [ "$watchdog_rc" -eq 2 ]; then
+    unknown=1
+    printf 'UNKNOWN  %4ss  %s — watchdog failed before its deadline\n' "${secs}" "${s}"
+    tail -n 20 "${log}" | sed 's/^/    /'
+  elif [ "${rc}" -eq 0 ] && [ ! -e "${log}.timeout" ]; then
     printf 'PASS     %4ss  %s\n' "${secs}" "${s}"
   else
     failed=1
@@ -290,4 +316,5 @@ while IFS=$'\t' read -r run_wd rel s how test_timeout; do
   fi
 done <<<"${runs}"
 
+[ "$unknown" -eq 0 ] || exit 2
 exit "${failed}"
