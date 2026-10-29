@@ -485,15 +485,104 @@ workflow="${repo_root}/.github/workflows/ci.yaml"
 # 4a and the scanned/lists_seen floors exist to prevent, reintroduced in the fix for it.
 [ -r "${workflow}" ] ||
   fail "ci.yaml is missing or unreadable at ${workflow} — this job's own wiring cannot be verified, so an OK here would be vacuous"
+# A unique line can still belong to the wrong job (#4659). These checks deliberately
+# accept only the workflow's canonical indentation and fail closed on ambiguous blocks.
+owned_block() {
+  awk -v heading="$1" -v indentation="$2" '
+    $0 == heading { found++; inside = 1; next }
+    inside && $0 !~ /^ *$/ {
+      match($0, /^ */)
+      if (RLENGTH <= indentation) inside = 0
+    }
+    inside { print }
+    END { if (found != 1) exit 1 }
+  '
+}
+status_wiring() {
+  local status needs step inputs results hits
+  status="$(owned_block '  status:' 2)" || {
+    echo 'status job must occur exactly once'
+    return 1
+  }
+  needs="$(owned_block '    needs:' 4 <<<"${status}")" || {
+    echo 'status needs block must occur exactly once'
+    return 1
+  }
+  hits="$(grep -cFx '      - test-merge-confirmation-read' <<<"${needs}" || true)"
+  [ "${hits}" -eq 1 ] || {
+    echo 'status needs must contain the guard exactly once'
+    return 1
+  }
+  step="$(owned_block '      - name: Check job results' 6 <<<"${status}")" || {
+    echo 'status aggregate step must occur exactly once'
+    return 1
+  }
+  grep -q '^        uses: devantler-tech/\.github/actions/aggregate-job-checks@' <<<"${step}" || {
+    echo 'status aggregate step must use the result aggregator'
+    return 1
+  }
+  inputs="$(owned_block '        with:' 8 <<<"${step}")" || {
+    echo 'status aggregate inputs must occur exactly once'
+    return 1
+  }
+  results="$(owned_block '          job-results: >-' 10 <<<"${inputs}")" || {
+    echo 'status job-results block must occur exactly once'
+    return 1
+  }
+  hits="$(grep -cFx '            ${{ needs.test-merge-confirmation-read.result }}' <<<"${results}" || true)"
+  [ "${hits}" -eq 1 ] || {
+    echo 'status job-results must contain the guard exactly once'
+    return 1
+  }
+}
+
+# Exercise ownership without editing a real workflow. Unrelated copies must not matter.
+status_fixture='  status:
+    needs:
+      - test-merge-confirmation-read
+    steps:
+      - name: Check job results
+        uses: devantler-tech/.github/actions/aggregate-job-checks@fixture
+        with:
+          job-results: >-
+            ${{ needs.test-merge-confirmation-read.result }}'
+status_wiring <<<"${status_fixture}" || fail 'status ownership positive control failed'
+for field in needs result; do
+  case "${field}" in
+    needs)
+      entry='      - test-merge-confirmation-read'
+      reason='status needs must contain the guard exactly once'
+      outside=$'\n  unrelated:\n    needs:\n'
+      ;;
+    result)
+      entry='            ${{ needs.test-merge-confirmation-read.result }}'
+      reason='status job-results must contain the guard exactly once'
+      outside=$'\n  unrelated:\n    env:\n      proof: |\n'
+      ;;
+  esac
+  without="$(awk -v entry="${entry}" '$0 != entry' <<<"${status_fixture}")"
+  for control in missing relocated duplicate; do
+    case "${control}" in
+      missing) mutant="${without}" ;;
+      relocated) mutant="${without}${outside}${entry}" ;;
+      duplicate) mutant="$(awk -v entry="${entry}" '{ print; if ($0 == entry) print }' <<<"${status_fixture}")" ;;
+    esac
+    if diagnostic="$(status_wiring <<<"${mutant}")"; then
+      fail "status ${field} ${control} control was accepted"
+    fi
+    grep -qxF "${reason}" <<<"${diagnostic}" ||
+      fail "status ${field} ${control} control failed for the wrong reason: ${diagnostic}"
+  done
+  status_wiring <<<"${status_fixture}${outside}${entry}" ||
+    fail "an unrelated ${field} copy changed status ownership"
+done
+diagnostic="$(status_wiring <"${workflow}")" || fail "ci.yaml ${diagnostic}"
 for wiring in \
   '            merge-confirmation-read:|paths-filter entry' \
   '      merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}|changes-job outputs declaration (its absence makes the job skip silently)' \
-  '  test-merge-confirmation-read:|job definition' \
-  '      - test-merge-confirmation-read|status job needs: entry (its absence stops the job gating the merge)' \
-  '            ${{ needs.test-merge-confirmation-read.result }}|status job job-results entry'; do
+  '  test-merge-confirmation-read:|job definition'; do
   needle="${wiring%%|*}"; what="${wiring#*|}"
-  # Each of these lines names this job, so it must occur EXACTLY once: a whole-file match is only
-  # sound while the needle is unique, and a duplicate would let a copy elsewhere satisfy it (#3050).
+  # Status dependencies and results are checked in their owning fields above.
   hits=$(grep -cFx -- "${needle}" "${workflow}" || true)
   [ "${hits}" -ne 0 ] ||
     fail "ci.yaml is missing this job's ${what} — the guard would not gate"
