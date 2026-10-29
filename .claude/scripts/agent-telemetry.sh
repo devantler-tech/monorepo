@@ -692,8 +692,8 @@ rx_escape()    { printf '%s' "$1" | sed 's|[].[^$*/\\+?(){}|]|\\&|g'; }
 PORTFOLIO_DIR_RE=__authorization_not_resolved__
 [ -n "$PORTFOLIO_PATHS" ] || { echo "PORTFOLIO_PATHS resolved empty — refusing to scan" >&2; exit 2; }
 
-# True when the session store root is itself under an allowlisted path — then the
-# store contains only in-scope work by construction and needs no dir filtering.
+# True when the store root belongs to an admitted repository and selector.
+# This admits its direct records and session layout, never arbitrary child stores.
 # The loop is fed by a redirect, not a pipe. Piping it into `grep -q` made grep
 # exit at the first `match` and killed the writer with SIGPIPE; `pipefail` then
 # reported the writer's death, so a store that IS in scope answered "no".
@@ -2648,8 +2648,8 @@ scoped_session_paths() {
   # One `ls` of directory NAMES (no descent, no stat) is the minimum needed to
   # decide scope, and out-of-scope trees are never entered.
   [ -d "$CLAUDE_PROJECTS" ] || return 0
-  # If the store ROOT is itself inside an allowlisted path, it is already scoped
-  # and every directory under it is in scope — no per-directory filter needed.
+  # A selected store root may hold direct sessions and separate project stores.
+  # Only its session layout and independently admitted project names are walked.
   {
     if store_root_in_scope; then
       claude_session_listing "$CLAUDE_PROJECTS" \
@@ -2666,7 +2666,7 @@ scoped_session_paths() {
 }
 
 claude_project_authorized() {
-  local name=$1 p slug suffix root sub
+  local name=$1 p slug suffix root sub presence
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     slug=$(path_to_slug "$p")
@@ -2685,6 +2685,9 @@ claude_project_authorized() {
       "$slug"--claude-worktrees-*)
         suffix=${name#"$slug"--claude-worktrees-}
         root="$p/.claude/worktrees/$suffix"
+        presence=0
+        worktree_presence "$root" || presence=$?
+        case "$presence" in 1) return 3 ;; 2) return 2 ;; esac
         [ -e "$root/.git" ] || return 2
         transcript_path_authorized "$root"; return $? ;;
     esac
@@ -2804,7 +2807,7 @@ portfolio_repository_name() {
     *) return 1 ;;
   esac
   name=${name%.git}
-  grep -Eq '^devantler-tech/[A-Za-z0-9._-]+$' <<<"$name" || return 1
+  [[ $name != *$'\n'* && $name =~ ^devantler-tech/[A-Za-z0-9._-]+$ ]] || return 1
   case "$name" in */.|*/..) return 1 ;; esac
   printf '%s\n' "$name" | tr '[:upper:]' '[:lower:]'
 }
@@ -2818,7 +2821,7 @@ transcript_git() {
 }
 
 transcript_path_authorized() {
-  local path=$1 url top physical_path sub key slots slot_rc=0
+  local path=$1 url top physical_path
   # Git's nearest repository distinguishes an ordinary product directory from
   # a different checkout nested beneath an admitted aggregator.
   url=$(transcript_git -C "$path" remote get-url origin 2>/dev/null) || return 2
@@ -2826,6 +2829,13 @@ transcript_path_authorized() {
   top=$(transcript_git -C "$path" rev-parse --show-toplevel 2>/dev/null) || return 2
   top=$(cd "$top" && pwd -P) || return 2
   physical_path=$(cd "$path" && pwd -P) || return 2
+  transcript_repository_contains_path "$top" "$physical_path"
+}
+
+# Also checks a selected missing cwd: an ordinary removed subdirectory retains
+# its live repository witness, while an unpopulated product slot does not.
+transcript_repository_contains_path() {
+  local top=$1 physical_path=$2 sub key slots slot_rc=0
   case "$physical_path" in
     "$top"|"$top"/*) ;;
     *) return 2 ;;
@@ -2837,7 +2847,7 @@ transcript_path_authorized() {
     [ "$slot_rc" -le 1 ] || return 2
     while read -r key sub; do
       [ -n "$key" ] || continue
-      case "$sub" in ''|/*|*//*|../*|*/../*|*/..|./*|*/./*|*/.|*/|*[[:cntrl:]]*) return 2 ;; esac
+      case "$sub" in ''|.|..|/*|*//*|../*|*/../*|*/..|./*|*/./*|*/.|*/|*[[:cntrl:]]*) return 2 ;; esac
       case "$physical_path" in
         "$top/$sub"|"$top/$sub"/*) [ -e "$top/$sub/.git" ] || return 2 ;;
       esac
@@ -2866,7 +2876,7 @@ prepare_transcript_scope() {
   if [ -r "$MONOREPO/.gitmodules" ] && transcript_path_authorized "$MONOREPO"; then
     while IFS= read -r sub; do
       [ -n "$sub" ] || continue
-      case "$sub" in /*|*//*|../*|*/../*|*/..|./*|*/./*|*/.|*/|*[[:cntrl:]]*) continue ;; esac
+      case "$sub" in .|..|/*|*//*|../*|*/../*|*/..|./*|*/./*|*/.|*/|*[[:cntrl:]]*) continue ;; esac
       if transcript_path_authorized "$MONOREPO/$sub"; then
         url=$(transcript_git -C "$MONOREPO/$sub" remote get-url origin 2>/dev/null) || continue
         # The path list is a selector too: a declared path cannot name an
@@ -2905,7 +2915,7 @@ prepare_transcript_scope() {
 }
 
 in_scope_cwd() {
-  local cwd="$1" recorded="${2-}" p url gone=0 unchecked=0 presence base rest id root where actual_root physical_root
+  local cwd="$1" recorded="${2-}" p gone=0 unchecked=0 presence base rest id root where actual_root physical_root admission_rc
   [ -n "$cwd" ] || return 1
   # Both forms compare the recorded folder as TEXT, so it must be written plainly
   # (monorepo#4151). `<portfolio path>/../../elsewhere` starts with a portfolio
@@ -2962,12 +2972,22 @@ in_scope_cwd() {
         # A directory inside some other repository is not its own worktree.
         # Resolve only these already selected paths; never accept an inherited
         # ancestor remote as proof of the named worktree's identity.
-        actual_root=$(transcript_git -C "$root" rev-parse --show-toplevel 2>/dev/null) || continue
-        actual_root=$(cd "$actual_root" && pwd -P) || continue
-        physical_root=$(cd "$root" && pwd -P) || continue
-        [ "$actual_root" = "$physical_root" ] || continue
-        url=$(transcript_git -C "$where" remote get-url origin 2>/dev/null) || continue
-        if portfolio_remote_url "$url"; then return 0; fi ;;
+        [ -e "$root/.git" ] || [ -L "$root/.git" ] || continue
+        actual_root=$(transcript_git -C "$root" rev-parse --show-toplevel 2>/dev/null) || { unchecked=1; continue; }
+        actual_root=$(cd "$actual_root" && pwd -P) || { unchecked=1; continue; }
+        physical_root=$(cd "$root" && pwd -P) || { unchecked=1; continue; }
+        [ "$actual_root" = "$physical_root" ] || { unchecked=1; continue; }
+        admission_rc=0
+        transcript_path_authorized "$root" || admission_rc=$?
+        [ "$admission_rc" -ne 1 ] || continue
+        if [ "$admission_rc" -ne 0 ]; then unchecked=1; continue; fi
+        if ! transcript_repository_contains_path "$physical_root" "$physical_root${cwd#"$root"}"; then
+          unchecked=1; continue
+        fi
+        admission_rc=0
+        transcript_path_authorized "$where" || admission_rc=$?
+        [ "$admission_rc" -ne 0 ] || return 0
+        [ "$admission_rc" -ne 2 ] || unchecked=1 ;;
     esac
   done < <(printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$')
   [ "$unchecked" -eq 0 ] || return 4
@@ -3050,16 +3070,16 @@ codex_unreadable_folders() {
 # so a project folder, a session's `subagents/` folder or a transcript it cannot
 # open simply drops out, and every section that reads the walk printed a clean,
 # smaller count — the delegated share read 0% with one session folder locked.
-# Names, one per line, every in-scope folder (relative to the store; `.` is the
-# store itself) that exists but could not be walked or holds a transcript that
-# cannot be opened. Scope is decided exactly as the walk decides it, so an
-# excluded folder is never entered here either.
-claude_unreadable_folders() {
+# Tag each unavailable in-scope folder: U for an unreadable source, G for a
+# confirmed removed worktree. Paths are relative to the store (`.` is the store
+# itself). A stale project slug cannot supply a removed repository's identity;
+# it remains excluded, visibly separate from failed reads and measured sessions.
+claude_unavailable_folders() {
   local d dirs list f admission_rc presence=0
   worktree_presence "$CLAUDE_PROJECTS" || presence=$?
-  case "$presence" in 1) return 0 ;; 2) printf '.\n'; return 0 ;; esac
+  case "$presence" in 1) return 0 ;; 2) printf 'U .\n'; return 0 ;; esac
   if ! dirs=$(ls -1 "$CLAUDE_PROJECTS" 2>/dev/null); then
-    printf '.\n'; return 0
+    printf 'U .\n'; return 0
   else
     dirs=$(printf '%s\n' "$dirs" | grep -E "^($PORTFOLIO_DIR_RE)$" || true)
   fi
@@ -3073,20 +3093,21 @@ $dirs}"; fi
       case "$admission_rc" in
         0) ;;
         1) continue ;;
-        *) printf '%s\n' "$d"; continue ;;
+        3) printf 'G %s\n' "$d"; continue ;;
+        *) printf 'U %s\n' "$d"; continue ;;
       esac
     fi
     # Listed twice before it counts, as for Codex: a session that settles while
     # it is listed can make one `find` fail on a folder that reads fine.
     if ! list=$(claude_session_listing "$CLAUDE_PROJECTS/$d") \
        && ! list=$(claude_session_listing "$CLAUDE_PROJECTS/$d"); then
-      printf '%s\n' "$d"; continue
+      printf 'U %s\n' "$d"; continue
     fi
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       # Open it rather than test the permission bit: an ACL or sandbox denial
       # can pass `-r` and still fail the open the walk's readers make.
-      if [ -e "$f" ] && ! { : <"$f"; } 2>/dev/null; then printf '%s\n' "$d"; break; fi
+      if [ -e "$f" ] && ! { : <"$f"; } 2>/dev/null; then printf 'U %s\n' "$d"; break; fi
     done <<<"$list"
   done <<<"$dirs"
 }
@@ -3094,6 +3115,7 @@ $dirs}"; fi
 SF_CACHE=''
 SF_COUNT=0
 CL_UNREADABLE=''
+CL_GONE=0
 WINDOW_SINCE=''
 CX_CACHE=''
 CX_COUNT=0
@@ -3144,8 +3166,11 @@ cx_line_base() {
 # shares this cutoff, so a boundary record vanished from the metric AND its
 # control together — invisible, and in the under-reporting direction.
 populate_session_cache() {
+  local cl_walk=''
   [ "$SAFETY_SCOPE" = codex ] || SF_CACHE="$(session_files)"
-  [ "$SAFETY_SCOPE" = codex ] || CL_UNREADABLE="$(claude_unreadable_folders)"
+  [ "$SAFETY_SCOPE" = codex ] || cl_walk="$(claude_unavailable_folders)"
+  CL_UNREADABLE=$(printf '%s\n' "$cl_walk" | awk '/^U / { print substr($0, 3) }')
+  CL_GONE=$(printf '%s\n' "$cl_walk" | grep -c '^G ' || true)
   SF_COUNT=$(printf '%s' "$SF_CACHE" | grep -c . || true)
   # awk applies the cap instead of `head`: it reads the whole walk, so no writer is
   # cut off mid-stream under pipefail.
@@ -3417,6 +3442,9 @@ if [ -n "$CL_UNREADABLE" ]; then
       done <<<"$CL_UNREADABLE"
       main_rc=2 ;;
   esac
+fi
+if [ "$CL_GONE" -gt 0 ]; then
+  echo " Claude project folders left out, worktree confirmed gone: ${CL_GONE}"
 fi
 # The same for a transcript whose worktree could be neither found nor confirmed
 # absent: it is left out, and the reading is incomplete rather than clean.

@@ -350,6 +350,66 @@ else
   check grep -qF '1 Codex sessions]' "$FIX/transcript-output"
 fi
 cp "$FIX/collector-before-routing-mutation.sh" "$FIX/definition/.claude/scripts/agent-telemetry.sh"
+
+# Live Codex worktrees use the same repository and product-slot checks as a
+# selected ordinary checkout, including a cwd that has since been removed.
+worktree_root="$FIX/home/codex/worktrees/native/corpus"
+mkdir -p "$worktree_root/unpopulated"
+git -C "$worktree_root" init -q
+git -C "$worktree_root" remote add origin https://github.com/devantler-tech/monorepo.git
+cat > "$worktree_root/.gitmodules" <<'SLOT'
+[submodule "unpopulated"]
+  path = unpopulated
+  url = https://github.com/devantler-tech/scope-public.git
+SLOT
+write_codex "$worktree_root/unpopulated"
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check not_measured
+check test "$RC" = 2
+rmdir "$worktree_root/unpopulated"
+write_codex "$worktree_root/unpopulated"
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check not_measured
+check test "$RC" = 2
+write_codex "$worktree_root"
+git -C "$worktree_root" config core.worktree "$FIX/corpus/mapped"
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check not_measured
+check test "$RC" = 2
+git --git-dir="$worktree_root/.git" config --unset core.worktree
+write_codex "$worktree_root/ordinary-deleted-directory"
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check grep -qF '1 Codex sessions]' "$FIX/transcript-output"
+
+# A remote is one value, not a list of independently admissible lines.
+git -C "$FIX/corpus/private" remote set-url origin $'https://github.com/devantler-tech/scope-denied\ndevantler-tech/scope-public.git'
+write_codex "$FIX/corpus/private"
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check not_measured
+git -C "$FIX/corpus/private" remote set-url origin https://github.com/devantler-tech/scope-denied.git
+
+# The project-store slug survives worktree removal. A confirmed removal is a
+# visible coverage exclusion; a still-existing root with broken metadata is not.
+rm "$FIX/home/codex/sessions/scope.jsonl"
+claude_root="$FIX/corpus/.claude/worktrees/calm-quiet-abcdef"
+claude_slug="$(printf '%s' "$FIX/corpus" | tr / -)--claude-worktrees-calm-quiet-abcdef"
+mkdir -p "$FIX/stale-projects/$claude_slug"
+printf '{"type":"user","message":{"content":"SCOPE_ADMISSION_CANARY"}}\n' \
+  > "$FIX/stale-projects/$claude_slug/scope.jsonl"
+SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
+check test "$RC" = 0
+check not_measured
+check not_walked "$FIX/stale-projects/$claude_slug"
+check grep -qF 'Claude project folders left out, worktree confirmed gone: 1' "$FIX/transcript-output"
+mkdir -p "$claude_root"
+SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
+check test "$RC" = 2
+check not_walked "$FIX/stale-projects/$claude_slug"
+git -C "$claude_root" init -q
+git -C "$claude_root" remote add origin https://github.com/devantler-tech/scope-public.git
+SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
+check test "$RC" = 0
+check grep -qF '[BOTH instances: 1 Claude + 0 Codex sessions]' "$FIX/transcript-output"
 printf 'outcome authorization: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
 scope_test_finished=1
