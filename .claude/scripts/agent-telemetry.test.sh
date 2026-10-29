@@ -801,14 +801,14 @@ case "$*" in
   'api repos/devantler-tech/monorepo/commits -X GET '*)
     [ -z "${OUTCOMES_COMMITS_FAIL:-}" ] || exit 1
     printf '0\n' ;;
-  'api --paginate orgs/devantler-tech/repos?type=all&per_page=100 --jq '*)
+  'api --paginate --slurp orgs/devantler-tech/repos?type=all&per_page=100')
     # The live org inventory (monorepo#4139). Default: the monorepo plus an
     # archived repository, so every other case keeps its one-repository totals.
     [ -z "${OUTCOMES_ORG_FAIL:-}" ] || exit 1
     if [ -n "${OUTCOMES_ORG_REPOS:-}" ]; then
-      jq -r "$5" "$OUTCOMES_ORG_REPOS"
+      jq -s '.' "$OUTCOMES_ORG_REPOS"
     else
-      printf '%s\n' '[{"full_name":"devantler-tech/monorepo","archived":false},{"full_name":"devantler-tech/retired","archived":true}]' | jq -r "$5"
+      printf '%s\n' '[[{"id":1,"full_name":"devantler-tech/monorepo","private":false,"archived":false},{"id":2,"full_name":"devantler-tech/retired","private":false,"archived":true}]]'
     fi ;;
   'api repos/'*) printf '0\n' ;;
   *) exit 93 ;;
@@ -846,6 +846,10 @@ mkdir -p \
   "$FIX/outcomes/definition-root/.claude/plugin-consumption" \
   "$FIX/outcomes/definition-root/libraries/agent-plugins/plugins/agentic-engineering/scripts"
 cp "$TARGET" "$FIX/outcomes/definition-root/.claude/scripts/agent-telemetry.sh"
+mkdir -p "$FIX/outcomes/definition-root/.claude/guides"
+cp "$SCRIPT_DIR/../../AGENTS.md" "$FIX/outcomes/definition-root/AGENTS.md"
+cp "$SCRIPT_DIR/../guides/work-selection.md" "$SCRIPT_DIR/../guides/egress-and-privacy.md" \
+  "$FIX/outcomes/definition-root/.claude/guides/"
 cp "$FIX/outcomes/classifier" \
   "$FIX/outcomes/definition-root/libraries/agent-plugins/plugins/agentic-engineering/scripts/classify-default-branch-ci-runs.sh"
 cp "$FIX/outcomes/desired-state.json" \
@@ -864,6 +868,10 @@ mkdir -p \
   "$FIX/outcomes/cache-definition-root/.claude/plugin-consumption" \
   "$FIX/outcomes/cache-codex/plugins/cache/devantler-plugins/agentic-engineering/9.9.9/scripts"
 cp "$TARGET" "$FIX/outcomes/cache-definition-root/.claude/scripts/agent-telemetry.sh"
+mkdir -p "$FIX/outcomes/cache-definition-root/.claude/guides"
+cp "$SCRIPT_DIR/../../AGENTS.md" "$FIX/outcomes/cache-definition-root/AGENTS.md"
+cp "$SCRIPT_DIR/../guides/work-selection.md" "$SCRIPT_DIR/../guides/egress-and-privacy.md" \
+  "$FIX/outcomes/cache-definition-root/.claude/guides/"
 cp "$FIX/outcomes/desired-state.json" \
   "$FIX/outcomes/cache-definition-root/.claude/plugin-consumption/agentic-engineering.desired-state.json"
 cp "$FIX/outcomes/classifier" \
@@ -960,15 +968,15 @@ check "outcomes without the live inventory say so" "$OUT" 'repository inventory:
 rm -f "$FIX/outcomes/repo/.gitmodules"
 # The census is the live org, not the checkout (monorepo#4139): a repository with
 # no submodule is counted, an archived one is never queried, and a failed or
-# malformed listing leaves the portfolio verdicts UNKNOWN while the submodule cohort
-# (the series before #4139) is still counted.
+# malformed listing leaves every repository query unauthorized. Historical raw
+# observations are retained; reproducing them is not permission to read a source.
 OUT=$(outcomes_run); RC=$?
 check "outcomes inventory comes from the live org" "$OUT" 'repository inventory: live org, 1 non-archived repositories'
 nocheck "outcomes never query an archived repository" "$OUT" 'devantler-tech/retired'
 nocheck "outcomes live inventory leaves no repository UNKNOWN" "$OUT" 'UNKNOWN (query or provenance)'
 nocheck "outcomes live inventory is not reported unavailable" "$OUT" 'inventory unavailable'
 check "outcomes live inventory keeps the cohort series" "$OUT" 'submodule cohort (the series before monorepo#4139): 1'
-printf '%s\n' '[{"full_name":"devantler-tech/monorepo","archived":false},{"full_name":"devantler-tech/no-submodule","archived":false},{"full_name":"devantler-tech/retired","archived":true}]' \
+printf '%s\n' '[{"id":1,"full_name":"devantler-tech/monorepo","private":false,"archived":false},{"id":2,"full_name":"devantler-tech/no-submodule","private":false,"archived":false},{"id":3,"full_name":"devantler-tech/retired","private":false,"archived":true}]' \
   > "$FIX/outcomes/org-repos.json"
 OUT=$(OUTCOMES_ORG_REPOS="$FIX/outcomes/org-repos.json" outcomes_run); RC=$?
 check "outcomes count a live org repository that has no submodule" "$OUT" 'devantler-tech/no-submodule                1'
@@ -976,19 +984,19 @@ check "outcomes total includes the repository without a submodule" "$OUT" 'total
 check "outcomes inventory counts only non-archived repositories" "$OUT" 'live org, 2 non-archived repositories'
 check "outcomes keep the submodule cohort series beside the wider total" "$OUT" 'submodule cohort (the series before monorepo#4139): 1'
 nocheck "outcomes complete cohort is not labelled active-only" "$OUT" 'ACTIVE ONLY'
-printf '%s\n' '[{"full_name":"devantler-tech/monorepo","archived":true},{"full_name":"devantler-tech/no-submodule","archived":false}]' \
+printf '%s\n' '[{"id":1,"full_name":"devantler-tech/monorepo","private":false,"archived":true},{"id":2,"full_name":"devantler-tech/no-submodule","private":false,"archived":false}]' \
   > "$FIX/outcomes/org-repos.json"
 OUT=$(OUTCOMES_ORG_REPOS="$FIX/outcomes/org-repos.json" outcomes_run); RC=$?
 nocheck "outcomes never re-add an archived monorepo to the live inventory" "$OUT" 'devantler-tech/monorepo                    1'
 check "outcomes count only the live repositories when the monorepo is archived" "$OUT" 'total: 1'
-check "outcomes label a cohort missing an archived repository active-only" "$OUT" 'submodule cohort (the series before monorepo#4139): 0 — ACTIVE ONLY, 1 cohort repositories not in the live inventory were not queried'
-printf '%s\n' '[{"full_name":"devantler-tech/monorepo","archived":false},{"full_name":"devantler-tech/empty-repo","archived":false}]' \
+check "outcomes label a cohort missing an archived repository as an authorized subset" "$OUT" 'submodule cohort (the series before monorepo#4139): 0 — AUTHORIZED SUBSET, 1 cohort repositories outside current admission were not queried'
+printf '%s\n' '[{"id":1,"full_name":"devantler-tech/monorepo","private":false,"archived":false},{"id":2,"full_name":"devantler-tech/empty-repo","private":false,"archived":false}]' \
   > "$FIX/outcomes/org-repos.json"
 OUT=$(OUTCOMES_ORG_REPOS="$FIX/outcomes/org-repos.json" outcomes_run); RC=$?
 check "outcomes report a repository with no commits as EMPTY" "$OUT" 'devantler-tech/empty-repo                  EMPTY (no commits, nothing on main)'
 check "outcomes an empty repository keeps the red-main count measured" "$OUT" 'repos RED on main: 0'
 check "outcomes an empty repository keeps the revert total complete" "$OUT" '(0 = nothing needed reverting anywhere in the portfolio)'
-printf '%s\n' '[{"full_name":"devantler-tech/monorepo","archived":false},{"full_name":"devantler-tech/broken-repo","archived":false}]' \
+printf '%s\n' '[{"id":1,"full_name":"devantler-tech/monorepo","private":false,"archived":false},{"id":2,"full_name":"devantler-tech/broken-repo","private":false,"archived":false}]' \
   > "$FIX/outcomes/org-repos.json"
 OUT=$(OUTCOMES_ORG_REPOS="$FIX/outcomes/org-repos.json" outcomes_run); RC=$?
 check "outcomes any other head failure stays UNKNOWN" "$OUT" 'devantler-tech/broken-repo                 UNKNOWN (head query failed)'
@@ -1002,7 +1010,7 @@ if [ "$RC" = 2 ]; then ok "outcomes failed org listing exits 2 (UNKNOWN)"; else 
 check "outcomes failed org listing leaves the inventory UNKNOWN" "$OUT" 'repository inventory: UNKNOWN (live org listing failed)'
 check "outcomes failed org listing prints no portfolio merge total" "$OUT" 'merged PRs: UNKNOWN (live repository inventory unavailable)'
 nocheck "outcomes failed org listing never claims a portfolio total" "$OUT" '── total: 1'
-check "outcomes failed org listing still counts the submodule cohort" "$OUT" 'submodule cohort (the series before monorepo#4139): 1'
+check "outcomes failed org listing does not query an unverified legacy cohort" "$OUT" 'submodule cohort (the series before monorepo#4139): UNKNOWN (authorization unresolved; historical raw observations retained)'
 check "outcomes failed org listing keeps the red-main verdict UNKNOWN" "$OUT" 'repos RED on main: QUERY-UNKNOWN'
 check "outcomes failed org listing keeps the revert total incomplete" "$OUT" 'live repository inventory unavailable — this total is INCOMPLETE'
 for listing in '[{"full_name":"devantler-tech/monorepo"}]' \
