@@ -14,6 +14,7 @@ func TestSplitPreservesSectionOwnershipAndBytes(t *testing.T) {
 		{"fenced headings", "# Store\n```md\n### t1\n```\n### t1\n~~~\n### t2\n~~~~\nbody\n### t2\nkept\n", "^### t1$", "# Store\n```md\n### t1\n```\n### t2\nkept\n", "### t1\n~~~\n### t2\n~~~~\nbody\n"},
 		{"indentation", "# Store\n   ### t1\nchild\n### t2\nkept", "^   ### t1$", "# Store\n### t2\nkept", "   ### t1\nchild\n"},
 		{"fenced comment is data", "# Store\n### t1\n```html\n<!--\n### fake\n-->\n```\n### Current\nkeep\n", "^### t1$", "# Store\n### Current\nkeep\n", "### t1\n```html\n<!--\n### fake\n-->\n```\n"},
+		{"thematic breaks and fenced underlines", "# Store\n---\n### t1\nbody\n\n---\n```\nNext\n===\n```\n### Current\nkeep\n", "^### t1$", "# Store\n---\n### Current\nkeep\n", "### t1\nbody\n\n---\n```\nNext\n===\n```\n"},
 		{"frontmatter headings", "---\n### t1\nkind: note\n---\n# Store\n### t1\nbody\n### t2\nkept\n", "^### t1$", "---\n### t1\nkind: note\n---\n# Store\n### t2\nkept\n", "### t1\nbody\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -40,6 +41,8 @@ func TestSplitRefusesUnprovenSelections(t *testing.T) {
 		{"# Store\n### t1 <!-- hidden -->\nbody\n", "^### t1", "HTML comments are unsupported"},
 		{"# Store\n<pre>\n### t1\nexample\n</pre>\n### Current\nkeep\n", "^### t1$", "raw HTML is unsupported"},
 		{"# Store\n<SCRIPT>\n### t1\nexample\n</SCRIPT>\n### Current\nkeep\n", "^### t1$", "raw HTML is unsupported"},
+		{"# Store\n### t1\nbody\nNext\n---\nkeep\n", "^### t1$", "setext headings are unsupported"},
+		{"# Store\n### t1\nbody\nNext\n===\nkeep\n", "^### t1$", "setext headings are unsupported"},
 	} {
 		_, _, err := Split([]byte(c.source), c.selector)
 		if err == nil || !strings.Contains(err.Error(), c.diagnostic) {

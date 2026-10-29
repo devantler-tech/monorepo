@@ -141,14 +141,17 @@ func TestCommitDoesNotRollbackOrRetryAfterExchange(t *testing.T) {
 }
 
 func TestCommitExchangeFailureDoesNotFallBackToRename(t *testing.T) {
-	source, candidate, digest, old, next := fixture(t)
+	source, candidate, digest, old, _ := fixture(t)
 	calls := 0
 	displaced, err := commitWith(source, candidate, digest, func(string, string) error { calls++; return os.ErrPermission })
-	if !errors.Is(err, os.ErrPermission) || calls != 1 {
+	if !errors.Is(err, os.ErrPermission) || calls != 1 || displaced != "" || !strings.Contains(err.Error(), "exchange refused; no swap occurred") {
 		t.Fatalf("exchange failure was hidden: %v", err)
 	}
 	sameBytes(t, source, old)
-	sameBytes(t, displaced, next)
+	entries, readErr := os.ReadDir(filepath.Dir(source))
+	if readErr != nil || len(entries) != 2 {
+		t.Fatal("proven exchange refusal retained an incorrectly labeled displaced file")
+	}
 }
 
 func TestCommitStaleSnapshotRefusesBeforeArtifacts(t *testing.T) {

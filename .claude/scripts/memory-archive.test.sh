@@ -40,12 +40,20 @@ bash "$script_dir/memory-archive.sh" "$source_file" '^### Old$' "$archive_file" 
   echo 'repeat must refuse the existing archive' >&2
   exit 1
 }
+grep -qF 'archive already exists; overwrite is forbidden' "$work/refused" || {
+  echo 'repeat refusal did not name the existing archive' >&2
+  exit 1
+}
 cmp "$source_file" "$work/expected-source"
 cmp "$archive_file" "$work/expected-archive"
 rc=0
 bash "$script_dir/memory-archive.sh" "$source_file" >"$work/usage" 2>&1 || rc=$?
 [[ "$rc" == 2 ]] || {
   echo 'incomplete public arguments must be usage exit 2' >&2
+  exit 1
+}
+grep -qF 'Usage: memory-archive.sh' "$work/usage" || {
+  echo 'incomplete arguments did not print usage' >&2
   exit 1
 }
 bash "$script_dir/memory-archive.sh" --help >"$work/help"

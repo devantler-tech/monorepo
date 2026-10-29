@@ -11,7 +11,16 @@ import (
 func main() { os.Exit(run(os.Args[1:], os.Getenv("MEMORY_ARCHIVE_HELPER_DIR"), os.Stdout, os.Stderr)) }
 
 func run(args []string, helpers string, stdout, stderr io.Writer) int {
-	const usage = "Usage: memory-archive.sh <file> <heading-regex> <archive-path>\n\nArchive one ATX Markdown heading, its prose and deeper subsections into a new file.\nThe next equal-or-shallower heading ends the section; fences and frontmatter are data.\nHTML markup outside fenced text is refused before any data writes.\nThe archive directory must already exist. Existing archive paths are never overwritten.\nA verified backup and the actual displaced source inode are retained.\nThe source uses guarded native exchange on Linux/macOS; unsupported filesystems refuse.\nExit 0: complete and independently read back. Exit 2: refused, incomplete or invalid.\n"
+	const usage = `Usage: memory-archive.sh <file> <heading-regex> <archive-path>
+
+Archive one ATX Markdown heading, its prose and deeper subsections into a new file.
+The next equal-or-shallower heading ends the section; fences and frontmatter are data.
+Setext headings and HTML markup outside fenced text are refused before data writes.
+The archive directory must already exist. Existing archive paths are never overwritten.
+A verified backup and the actual displaced source inode are retained.
+The source uses guarded native exchange on Linux/macOS; unsupported filesystems refuse.
+Exit 0: complete and independently read back. Exit 2: refused, incomplete or invalid.
+`
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
 		_, _ = io.WriteString(stdout, usage)
 		return 0

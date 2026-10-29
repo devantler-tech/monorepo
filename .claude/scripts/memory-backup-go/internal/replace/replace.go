@@ -89,6 +89,12 @@ func commitWith(source, candidate, digest string, exchange exchangeFunc) (displa
 	// append or replacement; an uncertain response is never retried or reversed.
 	attempted = true
 	if err = exchange(displaced, source); err != nil {
+		if current, readErr := os.Lstat(displaced); readErr == nil && os.SameFile(prepared, current) {
+			// The prepared inode remains at its original private path. The
+			// exchange did not occur; do not label this candidate as old source.
+			attempted = false
+			return "", fmt.Errorf("exchange refused; no swap occurred: %w", err)
+		}
 		return displaced, err
 	}
 	saved, actualOld, err := readRegular(displaced)

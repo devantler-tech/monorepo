@@ -21,6 +21,7 @@ var (
 var heading = regexp.MustCompile("^ {0,3}(#{1,6})(?:[ \\t]+|$)")
 var fence = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})(.*)$")
 var rawHTML = regexp.MustCompile(`(?i)<(?:/?[a-z][a-z0-9-]*(?:[\t >]|$)|!|\?)`)
+var setext = regexp.MustCompile(`^ {0,3}(?:=+|-+)[ \t]*$`)
 
 // Split owns deeper headings and prose until an equal-or-shallower ATX heading.
 // Offsets address the original bytes: neither line endings nor EOF are rebuilt.
@@ -43,8 +44,11 @@ func Split(source []byte, selector string) ([]byte, []byte, error) {
 	offset := 0
 	marker := ""
 	frontmatter := false
+	previousParagraph := false
 	for _, record := range bytes.SplitAfter(source, []byte("\n")) {
 		line := strings.TrimSuffix(strings.TrimSuffix(string(record), "\n"), "\r")
+		wasParagraph := previousParagraph
+		previousParagraph = false
 		if offset == 0 && line == "---" {
 			frontmatter = true
 			offset += len(record)
@@ -69,8 +73,12 @@ func Split(source []byte, selector string) ([]byte, []byte, error) {
 			return nil, nil, errors.New("HTML comments are unsupported outside fenced text")
 		} else if rawHTML.MatchString(line) {
 			return nil, nil, errors.New("raw HTML is unsupported outside fenced text")
+		} else if wasParagraph && setext.MatchString(line) {
+			return nil, nil, errors.New("setext headings are unsupported; use ATX headings")
 		} else if h := heading.FindStringSubmatch(line); h != nil {
 			boundaries = append(boundaries, boundary{offset, len(h[1]), selected.MatchString(line)})
+		} else if strings.TrimSpace(line) != "" && !setext.MatchString(line) && !strings.HasPrefix(line, "    ") && !strings.HasPrefix(line, "\t") {
+			previousParagraph = true
 		}
 		offset += len(record)
 	}

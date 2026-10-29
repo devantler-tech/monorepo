@@ -155,7 +155,7 @@ step:
    `<file> <heading-regex> <new-archive-path>`. It performs the required backup, selects exactly one
    ATX Markdown heading and its deeper subsections, preserves verbatim records and line endings,
    and proves byte, line, nonblank and multiset conservation with a checked negative control.
-   Fenced text and YAML frontmatter are not headings; HTML markup outside fenced text is refused
+   Fenced text and YAML frontmatter are not headings; setext headings and HTML markup outside fenced text are refused
    before data writes. The archive directory must already exist;
    existing archive paths are never overwritten. The source still goes through `memory-rewrite.sh`,
    bound to its original SHA-256 snapshot. On Linux/macOS, the writer atomically exchanges the

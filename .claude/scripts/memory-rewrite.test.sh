@@ -375,13 +375,25 @@ check 'matching external snapshot is accepted' 0 "$rc"
 check_unchanged 'matching snapshot installs the prepared candidate' "$bound_dir/new.md" "$bound_dir/source.md"
 zero_digest="$(printf '%064d' 0)"
 for invalid_digest in '' invalid "${zero_digest:1}" "${zero_digest}0"; do
-  rc="$(run --file "$bound_dir/source.md" --from "$bound_dir/new.md" --expected-sha256 "$invalid_digest")"
+  rc=0
+  out="$("$tool" --file "$bound_dir/source.md" --from "$bound_dir/new.md" --expected-sha256 "$invalid_digest" 2>&1)" || rc=$?
   check 'malformed expected snapshot is usage exit 2' 2 "$rc"
+  if grep -qF -- '--expected-sha256 needs 64 lowercase hex characters' <<<"$out"; then
+    pass 'malformed snapshot reports its own validation error'
+  else
+    fail 'malformed snapshot reports its own validation error'
+  fi
   check_unchanged 'malformed snapshot leaves source unchanged' "$bound_dir/new.md" "$bound_dir/source.md"
 done
 expected_sha256="$(shasum -a 256 "$bound_dir/source.md" | awk '{print $1}')"
-rc="$(run --file "$bound_dir/source.md" --from "$bound_dir/new.md" --expected-sha256 "$expected_sha256" --expected-sha256 "$expected_sha256")"
+rc=0
+out="$("$tool" --file "$bound_dir/source.md" --from "$bound_dir/new.md" --expected-sha256 "$expected_sha256" --expected-sha256 "$expected_sha256" 2>&1)" || rc=$?
 check 'repeated expected snapshot is usage exit 2' 2 "$rc"
+if grep -qF -- '--expected-sha256 must not be repeated' <<<"$out"; then
+  pass 'repeated snapshot reports its own validation error'
+else
+  fail 'repeated snapshot reports its own validation error'
+fi
 
 # A sibling may write while the final swap file is copied, after the older
 # staleness gate. Run the real copy and inject only that deterministic window.
