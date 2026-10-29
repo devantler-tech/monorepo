@@ -294,6 +294,7 @@ jobs:
             build-cache-reclaim:
               - '.claude/scripts/build-cache-reclaim.sh'
               - '.claude/scripts/build-cache-reclaim.test.sh'
+              - '.claude/scripts/cleanup-trap-census-go/go.mod'
               - '.claude/scripts/codex-transcript-retention.sh'
               - '.claude/scripts/codex-transcript-retention.test.sh'
               - '.claude/scripts/codex-worktree-retention.sh'
@@ -1409,6 +1410,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up Go for the native process-holder fixture
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/cleanup-trap-census-go/go.mod
+          cache: false
       # This script DELETES, so every assertion is a safety property proved by
       # ablation: a fixture differing from a reapable tree in exactly one dimension
       # (age, name pattern, dry-run, read-only module cache) must be KEPT, so a script

@@ -136,8 +136,12 @@ try_lock_file() {
   (set -C; printf '%s\n' "$lock_token" > "$1") 2>/dev/null
 }
 release_lock_file() {
+  local held_token=''
   [ -f "$1" ] && [ ! -L "$1" ] || return 0
-  [ "$(cat "$1" 2>/dev/null)" = "$lock_token" ] || return 0
+  # Bash 3.2 command substitution can lose the token when stdout is closed.
+  # Cleanup must still release our lock after a failed summary write.
+  IFS= read -r held_token < "$1" || return 0
+  [ "$held_token" = "$lock_token" ] || return 0
   rm -f "$1" 2>/dev/null || true
 }
 # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
