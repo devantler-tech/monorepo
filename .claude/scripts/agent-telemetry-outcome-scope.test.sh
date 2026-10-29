@@ -254,6 +254,14 @@ done
 write_codex "$FIX/corpus/private"
 SCOPE_SELECTORS="$FIX/corpus/private" transcript_run
 check not_measured
+GIT_DIR="$FIX/corpus/.git" transcript_run
+check not_measured
+GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.https://github.com/devantler-tech/monorepo.git.insteadOf \
+  GIT_CONFIG_VALUE_0=https://github.com/devantler-tech/scope-denied.git transcript_run
+check not_measured
+SCOPE_SELECTORS="$FIX/missing-selector" transcript_run
+check test "$RC" = 2
+check not_walked "$FIX/home/codex/sessions"
 write_codex "$FIX/corpus"
 SCOPE_LIST_FAIL=1 transcript_run
 check test "$RC" = 2
@@ -300,6 +308,39 @@ cp "$FIX/projects/$private_slug/scope.jsonl" "$FIX/corpus/store/$private_slug/"
 SCOPE_PROJECTS="$FIX/corpus/store" transcript_run
 check not_walked "$FIX/corpus/store/$private_slug"
 check not_measured
+
+# An unpopulated Gitlink slot inherits the aggregator's remote when asked with
+# git -C. That inherited identity is not evidence about its recorded product.
+mkdir -p "$FIX/corpus/unpopulated"
+cat >> "$FIX/corpus/.gitmodules" <<'EOF'
+[submodule "unpopulated"]
+  path = unpopulated
+  url = https://github.com/devantler-tech/scope-public.git
+EOF
+write_codex "$FIX/corpus/unpopulated"
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check not_measured
+check test "$RC" = 2
+
+# Neutralizing repository-environment isolation really admits the private
+# fixture. This control cannot pass merely because collection stopped working.
+cp "$FIX/definition/.claude/scripts/agent-telemetry.sh" "$FIX/collector-before-routing-mutation.sh"
+awk '
+  /^transcript_git\(\) \{/ { print "transcript_git() { git \"$@\"; }"; inside = 1; next }
+  inside && /^\}/ { inside = 0; next }
+  !inside { print }
+' "$FIX/collector-before-routing-mutation.sh" > "$FIX/definition/.claude/scripts/agent-telemetry.sh"
+if cmp -s "$FIX/collector-before-routing-mutation.sh" "$FIX/definition/.claude/scripts/agent-telemetry.sh"; then
+  check false
+else
+  write_codex "$FIX/corpus/private"
+  GIT_DIR="$FIX/corpus/.git" transcript_run
+  check grep -qF '1 Codex sessions]' "$FIX/transcript-output"
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.https://github.com/devantler-tech/monorepo.git.insteadOf \
+    GIT_CONFIG_VALUE_0=https://github.com/devantler-tech/scope-denied.git transcript_run
+  check grep -qF '1 Codex sessions]' "$FIX/transcript-output"
+fi
+cp "$FIX/collector-before-routing-mutation.sh" "$FIX/definition/.claude/scripts/agent-telemetry.sh"
 printf 'outcome authorization: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
 scope_test_finished=1

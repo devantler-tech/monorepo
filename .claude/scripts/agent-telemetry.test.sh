@@ -17,7 +17,13 @@ unset CLAUDE_CODE_EXECPATH
 
 ok()   { PASS=$((PASS+1)); echo "  ✓ $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "  ✗ $1"; echo "      $2"; }
-check(){ if grep -qF -- "$3" <<<"$2"; then ok "$1"; else bad "$1" "expected to find: $3"; fi; }
+check(){
+  if grep -qF -- "$3" <<<"$2"; then ok "$1"
+  else
+    bad "$1" "expected to find: $3"
+    grep -E 'UNKNOWN|sessions in window|cohort:|TOTAL occurrences:|INJECTION' <<<"$2" | head -n 12
+  fi
+}
 nocheck(){ if grep -qF -- "$3" <<<"$2"; then bad "$1" "should NOT contain: $3"; else ok "$1"; fi; }
 
 # The injected record every scheduled dispatch begins with. Dispatch fixtures
@@ -60,11 +66,25 @@ BOUNDARY_SLUG=$(printf '%s' "$BOUNDARY_ROOT" | tr / -)
 mkdir -p "$BOUNDARY_ROOT"
 git -C "$BOUNDARY_ROOT" init -q
 git -C "$BOUNDARY_ROOT" remote add origin https://github.com/devantler-tech/monorepo.git
+export PORTFOLIO_PATHS="$PORTFOLIO_PATHS:$BOUNDARY_ROOT"
 for name in keen-proskuriakova-4c1726 admiring-babbage-4af60d wizardly-ellis-19cf5b; do
   mkdir -p "$BOUNDARY_ROOT/.claude/worktrees/$name"
   git -C "$BOUNDARY_ROOT/.claude/worktrees/$name" init -q
   git -C "$BOUNDARY_ROOT/.claude/worktrees/$name" remote add origin https://github.com/devantler-tech/monorepo.git
 done
+
+# Copied collector mutations still load a complete reviewed consumer contract.
+# Their source text differs only by the intended mutation, so existing
+# non-vacuity/diff-count assertions keep their original meaning.
+fixture_script_path() {
+  local name=$1 root
+  case "$name" in ''|*[!a-zA-Z0-9_-]*) return 1 ;; esac
+  root="$FIX/collector-copies/$name"
+  mkdir -p "$root/.claude/scripts" "$root/.claude/guides"
+  cp "$SCRIPT_DIR/../../AGENTS.md" "$root/AGENTS.md"
+  cp "$SCRIPT_DIR/../guides/work-selection.md" "$SCRIPT_DIR/../guides/egress-and-privacy.md" "$root/.claude/guides/"
+  printf '%s/.claude/scripts/agent-telemetry.sh\n' "$root"
+}
 
 # The fixtures model ONE engineer entry a lane, and a case that needs more names
 # them. The script's own default is the two entries each lane is deployed with
@@ -4331,18 +4351,22 @@ git -C "$FIX/fixmono" remote add origin https://github.com/devantler-tech/monore
 mkdir -p "$FIX/fixmono/platform"
 git -C "$FIX/fixmono/platform" init -q
 git -C "$FIX/fixmono/platform" remote add origin https://github.com/devantler-tech/platform.git
-mkdir -p "$FIX/mark/${BOUNDARY_SLUG}" \
-         "$FIX/mark/${BOUNDARY_SLUG}--claude-worktrees-wizardly-ellis-19cf5b" \
-         "$FIX/mark/${BOUNDARY_SLUG}--git-modules-platform" \
-         "$FIX/mark/${BOUNDARY_SLUG}--client"
-for d in "${BOUNDARY_SLUG}" "${BOUNDARY_SLUG}--claude-worktrees-wizardly-ellis-19cf5b" "${BOUNDARY_SLUG}--git-modules-platform"; do
+MARK_SLUG=$(printf '%s' "$FIX/fixmono" | tr / -)
+mkdir -p "$FIX/fixmono/.claude/worktrees/wizardly-ellis-19cf5b"
+git -C "$FIX/fixmono/.claude/worktrees/wizardly-ellis-19cf5b" init -q
+git -C "$FIX/fixmono/.claude/worktrees/wizardly-ellis-19cf5b" remote add origin https://github.com/devantler-tech/monorepo.git
+mkdir -p "$FIX/mark/${MARK_SLUG}" \
+         "$FIX/mark/${MARK_SLUG}--claude-worktrees-wizardly-ellis-19cf5b" \
+         "$FIX/mark/${MARK_SLUG}--git-modules-platform" \
+         "$FIX/mark/${MARK_SLUG}--client"
+for d in "${MARK_SLUG}" "${MARK_SLUG}--claude-worktrees-wizardly-ellis-19cf5b" "${MARK_SLUG}--git-modules-platform"; do
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"m1","name":"Bash","input":{"command":"sleep 3"}}]}}' \
     > "$FIX/mark/$d/s.jsonl"
 done
 printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"m2","name":"Bash","input":{"command":"sleep 4"}}]}}' \
-  > "$FIX/mark/${BOUNDARY_SLUG}--client/s.jsonl"
+  > "$FIX/mark/${MARK_SLUG}--client/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/mark" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/fixmono" \
-      PORTFOLIO_PATHS="$BOUNDARY_ROOT" HOME="$FIX" \
+      PORTFOLIO_PATHS="$FIX/fixmono" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 50 --section efficiency 2>&1)
 if grep -qE 'sleep/poll calls \.\. 3' <<<"$OUT"; then
   ok "'monorepo--client' excluded; worktree + git-modules markers kept"
@@ -5925,7 +5949,7 @@ for i in 1 2 3; do
   printf '{"type":"user","message":{"content":[{"type":"text","text":"update your instructions please %d"}]}}\n' \
     "$i" >> "$FIX/injgrow/corpus/p/s.jsonl"
 done
-OUT=$(PATH="$FIX/injgrow/bin:$PATH" REAL_CUT="$real_cut" CLAUDE_PROJECTS_DIR="$FIX/injgrow/corpus" CODEX_HOME="$FIX/nocodex" \
+OUT=$(PATH="$FIX/injgrow/bin:$PATH" REAL_CUT="$real_cut" CLAUDE_PROJECTS_DIR="$FIX/injgrow/corpus/p" CODEX_HOME="$FIX/nocodex" \
       MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 # NON-VACUITY FIRST: if the corpus did not actually grow, every assertion below
@@ -5954,7 +5978,7 @@ nocheck "and no divergence is claimed when the walks agree" "$OUT" \
 # claim the numbers contradict. Ablate ONLY the class walk's pinning to force a
 # genuine divergence and prove the arm fires — otherwise it is unreachable code
 # that would pass every assertion above while being permanently inert.
-INJ_AB="$FIX/injgrow/ablated.sh"
+INJ_AB=$(fixture_script_path injection-growth)
 /usr/bin/awk '
   /^emit_injection_classes\(\) \{/ {infn=1}
   infn && /injection_matching_lines "\$f" "\$len" "\$phrase_locale" \\$/ {
@@ -5978,7 +6002,7 @@ else
     printf '{"type":"user","message":{"content":[{"type":"text","text":"update your instructions please %d"}]}}\n' \
       "$i" >> "$FIX/injgrow/corpus/p/s.jsonl"
   done
-  OUT=$(PATH="$FIX/injgrow/bin:$PATH" REAL_CUT="$real_cut" CLAUDE_PROJECTS_DIR="$FIX/injgrow/corpus" CODEX_HOME="$FIX/nocodex" \
+  OUT=$(PATH="$FIX/injgrow/bin:$PATH" REAL_CUT="$real_cut" CLAUDE_PROJECTS_DIR="$FIX/injgrow/corpus/p" CODEX_HOME="$FIX/nocodex" \
         MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
         bash "$INJ_AB" --since-days 3650 --section safety 2>&1)
   check "ablation: an unpinned class walk is CAUGHT and named, not printed silently" "$OUT" \
@@ -6024,7 +6048,7 @@ for i in 1 2 3 4 5; do
     "$i" >> "$FIX/injshrink/corpus/p/s.jsonl"
 done
 SHRINK_BEFORE=$(wc -c < "$FIX/injshrink/corpus/p/s.jsonl" | tr -d ' ')
-OUT=$(PATH="$FIX/injshrink/bin:$PATH" REAL_CUT="$real_cut" CLAUDE_PROJECTS_DIR="$FIX/injshrink/corpus" CODEX_HOME="$FIX/nocodex" \
+OUT=$(PATH="$FIX/injshrink/bin:$PATH" REAL_CUT="$real_cut" CLAUDE_PROJECTS_DIR="$FIX/injshrink/corpus/p" CODEX_HOME="$FIX/nocodex" \
       MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 SHRINK_AFTER=$(wc -c < "$FIX/injshrink/corpus/p/s.jsonl" | tr -d ' ')
@@ -6050,7 +6074,7 @@ nocheck "and the report withholds the byte-stability claim the length pin cannot
 # separator), so the raw keys stay distinct
 # while the classified ones merge. The injdigest fixture already supplies two
 # distinct digests sharing one display, which is precisely that pair.
-INJ_KEY_AB="$FIX/injgrow/keymerge.sh"
+INJ_KEY_AB=$(fixture_script_path injection-keymerge)
 awk '
   /^[[:space:]]+\| phrase_class_keys \\$/ {
     print "          | phrase_class_keys | sed '\''s/^[^~]*~/MERGEDKEY~/'\'' \\"; next
@@ -8496,7 +8520,7 @@ EOF
 
 # $1 = script under test, $2 = section, $3 = optional signature
 awkrun() {
-  DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/awkward" CODEX_HOME="$FIX/codex" \
+  DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/awkward/aw" CODEX_HOME="$FIX/codex" \
     MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
     bash "$1" --since-days 3650 --max-files 20 --section "$2" \
     ${3:+--signature "$3"} 2>&1
@@ -8535,7 +8559,7 @@ cat > "$FIX/nullcontent/n/s.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T10:00:02Z","message":{"content":[{"type":"tool_use","id":"n2","name":"Edit","input":{"file_path":"/y"}}]}}
 {"type":"user","timestamp":"2026-08-01T10:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"n2","is_error":true,"content":false}]}}
 EOF
-OUT=$(DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/nullcontent" CODEX_HOME="$FIX/codex" \
+OUT=$(DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/nullcontent/n" CODEX_HOME="$FIX/codex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" bash "$TARGET" \
   --since-days 3650 --max-files 5 --section reliability 2>&1)
 check "null/false tool_result content stays observable" "$OUT" "tool errors in window: 2"
@@ -8549,7 +8573,7 @@ cat > "$FIX/barestring/m/s.jsonl" <<'EOF'
 {"type":"user","timestamp":"2026-08-01T10:00:00Z","message":{"content":["please look at this: ",{"type":"text","text":"<scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}]}}
 {"type":"assistant","timestamp":"2026-08-01T10:00:01Z","message":{"content":[{"type":"tool_use","id":"m1","name":"Bash","input":{"command":"x"}}]}}
 EOF
-OUT=$(DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/barestring" CODEX_HOME="$FIX/codex" \
+OUT=$(DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/barestring/m" CODEX_HOME="$FIX/codex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" bash "$TARGET" \
   --since-days 3650 --max-files 5 --section dispatch 2>&1)
 check "a bare-string prefix is not read as a dispatch marker" "$OUT" \
@@ -8568,7 +8592,7 @@ cat > "$FIX/strfinal/p/s.jsonl" <<'EOF'
 {"type":"user","timestamp":"2026-08-01T10:00:00Z","message":{"content":[{"type":"text","text":"<scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}]}}
 {"type":"assistant","timestamp":"2026-08-01T10:00:01Z","message":{"stop_reason":"stop_sequence","content":"You've hit your weekly limit · resets Aug 1 at 1pm (Europe/Copenhagen)"}}
 EOF
-OUT=$(DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/strfinal" CODEX_HOME="$FIX/codex" \
+OUT=$(DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/strfinal/p" CODEX_HOME="$FIX/codex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" bash "$TARGET" \
   --since-days 3650 --max-files 5 --section dispatch 2>&1)
 check "a string-form final refusal is classified dead"   "$OUT" "dead ......... 1"
@@ -8585,7 +8609,7 @@ cat > "$FIX/barearray/q/s.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T10:00:00Z","message":{"content":[{"type":"tool_use","id":"q1","name":"Bash","input":{"command":"sleep 300","description":"poll CI"}}]}}
 {"type":"user","timestamp":"2026-08-01T10:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"q1","is_error":true,"content":["Command timed out after 5m 0s"]}]}}
 EOF
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/barearray" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/barearray/q" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" \
   HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 5 --section efficiency 2>&1)
 check "a bare-string element of a result array is still text" "$OUT" "bash timeouts .............. 1"
 
@@ -8606,7 +8630,7 @@ cat > "$FIX/lattice/x/s.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T10:00:05Z","message":{"content":[{"type":"tool_use","id":"x3","name":"Read","input":{"file_path":"/c"}}]}}
 {"type":"user","timestamp":"2026-08-01T10:00:06Z","message":{"content":[{"type":"tool_result","tool_use_id":"x3","is_error":true,"content":["bare elem"]}]}}
 EOF
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/lattice" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/lattice/x" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" \
   HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 5 --section reliability 2>&1)
 check "lattice: every errored result survives"        "$OUT" "tool errors in window: 3"
 check "lattice: a numeric .text payload is preserved" "$OUT" "Bash: <n>"
@@ -8630,7 +8654,7 @@ cat > "$FIX/nulltext/z/s.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T10:00:04Z","message":{"content":[{"type":"tool_use","id":"z3","name":"Read","input":{"file_path":"/c"}}]}}
 {"type":"user","timestamp":"2026-08-01T10:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"z3","is_error":true,"content":[{"type":"text","text":null},{"type":"text","text":"real payload"}]}]}}
 EOF
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/nulltext" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/nulltext/z" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" \
   HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 5 --section reliability 2>&1)
 check   "null and absent .text keep their records counted" "$OUT" "tool errors in window: 3"
 check   "a sibling payload beside a null .text survives"   "$OUT" "Read: real payload"
@@ -8644,7 +8668,7 @@ cat > "$FIX/arrayrefusal/y/s.jsonl" <<'EOF'
 {"type":"user","timestamp":"2026-08-01T10:00:00Z","message":{"content":[{"type":"text","text":"<scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}]}}
 {"type":"assistant","timestamp":"2026-08-01T10:00:01Z","message":{"stop_reason":"stop_sequence","content":["You've hit your weekly limit · resets Aug 1 at 1pm (Europe/Copenhagen)"]}}
 EOF
-OUT=$(DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/arrayrefusal" CODEX_HOME="$FIX/codex" \
+OUT=$(DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/arrayrefusal/y" CODEX_HOME="$FIX/codex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" bash "$TARGET" \
   --since-days 3650 --max-files 5 --section dispatch 2>&1)
 check "a bare-string refusal in a final array is dead" "$OUT" "dead ......... 1"
@@ -8654,7 +8678,7 @@ check "a bare-string refusal in a final array is dead" "$OUT" "dead ......... 1"
 # Each arm removes exactly one guard from one accessor and requires two different
 # sections to under-count.
 shared_ablate() { # $1=perl-expr $2=label $3=reliability-after $4=signature-after
-  local ab="$FIX/shared-ablate.sh"
+  local ab; ab=$(fixture_script_path shared-accessor)
   cp "$TARGET" "$ab"
   perl -0pi -e "$1" "$ab"
   if cmp -s "$TARGET" "$ab"; then
@@ -8698,7 +8722,7 @@ shared_ablate 's/def scalar_text: if type=="string" then \. else tostring end;/d
 # removes exactly one filter, asserts the copy actually CHANGED, and requires the
 # count to move. `cp` only — never git — so a failed arm cannot lose work.
 ablate() { # $1=sed-expr $2=label $3=expected-count-after $4=days $5=expected-changed-lines
-  local ab="$FIX/ablate.sh" changed
+  local ab changed; ab=$(fixture_script_path signature-filter)
   cp "$TARGET" "$ab"
   sed -i.bak "$1" "$ab"; rm -f "$ab.bak"
   if cmp -s "$TARGET" "$ab"; then
@@ -8812,7 +8836,8 @@ fi
 # (8 spaces), which is what keeps the arm from hitting the signature walk's
 # identical predicate — the exact mis-aiming that arm A above was rewritten for.
 rel_ablate() { # $1=sed-expr $2=label $3=expected-after $4=expected-changed-lines
-  local ab="$FIX/ablate_rel.sh" changed aout
+  local ab changed aout
+  ab=$(fixture_script_path reliability-window)
   cp "$TARGET" "$ab"
   sed -i.bak "$1" "$ab"; rm -f "$ab.bak"
   if cmp -s "$TARGET" "$ab"; then
@@ -9760,7 +9785,7 @@ nocheck "matrix: the out-of-window row is excluded, not flagged" "$OUT" "OUT-OF-
 
 # Ablate the parse invariant back to a bare non-empty test — the shape every
 # earlier round of this fix had. The matrix must stop reading 2/8.
-TSABL="$FIX/abl_ts.sh"
+TSABL=$(fixture_script_path timestamp-roundtrip)
 cp "$TARGET" "$TSABL"
 sed -i.bak 's/and \$r == (\$o | sub/and true; # ablated: (\$o | sub/' "$TSABL"; rm -f "$TSABL.bak"
 TSABL_CHANGED=$(diff "$TARGET" "$TSABL" | grep -c '^<')
@@ -9813,7 +9838,7 @@ check "and the canary stays at zero"                 "$OUT" "undated matches (ex
 nocheck "with no false-clean warning"                "$OUT" "NOT a clean verdict"
 
 # Ablate the canary: the undated match must go back to vanishing silently.
-SUABL="$FIX/abl_sigundated.sh"
+SUABL=$(fixture_script_path undated-signature)
 cp "$TARGET" "$SUABL"
 sed -i.bak 's/^        | select((\.timestamp \/\/ null) | usable_ts | not)$/        | select(false)/' "$SUABL"; rm -f "$SUABL.bak"
 SUABL_CHANGED=$(diff "$TARGET" "$SUABL" | grep -c '^<')
@@ -10055,7 +10080,7 @@ else
 fi
 
 # Ablation: break ONLY the embedded jq program in tagged_commands_in.
-XF_AB="$FIX/xf_ablate.sh"
+XF_AB=$(fixture_script_path efficiency-canary)
 cp "$TARGET" "$XF_AB"
 sed -i.bak 's#(\.id? // "") as \$i#(.id?//"") as $i#' "$XF_AB"; rm -f "$XF_AB.bak"
 xf_changed=$(diff "$TARGET" "$XF_AB" | grep -c '^<')
@@ -10101,7 +10126,7 @@ cat > "$WX/projects/$WX_SLUG/s.jsonl" <<JSONL
 JSONL
 
 wx_run() { # $1 = script, $2 = section
-  TZ=UTC CLAUDE_PROJECTS_DIR="$WX/projects" CODEX_HOME="$WX/codex" MONOREPO_DIR="$WX/nest" \
+  TZ=UTC PORTFOLIO_PATHS="$WX/nest" CLAUDE_PROJECTS_DIR="$WX/projects" CODEX_HOME="$WX/codex" MONOREPO_DIR="$WX/nest" \
     HOME="$WX" bash "$1" --since-days 3650 --section "$2" 2>&1
 }
 
@@ -10151,7 +10176,7 @@ mk_run() { # $1 = fixture name; stdin = the session's records; prints the safety
   slug=$(printf '%s' "$mk/nest" | sed 's|/|-|g')
   mkdir -p "$mk/projects/$slug" "$mk/codex" "$mk/nest"
   cat > "$mk/projects/$slug/s.jsonl"
-  TZ=UTC CLAUDE_PROJECTS_DIR="$mk/projects" CODEX_HOME="$mk/codex" MONOREPO_DIR="$mk/nest" \
+  TZ=UTC PORTFOLIO_PATHS="$mk/nest" CLAUDE_PROJECTS_DIR="$mk/projects" CODEX_HOME="$mk/codex" MONOREPO_DIR="$mk/nest" \
     HOME="$mk" bash "$TARGET" --since-days 3650 --section safety 2>&1
 }
 MK_OUT=$({
@@ -10354,7 +10379,7 @@ mk_mention_session 'echo "$(alias echo=x)"'
 mk_mention_session 'alias echo=x'
 # The redirect that writes the text to a file can sit on the next line of the call.
 mk_mention_session "printf 'alias echo=x' \\" ">> ~/.bashrc"
-MK_OUT=$(TZ=UTC CLAUDE_PROJECTS_DIR="$MKM/projects" CODEX_HOME="$MKM/codex" MONOREPO_DIR="$MKM/nest" \
+MK_OUT=$(TZ=UTC PORTFOLIO_PATHS="$MKM/nest" CLAUDE_PROJECTS_DIR="$MKM/projects" CODEX_HOME="$MKM/codex" MONOREPO_DIR="$MKM/nest" \
   HOME="$MKM" bash "$TARGET" --since-days 3650 --section safety 2>&1)
 if [[ "$MKM_N" -eq 11 ]] \
    && grep -qE '^ +11 npm ci$' <<<"$MK_OUT" \
@@ -10689,7 +10714,7 @@ fi
 
 # walk ~ section ~ literal to break ~ its mutation ~ line proving the walk read something
 while IFS='~' read -r wx_walk wx_sec wx_old wx_new wx_signal; do
-  wx_ab="$FIX/wx_ablate_${wx_walk}.sh"
+  wx_ab=$(fixture_script_path "walk-${wx_walk}")
   wx_mutate "$wx_ab" "$wx_old" "$wx_new"
   wx_changed=$(diff "$TARGET" "$wx_ab" | grep -c '^<' || true)
   if [ "$wx_changed" -ne 1 ]; then
@@ -10714,7 +10739,7 @@ CASES
 
 # The collision walk reads every file twice (races, then push collisions), so
 # its canary counts reads, not files: one file is two reads.
-wx_ab="$FIX/wx_ablate_collision.sh"
+wx_ab=$(fixture_script_path walk-collision)
 wx_mutate "$wx_ab" '| select(((.is_error? // false) == true) or ((.status? // "") == "error"))' \
                    '| select(((.is_error? // false) == true) or ((.status? // "") == "error")'
 wx_changed=$(diff "$TARGET" "$wx_ab" | grep -c '^<' || true)
@@ -11266,7 +11291,7 @@ nocheck "no multibyte abort is emitted for an invalid byte" "$OUT" "multibyte co
 # FAIL-CLOSED. Sabotage the pass so it exits non-zero having emitted nothing —
 # the exact signature of the abort above — and require UNKNOWN everywhere a
 # number would otherwise be trended.
-S2817="$FIX/agent-telemetry-2817-abort.sh"
+S2817=$(fixture_script_path wait-abort)
 sed 's/printf "%d %d %d %d %d %d %d %d %d %d %d %d"/exit 3; printf "%d %d %d %d %d %d %d %d %d %d %d %d"/' \
   "$TARGET" > "$S2817"
 chmod +x "$S2817"
@@ -11298,7 +11323,7 @@ check   "a failed pass says so in words"                         "$OUT" "wait-ta
 # fail-open: `read` fills the missing fields with empty strings, and empty
 # arithmetic prints 0.00 exactly as an abort does. Exit status alone is not a
 # sufficient test, so the field count is checked too.
-S2817B="$FIX/agent-telemetry-2817-short.sh"
+S2817B=$(fixture_script_path wait-short)
 sed 's/printf "%d %d %d %d %d %d %d %d %d %d %d %d", n_tot/printf "%d", n_tot/' "$TARGET" > "$S2817B"
 chmod +x "$S2817B"
 OUT=$(eff2817 "$FIX/b2817ctl" "$S2817B")
@@ -11681,6 +11706,7 @@ nocheck "portfolio path: none of them is an unknown" "$OUT" "UNKNOWN:"
 if [ "$rc" -eq 0 ]; then ok "portfolio path: exit 0"; else bad "portfolio path: exit 0" "exit $rc"; fi
 # The control: the same form written plainly IS read, so the zero above is the
 # spelling's doing and not a fixture in which this form never matches.
+mkdir -p "$BOUNDARY_ROOT/sub"
 cxgone_file plainsub "$BOUNDARY_ROOT/sub" '' 47
 n=$(cxgone_sleeps); [ "$n" = 4 ] && ok "portfolio path: a plainly written sub-folder is read" \
   || bad "portfolio path: a plainly written sub-folder is read" "sleep count '$n', expected 4"
@@ -11764,7 +11790,7 @@ cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg/proj/p1/subagents/a
 # Older than the 3650-day window: on disk, so excluded on purpose rather than missing.
 touch -t 200001010000 "$FIX/deleg/proj/p1/subagents/agent-a2.jsonl"
 deleg_run() {
-  CLAUDE_PROJECTS_DIR="$FIX/deleg" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  CLAUDE_PROJECTS_DIR="$FIX/deleg/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
     bash "$TARGET" --since-days 3650 --section a2a 2>&1
 }
 OUT=$(deleg_run); rc=$?
@@ -11798,7 +11824,7 @@ fi
 # against: the share still prints, the inventory says UNKNOWN (never "0 named").
 mkdir -p "$FIX/deleg-orphan/proj/p9/subagents"
 cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-orphan/proj/p9/subagents/agent-a9.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-orphan" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-orphan/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
 check "delegated coverage: subagents only still print the share" "$OUT" \
   "claude coverage: 0 parent + 1 delegated (subagents/) transcripts; delegated share 100%"
@@ -11808,7 +11834,7 @@ if [ "$rc" -eq 2 ]; then ok "delegated coverage: no parent exits 2"; else bad "d
 # With a parent in the walk, a helper whose own parent is gone from disk is not
 # "excluded on purpose": it is unknown and exits 2 (review of #4326).
 cp "$FIX/deleg/proj/p2.jsonl" "$FIX/deleg-orphan/proj/other.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-orphan" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-orphan/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
 check "delegated coverage: a helper with no parent on disk is counted apart" "$OUT" \
   "0 whose parent could not be read, 0 whose parent is outside the window or file cap, 1 whose parent is missing on disk"
@@ -11820,7 +11846,7 @@ if [ "$rc" -eq 2 ]; then ok "delegated coverage: a helper with no parent on disk
 mkdir -p "$FIX/deleg-cut/proj"
 { cat "$FIX/deleg/proj/p2.jsonl"; printf '%s' '{"type":"user","message":{"content":[{"type":"te'; } > "$FIX/deleg-cut/proj/p.jsonl"
 : > "$FIX/deleg-cut/proj/empty.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-cut" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-cut/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
 check "delegated coverage: an empty or cut-short parent is unknown" "$OUT" \
   "UNKNOWN: 2 parent transcript(s) could not be read or parsed for the delegated inventory"
@@ -11829,7 +11855,7 @@ if [ "$rc" -eq 2 ]; then ok "delegated coverage: a cut-short parent exits 2"; el
 # the whole parent is parsed before its launch records are read.
 mkdir -p "$FIX/deleg-mid/proj"
 { printf '%s\n' 'not json at all'; cat "$FIX/deleg/proj/p2.jsonl"; } > "$FIX/deleg-mid/proj/p.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-mid" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-mid/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
 check "delegated coverage: a malformed line mid-parent is unknown" "$OUT" \
   "UNKNOWN: 1 parent transcript(s) could not be read or parsed for the delegated inventory"
@@ -11839,7 +11865,7 @@ if [ "$rc" -eq 2 ]; then ok "delegated coverage: a malformed line mid-parent exi
 mkdir -p "$FIX/deleg-ws/proj"
 printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","toolUseResult": {"agentId" : "w1"},"message":{"content":[{"type":"text","text":"x"}]}}' \
   > "$FIX/deleg-ws/proj/p.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-ws" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-ws/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1)
 check "delegated coverage: an agentId with spaced JSON is still inventoried" "$OUT" \
   "1 named — 0 in this walk (0 of them unreadable), 0 outside the window or file cap, 1 missing on disk"
@@ -11849,7 +11875,7 @@ mkdir -p "$FIX/deleg-bg/proj/p/subagents"
 printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"agentId: abg (background)"}]}}' \
   > "$FIX/deleg-bg/proj/p.jsonl"
 cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-bg/proj/p/subagents/agent-abg.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-bg" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-bg/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1)
 check "delegated coverage: a background launch is reported as not inventoried" "$OUT" \
   "claude delegated not inventoried: 1 of 1 delegated transcripts — 1 named by no parent agentId record (background or nested launches), 0 whose parent could not be read, 0 whose parent is outside the window or file cap, 0 whose parent is missing on disk"
@@ -11858,7 +11884,7 @@ check "delegated coverage: text naming is not read as a record" "$OUT" "0 named 
 # #4326): the parent's inventory could not be built, so it is unknown and exit 2.
 mkdir -p "$FIX/deleg-bad/proj"
 printf '%s\n' '{"type":"user","toolUseResult":{"agentId":"t1"' > "$FIX/deleg-bad/proj/p.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-bad" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-bad/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
 check "delegated coverage: a malformed agentId record is unknown" "$OUT" \
   "UNKNOWN: 1 parent transcript(s) could not be read or parsed for the delegated inventory"
@@ -11867,7 +11893,7 @@ if [ "$rc" -eq 2 ]; then ok "delegated coverage: a malformed record exits 2"; el
 mkdir -p "$FIX/deleg-other/proj"
 printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","data":{"agentId":"o1"},"message":{"content":[{"type":"text","text":"x"}]}}' \
   > "$FIX/deleg-other/proj/p.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-other" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-other/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1)
 check "delegated coverage: an agentId outside toolUseResult is not a launch" "$OUT" "0 named — 0 in this walk"
 # A named helper that is in the walk but cannot be read is not covered.
@@ -11892,7 +11918,7 @@ cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-cap/proj/old/subage
 touch -t 202001010000 "$FIX/deleg-cap/proj/old.jsonl"
 touch -t 202101010000 "$FIX/deleg-cap/proj/new.jsonl"
 touch -t 202201010000 "$FIX/deleg-cap/proj/old/subagents/agent-c1.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-cap" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-cap/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 2 --section a2a 2>&1)
 check "delegated coverage: a helper whose parent the cap left out is reported apart" "$OUT" \
   "1 of 1 delegated transcripts — 0 named by no parent agentId record (background or nested launches), 0 whose parent could not be read, 1 whose parent is outside the window or file cap, 0 whose parent is missing on disk"
@@ -11902,7 +11928,7 @@ mkdir -p "$FIX/deleg-emptyhelper/proj/p/subagents"
 printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","toolUseResult":{"agentId":"e1"},"message":{"content":[{"type":"text","text":"x"}]}}' \
   > "$FIX/deleg-emptyhelper/proj/p.jsonl"
 : > "$FIX/deleg-emptyhelper/proj/p/subagents/agent-e1.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-emptyhelper" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-emptyhelper/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
 check "delegated coverage: an empty named helper is unknown" "$OUT" \
   "UNKNOWN: 1 named delegated transcript(s) in this walk could not be read"
@@ -11915,7 +11941,7 @@ printf ' \n\n' > "$FIX/deleg-blank/proj/blank.jsonl"
 printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","toolUseResult":{"agentId":"b1"},"message":{"content":[{"type":"text","text":"x"}]}}' \
   > "$FIX/deleg-blank/proj/p.jsonl"
 printf '  \n' > "$FIX/deleg-blank/proj/p/subagents/agent-b1.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-blank" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-blank/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
 check "delegated coverage: a whitespace-only parent is unknown" "$OUT" \
   "UNKNOWN: 1 parent transcript(s) could not be read or parsed for the delegated inventory"
@@ -11929,7 +11955,7 @@ printf 'null\n' > "$FIX/deleg-scalar/proj/scalar.jsonl"
 printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","toolUseResult":{"agentId":"s1"},"message":{"content":[{"type":"text","text":"x"}]}}' \
   > "$FIX/deleg-scalar/proj/p.jsonl"
 printf '[]\n' > "$FIX/deleg-scalar/proj/p/subagents/agent-s1.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-scalar" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-scalar/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
 check "delegated coverage: a parent holding a bare scalar is unknown" "$OUT" \
   "UNKNOWN: 1 parent transcript(s) could not be read or parsed for the delegated inventory"
@@ -11951,7 +11977,7 @@ printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","toolUseRes
   > "$FIX/deleg-badid/proj/p.jsonl"
 printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","toolUseResult":{"agentId":7},"message":{"content":[{"type":"text","text":"x"}]}}' \
   > "$FIX/deleg-badid/proj/q.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-badid" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-badid/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
 check "delegated coverage: a malformed agentId makes its parent unknown" "$OUT" \
   "UNKNOWN: 2 parent transcript(s) could not be read or parsed for the delegated inventory"
@@ -11961,7 +11987,7 @@ if [ "$rc" -eq 2 ]; then ok "delegated coverage: a malformed agentId exits 2"; e
 mkdir -p "$FIX/deleg-badparent/proj/p/subagents"
 printf '%s\n' 'not json' > "$FIX/deleg-badparent/proj/p.jsonl"
 cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-badparent/proj/p/subagents/agent-x1.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-badparent" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-badparent/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1)
 check "delegated coverage: a helper of an unreadable parent is reported apart" "$OUT" \
   "1 of 1 delegated transcripts — 0 named by no parent agentId record (background or nested launches), 1 whose parent could not be read"
@@ -11970,7 +11996,7 @@ if [ "$(id -u)" -ne 0 ]; then
   mkdir -p "$FIX/deleg-locked/proj"
   cp "$FIX/deleg/proj/p2.jsonl" "$FIX/deleg-locked/proj/p.jsonl"
   chmod 000 "$FIX/deleg-locked"
-  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-locked" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-locked/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
         bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
   chmod 700 "$FIX/deleg-locked"
   check "delegated coverage: an unlistable projects store is unknown" "$OUT" \
@@ -11984,7 +12010,7 @@ if [ "$(id -u)" -ne 0 ]; then
   mkdir -p "$FIX/walk-locked"
   cp -R "$FIX/deleg/proj" "$FIX/walk-locked/proj"
   walk_locked_run() {
-    CLAUDE_PROJECTS_DIR="$FIX/walk-locked" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+    CLAUDE_PROJECTS_DIR="$FIX/walk-locked/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section "$1" 2>&1
   }
   # Control first: the same tree, readable, is a known reading with no unknown line.
@@ -12012,7 +12038,7 @@ if [ "$(id -u)" -ne 0 ]; then
   cp "$FIX/deleg/proj/p2.jsonl" "$FIX/walk-unnamed/proj/p.jsonl"
   cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/walk-unnamed/proj/p/subagents/agent-u1.jsonl"
   walk_unnamed_run() {
-    CLAUDE_PROJECTS_DIR="$FIX/walk-unnamed" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+    CLAUDE_PROJECTS_DIR="$FIX/walk-unnamed/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1
   }
   OUT=$(walk_unnamed_run); rc=$?

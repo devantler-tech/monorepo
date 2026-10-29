@@ -2666,15 +2666,22 @@ scoped_session_paths() {
 }
 
 claude_project_authorized() {
-  local name=$1 p slug suffix root
+  local name=$1 p slug suffix root sub
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     slug=$(path_to_slug "$p")
     case "$name" in
       "$slug") transcript_path_authorized "$p"; return $? ;;
       "$slug"--git-modules-*)
-        # Only the already verified submodule alternation reaches this branch.
-        return 0 ;;
+        [ "$p" = "$MONOREPO" ] || return 1
+        suffix=${name#"$slug"--git-modules-}
+        while IFS= read -r sub; do
+          [ -n "$sub" ] || continue
+          if [ "$suffix" = "$(printf '%s' "$sub" | tr / -)" ]; then
+            transcript_path_authorized "$MONOREPO/$sub"; return $?
+          fi
+        done <<<"$TRANSCRIPT_SUBMODULES"
+        return 1 ;;
       "$slug"--claude-worktrees-*)
         suffix=${name#"$slug"--claude-worktrees-}
         root="$p/.claude/worktrees/$suffix"
@@ -2695,11 +2702,15 @@ claude_session_listing() {
   if [ -d "$dir/subagents" ]; then
     find "$dir/subagents" -name '*.jsonl' -mtime "-${SINCE_DAYS}" 2>/dev/null || return 1
   fi
-  for parent in "$dir"/*.jsonl; do
-    [ -f "$parent" ] && [ ! -L "$parent" ] || continue
-    id=${parent##*/}; id=${id%.jsonl}
-    if [ -d "$dir/$id/subagents" ]; then
-      find "$dir/$id/subagents" -name '*.jsonl' -mtime "-${SINCE_DAYS}" 2>/dev/null || return 1
+  for parent in "$dir"/*; do
+    [ -d "$parent" ] && [ ! -L "$parent" ] || continue
+    id=${parent##*/}
+    # Session ids cannot be Claude project slugs (which start with '-'). Keep
+    # orphan helpers visible: their absent parent is UNKNOWN, never zero work.
+    case "$id" in ''|[!a-zA-Z0-9]*|*[!a-zA-Z0-9_-]*) continue ;; esac
+    [ -x "$parent" ] || return 1
+    if [ -d "$parent/subagents" ]; then
+      find "$parent/subagents" -name '*.jsonl' -mtime "-${SINCE_DAYS}" 2>/dev/null || return 1
     fi
   done
   return 0
@@ -2793,21 +2804,47 @@ portfolio_repository_name() {
     *) return 1 ;;
   esac
   name=${name%.git}
-  printf '%s\n' "$name" | grep -Eq '^devantler-tech/[A-Za-z0-9._-]+$' || return 1
+  grep -Eq '^devantler-tech/[A-Za-z0-9._-]+$' <<<"$name" || return 1
   case "$name" in */.|*/..) return 1 ;; esac
   printf '%s\n' "$name" | tr '[:upper:]' '[:lower:]'
 }
 
+transcript_git() {
+  # Repository-routing environment inherited from a hook or parent process
+  # cannot substitute another checkout's identity for the selected directory.
+  env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+    -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
+    -u GIT_CEILING_DIRECTORIES -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_COUNT git "$@"
+}
+
 transcript_path_authorized() {
-  local path=$1 url
+  local path=$1 url top physical_path sub key slots slot_rc=0
   # Git's nearest repository distinguishes an ordinary product directory from
   # a different checkout nested beneath an admitted aggregator.
-  url=$(git -C "$path" remote get-url origin 2>/dev/null) || return 2
-  portfolio_remote_url "$url"
+  url=$(transcript_git -C "$path" remote get-url origin 2>/dev/null) || return 2
+  portfolio_remote_url "$url" || return 1
+  top=$(transcript_git -C "$path" rev-parse --show-toplevel 2>/dev/null) || return 2
+  top=$(cd "$top" && pwd -P) || return 2
+  physical_path=$(cd "$path" && pwd -P) || return 2
+  # An unpopulated product slot inherits the parent remote. That is not proof
+  # of the product's repository identity, even if the parent itself is admitted.
+  if [ -e "$top/.gitmodules" ]; then
+    slots=$(transcript_git -C "$top" config --file .gitmodules --get-regexp '\.path$' 2>/dev/null) || slot_rc=$?
+    [ "$slot_rc" -le 1 ] || return 2
+    while read -r key sub; do
+      [ -n "$key" ] || continue
+      case "$sub" in ''|/*|*//*|../*|*/../*|*/..|./*|*/./*|*/.|*/|*[[:cntrl:]]*) return 2 ;; esac
+      case "$physical_path" in
+        "$top/$sub"|"$top/$sub"/*) [ -e "$top/$sub/.git" ] || return 2 ;;
+      esac
+    done <<<"$slots"
+  fi
+  return 0
 }
 
 prepare_transcript_scope() {
-  local p paths='' sub url declared authorized_subs='' admission_rc
+  local p paths='' sub url declared authorized_subs='' admission_rc submodule_pattern
+  TRANSCRIPT_SUBMODULES=''
   TRANSCRIPT_AUTHORIZED_REPOS=$(outcome_authorized_repositories) || return 2
   [ -n "$TRANSCRIPT_AUTHORIZED_REPOS" ] || return 2
   while IFS= read -r p; do
@@ -2827,23 +2864,25 @@ prepare_transcript_scope() {
       [ -n "$sub" ] || continue
       case "$sub" in /*|*//*|../*|*/../*|*/..|./*|*/./*|*/.|*/|*[[:cntrl:]]*) continue ;; esac
       if transcript_path_authorized "$MONOREPO/$sub"; then
-        url=$(git -C "$MONOREPO/$sub" remote get-url origin 2>/dev/null) || continue
+        url=$(transcript_git -C "$MONOREPO/$sub" remote get-url origin 2>/dev/null) || continue
         # The path list is a selector too: a declared path cannot name an
         # ancestor's Git repository when its own checkout is not populated.
         [ -e "$MONOREPO/$sub/.git" ] || continue
-        declared=$(git -C "$MONOREPO" config --file .gitmodules --get-regexp '\.path$' \
+        declared=$(transcript_git -C "$MONOREPO" config --file .gitmodules --get-regexp '\.path$' \
           | awk -v p="$sub" '$2 == p { sub(/\.path$/, ".url", $1); print $1 }')
         [ -n "$declared" ] || continue
-        declared=$(git -C "$MONOREPO" config --file .gitmodules --get "$declared") || continue
+        declared=$(transcript_git -C "$MONOREPO" config --file .gitmodules --get "$declared") || continue
         [ "$(portfolio_repository_name "$url")" = "$(portfolio_repository_name "$declared")" ] || continue
         authorized_subs="${authorized_subs:+$authorized_subs|}$(rx_escape "$(printf '%s' "$sub" | tr '/' '-')")"
+        TRANSCRIPT_SUBMODULES="${TRANSCRIPT_SUBMODULES:+$TRANSCRIPT_SUBMODULES
+}$sub"
         while IFS= read -r p; do
           case "$MONOREPO/$sub" in "$p"|"$p"/*)
             paths="${paths:+$paths:}$MONOREPO/$sub"; break ;;
           esac
         done < <(printf '%s\n' "$PORTFOLIO_PATHS" | tr ':' '\n')
       fi
-    done < <(git -C "$MONOREPO" config --file .gitmodules --get-regexp '\.path$' 2>/dev/null | awk '{print $2}')
+    done < <(transcript_git -C "$MONOREPO" config --file .gitmodules --get-regexp '\.path$' 2>/dev/null | awk '{print $2}')
   fi
   SUBMOD_RE=${authorized_subs:-__no_submodules__}
   # Rebuild only from authorized selectors. An empty intersection scans no
@@ -2851,8 +2890,10 @@ prepare_transcript_scope() {
   PORTFOLIO_PATHS=$paths
   PORTFOLIO_DIR_RE=$(
     printf '%s' "$paths" | tr ':' '\n' | grep -v '^$' | while IFS= read -r p; do
+      submodule_pattern=__no_submodules__
+      [ "$p" != "$MONOREPO" ] || submodule_pattern=$SUBMOD_RE
       printf '%s(--claude-worktrees-[a-z]+-[a-z]+-[0-9a-f]{6}|--git-modules-(%s))?|' \
-        "$(rx_escape "$(path_to_slug "$p")")" "$SUBMOD_RE"
+        "$(rx_escape "$(path_to_slug "$p")")" "$submodule_pattern"
     done | sed 's/|$//'
   )
   PORTFOLIO_DIR_RE=${PORTFOLIO_DIR_RE:-__no_authorized_project__}
@@ -2917,10 +2958,11 @@ in_scope_cwd() {
         # A directory inside some other repository is not its own worktree.
         # Resolve only these already selected paths; never accept an inherited
         # ancestor remote as proof of the named worktree's identity.
-        actual_root=$(git -C "$root" rev-parse --show-toplevel 2>/dev/null) || continue
+        actual_root=$(transcript_git -C "$root" rev-parse --show-toplevel 2>/dev/null) || continue
+        actual_root=$(cd "$actual_root" && pwd -P) || continue
         physical_root=$(cd "$root" && pwd -P) || continue
         [ "$actual_root" = "$physical_root" ] || continue
-        url=$(git -C "$where" remote get-url origin 2>/dev/null) || continue
+        url=$(transcript_git -C "$where" remote get-url origin 2>/dev/null) || continue
         if portfolio_remote_url "$url"; then return 0; fi ;;
     esac
   done < <(printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$')
@@ -3009,8 +3051,9 @@ codex_unreadable_folders() {
 # cannot be opened. Scope is decided exactly as the walk decides it, so an
 # excluded folder is never entered here either.
 claude_unreadable_folders() {
-  local d dirs list f admission_rc
-  [ -d "$CLAUDE_PROJECTS" ] || return 0
+  local d dirs list f admission_rc presence=0
+  worktree_presence "$CLAUDE_PROJECTS" || presence=$?
+  case "$presence" in 1) return 0 ;; 2) printf '.\n'; return 0 ;; esac
   if ! dirs=$(ls -1 "$CLAUDE_PROJECTS" 2>/dev/null); then
     printf '.\n'; return 0
   else
@@ -3208,10 +3251,11 @@ transcript_has_records() {
 claude_delegated_coverage() {
   local f id p lines ids rc parents=0 delegated=0 named=0 in_walk=0 outside=0 missing=0
   local unreadable=0 unreadable_named=0 expected='' unnamed=0 parent_outside=0 parent_gone=0
-  local failed_parents='' parent_unknown=0
+  local failed_parents='' parent_unknown=0 presence=0
   # A projects store that exists but cannot be listed leaves the walk empty,
   # which would print as a known "0 parent + 0 delegated".
-  if [ -d "$CLAUDE_PROJECTS" ] && { [ ! -r "$CLAUDE_PROJECTS" ] || [ ! -x "$CLAUDE_PROJECTS" ]; }; then
+  worktree_presence "$CLAUDE_PROJECTS" || presence=$?
+  if [ "$presence" = 2 ] || { [ "$presence" = 0 ] && { [ ! -r "$CLAUDE_PROJECTS" ] || [ ! -x "$CLAUDE_PROJECTS" ]; }; }; then
     echo " claude coverage: UNKNOWN (the Claude projects store exists but cannot be listed)"
     return 2
   fi
