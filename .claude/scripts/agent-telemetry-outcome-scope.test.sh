@@ -305,6 +305,14 @@ EOF
 for child in private allowed; do
   slug=$(printf '%s' "$FIX/corpus/$child" | tr / -)
   mkdir -p "$FIX/projects/$slug"
+  # A slug selects a source, while the source's own repository attests its
+  # identity independently. A native unbound store is tested below as UNKNOWN.
+  git -C "$FIX/projects/$slug" init -q
+  if [ "$child" = allowed ]; then
+    git -C "$FIX/projects/$slug" remote add origin https://github.com/devantler-tech/scope-public.git
+  else
+    git -C "$FIX/projects/$slug" remote add origin https://github.com/devantler-tech/scope-denied.git
+  fi
   printf '{"type":"user","cwd":"%s","message":{"content":"SCOPE_ADMISSION_CANARY"}}\n' \
     "$FIX/corpus/$child" > "$FIX/projects/$slug/scope.jsonl"
 done
@@ -426,6 +434,8 @@ check test "$RC" = 2
 check not_walked "$FIX/stale-projects/$claude_slug"
 git -C "$claude_root" init -q
 git -C "$claude_root" remote add origin https://github.com/devantler-tech/scope-public.git
+git -C "$FIX/stale-projects/$claude_slug" init -q
+git -C "$FIX/stale-projects/$claude_slug" remote add origin https://github.com/devantler-tech/scope-public.git
 SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
 check test "$RC" = 0
 check grep -qF '[BOTH instances: 1 Claude + 0 Codex sessions]' "$FIX/transcript-output"
@@ -555,6 +565,8 @@ for repository in scope-denied scope-retired; do
   check not_walked "$direct_store"
 done
 git -C "$direct_store" remote set-url origin https://github.com/devantler-tech/scope-public.git
+git -C "$direct_store/$allowed_slug" init -q
+git -C "$direct_store/$allowed_slug" remote add origin https://github.com/devantler-tech/scope-public.git
 SCOPE_PROJECTS="$direct_store" transcript_run
 check test "$RC" = 0
 check grep -qF '[BOTH instances: 2 Claude + 0 Codex sessions]' "$FIX/transcript-output"
@@ -576,6 +588,43 @@ SCOPE_PROJECTS="$FIX/linked-projects" transcript_run
 check test "$RC" = 2
 check not_measured
 check not_walked "$FIX/linked-projects/$allowed_slug/subagents"
+# Native project slugs lose the distinction between a slash and a literal
+# hyphen. The selected checkout cannot attest an independently stored corpus.
+collision_checkout="$FIX/corpus/slug-collision"
+collision_other="$FIX/corpus/slug/collision"
+mkdir -p "$collision_checkout" "$collision_other" "$FIX/corpus/collision-projects"
+git -C "$collision_checkout" init -q
+git -C "$collision_checkout" remote add origin https://github.com/devantler-tech/monorepo.git
+git -C "$collision_other" init -q
+git -C "$collision_other" remote add origin https://github.com/excluded-owner/fixture.git
+collision_slug=$(printf '%s' "$collision_checkout" | tr / -)
+check test "$collision_slug" = "$(printf '%s' "$collision_other" | tr / -)"
+collision_store="$FIX/corpus/collision-projects/$collision_slug"
+mkdir -p "$collision_store/subagents"
+printf '{"type":"user","message":{"content":"COLLIDING_STORE_CANARY"}}\n' > "$collision_store/subagents/agent-foreign.jsonl"
+SCOPE_SELECTORS="$collision_checkout" SCOPE_PROJECTS="$FIX/corpus/collision-projects" transcript_run
+check test "$RC" = 2
+check not_measured
+check not_walked "$collision_store/subagents"
+# An independently bound store for a different admitted product still cannot
+# borrow the selected checkout's identity. No transcript needs to be opened.
+git -C "$collision_store" init -q
+git -C "$collision_store" remote add origin https://github.com/devantler-tech/scope-public.git
+SCOPE_SELECTORS="$collision_checkout" SCOPE_PROJECTS="$FIX/corpus/collision-projects" transcript_run
+check test "$RC" = 2
+check not_measured
+check not_walked "$collision_store/subagents"
+# Preserve real parent/delegated coverage once both source identities agree.
+git -C "$collision_store" remote set-url origin https://github.com/devantler-tech/monorepo.git
+rm "$collision_store/subagents/agent-foreign.jsonl"
+printf '{"type":"user","message":{"content":"OWNED_STORE_CANARY"}}\n' > "$collision_store/owned.jsonl"
+mkdir -p "$collision_store/owned/subagents"
+cp "$collision_store/owned.jsonl" "$collision_store/owned/subagents/agent-owned.jsonl"
+SCOPE_SELECTORS="$collision_checkout" SCOPE_PROJECTS="$FIX/corpus/collision-projects" transcript_run
+check test "$RC" = 0
+check grep -qF '[BOTH instances: 2 Claude + 0 Codex sessions]' "$FIX/transcript-output"
+check grep -qF '1 parent + 1 delegated' "$FIX/transcript-output"
+check walked "$collision_store/owned/subagents"
 printf 'outcome authorization: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
 scope_test_finished=1

@@ -13,13 +13,18 @@ export TZ=UTC
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="$SCRIPT_DIR/agent-telemetry.sh"
 PASS=0; FAIL=0
+FAILURE_NAMES=''
 # The miner can borrow the Claude Code runtime's bundled ripgrep (#4545). Keep
 # every fixture independent of the runtime that happens to run this suite; the
 # engine-selection cases below set it explicitly.
 unset CLAUDE_CODE_EXECPATH
 
 ok()   { PASS=$((PASS+1)); echo "  ✓ $1"; }
-bad()  { FAIL=$((FAIL+1)); echo "  ✗ $1"; echo "      $2"; }
+bad()  {
+  FAIL=$((FAIL+1))
+  FAILURE_NAMES="${FAILURE_NAMES}${FAILURE_NAMES:+$'\n'}$1"
+  echo "  ✗ $1"; echo "      $2"
+}
 check(){
   if grep -qF -- "$3" <<<"$2"; then ok "$1"
   else
@@ -83,11 +88,42 @@ fixture_script_path() {
   local name=$1 root
   case "$name" in ''|*[!a-zA-Z0-9_-]*) return 1 ;; esac
   root="$FIX/collector-copies/$name"
-  mkdir -p "$root/.claude/scripts" "$root/.claude/guides"
-  cp "$SCRIPT_DIR/../../AGENTS.md" "$root/AGENTS.md"
-  cp "$SCRIPT_DIR/../guides/work-selection.md" "$SCRIPT_DIR/../guides/egress-and-privacy.md" "$root/.claude/guides/"
+  mkdir -p "$root/.claude/scripts" "$root/.claude/guides" || return 2
+  cp "$SCRIPT_DIR/../../AGENTS.md" "$root/AGENTS.md" || return 2
+  cp "$SCRIPT_DIR/../guides/work-selection.md" "$SCRIPT_DIR/../guides/egress-and-privacy.md" "$root/.claude/guides/" || return 2
   printf '%s/.claude/scripts/agent-telemetry.sh\n' "$root"
 }
+
+# Namespaced synthetic corpora carry an independent source identity. A native
+# slug alone is deliberately insufficient; the scope suite checks that refusal.
+# This visits only this test's own immediate fixture directories.
+fixture_project_bindings() {
+  local store
+  for store in "$1"/*; do
+    [ -d "$store" ] && [ ! -L "$store" ] || continue
+    case "${store##*/}" in -*) ;; *) continue ;; esac
+    [ ! -e "$store/.git" ] || continue
+    git -C "$store" init -q || return 2
+    git -C "$store" remote add origin https://github.com/devantler-tech/monorepo.git || return 2
+  done
+}
+
+echo 'fixture setup failures remain failures'
+touch "$FIX/fixture-parent-file"
+fixture_out=$(FIX="$FIX/fixture-parent-file" fixture_script_path bad-parent 2>/dev/null)
+fixture_rc=$?
+if [ "$fixture_rc" = 2 ] && [ -z "$fixture_out" ]; then
+  ok 'fixture directory failure returns no usable collector path'
+else
+  bad 'fixture directory failure returns no usable collector path' "exit=$fixture_rc output=$fixture_out"
+fi
+fixture_out=$(SCRIPT_DIR="$FIX/missing-source" fixture_script_path bad-copy 2>/dev/null)
+fixture_rc=$?
+if [ "$fixture_rc" = 2 ] && [ -z "$fixture_out" ]; then
+  ok 'fixture copy failure returns no usable collector path'
+else
+  bad 'fixture copy failure returns no usable collector path' "exit=$fixture_rc output=$fixture_out"
+fi
 
 # The fixtures model ONE engineer entry a lane, and a case that needs more names
 # them. The script's own default is the two entries each lane is deployed with
@@ -691,6 +727,7 @@ EOF
 mkdir -p "$FIX/monorepo/.claude"
 
 run() {
+  fixture_project_bindings "$FIX/projects" || exit 1
   # TZ is PINNED. Cron hours are local, so the dropped-slot classifier reads local
   # time — which makes any fixture asserting an hour a function of the host's zone.
   # Unpinned, the hour-list case passed on a +02:00 developer machine and failed on
@@ -2663,6 +2700,7 @@ echo
 echo "review-finding regressions"
 
 mkdir -p "$FIX/projects/${FIX_SLUG}-leak" "$FIX/codex/sessions"
+fixture_project_bindings "$FIX/projects" || exit 1
 # A REAL errored tool result carrying a token, plus benign USER TEXT that merely
 # QUOTES a denial phrase and a fine-grained PAT.
 cat > "$FIX/projects/${FIX_SLUG}-leak/s.jsonl" <<'EOF'
@@ -2723,6 +2761,7 @@ echo
 echo "class-level regressions (round 2)"
 
 mkdir -p "$FIX/projects/${FIX_SLUG}-r2" "$FIX/codex/sessions"
+fixture_project_bindings "$FIX/projects" || exit 1
 
 # A command carrying an inline credential (the sampler path that bypassed
 # per-call-site redaction), plus prose that merely MENTIONS a sleep.
@@ -2777,6 +2816,7 @@ else bad "a real sleep command is still counted" "$(printf '%s' "$OUT" | grep 's
 # CLASS: detector/redactor pattern parity — a shape the redactor masks but the
 # detector misses reports "clean", the worst failure a leak detector has.
 mkdir -p "$FIX/projects/${FIX_SLUG}-jwt"
+fixture_project_bindings "$FIX/projects" || exit 1
 cat > "$FIX/projects/${FIX_SLUG}-jwt/s.jsonl" <<'EOF'
 {"type":"user","message":{"content":[{"type":"text","text":"bearer __JWT__"}]}}
 EOF
@@ -4210,6 +4250,7 @@ mkdir -p "$FIX/scoped/${BOUNDARY_SLUG}" \
          "$FIX/scoped/${BOUNDARY_SLUG}--claude-worktrees-keen-proskuriakova-4c1726" \
          "$FIX/scoped/-Users-x-work-employer-secret-service" \
          "$FIX/scoped/-Users-x-Library-something-else"
+fixture_project_bindings "$FIX/scoped" || exit 1
 for d in "${BOUNDARY_SLUG}" "${BOUNDARY_SLUG}--claude-worktrees-keen-proskuriakova-4c1726"; do
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"i1","name":"Bash","input":{"command":"sleep 11"}}]}}' \
     > "$FIX/scoped/$d/s.jsonl"
@@ -4261,6 +4302,7 @@ echo "round-4 regressions"
 mkdir -p "$FIX/anchor/${BOUNDARY_SLUG}" \
          "$FIX/anchor/${BOUNDARY_SLUG}--claude-worktrees-admiring-babbage-4af60d" \
          "$FIX/anchor/${BOUNDARY_SLUG}-client"
+fixture_project_bindings "$FIX/anchor" || exit 1
 for d in "${BOUNDARY_SLUG}" "${BOUNDARY_SLUG}--claude-worktrees-admiring-babbage-4af60d"; do
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a1","name":"Bash","input":{"command":"sleep 5"}}]}}' \
     > "$FIX/anchor/$d/s.jsonl"
@@ -4362,6 +4404,8 @@ mkdir -p "$FIX/mark/${MARK_SLUG}" \
          "$FIX/mark/${MARK_SLUG}--claude-worktrees-wizardly-ellis-19cf5b" \
          "$FIX/mark/${MARK_SLUG}--git-modules-platform" \
          "$FIX/mark/${MARK_SLUG}--client"
+fixture_project_bindings "$FIX/mark" || exit 1
+git -C "$FIX/mark/${MARK_SLUG}--git-modules-platform" remote set-url origin https://github.com/devantler-tech/platform.git || exit 1
 for d in "${MARK_SLUG}" "${MARK_SLUG}--claude-worktrees-wizardly-ellis-19cf5b" "${MARK_SLUG}--git-modules-platform"; do
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"m1","name":"Bash","input":{"command":"sleep 3"}}]}}' \
     > "$FIX/mark/$d/s.jsonl"
@@ -4465,6 +4509,7 @@ echo "round-9 regressions"
 mkdir -p "$FIX/imit/${BOUNDARY_SLUG}" \
          "$FIX/imit/${BOUNDARY_SLUG}--claude-worktrees-keen-proskuriakova-4c1726" \
          "$FIX/imit/${BOUNDARY_SLUG}--claude-worktrees-client"
+fixture_project_bindings "$FIX/imit" || exit 1
 for d in "${BOUNDARY_SLUG}" "${BOUNDARY_SLUG}--claude-worktrees-keen-proskuriakova-4c1726"; do
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"i1","name":"Bash","input":{"command":"sleep 2"}}]}}' \
     > "$FIX/imit/$d/s.jsonl"
@@ -5981,7 +6026,7 @@ nocheck "and no divergence is claimed when the walks agree" "$OUT" \
 # claim the numbers contradict. Ablate ONLY the class walk's pinning to force a
 # genuine divergence and prove the arm fires — otherwise it is unreachable code
 # that would pass every assertion above while being permanently inert.
-INJ_AB=$(fixture_script_path injection-growth)
+INJ_AB=$(fixture_script_path injection-growth) || exit 1
 /usr/bin/awk '
   /^emit_injection_classes\(\) \{/ {infn=1}
   infn && /injection_matching_lines "\$f" "\$len" "\$phrase_locale" \\$/ {
@@ -6077,7 +6122,7 @@ nocheck "and the report withholds the byte-stability claim the length pin cannot
 # separator), so the raw keys stay distinct
 # while the classified ones merge. The injdigest fixture already supplies two
 # distinct digests sharing one display, which is precisely that pair.
-INJ_KEY_AB=$(fixture_script_path injection-keymerge)
+INJ_KEY_AB=$(fixture_script_path injection-keymerge) || exit 1
 awk '
   /^[[:space:]]+\| phrase_class_keys \\$/ {
     print "          | phrase_class_keys | sed '\''s/^[^~]*~/MERGEDKEY~/'\'' \\"; next
@@ -8681,7 +8726,7 @@ check "a bare-string refusal in a final array is dead" "$OUT" "dead ......... 1"
 # Each arm removes exactly one guard from one accessor and requires two different
 # sections to under-count.
 shared_ablate() { # $1=perl-expr $2=label $3=reliability-after $4=signature-after
-  local ab; ab=$(fixture_script_path shared-accessor)
+  local ab; ab=$(fixture_script_path shared-accessor) || exit 1
   cp "$TARGET" "$ab"
   perl -0pi -e "$1" "$ab"
   if cmp -s "$TARGET" "$ab"; then
@@ -8725,7 +8770,7 @@ shared_ablate 's/def scalar_text: if type=="string" then \. else tostring end;/d
 # removes exactly one filter, asserts the copy actually CHANGED, and requires the
 # count to move. `cp` only — never git — so a failed arm cannot lose work.
 ablate() { # $1=sed-expr $2=label $3=expected-count-after $4=days $5=expected-changed-lines
-  local ab changed; ab=$(fixture_script_path signature-filter)
+  local ab changed; ab=$(fixture_script_path signature-filter) || exit 1
   cp "$TARGET" "$ab"
   sed -i.bak "$1" "$ab"; rm -f "$ab.bak"
   if cmp -s "$TARGET" "$ab"; then
@@ -8840,7 +8885,7 @@ fi
 # identical predicate — the exact mis-aiming that arm A above was rewritten for.
 rel_ablate() { # $1=sed-expr $2=label $3=expected-after $4=expected-changed-lines
   local ab changed aout
-  ab=$(fixture_script_path reliability-window)
+  ab=$(fixture_script_path reliability-window) || exit 1
   cp "$TARGET" "$ab"
   sed -i.bak "$1" "$ab"; rm -f "$ab.bak"
   if cmp -s "$TARGET" "$ab"; then
@@ -9788,7 +9833,7 @@ nocheck "matrix: the out-of-window row is excluded, not flagged" "$OUT" "OUT-OF-
 
 # Ablate the parse invariant back to a bare non-empty test — the shape every
 # earlier round of this fix had. The matrix must stop reading 2/8.
-TSABL=$(fixture_script_path timestamp-roundtrip)
+TSABL=$(fixture_script_path timestamp-roundtrip) || exit 1
 cp "$TARGET" "$TSABL"
 sed -i.bak 's/and \$r == (\$o | sub/and true; # ablated: (\$o | sub/' "$TSABL"; rm -f "$TSABL.bak"
 TSABL_CHANGED=$(diff "$TARGET" "$TSABL" | grep -c '^<')
@@ -9841,7 +9886,7 @@ check "and the canary stays at zero"                 "$OUT" "undated matches (ex
 nocheck "with no false-clean warning"                "$OUT" "NOT a clean verdict"
 
 # Ablate the canary: the undated match must go back to vanishing silently.
-SUABL=$(fixture_script_path undated-signature)
+SUABL=$(fixture_script_path undated-signature) || exit 1
 cp "$TARGET" "$SUABL"
 sed -i.bak 's/^        | select((\.timestamp \/\/ null) | usable_ts | not)$/        | select(false)/' "$SUABL"; rm -f "$SUABL.bak"
 SUABL_CHANGED=$(diff "$TARGET" "$SUABL" | grep -c '^<')
@@ -10083,7 +10128,7 @@ else
 fi
 
 # Ablation: break ONLY the embedded jq program in tagged_commands_in.
-XF_AB=$(fixture_script_path efficiency-canary)
+XF_AB=$(fixture_script_path efficiency-canary) || exit 1
 cp "$TARGET" "$XF_AB"
 sed -i.bak 's#(\.id? // "") as \$i#(.id?//"") as $i#' "$XF_AB"; rm -f "$XF_AB.bak"
 xf_changed=$(diff "$TARGET" "$XF_AB" | grep -c '^<')
@@ -10118,6 +10163,7 @@ echo "── extraction canary: every other per-file walk states a broken extrac
 WX="$FIX/walkcanary"
 WX_SLUG=$(printf '%s' "$WX/nest" | sed 's|/|-|g')
 mkdir -p "$WX/projects/$WX_SLUG" "$WX/codex" "$WX/nest"
+fixture_project_bindings "$WX/projects" || exit 1
 WX_TS=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')
 # One session carrying something every walk counts: two errored results
 # (reliability), a harness denial (blocked-action), a checkout of a PR ref
@@ -10178,6 +10224,7 @@ mk_run() { # $1 = fixture name; stdin = the session's records; prints the safety
   local mk="$FIX/$1" slug
   slug=$(printf '%s' "$mk/nest" | sed 's|/|-|g')
   mkdir -p "$mk/projects/$slug" "$mk/codex" "$mk/nest"
+  fixture_project_bindings "$mk/projects" || exit 1
   cat > "$mk/projects/$slug/s.jsonl"
   TZ=UTC PORTFOLIO_PATHS="$mk/nest" CLAUDE_PROJECTS_DIR="$mk/projects" CODEX_HOME="$mk/codex" MONOREPO_DIR="$mk/nest" \
     HOME="$mk" bash "$TARGET" --since-days 3650 --section safety 2>&1
@@ -10355,6 +10402,7 @@ fi
 MKM="$FIX/makemention"
 MKM_SLUG=$(printf '%s' "$MKM/nest" | sed 's|/|-|g')
 mkdir -p "$MKM/projects/$MKM_SLUG" "$MKM/codex" "$MKM/nest"
+fixture_project_bindings "$MKM/projects" || exit 1
 MKM_N=0
 mk_mention_session() { # $1 = the line holding the mention, $2 = optional second line of the same call
   local cmd="$1"
@@ -10717,7 +10765,7 @@ fi
 
 # walk ~ section ~ literal to break ~ its mutation ~ line proving the walk read something
 while IFS='~' read -r wx_walk wx_sec wx_old wx_new wx_signal; do
-  wx_ab=$(fixture_script_path "walk-${wx_walk}")
+  wx_ab=$(fixture_script_path "walk-${wx_walk}") || exit 1
   wx_mutate "$wx_ab" "$wx_old" "$wx_new"
   wx_changed=$(diff "$TARGET" "$wx_ab" | grep -c '^<' || true)
   if [ "$wx_changed" -ne 1 ]; then
@@ -10742,7 +10790,7 @@ CASES
 
 # The collision walk reads every file twice (races, then push collisions), so
 # its canary counts reads, not files: one file is two reads.
-wx_ab=$(fixture_script_path walk-collision)
+wx_ab=$(fixture_script_path walk-collision) || exit 1
 wx_mutate "$wx_ab" '| select(((.is_error? // false) == true) or ((.status? // "") == "error"))' \
                    '| select(((.is_error? // false) == true) or ((.status? // "") == "error")'
 wx_changed=$(diff "$TARGET" "$wx_ab" | grep -c '^<' || true)
@@ -11294,7 +11342,7 @@ nocheck "no multibyte abort is emitted for an invalid byte" "$OUT" "multibyte co
 # FAIL-CLOSED. Sabotage the pass so it exits non-zero having emitted nothing —
 # the exact signature of the abort above — and require UNKNOWN everywhere a
 # number would otherwise be trended.
-S2817=$(fixture_script_path wait-abort)
+S2817=$(fixture_script_path wait-abort) || exit 1
 sed 's/printf "%d %d %d %d %d %d %d %d %d %d %d %d"/exit 3; printf "%d %d %d %d %d %d %d %d %d %d %d %d"/' \
   "$TARGET" > "$S2817"
 chmod +x "$S2817"
@@ -11326,7 +11374,7 @@ check   "a failed pass says so in words"                         "$OUT" "wait-ta
 # fail-open: `read` fills the missing fields with empty strings, and empty
 # arithmetic prints 0.00 exactly as an abort does. Exit status alone is not a
 # sufficient test, so the field count is checked too.
-S2817B=$(fixture_script_path wait-short)
+S2817B=$(fixture_script_path wait-short) || exit 1
 sed 's/printf "%d %d %d %d %d %d %d %d %d %d %d %d", n_tot/printf "%d", n_tot/' "$TARGET" > "$S2817B"
 chmod +x "$S2817B"
 OUT=$(eff2817 "$FIX/b2817ctl" "$S2817B")
@@ -11587,6 +11635,7 @@ mkdir -p "$FIX/cxgone/archived_sessions" "$FIX/cxgone/worktrees/kept/monorepo" "
 # Scope tests require a complete supported-runtime control when judging an A2A
 # exit status. The separate Codex-only regression above still requires UNKNOWN.
 mkdir -p "$FIX/cx-scope-control/${BOUNDARY_SLUG}"
+fixture_project_bindings "$FIX/cx-scope-control" || exit 1
 printf '%s\n' '{"type":"user","message":{"content":[{"type":"text","text":"ordinary scope control"}]}}' \
   > "$FIX/cx-scope-control/${BOUNDARY_SLUG}/s.jsonl"
 cxgone_file() { # $1 = name, $2 = recorded cwd, $3 = git record (JSON object or empty), $4 = sleep seconds
@@ -12061,5 +12110,10 @@ if [ "$(id -u)" -ne 0 ]; then
   if [ "$rc" -eq 2 ]; then ok "Claude walk: an unopenable unnamed helper exits 2"; else bad "Claude walk: an unopenable unnamed helper exits 2" "exit $rc"; fi
 fi
 echo "──────────────────────────────"
+if [ "$FAIL" -gt 0 ]; then
+  # The affected runner retains a short log tail. Keep every failed check's
+  # name there without repeating the synthetic payload diagnostics.
+  printf 'Failed checks:\n%s\n' "$FAILURE_NAMES"
+fi
 echo "  passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

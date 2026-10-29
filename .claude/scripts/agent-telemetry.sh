@@ -2673,6 +2673,24 @@ scoped_session_paths() {
   } | sort -rn | cut -d' ' -f2-
 }
 
+# An encoded checkout name selects a candidate, never its source identity:
+# /work/foo-bar and /work/foo/bar have the same slug. A separately stored
+# corpus must itself be repository-bound to the same admitted product before
+# any transcript or delegated directory is listed. Native stores with only a
+# lossy name and no independent repository identity remain UNKNOWN.
+claude_store_authorized() {
+  local checkout=$1 store=$2 expected actual
+  transcript_path_authorized "$checkout" || return $?
+  expected=$(portfolio_repository_name "$TRANSCRIPT_GIT_VALUE") || return 2
+  # An ancestor repository is not an independent identity for a namespaced
+  # store: it could hold several colliding project names. Require the source
+  # itself to carry its repository binding, as well as checking containment.
+  [ -e "$store/.git" ] || [ -L "$store/.git" ] || return 2
+  transcript_path_authorized "$store" || return $?
+  actual=$(portfolio_repository_name "$TRANSCRIPT_GIT_VALUE") || return 2
+  [ "$expected" = "$actual" ] || return 2
+}
+
 claude_project_authorized() {
   local name=$1 p slug suffix root sub presence
   # A project slug identifies its checkout, not a different transcript store
@@ -2682,14 +2700,14 @@ claude_project_authorized() {
     [ -n "$p" ] || continue
     slug=$(path_to_slug "$p")
     case "$name" in
-      "$slug") transcript_path_authorized "$p"; return $? ;;
+      "$slug") claude_store_authorized "$p" "$CLAUDE_PROJECTS/$name"; return $? ;;
       "$slug"--git-modules-*)
         [ "$p" = "$MONOREPO" ] || return 1
         suffix=${name#"$slug"--git-modules-}
         while IFS= read -r sub; do
           [ -n "$sub" ] || continue
           if [ "$suffix" = "$(printf '%s' "$sub" | tr / -)" ]; then
-            transcript_path_authorized "$MONOREPO/$sub"; return $?
+            claude_store_authorized "$MONOREPO/$sub" "$CLAUDE_PROJECTS/$name"; return $?
           fi
         done <<<"$TRANSCRIPT_SUBMODULES"
         return 1 ;;
@@ -2700,7 +2718,7 @@ claude_project_authorized() {
         worktree_presence "$root" || presence=$?
         case "$presence" in 1) return 3 ;; 2) return 2 ;; esac
         [ -e "$root/.git" ] || return 2
-        transcript_path_authorized "$root"; return $? ;;
+        claude_store_authorized "$root" "$CLAUDE_PROJECTS/$name"; return $? ;;
     esac
   done < <(printf '%s\n' "$PORTFOLIO_PATHS" | tr ':' '\n')
   return 1
