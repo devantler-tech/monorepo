@@ -2820,34 +2820,104 @@ transcript_git() {
     -u GIT_CEILING_DIRECTORIES -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_COUNT git "$@"
 }
 
+# Keep the complete value: ordinary command substitution strips all trailing
+# line breaks, which can turn a malformed remote into an admitted repository.
+# Git supplies one output terminator; remove that one only, after its success.
+transcript_git_value() {
+  local captured
+  TRANSCRIPT_GIT_VALUE=''
+  captured=$(transcript_git "$@" 2>/dev/null && printf .) || return 2
+  case "$captured" in
+    *$'\n'.) TRANSCRIPT_GIT_VALUE=${captured%$'\n'.} ;;
+    *) return 2 ;;
+  esac
+  [ -n "$TRANSCRIPT_GIT_VALUE" ] || return 2
+}
+
+# Validate the complete NUL-delimited Git response before returning any path.
+# Names and paths may contain spaces; control characters, duplicate bindings,
+# partial records and failed reads are UNKNOWN rather than a smaller inventory.
+transcript_submodule_entries() {
+  local entries rc=0
+  entries=$(transcript_git -C "$1" config --file .gitmodules --null --get-regexp '\.path$' 2>/dev/null | (
+    trap - EXIT HUP INT TERM
+    entry=''; validated=''; seen_paths=''; seen_keys=''
+    while IFS= read -r -d '' entry; do
+      case "$entry" in *$'\n'*) ;; *) exit 2 ;; esac
+      key=${entry%%$'\n'*}; sub=${entry#*$'\n'}
+      case "$key" in submodule.*.path) ;; *) exit 2 ;; esac
+      case "$key" in *[[:cntrl:]]*) exit 2 ;; esac
+      case "$sub" in ''|.|..|/*|*//*|../*|*/../*|*/..|./*|*/./*|*/.|*/|*[[:cntrl:]]*) exit 2 ;; esac
+      case $'\n'"$seen_paths" in *$'\n'"$sub"$'\n'*) exit 2 ;; esac
+      case $'\n'"$seen_keys" in *$'\n'"$key"$'\n'*) exit 2 ;; esac
+      seen_paths="$seen_paths$sub"$'\n'
+      seen_keys="$seen_keys$key"$'\n'
+      validated="$validated$key"$'\t'"$sub"$'\n'
+    done
+    [ -z "$entry" ] || exit 2
+    printf '%s' "$validated"
+  )) || rc=$?
+  case "$rc" in
+    0) printf '%s' "$entries" ;;
+    1) [ -z "$entries" ] || return 2 ;; # No declared paths is a complete empty set.
+    *) return 2 ;;
+  esac
+}
+
 transcript_path_authorized() {
-  local path=$1 url top physical_path
+  local path=$1 boundary=${2-} existing=$1 top physical_path marker suffix
+  # A removed cwd may retain a live repository witness. Stop at its selected
+  # boundary and use the nearest surviving parent, never an outer checkout in
+  # place of a nested repository that still exists.
+  if [ ! -d "$existing" ]; then
+    [ -n "$boundary" ] || return 2
+    case "$path" in "$boundary"|"$boundary"/*) ;; *) return 2 ;; esac
+    # A missing nested worktree is a separate, unverifiable checkout. Its
+    # former contents cannot acquire the outer repository's identity.
+    for marker in .claude/worktrees .codex/worktrees .Codex/worktrees; do
+      case "$path" in "$boundary/$marker/"*)
+        suffix=${path#"$boundary/$marker/"}; suffix=${suffix%%/*}
+        [ -e "$boundary/$marker/$suffix/.git" ] || [ -L "$boundary/$marker/$suffix/.git" ] || return 2 ;;
+      esac
+    done
+    while [ ! -d "$existing" ]; do
+      [ ! -e "$existing" ] && [ ! -L "$existing" ] || return 2
+      [ "$existing" != "$boundary" ] || return 2
+      existing=$(dirname "$existing") || return 2
+    done
+    [ -x "$existing" ] || return 2
+  fi
   # Git's nearest repository distinguishes an ordinary product directory from
   # a different checkout nested beneath an admitted aggregator.
-  url=$(transcript_git -C "$path" remote get-url origin 2>/dev/null) || return 2
-  portfolio_remote_url "$url" || return 1
-  top=$(transcript_git -C "$path" rev-parse --show-toplevel 2>/dev/null) || return 2
+  transcript_git_value -C "$existing" remote get-url origin || return 2
+  portfolio_remote_url "$TRANSCRIPT_GIT_VALUE" || return 1
+  top=$(transcript_git -C "$existing" rev-parse --show-toplevel 2>/dev/null) || return 2
   top=$(cd "$top" && pwd -P) || return 2
-  physical_path=$(cd "$path" && pwd -P) || return 2
+  physical_path=$(cd "$existing" && pwd -P) || return 2
+  physical_path="$physical_path${path#"$existing"}"
   transcript_repository_contains_path "$top" "$physical_path"
 }
 
 # Also checks a selected missing cwd: an ordinary removed subdirectory retains
 # its live repository witness, while an unpopulated product slot does not.
 transcript_repository_contains_path() {
-  local top=$1 physical_path=$2 sub key slots slot_rc=0
+  local top=$1 physical_path=$2 sub key slots parent=$2
   case "$physical_path" in
     "$top"|"$top"/*) ;;
     *) return 2 ;;
   esac
+  # A nested checkout marker cannot belong to a different ancestor worktree.
+  # Containment alone would accept a misplaced core.worktree pointing upward.
+  while [ "$parent" != "$top" ]; do
+    [ ! -e "$parent/.git" ] && [ ! -L "$parent/.git" ] || return 2
+    parent=$(dirname "$parent") || return 2
+  done
   # An unpopulated product slot inherits the parent remote. That is not proof
   # of the product's repository identity, even if the parent itself is admitted.
-  if [ -e "$top/.gitmodules" ]; then
-    slots=$(transcript_git -C "$top" config --file .gitmodules --get-regexp '\.path$' 2>/dev/null) || slot_rc=$?
-    [ "$slot_rc" -le 1 ] || return 2
-    while read -r key sub; do
+  if [ -e "$top/.gitmodules" ] || [ -L "$top/.gitmodules" ]; then
+    slots=$(transcript_submodule_entries "$top") || return 2
+    while IFS=$'\t' read -r key sub; do
       [ -n "$key" ] || continue
-      case "$sub" in ''|.|..|/*|*//*|../*|*/../*|*/..|./*|*/./*|*/.|*/|*[[:cntrl:]]*) return 2 ;; esac
       case "$physical_path" in
         "$top/$sub"|"$top/$sub"/*) [ -e "$top/$sub/.git" ] || return 2 ;;
       esac
@@ -2858,6 +2928,7 @@ transcript_repository_contains_path() {
 
 prepare_transcript_scope() {
   local p paths='' sub url declared authorized_subs='' admission_rc submodule_pattern
+  local monorepo_selected=0 slots key actual_name declared_name
   TRANSCRIPT_SUBMODULES=''
   TRANSCRIPT_AUTHORIZED_REPOS=$(outcome_authorized_repositories) || return 2
   [ -n "$TRANSCRIPT_AUTHORIZED_REPOS" ] || return 2
@@ -2866,37 +2937,40 @@ prepare_transcript_scope() {
     admission_rc=0
     transcript_path_authorized "$p" || admission_rc=$?
     case "$admission_rc" in
-      0) paths="${paths:+$paths:}$p" ;;
+      0) paths="${paths:+$paths:}$p"; [ "$p" != "$MONOREPO" ] || monorepo_selected=1 ;;
       1) ;; # Successfully identified, but outside the authorized live set.
       *) return 2 ;;
     esac
   done < <(printf '%s\n' "$PORTFOLIO_PATHS" | tr ':' '\n')
   # An unpopulated or differently owned submodule does not acquire admission
   # from .gitmodules. Its real remote must agree with its declared identity.
-  if [ -r "$MONOREPO/.gitmodules" ] && transcript_path_authorized "$MONOREPO"; then
-    while IFS= read -r sub; do
-      [ -n "$sub" ] || continue
-      case "$sub" in .|..|/*|*//*|../*|*/../*|*/..|./*|*/./*|*/.|*/|*[[:cntrl:]]*) continue ;; esac
-      if transcript_path_authorized "$MONOREPO/$sub"; then
-        url=$(transcript_git -C "$MONOREPO/$sub" remote get-url origin 2>/dev/null) || continue
-        # The path list is a selector too: a declared path cannot name an
-        # ancestor's Git repository when its own checkout is not populated.
-        [ -e "$MONOREPO/$sub/.git" ] || continue
-        declared=$(transcript_git -C "$MONOREPO" config --file .gitmodules --get-regexp '\.path$' \
-          | awk -v p="$sub" '$2 == p { sub(/\.path$/, ".url", $1); print $1 }')
-        [ -n "$declared" ] || continue
-        declared=$(transcript_git -C "$MONOREPO" config --file .gitmodules --get "$declared") || continue
-        [ "$(portfolio_repository_name "$url")" = "$(portfolio_repository_name "$declared")" ] || continue
-        authorized_subs="${authorized_subs:+$authorized_subs|}$(rx_escape "$(printf '%s' "$sub" | tr '/' '-')")"
-        TRANSCRIPT_SUBMODULES="${TRANSCRIPT_SUBMODULES:+$TRANSCRIPT_SUBMODULES
+  if [ "$monorepo_selected" = 1 ] && { [ -e "$MONOREPO/.gitmodules" ] || [ -L "$MONOREPO/.gitmodules" ]; }; then
+    slots=$(transcript_submodule_entries "$MONOREPO") || return 2
+    while IFS=$'\t' read -r key sub; do
+      [ -n "$key" ] || continue
+      # Unpopulated slots have no checkout identity and acquire no alias. A
+      # populated checkout whose identity cannot be read is instead UNKNOWN.
+      [ -e "$MONOREPO/$sub/.git" ] || [ -L "$MONOREPO/$sub/.git" ] || continue
+      admission_rc=0
+      transcript_path_authorized "$MONOREPO/$sub" || admission_rc=$?
+      case "$admission_rc" in 0) ;; 1) continue ;; *) return 2 ;; esac
+      transcript_git_value -C "$MONOREPO/$sub" remote get-url origin || return 2
+      url=$TRANSCRIPT_GIT_VALUE
+      portfolio_remote_url "$url" || return 2
+      actual_name=$(portfolio_repository_name "$url") || return 2
+      declared=${key%.path}.url
+      transcript_git_value -C "$MONOREPO" config --file .gitmodules --get-all "$declared" || return 2
+      declared_name=$(portfolio_repository_name "$TRANSCRIPT_GIT_VALUE") || return 2
+      [ "$actual_name" = "$declared_name" ] || return 2
+      authorized_subs="${authorized_subs:+$authorized_subs|}$(rx_escape "$(printf '%s' "$sub" | tr '/' '-')")"
+      TRANSCRIPT_SUBMODULES="${TRANSCRIPT_SUBMODULES:+$TRANSCRIPT_SUBMODULES
 }$sub"
-        while IFS= read -r p; do
-          case "$MONOREPO/$sub" in "$p"|"$p"/*)
-            paths="${paths:+$paths:}$MONOREPO/$sub"; break ;;
-          esac
-        done < <(printf '%s\n' "$PORTFOLIO_PATHS" | tr ':' '\n')
-      fi
-    done < <(transcript_git -C "$MONOREPO" config --file .gitmodules --get-regexp '\.path$' 2>/dev/null | awk '{print $2}')
+      while IFS= read -r p; do
+        case "$MONOREPO/$sub" in "$p"|"$p"/*)
+          paths="${paths:+$paths:}$MONOREPO/$sub"; break ;;
+        esac
+      done < <(printf '%s\n' "$PORTFOLIO_PATHS" | tr ':' '\n')
+    done <<<"$slots"
   fi
   SUBMOD_RE=${authorized_subs:-__no_submodules__}
   # Rebuild only from authorized selectors. An empty intersection scans no
@@ -2915,7 +2989,7 @@ prepare_transcript_scope() {
 }
 
 in_scope_cwd() {
-  local cwd="$1" recorded="${2-}" p gone=0 unchecked=0 presence base rest id root where actual_root physical_root admission_rc
+  local cwd="$1" recorded="${2-}" p gone=0 unchecked=0 presence base rest id root actual_root physical_root admission_rc
   [ -n "$cwd" ] || return 1
   # Both forms compare the recorded folder as TEXT, so it must be written plainly
   # (monorepo#4151). `<portfolio path>/../../elsewhere` starts with a portfolio
@@ -2932,10 +3006,7 @@ in_scope_cwd() {
       presence=0
       transcript_path_authorized "$cwd" || presence=$?
       [ "$presence" -ne 0 ] || return 0
-      if [ "$presence" -eq 2 ]; then
-        worktree_presence "$cwd" && presence=0 || presence=$?
-        if [ "$presence" -eq 1 ]; then gone=1; else unchecked=1; fi
-      fi
+      [ "$presence" -ne 2 ] || unchecked=1
       continue ;;
     esac
     # Form 2: the Codex instance's own worktree of a portfolio repo. Basename
@@ -2945,10 +3016,10 @@ in_scope_cwd() {
     # ORIGIN REMOTE, and fail closed when it cannot be read (missing dir,
     # no remote, not a repo): an unverifiable worktree is excluded.
     #
-    # The WORKTREE ROOT is what gets judged, never the recorded folder itself
-    # (second review of monorepo#4149). The recorded folder may be a sub-folder
-    # that was deleted while the worktree lives on with another remote. So the
-    # path (already known to be plainly written, see above) must name exactly
+    # First establish the WORKTREE ROOT's own identity (monorepo#4149), then
+    # bind the cwd to its nearest surviving repository. The recorded folder may
+    # have been deleted while an outer or nested checkout lives on with another
+    # remote. The path (already known to be plainly written) must name exactly
     # `worktrees/<one id>/<name>[/…]`; anything else is not a Codex worktree by
     # its path.
     base=$(basename "$p")
@@ -2968,7 +3039,6 @@ in_scope_cwd() {
           continue
         fi
         # The root exists: its own remote decides, whatever the record says.
-        where="$cwd"; [ -d "$where" ] || where="$root"
         # A directory inside some other repository is not its own worktree.
         # Resolve only these already selected paths; never accept an inherited
         # ancestor remote as proof of the named worktree's identity.
@@ -2981,11 +3051,8 @@ in_scope_cwd() {
         transcript_path_authorized "$root" || admission_rc=$?
         [ "$admission_rc" -ne 1 ] || continue
         if [ "$admission_rc" -ne 0 ]; then unchecked=1; continue; fi
-        if ! transcript_repository_contains_path "$physical_root" "$physical_root${cwd#"$root"}"; then
-          unchecked=1; continue
-        fi
         admission_rc=0
-        transcript_path_authorized "$where" || admission_rc=$?
+        transcript_path_authorized "$cwd" "$root" || admission_rc=$?
         [ "$admission_rc" -ne 0 ] || return 0
         [ "$admission_rc" -ne 2 ] || unchecked=1 ;;
     esac

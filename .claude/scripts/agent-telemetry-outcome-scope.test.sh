@@ -333,6 +333,15 @@ check test "$RC" = 2
 
 # Neutralizing repository-environment isolation really admits the private
 # fixture. This control cannot pass merely because collection stopped working.
+# Keep the corpus identical on both sides of the mutation; a separate alias
+# mismatch must not conceal the repository-routing defect this control tests.
+mv "$FIX/corpus/.gitmodules" "$FIX/routing-gitmodules"
+write_codex "$FIX/corpus/private"
+GIT_DIR="$FIX/corpus/.git" transcript_run
+check not_measured
+GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.https://github.com/devantler-tech/monorepo.git.insteadOf \
+  GIT_CONFIG_VALUE_0=https://github.com/devantler-tech/scope-denied.git transcript_run
+check not_measured
 cp "$FIX/definition/.claude/scripts/agent-telemetry.sh" "$FIX/collector-before-routing-mutation.sh"
 awk '
   /^transcript_git\(\) \{/ { print "transcript_git() { git \"$@\"; }"; inside = 1; next }
@@ -350,6 +359,7 @@ else
   check grep -qF '1 Codex sessions]' "$FIX/transcript-output"
 fi
 cp "$FIX/collector-before-routing-mutation.sh" "$FIX/definition/.claude/scripts/agent-telemetry.sh"
+mv "$FIX/routing-gitmodules" "$FIX/corpus/.gitmodules"
 
 # Live Codex worktrees use the same repository and product-slot checks as a
 # selected ordinary checkout, including a cwd that has since been removed.
@@ -410,6 +420,90 @@ git -C "$claude_root" remote add origin https://github.com/devantler-tech/scope-
 SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
 check test "$RC" = 0
 check grep -qF '[BOTH instances: 1 Claude + 0 Codex sessions]' "$FIX/transcript-output"
+
+# Failure to establish a populated product's identity must stop preparation,
+# rather than shrink the admitted set and publish clean measurements.
+unresolved_product() {
+  SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+  check test "$RC" = 2
+  check not_measured
+  check not_walked "$FIX/home/codex/sessions"
+}
+write_codex "$FIX/corpus"
+cp "$FIX/corpus/allowed/.git/config" "$FIX/allowed-git-config"
+cp "$FIX/corpus/.gitmodules" "$FIX/valid-gitmodules"
+printf '[broken\n' > "$FIX/corpus/allowed/.git/config"
+unresolved_product
+cp "$FIX/allowed-git-config" "$FIX/corpus/allowed/.git/config"
+git -C "$FIX/corpus" config --file .gitmodules --unset submodule.allowed.url
+unresolved_product
+cp "$FIX/valid-gitmodules" "$FIX/corpus/.gitmodules"
+git -C "$FIX/corpus" config --file .gitmodules submodule.allowed.url https://github.com/devantler-tech/scope-private.git
+unresolved_product
+cp "$FIX/valid-gitmodules" "$FIX/corpus/.gitmodules"
+git -C "$FIX/corpus" config --file .gitmodules submodule.allowed.url $'https://github.com/devantler-tech/scope-public.git\n'
+unresolved_product
+cp "$FIX/valid-gitmodules" "$FIX/corpus/.gitmodules"
+cat >> "$FIX/corpus/.gitmodules" <<'DUPLICATE'
+[submodule "duplicate"]
+  path = allowed
+  url = https://github.com/devantler-tech/scope-public.git
+DUPLICATE
+unresolved_product
+cp "$FIX/valid-gitmodules" "$FIX/corpus/.gitmodules"
+
+# Command substitution must not trim a malformed remote into an admitted URL.
+git -C "$FIX/corpus/private" remote set-url origin $'https://github.com/devantler-tech/scope-public.git\n'
+write_codex "$FIX/corpus/private"
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check not_measured
+git -C "$FIX/corpus/private" remote set-url origin https://github.com/devantler-tech/scope-denied.git
+
+# Preserve the complete Git configuration values, including spaces in the
+# submodule name and path. An unpopulated slot cannot borrow its parent's remote.
+mkdir -p "$FIX/corpus/space folder "
+cat >> "$FIX/corpus/.gitmodules" <<'SPACED'
+[submodule "spaced product"]
+  path = "space folder "
+  url = https://github.com/devantler-tech/scope-public.git
+SPACED
+write_codex "$FIX/corpus/space folder "
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check test "$RC" = 2
+check not_measured
+git -C "$FIX/corpus/space folder " init -q
+git -C "$FIX/corpus/space folder " remote add origin https://github.com/devantler-tech/scope-public.git
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check measured
+
+# Missing cwd routes still belong to the nearest surviving repository. They
+# cannot borrow the outer worktree when a nested excluded checkout survives.
+rmdir "$FIX/corpus/unpopulated"
+write_codex "$FIX/corpus/unpopulated"
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check test "$RC" = 2
+check not_measured
+mkdir -p "$FIX/corpus/unpopulated"
+write_codex "$FIX/corpus/ordinary-deleted-directory"
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check test "$RC" = 2
+check not_measured
+mkdir -p "$worktree_root/private"
+git -C "$worktree_root/private" init -q
+git -C "$worktree_root/private" remote add origin https://github.com/devantler-tech/scope-denied.git
+write_codex "$worktree_root/private/deleted-directory"
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check not_measured
+write_codex "$worktree_root/.claude/worktrees/gone/deleted-directory"
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check test "$RC" = 2
+check not_measured
+# A misplaced core.worktree can name an authorized ancestor and still contain
+# the selected cwd. The nearest checkout marker must agree with that root.
+write_codex "$FIX/corpus"
+git -C "$FIX/corpus/allowed" config core.worktree "$FIX/corpus"
+unresolved_product
+cp "$FIX/allowed-git-config" "$FIX/corpus/allowed/.git/config"
 printf 'outcome authorization: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
 scope_test_finished=1
