@@ -350,6 +350,89 @@ out="$("$tool" --file "$fm_target" --from "$fm_ok" 2>&1)" || rc=$?
 check "closed frontmatter is accepted (positive control)" "0" "$rc"
 
 # ---------------------------------------------------------------------------
+# An externally prepared candidate must bind to the exact source it split.
+# Refusal happens before backup artifacts, preserving a sibling's newer bytes.
+bound_dir="$tmp/snapshot-bound"
+mkdir -p "$bound_dir"
+printf '# Notes\noriginal\n' >"$bound_dir/source.md"
+printf '# Notes\nreplacement\n' >"$bound_dir/new.md"
+expected_sha256="$(shasum -a 256 "$bound_dir/source.md" | awk '{print $1}')"
+printf 'sibling addition\n' >>"$bound_dir/source.md"
+cp "$bound_dir/source.md" "$bound_dir/expected.md"
+rc=0
+out="$("$tool" --file "$bound_dir/source.md" --from "$bound_dir/new.md" \
+  --expected-sha256 "$expected_sha256" --backup-dir "$bound_dir/backups" 2>&1)" || rc=$?
+check "pre-entry stale candidate is refused" 1 "$rc"
+check_unchanged "snapshot binding preserves the newer source" "$bound_dir/expected.md" "$bound_dir/source.md"
+if grep -qF 'refused stale candidate' <<<"$out" && [[ ! -e "$bound_dir/backups" ]]; then
+  pass 'snapshot refusal is specific and creates no backup artifacts'
+else
+  fail 'snapshot refusal is specific and creates no backup artifacts'
+fi
+expected_sha256="$(shasum -a 256 "$bound_dir/source.md" | awk '{print $1}')"
+rc="$(run --file "$bound_dir/source.md" --from "$bound_dir/new.md" --expected-sha256 "$expected_sha256")"
+check 'matching external snapshot is accepted' 0 "$rc"
+check_unchanged 'matching snapshot installs the prepared candidate' "$bound_dir/new.md" "$bound_dir/source.md"
+zero_digest="$(printf '%064d' 0)"
+for invalid_digest in '' invalid "${zero_digest:1}" "${zero_digest}0"; do
+  rc="$(run --file "$bound_dir/source.md" --from "$bound_dir/new.md" --expected-sha256 "$invalid_digest")"
+  check 'malformed expected snapshot is usage exit 2' 2 "$rc"
+  check_unchanged 'malformed snapshot leaves source unchanged' "$bound_dir/new.md" "$bound_dir/source.md"
+done
+expected_sha256="$(shasum -a 256 "$bound_dir/source.md" | awk '{print $1}')"
+rc="$(run --file "$bound_dir/source.md" --from "$bound_dir/new.md" --expected-sha256 "$expected_sha256" --expected-sha256 "$expected_sha256")"
+check 'repeated expected snapshot is usage exit 2' 2 "$rc"
+
+# A sibling may write while the final swap file is copied, after the older
+# staleness gate. Run the real copy and inject only that deterministic window.
+window_dir="$tmp/final-window"
+mkdir -p "$window_dir/bin"
+printf '# Notes\noriginal\n' >"$window_dir/source.md"
+printf '# Notes\nreplacement\n' >"$window_dir/new.md"
+cat >"$window_dir/bin/cp" <<'COPY'
+#!/usr/bin/env bash
+set -euo pipefail
+/bin/cp "$@"
+case "${2:-}" in
+  *.memory-rewrite.*) printf 'sibling addition\n' >>"$REWRITE_TEST_SOURCE" ;;
+esac
+COPY
+chmod +x "$window_dir/bin/cp"
+printf '# Notes\noriginal\nsibling addition\n' >"$window_dir/expected.md"
+rc=0
+out="$(PATH="$window_dir/bin:$PATH" REWRITE_TEST_SOURCE="$window_dir/source.md" \
+  "$tool" --file "$window_dir/source.md" --from "$window_dir/new.md" 2>&1)" || rc=$?
+check 'write during swap preparation is refused' 1 "$rc"
+check_unchanged 'final stale gate preserves the sibling write' "$window_dir/expected.md" "$window_dir/source.md"
+if grep -qF 'refused stale rewrite' <<<"$out"; then
+  pass 'final-window refusal names staleness'
+else
+  fail 'final-window refusal names staleness'
+fi
+
+# Ordinary rename-overwrite cannot preserve the inode actually displaced by a
+# last-moment writer. The real helper must use native exchange at this boundary.
+native_dir="$tmp/native-replacement"
+mkdir -p "$native_dir/bin"
+printf '# Notes\noriginal\n' >"$native_dir/source.md"
+printf '# Notes\nreplacement\n' >"$native_dir/new.md"
+cat >"$native_dir/bin/mv" <<'MOVE'
+#!/usr/bin/env bash
+printf 'clobbering mv invoked\n' >"$REWRITE_TEST_MARKER"
+exit 89
+MOVE
+chmod +x "$native_dir/bin/mv"
+rc=0
+out="$(PATH="$native_dir/bin:$PATH" REWRITE_TEST_MARKER="$native_dir/mv-used" \
+  "$tool" --file "$native_dir/source.md" --from "$native_dir/new.md" 2>&1)" || rc=$?
+check 'native replacement succeeds without rename-overwrite' 0 "$rc"
+check_unchanged 'native replacement installs the entire candidate' "$native_dir/new.md" "$native_dir/source.md"
+if [[ ! -e "$native_dir/mv-used" ]] && grep -qF 'displaced=' <<<"$out"; then
+  pass 'native replacement retains a displaced-file receipt'
+else
+  fail 'native replacement retains a displaced-file receipt'
+fi
+
 # Usage errors.
 # ---------------------------------------------------------------------------
 check "missing --file exits 2" "2" "$(run --from "$new")"

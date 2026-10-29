@@ -27,11 +27,12 @@
 #   --allow-shrink          permit a rebuild smaller than --max-shrink-pct of the original
 #   --max-shrink-pct N      refuse when new size < (100-N)% of old (default: 50)
 #   --backup-dir <dir>      directory for the pre-swap backup (default: same dir as --file)
+#   --expected-sha256 <hex> bind a prepared candidate to its original source snapshot
 #
 # Exit codes:
-#   0  rewrite applied; stdout carries `backup=<path>`
+#   0  rewrite read back; stdout carries backup and displaced-inode paths
 #   1  content refused (empty, shrink, lost heading) — target untouched
-#   2  usage / bound error — target untouched
+#   2  usage, unsupported exchange, or incomplete operation — inspect receipts
 set -Eeuo pipefail
 
 DEFAULT_MAX_SHRINK_PCT=50
@@ -44,6 +45,7 @@ suffix=""
 allow_shrink=0
 max_shrink_pct="$DEFAULT_MAX_SHRINK_PCT"
 backup_dir=""
+expected_digest=""
 
 usage() {
   sed -n '/^# Usage:/,/^#   2 /p' "$0" | sed 's/^# \{0,1\}//'
@@ -70,6 +72,12 @@ while [[ $# -gt 0 ]]; do
     --allow-shrink) allow_shrink=1; shift ;;
     --max-shrink-pct) max_shrink_pct="${2-}"; shift 2 || fail_usage "--max-shrink-pct needs an integer" ;;
     --backup-dir) backup_dir="${2-}"; shift 2 || fail_usage "--backup-dir needs a path" ;;
+    --expected-sha256)
+      [[ -z "$expected_digest" ]] || fail_usage "--expected-sha256 must not be repeated"
+      expected_digest="${2-}"
+      [[ "$expected_digest" =~ ^[a-f0-9]{64}$ ]] || fail_usage "--expected-sha256 needs 64 lowercase hex characters"
+      shift 2
+      ;;
     -h|--help) usage; exit 0 ;;
     *) fail_usage "unknown argument '$1'" ;;
   esac
@@ -83,7 +91,10 @@ done
 # assembling and validating its candidate — and replacing it afterwards would
 # silently discard that newer content, which is the loss this helper exists to
 # prevent. Re-checked immediately before the swap.
-original_digest="$(shasum "$file" | awk '{print $1}')"
+original_digest="$(shasum -a 256 -- "$file" | awk '{print $1}')"
+if [[ -n "$expected_digest" && "$expected_digest" != "$original_digest" ]]; then
+  fail_content "refused stale candidate: source no longer matches its expected snapshot; target untouched"
+fi
 
 # Exactly one content source.
 source_count=0
@@ -202,12 +213,20 @@ fi
 # Staleness gate: refuse if the target moved under us since the snapshot above.
 # Checked here — after every validation, before any artifact is written — so a
 # refusal leaves neither a backup nor a swap file behind.
-current_digest="$(shasum "$file" | awk '{print $1}')"
+current_digest="$(shasum -a 256 -- "$file" | awk '{print $1}')"
 if [[ "$current_digest" != "$original_digest" ]]; then
   fail_content "refused stale rewrite of $file: another writer changed it while this rebuild was being assembled; target untouched — re-read it and rebuild"
 fi
 
-# Backup first, then atomic-ish replace via temp + mv in the same directory.
+# Compile before persistent artifacts. The final native exchange retains the
+# actually displaced inode, closing the last digest-to-rename data-loss window.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! go -C "$script_dir/memory-backup-go" build -o "$workdir/memory-replace" ./cmd/memory-replace; then
+  echo 'memory-rewrite: replacement backend unavailable; target untouched' >&2
+  exit 2
+fi
+
+# Keep the independent ordinary backup even when a later exchange is uncertain.
 if [[ -z "$backup_dir" ]]; then
   backup_dir="$(dirname "$file")"
 fi
@@ -219,7 +238,17 @@ cp "$file" "$backup_path"
 
 swap="$file.memory-rewrite.$$"
 cp "$new_path" "$swap"
-mv "$swap" "$file"
+# The copy and backup above take time too. Preserve an intervening writer and
+# keep both recoverable copies rather than replacing newer bytes (#2990).
+current_digest="$(shasum -a 256 -- "$file" | awk '{print $1}')"
+if [[ "$current_digest" != "$original_digest" ]]; then
+  fail_content "refused stale rewrite of $file during swap preparation; backup=$backup_path prepared=$swap; target untouched"
+fi
+if ! "$workdir/memory-replace" "$file" "$swap" "$original_digest"; then
+  echo "memory-rewrite: incomplete; backup=$backup_path prepared=$swap; inspect recovery receipts before any retry" >&2
+  exit 2
+fi
+rm -f -- "$swap"
 
 printf 'memory-rewrite: ok file=%s backup=%s new_bytes=%s\n' "$file" "$backup_path" "$new_bytes"
 memory_rewrite_finished=1

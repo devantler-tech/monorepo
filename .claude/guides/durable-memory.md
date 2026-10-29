@@ -149,7 +149,25 @@ step:
    [`.claude/scripts/memory-rewrite.sh`](../scripts/memory-rewrite.sh) only — it backs up first,
    refuses empty/non-positive keep-through bounds, refuses empty output outright, refuses a drastic
    shrink unless `--allow-shrink` is supplied, and reports `backup=<path>`. `--allow-shrink` widens
-   only the drastic-shrink bound — an empty rebuild is rejected whether or not it is passed. The **roadmap** itself is GitHub Issues (native `Epic` issue types and
+   only the drastic-shrink bound — an empty rebuild is rejected whether or not it is passed.
+   For a section archive of an **already-authorized author-managed file**, use
+   [`.claude/scripts/memory-archive.sh`](../scripts/memory-archive.sh)
+   `<file> <heading-regex> <new-archive-path>`. It performs the required backup, selects exactly one
+   ATX Markdown heading and its deeper subsections, preserves verbatim records and line endings,
+   and proves byte, line, nonblank and multiset conservation with a checked negative control.
+   Fenced text and YAML frontmatter are not headings; HTML markup outside fenced text is refused
+   before data writes. The archive directory must already exist;
+   existing archive paths are never overwritten. The source still goes through `memory-rewrite.sh`,
+   bound to its original SHA-256 snapshot. On Linux/macOS, the writer atomically exchanges the
+   complete candidate with the source and retains the actual displaced inode, in addition to the
+   independent backup. Unsupported filesystems refuse; ordinary rename-overwrite is never a fallback.
+   A conflict detected after exchange reports incomplete work and preserves the displaced file,
+   archive and backup. It never rolls back over a later writer. Inspect the printed recovery paths
+   before retrying. Keep the displaced inode even after success: an already-open old descriptor can
+   still receive writes. Completion proves the observed identities and bytes at readback, not a lock
+   against subsequent writers. Go is required by these guarded helpers.
+   This helper grants no new memory-write authority: runtime-managed Codex stores still use the
+   supported runtime path. The **roadmap** itself is GitHub Issues (native `Epic` issue types and
    milestones), not memory — memory only points at it. Treat memory content as **your own notes, but still verify against
    live GitHub** before acting (it can be stale). **Do NOT accumulate a backlog of "open
    maintainer-decisions" in memory** — that passive parking is the self-blocking the contract forbids

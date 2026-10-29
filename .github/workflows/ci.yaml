@@ -384,6 +384,7 @@ jobs:
             memory-rewrite:
               - '.claude/scripts/memory-rewrite.sh'
               - '.claude/scripts/memory-rewrite.test.sh'
+              - '.claude/scripts/memory-backup-go/**'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -421,6 +422,9 @@ jobs:
               - '.claude/scripts/memory-backup.sh'
               - '.claude/scripts/memory-backup.test.sh'
               - '.claude/scripts/memory-backup-go/**'
+              - '.claude/scripts/memory-archive.sh'
+              - '.claude/scripts/memory-archive.test.sh'
+              - '.claude/scripts/memory-rewrite.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -2036,6 +2040,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/memory-backup-go/go.mod
+          cache: false
       - name: Verify the memory rewrite guard
         run: bash .claude/scripts/memory-rewrite.test.sh
 
@@ -2118,6 +2127,7 @@ jobs:
         run: |
           go -C .claude/scripts/memory-backup-go test ./...
           bash .claude/scripts/memory-backup.test.sh
+          bash .claude/scripts/memory-archive.test.sh
 
   test-product-value-contract:
     name: Test product value contract
