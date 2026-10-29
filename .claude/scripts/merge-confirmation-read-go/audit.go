@@ -238,6 +238,12 @@ func discoverSurfaces(root string) ([]string, error) {
 type auditResult struct{ surfaces, pluginSurfaces, lists int }
 
 func auditRepository(root string, run commandRunner) (auditResult, error) {
+	return auditWithReader(root, run, os.ReadFile)
+}
+
+// Preserve the checked-read behavior merged in #4658. The injectable reader lets
+// tests reproduce disappearing and partially read files without changing real definitions.
+func auditWithReader(root string, run commandRunner, readSurface func(string) ([]byte, error)) (auditResult, error) {
 	var result auditResult
 	policy, err := os.ReadFile(filepath.Join(root, ".claude/guides/merge-policy.md"))
 	if err != nil {
@@ -258,10 +264,11 @@ func auditRepository(root string, run commandRunner) (auditResult, error) {
 		if strings.HasPrefix(path, filepath.Join(root, "libraries/agent-plugins/plugins/agentic-engineering")+string(os.PathSeparator)) {
 			result.pluginSurfaces++
 		}
-		data, err := os.ReadFile(path)
+		data, err := readSurface(path)
 		if err != nil {
-			continue
-		} // Same optional-surface rule as the original guard.
+			relative, _ := filepath.Rel(root, path)
+			return result, fmt.Errorf("cannot read discovered definition %s: %w", relative, err)
+		}
 		result.surfaces++
 		lists, err := extract(data, filepath.Ext(path) == ".json")
 		if err != nil {

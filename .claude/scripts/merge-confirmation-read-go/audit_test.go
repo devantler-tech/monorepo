@@ -34,6 +34,79 @@ func TestRepositoryAudit(t *testing.T) {
 	t.Logf("no invalid fields in %d lists across %d surfaces (%d plugin definitions)", result.lists, result.surfaces, result.pluginSurfaces)
 }
 
+func TestEveryDiscoveredSurfaceIsReadOnce(t *testing.T) {
+	root := repositoryRoot()
+	paths, err := discoverSurfaces(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reads := map[string]int{}
+	result, err := auditWithReader(root, gitCommand, func(path string) ([]byte, error) {
+		reads[path]++
+		return os.ReadFile(path)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.surfaces != len(paths) || len(reads) != len(paths) {
+		t.Fatalf("incomplete read: %d/%d", len(reads), len(paths))
+	}
+	for _, path := range paths {
+		if reads[path] != 1 {
+			t.Fatalf("surface read %d times: %s", reads[path], path)
+		}
+	}
+}
+
+func TestDiscoveredReadFailuresCannotBecomeSuccessfulPartialAudits(t *testing.T) {
+	root := repositoryRoot()
+	paths, err := discoverSurfaces(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plugin := ""
+	for _, path := range paths {
+		if strings.Contains(path, "/libraries/agent-plugins/plugins/agentic-engineering/") {
+			plugin = path
+			break
+		}
+	}
+	if plugin == "" {
+		t.Fatal("the pinned plugin case is missing")
+	}
+	partialError := errors.New("injected partial read")
+	for _, tc := range []struct {
+		name, path string
+		data       []byte
+		err        error
+	}{
+		{"missing-required", filepath.Join(root, "AGENTS.md"), nil, os.ErrNotExist},
+		{"unreadable-discovered", filepath.Join(root, ".claude/guides/cadence.md"), nil, os.ErrPermission},
+		{"partial-plugin-read", plugin, []byte("--json state"), partialError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			found := false
+			for _, path := range paths {
+				if path == tc.path {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("the failure control is not in the real discovered set")
+			}
+			_, err := auditWithReader(root, gitCommand, func(path string) ([]byte, error) {
+				if path == tc.path {
+					return tc.data, tc.err
+				}
+				return os.ReadFile(path)
+			})
+			if err == nil || !errors.Is(err, tc.err) || !strings.Contains(err.Error(), "cannot read discovered definition") {
+				t.Fatalf("failed read escaped or failed for the wrong reason: %v", err)
+			}
+		})
+	}
+}
+
 func TestEveryProsePrescriptionGatesItsOwnSection(t *testing.T) {
 	text := read(t, ".claude/guides/merge-policy.md")
 	if err := auditPolicy(text); err != nil {
