@@ -2827,6 +2827,29 @@ cxtail_fixture 2000-99-99T99:99:99.000Z
 OUT=$(cxtail_run 1)
 check "an impossible Codex timestamp keeps the full read" "$OUT" \
   "codex record window: 0 of 1 transcript(s) read from their first record"
+# A date that is well-formed but does not exist passes every shape check; only
+# the `usable_ts` round trip rejects it, and the file must still be read in full
+# (#4675 pins this before any faster proof of the cut can replace the jq fold).
+cxtail_fixture 2001-02-29T00:00:03.000Z
+OUT=$(cxtail_run 1)
+check "a Codex timestamp on a date that does not exist keeps the full read" "$OUT" \
+  "codex record window: 0 of 1 transcript(s) read from their first record"
+check "the nonexistent-date file's older credential is caught" "$OUT" "slack-token"
+# A clock field `fromdateiso8601` would normalize (second 60, hour 24) fails the
+# same round trip.
+for cxtail_clock in 2000-01-01T00:00:60.000Z 2000-01-01T24:00:03.000Z; do
+  cxtail_fixture "$cxtail_clock"
+  OUT=$(cxtail_run 1)
+  check "an out-of-range Codex clock ($cxtail_clock) keeps the full read" "$OUT" \
+    "codex record window: 0 of 1 transcript(s) read from their first record"
+done
+# Control: a GENUINE leap day is a real date, so the cut still happens. Without
+# it the guard above could pass by rejecting every February 29.
+cxtail_fixture 2000-02-29T00:00:03.000Z
+OUT=$(cxtail_run 1)
+check "a Codex history ending on a real leap day is still cut" "$OUT" \
+  "codex record window: 1 of 1 transcript(s) read from their first record"
+nocheck "the leap-day file's history before the window is not rescanned" "$OUT" "slack-token"
 # Provenance names the SOURCE line, not the line inside the tail copy: the
 # in-window credential is line 1504 of the transcript (meta, the old credential,
 # 1500 padding records, the last old record, then it).
@@ -2837,6 +2860,8 @@ check "a cut Codex transcript still reports provenance" "$OUT" \
   "codex record window: 1 of 1 transcript(s) read from their first record"
 check "provenance of a cut Codex transcript names the source line" "$OUT" "session=r.jsonl line=1504 "
 # A checkout in the skipped history still pairs with a build inside the window.
+# The checkout sits 1.35 MB before the cut, so the first-match grep (#4675)
+# stops early and `head` takes a SIGPIPE: the printed count must still decide.
 cxtail_build_fixture() { # $1 = the command run before the window
   { printf '{"timestamp":"2000-01-01T00:00:00.000Z","type":"session_meta","payload":{"cwd":"%s"}}\n' "$FIX/monorepo"
     printf '{"timestamp":"2000-01-01T00:00:01.000Z","type":"response_item","payload":{"type":"function_call","arguments":"{\\"command\\":\\"%s\\"}"}}\n' "$1"
