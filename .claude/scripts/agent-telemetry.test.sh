@@ -35,7 +35,36 @@ trap 'rm -rf "$FIX"' EXIT
 # Every fixture lives under $FIX, so scoping the professional-work allowlist to
 # $FIX lets the ordinary tests run while the boundary itself stays enforced.
 # The boundary tests below override this deliberately to prove exclusion works.
-export PORTFOLIO_PATHS="$FIX"
+FIX_SLUG=$(printf '%s' "$FIX" | tr / -)
+mkdir -p "$FIX/proj-a" "$FIX/leak" "$FIX/r2" "$FIX/jwt"
+export PORTFOLIO_PATHS="$FIX:$FIX/proj-a:$FIX/leak:$FIX/r2:$FIX/jwt"
+
+# Selectors no longer authorize a corpus (#4139). Ordinary fixtures belong to
+# an actual synthetic admitted repository and resolve live metadata through a
+# strict offline forge. Unknown calls fail instead of reaching native accounts.
+git -C "$FIX" init -q
+git -C "$FIX" remote add origin https://github.com/devantler-tech/monorepo.git
+mkdir -p "$FIX/admission-bin"
+cat > "$FIX/admission-bin/gh" <<'SCOPE_GH'
+#!/usr/bin/env bash
+if [ "$*" = 'api --paginate --slurp orgs/devantler-tech/repos?type=all&per_page=100' ]; then
+  printf '%s\n' '[[{"id":1,"full_name":"devantler-tech/monorepo","private":false,"archived":false},{"id":2,"full_name":"devantler-tech/ksail","private":false,"archived":false},{"id":3,"full_name":"devantler-tech/platform","private":false,"archived":false}]]'
+  exit 0
+fi
+exit 93
+SCOPE_GH
+chmod +x "$FIX/admission-bin/gh"
+export PATH="$FIX/admission-bin:$PATH"
+BOUNDARY_ROOT="$FIX/portfolio/monorepo"
+BOUNDARY_SLUG=$(printf '%s' "$BOUNDARY_ROOT" | tr / -)
+mkdir -p "$BOUNDARY_ROOT"
+git -C "$BOUNDARY_ROOT" init -q
+git -C "$BOUNDARY_ROOT" remote add origin https://github.com/devantler-tech/monorepo.git
+for name in keen-proskuriakova-4c1726 admiring-babbage-4af60d wizardly-ellis-19cf5b; do
+  mkdir -p "$BOUNDARY_ROOT/.claude/worktrees/$name"
+  git -C "$BOUNDARY_ROOT/.claude/worktrees/$name" init -q
+  git -C "$BOUNDARY_ROOT/.claude/worktrees/$name" remote add origin https://github.com/devantler-tech/monorepo.git
+done
 
 # The fixtures model ONE engineer entry a lane, and a case that needs more names
 # them. The script's own default is the two entries each lane is deployed with
@@ -221,6 +250,10 @@ if [ "$FAIL" -ne 0 ]; then exit 1; fi
 # (#4477). Instrument the real cache entrypoint in a disposable script copy;
 # positive controls prove the sentinel still detects sections that need it.
 mkdir -p "$FIX/section-selection/.claude/scripts" "$FIX/section-selection/empty"
+mkdir -p "$FIX/section-selection/.claude/guides"
+cp "$SCRIPT_DIR/../../AGENTS.md" "$FIX/section-selection/AGENTS.md"
+cp "$SCRIPT_DIR/../guides/work-selection.md" "$SCRIPT_DIR/../guides/egress-and-privacy.md" \
+  "$FIX/section-selection/.claude/guides/"
 awk '{ print; if ($0 == "populate_session_cache() {")
   print "  printf walked >> \"$TRANSCRIPT_WALK_SENTINEL\"" }' "$TARGET" \
   > "$FIX/section-selection/.claude/scripts/agent-telemetry.sh"
@@ -514,7 +547,7 @@ ex() { printf '%s' "$1" | sed \
       -e "s|__GEN__|$S_GEN|g"; }
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
-mkdir -p "$FIX/projects/proj-a" "$FIX/codex/automations/daily-ai-engineer" \
+mkdir -p "$FIX/projects/${FIX_SLUG}-proj-a" "$FIX/codex/automations/daily-ai-engineer" \
          "$FIX/codex/automations/agent-improver" \
          "$FIX/codex/sessions" "$FIX/monorepo/.claude" \
          "$FIX/claude-store" \
@@ -523,7 +556,7 @@ mkdir -p "$FIX/projects/proj-a" "$FIX/codex/automations/daily-ai-engineer" \
 
 # A session with: one failing Bash call, one credential-shaped string, one blocked
 # action, and — critically — a line of PROSE that tries to issue an instruction.
-cat > "$FIX/projects/proj-a/s1.jsonl" <<'EOF'
+cat > "$FIX/projects/${FIX_SLUG}-proj-a/s1.jsonl" <<'EOF'
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"gh pr view 5"}}]}}
 {"type":"user","timestamp":"__NOW__","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":[{"type":"text","text":"argument required when using the --repo flag"}]}]}}
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"/x"}}]}}
@@ -534,7 +567,7 @@ cat > "$FIX/projects/proj-a/s1.jsonl" <<'EOF'
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"t4","name":"Bash","input":{"command":"probe"}}]}}
 {"type":"user","timestamp":"__NOW__","message":{"content":[{"type":"tool_result","tool_use_id":"t4","is_error":true,"content":[{"type":"text","text":"multibyte-boundary-probe-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX—TAIL"}]}]}}
 EOF
-subst "$FIX/projects/proj-a/s1.jsonl"
+subst "$FIX/projects/${FIX_SLUG}-proj-a/s1.jsonl"
 
 # Loader fixtures: Codex asserts the RETIRED gate; the constitution records it retired.
 cat > "$FIX/claude-sched/daily-ai-assistant/SKILL.md" <<'EOF'
@@ -2606,16 +2639,16 @@ nocheck "no drift reported once loaders agree" "$OUT" "⚠️  DRIFT"
 echo
 echo "review-finding regressions"
 
-mkdir -p "$FIX/projects/leak" "$FIX/codex/sessions"
+mkdir -p "$FIX/projects/${FIX_SLUG}-leak" "$FIX/codex/sessions"
 # A REAL errored tool result carrying a token, plus benign USER TEXT that merely
 # QUOTES a denial phrase and a fine-grained PAT.
-cat > "$FIX/projects/leak/s.jsonl" <<'EOF'
+cat > "$FIX/projects/${FIX_SLUG}-leak/s.jsonl" <<'EOF'
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"e1","name":"Bash","input":{"command":"git push"}}]}}
 {"type":"user","timestamp":"__NOW__","message":{"content":[{"type":"tool_result","tool_use_id":"e1","is_error":true,"content":[{"type":"text","text":"fatal: bad creds __GHPB__ here"}]}]}}
 {"type":"user","message":{"content":[{"type":"text","text":"quoting a log: Permission to use Bash with command rm -rf / plus __PATZ__"}]}}
 {"type":"user","timestamp":"__NOW__","message":{"content":[{"type":"tool_result","tool_use_id":"e1","is_error":true,"content":[{"type":"text","text":"<tool_use_error>Blocked: sleep 30 followed by: cat x"}]}]}}
 EOF
-subst "$FIX/projects/leak/s.jsonl"
+subst "$FIX/projects/${FIX_SLUG}-leak/s.jsonl"
 # Codex-format session: proves the format-agnostic detectors cover it.
 printf '%s\n' "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$FIX/codex\"}}" \
   > "$FIX/codex/sessions/r.jsonl"
@@ -2666,20 +2699,20 @@ else bad "P3: missing option value exits 2" "rc=$_rc"; fi
 echo
 echo "class-level regressions (round 2)"
 
-mkdir -p "$FIX/projects/r2" "$FIX/codex/sessions"
+mkdir -p "$FIX/projects/${FIX_SLUG}-r2" "$FIX/codex/sessions"
 
 # A command carrying an inline credential (the sampler path that bypassed
 # per-call-site redaction), plus prose that merely MENTIONS a sleep.
 # Includes a PR checkout, so the near-miss sampler actually fires and its
 # redaction is exercised (round 3 narrowed the sampler to checkout-bearing
 # sessions, so a build-only fixture would no longer reach that code path).
-cat > "$FIX/projects/r2/s.jsonl" <<'EOF'
+cat > "$FIX/projects/${FIX_SLUG}-r2/s.jsonl" <<'EOF'
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"c0","name":"Bash","input":{"command":"gh pr checkout 123"}}]}}
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"c1","name":"Bash","input":{"command":"GITHUB_TOKEN=__GHPC__ npm ci"}}]}}
 {"type":"user","message":{"content":[{"type":"text","text":"a reviewer wrote: just run sleep 60 and poll it in a loop, also sleep 30 works"}]}}
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"c2","name":"Bash","input":{"command":"echo hi"}}]}}
 EOF
-subst "$FIX/projects/r2/s.jsonl"
+subst "$FIX/projects/${FIX_SLUG}-r2/s.jsonl"
 
 runr2() {
   CLAUDE_PROJECTS_DIR="$FIX/projects" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
@@ -2720,12 +2753,12 @@ else bad "a real sleep command is still counted" "$(printf '%s' "$OUT" | grep 's
 
 # CLASS: detector/redactor pattern parity — a shape the redactor masks but the
 # detector misses reports "clean", the worst failure a leak detector has.
-mkdir -p "$FIX/projects/jwt"
-cat > "$FIX/projects/jwt/s.jsonl" <<'EOF'
+mkdir -p "$FIX/projects/${FIX_SLUG}-jwt"
+cat > "$FIX/projects/${FIX_SLUG}-jwt/s.jsonl" <<'EOF'
 {"type":"user","message":{"content":[{"type":"text","text":"bearer __JWT__"}]}}
 EOF
-subst "$FIX/projects/jwt/s.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/projects/jwt" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+subst "$FIX/projects/${FIX_SLUG}-jwt/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/projects/${FIX_SLUG}-jwt" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 if grep -q 'jwt-like' <<<"$OUT"; then
   # NB: match the EXPANDED token, not the literal placeholder — grepping OUT for
@@ -4150,11 +4183,11 @@ else ok "scratch file never holds a raw credential"; fi
 echo
 echo "professional-work boundary"
 
-mkdir -p "$FIX/scoped/-Users-x-git-personal-monorepo" \
-         "$FIX/scoped/-Users-x-git-personal-monorepo--claude-worktrees-keen-proskuriakova-4c1726" \
+mkdir -p "$FIX/scoped/${BOUNDARY_SLUG}" \
+         "$FIX/scoped/${BOUNDARY_SLUG}--claude-worktrees-keen-proskuriakova-4c1726" \
          "$FIX/scoped/-Users-x-work-employer-secret-service" \
          "$FIX/scoped/-Users-x-Library-something-else"
-for d in "-Users-x-git-personal-monorepo" "-Users-x-git-personal-monorepo--claude-worktrees-keen-proskuriakova-4c1726"; do
+for d in "${BOUNDARY_SLUG}" "${BOUNDARY_SLUG}--claude-worktrees-keen-proskuriakova-4c1726"; do
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"i1","name":"Bash","input":{"command":"sleep 11"}}]}}' \
     > "$FIX/scoped/$d/s.jsonl"
 done
@@ -4165,16 +4198,16 @@ for d in "-Users-x-work-employer-secret-service" "-Users-x-Library-something-els
     > "$FIX/scoped/$d/s.jsonl"
 done
 
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/scoped" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
-      PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/scoped" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$BOUNDARY_ROOT" \
+      PORTFOLIO_PATHS="$BOUNDARY_ROOT" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 50 --section efficiency 2>&1)
 # Two in-scope sessions each ran one sleep; the two out-of-scope ones must not count.
 if grep -qE 'sleep/poll calls \.\. 2' <<<"$OUT"; then
   ok "only portfolio sessions are read (2 in-scope, 2 excluded)"
 else bad "only portfolio sessions are read" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
 
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/scoped" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
-      PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/scoped" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$BOUNDARY_ROOT" \
+      PORTFOLIO_PATHS="$BOUNDARY_ROOT" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 50 --section reliability 2>&1)
 if grep -qE 'sessions in window: 2 ' <<<"$OUT"; then
   ok "session count reflects only in-scope projects"
@@ -4182,8 +4215,8 @@ else bad "session count reflects only in-scope projects" "$(printf '%s' "$OUT" |
 
 # Worktree dirs share the root slug as a PREFIX and must stay included — losing
 # them would blind the miner to nearly every real agent run.
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/scoped" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
-      PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/scoped" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$BOUNDARY_ROOT" \
+      PORTFOLIO_PATHS="$BOUNDARY_ROOT" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 50 --section reliability 2>&1)
 if grep -qE 'sessions in window: 2 ' <<<"$OUT"; then
   ok "per-session worktree dirs are still in scope"
@@ -4202,17 +4235,17 @@ echo "round-4 regressions"
 # BOUNDARY HOLE: an unanchored substring match admits a DIFFERENT repo whose
 # name merely extends an allowlisted one. `monorepo-client` is the whole point —
 # a plausible professional repo sitting next to the portfolio one.
-mkdir -p "$FIX/anchor/-Users-x-git-personal-monorepo" \
-         "$FIX/anchor/-Users-x-git-personal-monorepo--claude-worktrees-admiring-babbage-4af60d" \
-         "$FIX/anchor/-Users-x-git-personal-monorepo-client"
-for d in "-Users-x-git-personal-monorepo" "-Users-x-git-personal-monorepo--claude-worktrees-admiring-babbage-4af60d"; do
+mkdir -p "$FIX/anchor/${BOUNDARY_SLUG}" \
+         "$FIX/anchor/${BOUNDARY_SLUG}--claude-worktrees-admiring-babbage-4af60d" \
+         "$FIX/anchor/${BOUNDARY_SLUG}-client"
+for d in "${BOUNDARY_SLUG}" "${BOUNDARY_SLUG}--claude-worktrees-admiring-babbage-4af60d"; do
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a1","name":"Bash","input":{"command":"sleep 5"}}]}}' \
     > "$FIX/anchor/$d/s.jsonl"
 done
 printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a2","name":"Bash","input":{"command":"sleep 6"}}]}}' \
-  > "$FIX/anchor/-Users-x-git-personal-monorepo-client/s.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/anchor" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
-      PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+  > "$FIX/anchor/${BOUNDARY_SLUG}-client/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/anchor" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$BOUNDARY_ROOT" \
+      PORTFOLIO_PATHS="$BOUNDARY_ROOT" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 50 --section efficiency 2>&1)
 if grep -qE 'sleep/poll calls \.\. 2' <<<"$OUT"; then
   ok "sibling repo 'monorepo-client' is NOT admitted by prefix"
@@ -4225,8 +4258,8 @@ printf '%s\n' "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$FIX/cxwt/workt
   > "$FIX/cxwt/sessions/r.jsonl"
 printf '%s\n' '{"type":"response_item","payload":{"type":"function_call","arguments":"{\"command\":\"sleep 8\"}"}}' \
   >> "$FIX/cxwt/sessions/r.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxwt" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
-      PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxwt" MONOREPO_DIR="$BOUNDARY_ROOT" \
+      PORTFOLIO_PATHS="$BOUNDARY_ROOT" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
 # Excluding the only session empties the corpus, so the section short-circuits
 # rather than printing a zero — either outcome proves the worktree was excluded,
@@ -4294,18 +4327,22 @@ mkdir -p "$FIX/fixmono"
 printf '%b\n' '[submodule "platform"]' '\tpath = platform' '\turl = git@github.com:devantler-tech/platform.git' \
   > "$FIX/fixmono/.gitmodules"
 ( cd "$FIX/fixmono" && git init -q 2>/dev/null ) || true
-mkdir -p "$FIX/mark/-Users-x-git-personal-monorepo" \
-         "$FIX/mark/-Users-x-git-personal-monorepo--claude-worktrees-wizardly-ellis-19cf5b" \
-         "$FIX/mark/-Users-x-git-personal-monorepo--git-modules-platform" \
-         "$FIX/mark/-Users-x-git-personal-monorepo--client"
-for d in "-Users-x-git-personal-monorepo" "-Users-x-git-personal-monorepo--claude-worktrees-wizardly-ellis-19cf5b" "-Users-x-git-personal-monorepo--git-modules-platform"; do
+git -C "$FIX/fixmono" remote add origin https://github.com/devantler-tech/monorepo.git
+mkdir -p "$FIX/fixmono/platform"
+git -C "$FIX/fixmono/platform" init -q
+git -C "$FIX/fixmono/platform" remote add origin https://github.com/devantler-tech/platform.git
+mkdir -p "$FIX/mark/${BOUNDARY_SLUG}" \
+         "$FIX/mark/${BOUNDARY_SLUG}--claude-worktrees-wizardly-ellis-19cf5b" \
+         "$FIX/mark/${BOUNDARY_SLUG}--git-modules-platform" \
+         "$FIX/mark/${BOUNDARY_SLUG}--client"
+for d in "${BOUNDARY_SLUG}" "${BOUNDARY_SLUG}--claude-worktrees-wizardly-ellis-19cf5b" "${BOUNDARY_SLUG}--git-modules-platform"; do
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"m1","name":"Bash","input":{"command":"sleep 3"}}]}}' \
     > "$FIX/mark/$d/s.jsonl"
 done
 printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"m2","name":"Bash","input":{"command":"sleep 4"}}]}}' \
-  > "$FIX/mark/-Users-x-git-personal-monorepo--client/s.jsonl"
+  > "$FIX/mark/${BOUNDARY_SLUG}--client/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/mark" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/fixmono" \
-      PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+      PORTFOLIO_PATHS="$BOUNDARY_ROOT" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 50 --section efficiency 2>&1)
 if grep -qE 'sleep/poll calls \.\. 3' <<<"$OUT"; then
   ok "'monorepo--client' excluded; worktree + git-modules markers kept"
@@ -4398,17 +4435,17 @@ echo "round-9 regressions"
 # A repo whose name IMITATES Claude's worktree marker must not be admitted. The
 # real marker has a fixed shape (adjective-name-hex6), verified against the live
 # store, so an imitation like `--claude-worktrees-client` no longer matches.
-mkdir -p "$FIX/imit/-Users-x-git-personal-monorepo" \
-         "$FIX/imit/-Users-x-git-personal-monorepo--claude-worktrees-keen-proskuriakova-4c1726" \
-         "$FIX/imit/-Users-x-git-personal-monorepo--claude-worktrees-client"
-for d in "-Users-x-git-personal-monorepo" "-Users-x-git-personal-monorepo--claude-worktrees-keen-proskuriakova-4c1726"; do
+mkdir -p "$FIX/imit/${BOUNDARY_SLUG}" \
+         "$FIX/imit/${BOUNDARY_SLUG}--claude-worktrees-keen-proskuriakova-4c1726" \
+         "$FIX/imit/${BOUNDARY_SLUG}--claude-worktrees-client"
+for d in "${BOUNDARY_SLUG}" "${BOUNDARY_SLUG}--claude-worktrees-keen-proskuriakova-4c1726"; do
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"i1","name":"Bash","input":{"command":"sleep 2"}}]}}' \
     > "$FIX/imit/$d/s.jsonl"
 done
 printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"i2","name":"Bash","input":{"command":"sleep 9"}}]}}' \
-  > "$FIX/imit/-Users-x-git-personal-monorepo--claude-worktrees-client/s.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/imit" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
-      PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+  > "$FIX/imit/${BOUNDARY_SLUG}--claude-worktrees-client/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/imit" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$BOUNDARY_ROOT" \
+      PORTFOLIO_PATHS="$BOUNDARY_ROOT" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 50 --section efficiency 2>&1)
 if grep -qE 'sleep/poll calls \.\. 2' <<<"$OUT"; then
   ok "a repo imitating the worktree marker is excluded"
@@ -11521,9 +11558,9 @@ check "archived Codex run: a missing archive folder reads zero, not an error" "$
 mkdir -p "$FIX/cxgone/archived_sessions" "$FIX/cxgone/worktrees/kept/monorepo" "$FIX/empty"
 # Scope tests require a complete supported-runtime control when judging an A2A
 # exit status. The separate Codex-only regression above still requires UNKNOWN.
-mkdir -p "$FIX/cx-scope-control/-Users-x-git-personal-monorepo"
+mkdir -p "$FIX/cx-scope-control/${BOUNDARY_SLUG}"
 printf '%s\n' '{"type":"user","message":{"content":[{"type":"text","text":"ordinary scope control"}]}}' \
-  > "$FIX/cx-scope-control/-Users-x-git-personal-monorepo/s.jsonl"
+  > "$FIX/cx-scope-control/${BOUNDARY_SLUG}/s.jsonl"
 cxgone_file() { # $1 = name, $2 = recorded cwd, $3 = git record (JSON object or empty), $4 = sleep seconds
   local meta
   if [ -n "$3" ]; then meta="{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$2\",\"git\":$3}}"
@@ -11533,8 +11570,8 @@ cxgone_file() { # $1 = name, $2 = recorded cwd, $3 = git record (JSON object or 
     >> "$FIX/cxgone/archived_sessions/$1.jsonl"
 }
 cxgone_run() { # $1 = section
-  CLAUDE_PROJECTS_DIR="$FIX/cx-scope-control" CODEX_HOME="$FIX/cxgone" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
-    PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+  CLAUDE_PROJECTS_DIR="$FIX/cx-scope-control" CODEX_HOME="$FIX/cxgone" MONOREPO_DIR="$BOUNDARY_ROOT" \
+    PORTFOLIO_PATHS="$BOUNDARY_ROOT" HOME="$FIX" \
     bash "$TARGET" --since-days 3650 --section "$1" 2>&1
 }
 cxgone_sleeps() { cxgone_run efficiency | grep -oE 'sleep/poll calls \.\. [0-9]+' | grep -oE '[0-9]+$'; }
@@ -11631,12 +11668,12 @@ n=$(cxgone_sleeps); [ "$n" = 3 ] && ok "worktree root: a sub-folder of a removed
 # A recorded folder that merely STARTS WITH a portfolio path was accepted, so
 # `<portfolio>/../../elsewhere/project` read as in scope although it names a
 # folder outside the portfolio. Each spelling below is left out.
-cxgone_file climbout  "/Users/x/git-personal/monorepo/../../elsewhere/project" '' 41
-cxgone_file climbend  "/Users/x/git-personal/monorepo/sub/.." '' 42
-cxgone_file dotpart   "/Users/x/git-personal/monorepo/./sub" '' 43
-cxgone_file dotend    "/Users/x/git-personal/monorepo/." '' 44
-cxgone_file doubled   "/Users/x/git-personal/monorepo//sub" '' 45
-cxgone_file slashend  "/Users/x/git-personal/monorepo/" '' 46
+cxgone_file climbout  "$BOUNDARY_ROOT/../../elsewhere/project" '' 41
+cxgone_file climbend  "$BOUNDARY_ROOT/sub/.." '' 42
+cxgone_file dotpart   "$BOUNDARY_ROOT/./sub" '' 43
+cxgone_file dotend    "$BOUNDARY_ROOT/." '' 44
+cxgone_file doubled   "$BOUNDARY_ROOT//sub" '' 45
+cxgone_file slashend  "$BOUNDARY_ROOT/" '' 46
 n=$(cxgone_sleeps); OUT=$(cxgone_run a2a); rc=$?
 [ "$n" = 3 ] && ok "portfolio path: a climbing, dotted, doubled or slash-ended folder admits nothing" \
   || bad "portfolio path: a climbing, dotted, doubled or slash-ended folder admits nothing" "sleep count '$n', expected 3"
@@ -11644,7 +11681,7 @@ nocheck "portfolio path: none of them is an unknown" "$OUT" "UNKNOWN:"
 if [ "$rc" -eq 0 ]; then ok "portfolio path: exit 0"; else bad "portfolio path: exit 0" "exit $rc"; fi
 # The control: the same form written plainly IS read, so the zero above is the
 # spelling's doing and not a fixture in which this form never matches.
-cxgone_file plainsub "/Users/x/git-personal/monorepo/sub" '' 47
+cxgone_file plainsub "$BOUNDARY_ROOT/sub" '' 47
 n=$(cxgone_sleeps); [ "$n" = 4 ] && ok "portfolio path: a plainly written sub-folder is read" \
   || bad "portfolio path: a plainly written sub-folder is read" "sleep count '$n', expected 4"
 # A working copy that still exists decides by ITS OWN remote, also when the
@@ -11667,13 +11704,13 @@ n=$(cxgone_sleeps); OUT=$(cxgone_run a2a); rc=$?
 nocheck "worktree root: another owner's working copy is not an unknown" "$OUT" "UNKNOWN:"
 # A Codex home given with a trailing slash reads the same transcripts: every
 # Codex worktree transcript used to be left out with no count and no unknown line.
-n_slash=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxgone/" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
-  PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+n_slash=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxgone/" MONOREPO_DIR="$BOUNDARY_ROOT" \
+  PORTFOLIO_PATHS="$BOUNDARY_ROOT" HOME="$FIX" \
   bash "$TARGET" --since-days 3650 --section efficiency 2>&1 | grep -oE 'sleep/poll calls \.\. [0-9]+' | grep -oE '[0-9]+$')
 [ "$n_slash" = 5 ] && ok "Codex home: a trailing slash reads the same transcripts" \
   || bad "Codex home: a trailing slash reads the same transcripts" "sleep count '$n_slash', expected 5"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxgone//" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
-  PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxgone//" MONOREPO_DIR="$BOUNDARY_ROOT" \
+  PORTFOLIO_PATHS="$BOUNDARY_ROOT" HOME="$FIX" \
   bash "$TARGET" --since-days 3650 --section a2a 2>&1)
 archive_line=$(cxgone_run a2a | grep -F "from archived_sessions/")
 case "$archive_line" in

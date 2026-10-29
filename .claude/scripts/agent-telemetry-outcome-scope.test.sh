@@ -176,6 +176,130 @@ cp "$FIX/valid-contract.md" "$FIX/definition/AGENTS.md"
 TEST_SCOPE_ORG=another-owner run
 check unknown
 check no_repo_queries
+
+# Local observations are selectors, never authority. Exercise the real CLI on
+# synthetic repositories and trace traversal before any transcript is read.
+rmdir "$FIX/corpus/.git"
+git -C "$FIX/corpus" init -q
+git -C "$FIX/corpus" remote add origin https://github.com/devantler-tech/monorepo.git
+for pair in 'allowed scope-public' 'private scope-denied' 'mapped scope-private' 'archived scope-retired'; do
+  IFS=' ' read -r child repository <<<"$pair"
+  mkdir -p "$FIX/corpus/$child"
+  git -C "$FIX/corpus/$child" init -q
+  git -C "$FIX/corpus/$child" remote add origin "https://github.com/devantler-tech/$repository.git"
+done
+mkdir -p "$FIX/corpus/unlisted"
+git -C "$FIX/corpus/unlisted" init -q
+git -C "$FIX/corpus/unlisted" remote add origin https://github.com/excluded-owner/fixture.git
+mkdir -p "$FIX/home/codex/sessions" "$FIX/projects"
+SCOPE_REAL_FIND=$(command -v find)
+export SCOPE_REAL_FIND
+cat > "$FIX/bin/find" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >> "$SCOPE_WALK_TRACE"
+exec "$SCOPE_REAL_FIND" "$@"
+EOF
+chmod +x "$FIX/bin/find"
+write_codex() {
+  printf '{"type":"session_meta","payload":{"cwd":"%s","git":{"repository_url":"%s"}}}\n' "$1" "${2-}" > "$FIX/home/codex/sessions/scope.jsonl"
+  printf '%s\n' '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"SCOPE_ADMISSION_CANARY"}]}}' >> "$FIX/home/codex/sessions/scope.jsonl"
+}
+transcript_run() {
+  jq -s '.' "$FIX/rows.json" > "$FIX/pages.json"
+  : > "$FIX/trace"; : > "$FIX/walk-trace"
+  set +e
+  PATH="$FIX/bin:$PATH" HOME="$FIX/home" CODEX_HOME="$FIX/home/codex" \
+    CLAUDE_PROJECTS_DIR="${SCOPE_PROJECTS:-$FIX/projects}" MONOREPO_DIR="$FIX/corpus" \
+    PORTFOLIO_PATHS="${SCOPE_SELECTORS:-$FIX/corpus}" PORTFOLIO_ORG=devantler-tech \
+    AGENT_TELEMETRY_RUNTIME=codex SCOPE_TRACE="$FIX/trace" SCOPE_WALK_TRACE="$FIX/walk-trace" \
+    SCOPE_PAGES="$FIX/pages.json" SCOPE_ROWS="$FIX/rows.json" SCOPE_LIST_FAIL="${SCOPE_LIST_FAIL:-0}" \
+    bash "$FIX/definition/.claude/scripts/agent-telemetry.sh" --section efficiency \
+      > "$FIX/transcript-output" 2>&1
+  RC=$?
+  set -e
+}
+measured() {
+  if [ "$RC" = 0 ] && grep -qF '[BOTH instances: 0 Claude + 1 Codex sessions]' "$FIX/transcript-output"; then return 0; fi
+  printf 'admitted fixture exit=%s\n' "$RC" >&2
+  head -n 10 "$FIX/transcript-output" >&2
+  return 1
+}
+not_measured() { ! grep -Eq '\[BOTH instances: ([1-9][0-9]* Claude|[0-9]+ Claude \+ [1-9][0-9]* Codex)' "$FIX/transcript-output"; }
+not_walked() { ! grep -qF "$1" "$FIX/walk-trace"; }
+for cwd in "$FIX/corpus" "$FIX/corpus/allowed" "$FIX/corpus/mapped"; do
+  write_codex "$cwd"
+  transcript_run
+  check measured
+done
+for remote in https://github.com/devantler-tech/scope-public.git \
+  git@github.com:devantler-tech/scope-private.git \
+  ssh://git@github.com/devantler-tech/scope-public.git; do
+  write_codex "$FIX/home/codex/worktrees/gone/corpus" "$remote"
+  transcript_run
+  check measured
+done
+for remote in https://github.com/devantler-tech/scope-retired.git \
+  https://github.com/devantler-tech/scope-denied.git \
+  https://notgithub.com/devantler-tech/scope-public.git \
+  https://github.com/excluded-owner/fixture.git; do
+  write_codex "$FIX/home/codex/worktrees/gone/corpus" "$remote"
+  transcript_run
+  check not_measured
+done
+for child in unlisted private archived; do
+  write_codex "$FIX/corpus/$child"
+  transcript_run
+  check not_measured
+done
+write_codex "$FIX/corpus/private"
+SCOPE_SELECTORS="$FIX/corpus/private" transcript_run
+check not_measured
+write_codex "$FIX/corpus"
+SCOPE_LIST_FAIL=1 transcript_run
+check test "$RC" = 2
+check not_measured
+check not_walked "$FIX/home/codex/sessions"
+cp "$FIX/definition/AGENTS.md" "$FIX/transcript-valid-contract.md"
+printf 'Missing authorization contract.\n' > "$FIX/definition/AGENTS.md"
+transcript_run
+check test "$RC" = 2
+check not_measured
+check not_walked "$FIX/home/codex/sessions"
+mv "$FIX/transcript-valid-contract.md" "$FIX/definition/AGENTS.md"
+
+# A slug alone does not authorize an archived or private submodule. In
+# particular, placing the session store under the aggregator grants no bypass.
+rm "$FIX/home/codex/sessions/scope.jsonl"
+cat > "$FIX/corpus/.gitmodules" <<'EOF'
+[submodule "private"]
+  path = private
+  url = https://github.com/devantler-tech/scope-denied.git
+[submodule "allowed"]
+  path = allowed
+  url = https://github.com/devantler-tech/scope-public.git
+EOF
+for child in private allowed; do
+  slug=$(printf '%s' "$FIX/corpus/$child" | tr / -)
+  mkdir -p "$FIX/projects/$slug"
+  printf '{"type":"user","cwd":"%s","message":{"content":"SCOPE_ADMISSION_CANARY"}}\n' \
+    "$FIX/corpus/$child" > "$FIX/projects/$slug/scope.jsonl"
+done
+transcript_run
+check not_walked "$FIX/projects/$(printf '%s' "$FIX/corpus/private" | tr / -)"
+check grep -qF '[BOTH instances: 1 Claude + 0 Codex sessions]' "$FIX/transcript-output"
+allowed_slug=$(printf '%s' "$FIX/corpus/allowed" | tr / -)
+mkdir -p "$FIX/projects/$allowed_slug/scope/subagents"
+cp "$FIX/projects/$allowed_slug/scope.jsonl" "$FIX/projects/$allowed_slug/scope/subagents/agent-child.jsonl"
+transcript_run
+check grep -qF '[BOTH instances: 2 Claude + 0 Codex sessions]' "$FIX/transcript-output"
+check grep -qF '1 parent + 1 delegated' "$FIX/transcript-output"
+mkdir -p "$FIX/corpus/store"
+private_slug=$(printf '%s' "$FIX/corpus/private" | tr / -)
+mkdir -p "$FIX/corpus/store/$private_slug"
+cp "$FIX/projects/$private_slug/scope.jsonl" "$FIX/corpus/store/$private_slug/"
+SCOPE_PROJECTS="$FIX/corpus/store" transcript_run
+check not_walked "$FIX/corpus/store/$private_slug"
+check not_measured
 printf 'outcome authorization: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
 scope_test_finished=1
