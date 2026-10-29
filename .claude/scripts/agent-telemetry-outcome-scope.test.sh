@@ -196,7 +196,7 @@ SCOPE_REAL_FIND=$(command -v find)
 export SCOPE_REAL_FIND
 cat > "$FIX/bin/find" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "$1" >> "$SCOPE_WALK_TRACE"
+printf '%s\n' "$@" >> "$SCOPE_WALK_TRACE"
 exec "$SCOPE_REAL_FIND" "$@"
 EOF
 chmod +x "$FIX/bin/find"
@@ -225,7 +225,14 @@ measured() {
   return 1
 }
 not_measured() { ! grep -Eq '\[BOTH instances: ([1-9][0-9]* Claude|[0-9]+ Claude \+ [1-9][0-9]* Codex)' "$FIX/transcript-output"; }
+excluded() {
+  if [ "$RC" = 0 ] && grep -qF '(no sessions in window — neither instance)' "$FIX/transcript-output"; then return 0; fi
+  printf 'excluded fixture exit=%s\n' "$RC" >&2
+  head -n 10 "$FIX/transcript-output" >&2
+  return 1
+}
 not_walked() { ! grep -qF "$1" "$FIX/walk-trace"; }
+walked() { grep -qxF "$1" "$FIX/walk-trace"; }
 for cwd in "$FIX/corpus" "$FIX/corpus/allowed" "$FIX/corpus/mapped"; do
   write_codex "$cwd"
   transcript_run
@@ -244,21 +251,21 @@ for remote in https://github.com/devantler-tech/scope-retired.git \
   https://github.com/excluded-owner/fixture.git; do
   write_codex "$FIX/home/codex/worktrees/gone/corpus" "$remote"
   transcript_run
-  check not_measured
+  check excluded
 done
 for child in unlisted private archived; do
   write_codex "$FIX/corpus/$child"
   transcript_run
-  check not_measured
+  check excluded
 done
 write_codex "$FIX/corpus/private"
 SCOPE_SELECTORS="$FIX/corpus/private" transcript_run
-check not_measured
+check excluded
 GIT_DIR="$FIX/corpus/.git" transcript_run
-check not_measured
+check excluded
 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.https://github.com/devantler-tech/monorepo.git.insteadOf \
   GIT_CONFIG_VALUE_0=https://github.com/devantler-tech/scope-denied.git transcript_run
-check not_measured
+check excluded
 SCOPE_SELECTORS="$FIX/missing-selector" transcript_run
 check test "$RC" = 2
 check not_walked "$FIX/home/codex/sessions"
@@ -303,6 +310,8 @@ for child in private allowed; do
 done
 transcript_run
 check not_walked "$FIX/projects/$(printf '%s' "$FIX/corpus/private" | tr / -)"
+check walked "$FIX/projects/$(printf '%s' "$FIX/corpus/allowed" | tr / -)"
+check test "$RC" = 0
 check grep -qF '[BOTH instances: 1 Claude + 0 Codex sessions]' "$FIX/transcript-output"
 allowed_slug=$(printf '%s' "$FIX/corpus/allowed" | tr / -)
 mkdir -p "$FIX/projects/$allowed_slug/scope/subagents"
@@ -316,7 +325,7 @@ mkdir -p "$FIX/corpus/store/$private_slug"
 cp "$FIX/projects/$private_slug/scope.jsonl" "$FIX/corpus/store/$private_slug/"
 SCOPE_PROJECTS="$FIX/corpus/store" transcript_run
 check not_walked "$FIX/corpus/store/$private_slug"
-check not_measured
+check excluded
 
 # An unpopulated Gitlink slot inherits the aggregator's remote when asked with
 # git -C. That inherited identity is not evidence about its recorded product.
@@ -338,10 +347,10 @@ check test "$RC" = 2
 mv "$FIX/corpus/.gitmodules" "$FIX/routing-gitmodules"
 write_codex "$FIX/corpus/private"
 GIT_DIR="$FIX/corpus/.git" transcript_run
-check not_measured
+check excluded
 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.https://github.com/devantler-tech/monorepo.git.insteadOf \
   GIT_CONFIG_VALUE_0=https://github.com/devantler-tech/scope-denied.git transcript_run
-check not_measured
+check excluded
 cp "$FIX/definition/.claude/scripts/agent-telemetry.sh" "$FIX/collector-before-routing-mutation.sh"
 awk '
   /^transcript_git\(\) \{/ { print "transcript_git() { git \"$@\"; }"; inside = 1; next }
@@ -389,13 +398,13 @@ check test "$RC" = 2
 git --git-dir="$worktree_root/.git" config --unset core.worktree
 write_codex "$worktree_root/ordinary-deleted-directory"
 SCOPE_PROJECTS="$FIX/no-projects" transcript_run
-check grep -qF '1 Codex sessions]' "$FIX/transcript-output"
+check measured
 
 # A remote is one value, not a list of independently admissible lines.
 git -C "$FIX/corpus/private" remote set-url origin $'https://github.com/devantler-tech/scope-denied\ndevantler-tech/scope-public.git'
 write_codex "$FIX/corpus/private"
 SCOPE_PROJECTS="$FIX/no-projects" transcript_run
-check not_measured
+check excluded
 git -C "$FIX/corpus/private" remote set-url origin https://github.com/devantler-tech/scope-denied.git
 
 # The project-store slug survives worktree removal. A confirmed removal is a
@@ -408,7 +417,7 @@ printf '{"type":"user","message":{"content":"SCOPE_ADMISSION_CANARY"}}\n' \
   > "$FIX/stale-projects/$claude_slug/scope.jsonl"
 SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
 check test "$RC" = 0
-check not_measured
+check excluded
 check not_walked "$FIX/stale-projects/$claude_slug"
 check grep -qF 'Claude project folders left out, worktree confirmed gone: 1' "$FIX/transcript-output"
 mkdir -p "$claude_root"
@@ -456,7 +465,7 @@ cp "$FIX/valid-gitmodules" "$FIX/corpus/.gitmodules"
 git -C "$FIX/corpus/private" remote set-url origin $'https://github.com/devantler-tech/scope-public.git\n'
 write_codex "$FIX/corpus/private"
 SCOPE_PROJECTS="$FIX/no-projects" transcript_run
-check not_measured
+check excluded
 git -C "$FIX/corpus/private" remote set-url origin https://github.com/devantler-tech/scope-denied.git
 
 # Preserve the complete Git configuration values, including spaces in the
@@ -484,7 +493,15 @@ SCOPE_PROJECTS="$FIX/no-projects" transcript_run
 check test "$RC" = 2
 check not_measured
 mkdir -p "$FIX/corpus/unpopulated"
+# An ordinary name can have belonged to a different checkout. Once that
+# checkout is removed, the broad selector cannot recover its former identity.
+mkdir -p "$FIX/corpus/ordinary-deleted-directory"
+git -C "$FIX/corpus/ordinary-deleted-directory" init -q
+git -C "$FIX/corpus/ordinary-deleted-directory" remote add origin https://github.com/devantler-tech/scope-denied.git
 write_codex "$FIX/corpus/ordinary-deleted-directory"
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check excluded
+rm -rf "$FIX/corpus/ordinary-deleted-directory"
 SCOPE_PROJECTS="$FIX/no-projects" transcript_run
 check test "$RC" = 2
 check not_measured
@@ -493,7 +510,7 @@ git -C "$worktree_root/private" init -q
 git -C "$worktree_root/private" remote add origin https://github.com/devantler-tech/scope-denied.git
 write_codex "$worktree_root/private/deleted-directory"
 SCOPE_PROJECTS="$FIX/no-projects" transcript_run
-check not_measured
+check excluded
 write_codex "$worktree_root/.claude/worktrees/gone/deleted-directory"
 SCOPE_PROJECTS="$FIX/no-projects" transcript_run
 check test "$RC" = 2
@@ -534,7 +551,7 @@ for repository in scope-denied scope-retired; do
   git -C "$direct_store" remote set-url origin "https://github.com/devantler-tech/$repository.git"
   SCOPE_PROJECTS="$direct_store" transcript_run
   check test "$RC" = 0
-  check not_measured
+  check excluded
   check not_walked "$direct_store"
 done
 git -C "$direct_store" remote set-url origin https://github.com/devantler-tech/scope-public.git
@@ -547,9 +564,9 @@ git config --file "$FIX/routing.config" \
   url.https://github.com/devantler-tech/monorepo.git.insteadOf https://github.com/excluded-owner/fixture.git
 write_codex "$FIX/corpus/unlisted"
 GIT_CONFIG_SYSTEM="$FIX/routing.config" SCOPE_PROJECTS="$FIX/no-projects" transcript_run
-check not_measured
+check excluded
 GIT_CONFIG_GLOBAL="$FIX/routing.config" SCOPE_PROJECTS="$FIX/no-projects" transcript_run
-check not_measured
+check excluded
 printf 'outcome authorization: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
 scope_test_finished=1

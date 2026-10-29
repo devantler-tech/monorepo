@@ -2881,9 +2881,9 @@ transcript_submodule_entries() {
 
 transcript_path_authorized() {
   local path=$1 boundary=${2-} existing=$1 top physical_path marker suffix
-  # A removed cwd may retain a live repository witness. Stop at its selected
-  # boundary and use the nearest surviving parent, never an outer checkout in
-  # place of a nested repository that still exists.
+  # Only Form 2's independently verified runtime worktree supplies a boundary
+  # for a removed cwd. Stop there and use the nearest surviving parent, never
+  # an outer checkout in place of a nested repository that still exists.
   if [ ! -d "$existing" ]; then
     [ -n "$boundary" ] || return 2
     case "$path" in "$boundary"|"$boundary"/*) ;; *) return 2 ;; esac
@@ -2913,8 +2913,8 @@ transcript_path_authorized() {
   transcript_repository_contains_path "$top" "$physical_path"
 }
 
-# Also checks a selected missing cwd: an ordinary removed subdirectory retains
-# its live repository witness, while an unpopulated product slot does not.
+# Also checks Form 2's missing cwd: an ordinary removed subdirectory retains
+# its verified worktree witness, while an unpopulated product slot does not.
 transcript_repository_contains_path() {
   local top=$1 physical_path=$2 sub key slots parent=$2
   case "$physical_path" in
@@ -3016,7 +3016,9 @@ in_scope_cwd() {
     */|*//*|*/./*|*/.|*/../*|*/..) return 1 ;;
   esac
   while IFS= read -r p; do
-    # Form 1: literally under an allowlisted path, at a component boundary.
+    # Form 1 selects a literal path, not a runtime-owned worktree boundary.
+    # A deleted nested checkout can have an ordinary directory name, so the
+    # selector's parent identity cannot replace missing cwd metadata.
     case "$cwd" in "$p" | "$p"/*)
       presence=0
       transcript_path_authorized "$cwd" || presence=$?
