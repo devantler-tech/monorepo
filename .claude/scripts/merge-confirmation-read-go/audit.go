@@ -98,7 +98,7 @@ func indentedBlock(text, heading string, indentation int) (string, error) {
 }
 
 func auditWiring(text string) error {
-	for _, rule := range wiringRules {
+	for _, rule := range wiringRules[:3] {
 		hits := 0
 		for _, line := range strings.Split(text, "\n") {
 			if line == rule.needle {
@@ -108,6 +108,9 @@ func auditWiring(text string) error {
 		if hits != 1 {
 			return fmt.Errorf("ci.yaml carries this job's %s %d times — the guard would not gate", rule.diagnostic, hits)
 		}
+	}
+	if err := auditStatusWiring(text); err != nil {
+		return err
 	}
 	block, err := indentedBlock(text, wiringRules[0].needle, 12)
 	if err != nil {
@@ -130,6 +133,63 @@ func auditWiring(text string) error {
 	}
 	if !strings.Contains(job, "run: bash .claude/scripts/merge-confirmation-read.test.sh") {
 		return fmt.Errorf("ci.yaml does not invoke the uncached guard launcher")
+	}
+	return nil
+}
+
+// Match the corrected Bash baseline's closed, indentation-bound owner checks.
+// Continue counting headings after a block ends so duplicates are never admitted.
+func ownedBlock(text, heading string, indentation int) (string, error) {
+	var block []string
+	inside, hits := false, 0
+	for _, line := range strings.Split(text, "\n") {
+		if line == heading {
+			hits++
+			inside = true
+			continue
+		}
+		if inside && strings.TrimSpace(line) != "" && len(line)-len(strings.TrimLeft(line, " ")) <= indentation {
+			inside = false
+		}
+		if inside {
+			block = append(block, line)
+		}
+	}
+	if hits != 1 {
+		return "", fmt.Errorf("ci.yaml must contain exactly one %s block", strings.TrimSpace(heading))
+	}
+	return strings.Join(block, "\n") + "\n", nil
+}
+
+func auditStatusWiring(text string) error {
+	status, err := ownedBlock(text, "  status:", 2)
+	if err != nil {
+		return err
+	}
+	needs, err := ownedBlock(status, "    needs:", 4)
+	if err != nil {
+		return err
+	}
+	if strings.Count(needs, wiringRules[3].needle+"\n") != 1 {
+		return fmt.Errorf("ci.yaml %s must contain the guard exactly once", wiringRules[3].diagnostic)
+	}
+	step, err := ownedBlock(status, "      - name: Check job results", 6)
+	if err != nil {
+		return err
+	}
+	if !regexp.MustCompile(`(?m)^        uses: devantler-tech/\.github/actions/aggregate-job-checks@`).MatchString(step) {
+		return fmt.Errorf("ci.yaml status aggregate step must use the result aggregator")
+	}
+	inputs, err := ownedBlock(step, "        with:", 8)
+	if err != nil {
+		return err
+	}
+	results, err := ownedBlock(inputs, "          job-results: >-", 10)
+	if err != nil {
+		return err
+	}
+	if strings.Count(results, wiringRules[4].needle+"\n") != 1 {
+		return fmt.Errorf("ci.yaml %s must contain the guard exactly once", wiringRules[4].diagnostic)
 	}
 	return nil
 }

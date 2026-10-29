@@ -140,6 +140,27 @@ func TestEveryProsePrescriptionGatesItsOwnSection(t *testing.T) {
 	}
 }
 
+func TestStatusWiringOwnership(t *testing.T) {
+	text := read(t, ".github/workflows/ci.yaml")
+	for i, rule := range wiringRules[3:] {
+		t.Run(rule.diagnostic, func(t *testing.T) {
+			outside := "\n  unrelated:\n    runs-on: ubuntu-latest\n"
+			if i == 0 {
+				outside += "    needs:\n" + rule.needle + "\n    steps:\n      - run: true\n"
+			} else {
+				outside += "    env:\n      PROOF: |\n" + rule.needle + "\n    steps:\n      - run: true\n"
+			}
+			changed := strings.Replace(text, rule.needle+"\n", "", 1) + outside
+			if err := auditWiring(changed); err == nil || !strings.Contains(err.Error(), rule.diagnostic) {
+				t.Fatalf("relocated ownership assertion accepted or wrong refusal: %v", err)
+			}
+			if err := auditWiring(text + outside); err != nil {
+				t.Fatalf("an unrelated copy replaced valid ownership: %v", err)
+			}
+		})
+	}
+}
+
 func TestEveryWiringPointAndTrigger(t *testing.T) {
 	text := read(t, ".github/workflows/ci.yaml")
 	if err := auditWiring(text); err != nil {
