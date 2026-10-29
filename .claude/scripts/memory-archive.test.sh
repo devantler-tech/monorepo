@@ -8,7 +8,10 @@ memory_archive_test_finished=0
 cleanup() {
   local rc=$?
   rm -rf "$work"
-  if [[ "$memory_archive_test_finished" != 1 && "$rc" == 0 ]]; then rc=2; fi
+  if [[ "$memory_archive_test_finished" != 1 && "$rc" == 0 ]]; then
+    echo 'memory-archive.test: aborted before completion; reporting UNKNOWN' >&2
+    rc=2
+  fi
   exit "$rc"
 }
 trap cleanup EXIT
