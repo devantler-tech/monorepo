@@ -625,6 +625,27 @@ check test "$RC" = 0
 check grep -qF '[BOTH instances: 2 Claude + 0 Codex sessions]' "$FIX/transcript-output"
 check grep -qF '1 parent + 1 delegated' "$FIX/transcript-output"
 check walked "$collision_store/owned/subagents"
+# A colon in a declared path cannot add another literal selector. Both paths
+# have admitted origins so repository authorization cannot mask the escape.
+cp "$FIX/corpus/.gitmodules" "$FIX/before-colon-gitmodules"
+colon_outside="$FIX/unselected-repository"
+colon_sub="colon:$colon_outside"
+mkdir -p "$colon_outside" "$FIX/corpus/$colon_sub"
+git -C "$colon_outside" init -q
+git -C "$colon_outside" remote add origin https://github.com/devantler-tech/scope-public.git
+git -C "$FIX/corpus/$colon_sub" init -q
+git -C "$FIX/corpus/$colon_sub" remote add origin https://github.com/devantler-tech/scope-public.git
+git -C "$FIX/corpus" config --file .gitmodules submodule.colon.path "$colon_sub"
+git -C "$FIX/corpus" config --file .gitmodules submodule.colon.url https://github.com/devantler-tech/scope-public.git
+write_codex "$colon_outside"
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check test "$RC" = 2
+check not_measured
+check not_walked "$FIX/home/codex/sessions"
+cp "$FIX/before-colon-gitmodules" "$FIX/corpus/.gitmodules"
+write_codex "$FIX/corpus/allowed"
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check measured
 printf 'outcome authorization: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
 scope_test_finished=1

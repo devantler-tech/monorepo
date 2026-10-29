@@ -2873,6 +2873,8 @@ transcript_git_value() {
 # Validate the complete NUL-delimited Git response before returning any path.
 # Names and paths may contain spaces; control characters, duplicate bindings,
 # partial records and failed reads are UNKNOWN rather than a smaller inventory.
+# A literal colon is unsupported in this colon-delimited selector interface: it
+# must not turn one declared submodule path into additional observation roots.
 transcript_submodule_entries() {
   local entries rc=0 newline=$'\n' tab=$'\t'
   entries=$(transcript_git -C "$1" config --file .gitmodules --null --get-regexp '\.path$' 2>/dev/null | (
@@ -2883,7 +2885,7 @@ transcript_submodule_entries() {
       key=${entry%%"$newline"*}; sub=${entry#*"$newline"}
       case "$key" in (submodule.*.path) : ;; (*) exit 2 ;; esac
       case "$key" in (*[[:cntrl:]]*) exit 2 ;; esac
-      case "$sub" in (''|.|..|/*|*//*|../*|*/../*|*/..|./*|*/./*|*/.|*/|*[[:cntrl:]]*) exit 2 ;; esac
+      case "$sub" in (''|.|..|/*|*:*|*//*|../*|*/../*|*/..|./*|*/./*|*/.|*/|*[[:cntrl:]]*) exit 2 ;; esac
       case "$newline$seen_paths" in (*"$newline$sub$newline"*) exit 2 ;; esac
       case "$newline$seen_keys" in (*"$newline$key$newline"*) exit 2 ;; esac
       seen_paths="$seen_paths$sub$newline"
