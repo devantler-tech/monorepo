@@ -275,6 +275,15 @@ check not_measured
 check not_walked "$FIX/home/codex/sessions"
 mv "$FIX/transcript-valid-contract.md" "$FIX/definition/AGENTS.md"
 
+# A broken worktree configuration can report an unrelated working tree root.
+# The selected cwd must actually belong to the repository supplying identity.
+write_codex "$FIX/corpus/allowed"
+git -C "$FIX/corpus/allowed" config core.worktree "$FIX/corpus/mapped"
+transcript_run
+check not_measured
+check test "$RC" = 2
+git --git-dir="$FIX/corpus/allowed/.git" config --unset core.worktree
+
 # A slug alone does not authorize an archived or private submodule. In
 # particular, placing the session store under the aggregator grants no bypass.
 rm "$FIX/home/codex/sessions/scope.jsonl"

@@ -2826,6 +2826,10 @@ transcript_path_authorized() {
   top=$(transcript_git -C "$path" rev-parse --show-toplevel 2>/dev/null) || return 2
   top=$(cd "$top" && pwd -P) || return 2
   physical_path=$(cd "$path" && pwd -P) || return 2
+  case "$physical_path" in
+    "$top"|"$top"/*) ;;
+    *) return 2 ;;
+  esac
   # An unpopulated product slot inherits the parent remote. That is not proof
   # of the product's repository identity, even if the parent itself is admitted.
   if [ -e "$top/.gitmodules" ]; then
