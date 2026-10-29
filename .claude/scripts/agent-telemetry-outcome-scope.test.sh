@@ -99,7 +99,7 @@ run() {
     AGENT_TELEMETRY_RUNTIME=codex AGENT_CI_CLASSIFIER="$FIX/classifier" \
     AGENT_CI_DESIRED_STATE="$FIX/desired.json" SCOPE_TRACE="$FIX/trace" \
     SCOPE_PAGES="$FIX/pages.json" SCOPE_ROWS="$FIX/rows.json" SCOPE_LIST_FAIL="${SCOPE_LIST_FAIL:-0}" \
-    bash "$FIX/definition/.claude/scripts/agent-telemetry.sh" --section outcomes \
+    "$BASH" "$FIX/definition/.claude/scripts/agent-telemetry.sh" --section outcomes \
     --instances "$FIX/instances.json" > "$FIX/output" 2>&1
   RC=$?
   set -e
@@ -213,7 +213,7 @@ transcript_run() {
     PORTFOLIO_PATHS="${SCOPE_SELECTORS:-$FIX/corpus}" PORTFOLIO_ORG=devantler-tech \
     AGENT_TELEMETRY_RUNTIME=codex SCOPE_TRACE="$FIX/trace" SCOPE_WALK_TRACE="$FIX/walk-trace" \
     SCOPE_PAGES="$FIX/pages.json" SCOPE_ROWS="$FIX/rows.json" SCOPE_LIST_FAIL="${SCOPE_LIST_FAIL:-0}" \
-    bash "$FIX/definition/.claude/scripts/agent-telemetry.sh" --section efficiency \
+    "$BASH" "$FIX/definition/.claude/scripts/agent-telemetry.sh" --section efficiency \
       > "$FIX/transcript-output" 2>&1
   RC=$?
   set -e
@@ -504,6 +504,52 @@ write_codex "$FIX/corpus"
 git -C "$FIX/corpus/allowed" config core.worktree "$FIX/corpus"
 unresolved_product
 cp "$FIX/allowed-git-config" "$FIX/corpus/allowed/.git/config"
+# A selected direct store is itself an observation source. Unreadable metadata
+# cannot become a clean zero, nor authorize matching child project namespaces.
+rm "$FIX/home/codex/sessions/scope.jsonl"
+direct_store="$FIX/corpus/nested-store"
+mkdir -p "$direct_store"
+git -C "$direct_store" init -q
+git -C "$direct_store" remote add origin https://github.com/devantler-tech/scope-public.git
+printf '{"type":"user","message":{"content":"SCOPE_ADMISSION_CANARY"}}\n' > "$direct_store/scope.jsonl"
+SCOPE_PROJECTS="$direct_store" transcript_run
+check test "$RC" = 0
+check grep -qF '[BOTH instances: 1 Claude + 0 Codex sessions]' "$FIX/transcript-output"
+cp "$direct_store/.git/config" "$FIX/direct-store-git-config"
+printf '[broken\n' > "$direct_store/.git/config"
+SCOPE_PROJECTS="$direct_store" transcript_run
+check test "$RC" = 2
+check grep -qF 'UNKNOWN: the Claude projects folder' "$FIX/transcript-output"
+check not_measured
+check not_walked "$direct_store"
+mkdir -p "$direct_store/$allowed_slug"
+cp "$direct_store/scope.jsonl" "$direct_store/$allowed_slug/scope.jsonl"
+SCOPE_PROJECTS="$direct_store" transcript_run
+check test "$RC" = 2
+check grep -qF 'UNKNOWN: the Claude projects folder' "$FIX/transcript-output"
+check not_measured
+check not_walked "$direct_store"
+cp "$FIX/direct-store-git-config" "$direct_store/.git/config"
+for repository in scope-denied scope-retired; do
+  git -C "$direct_store" remote set-url origin "https://github.com/devantler-tech/$repository.git"
+  SCOPE_PROJECTS="$direct_store" transcript_run
+  check test "$RC" = 0
+  check not_measured
+  check not_walked "$direct_store"
+done
+git -C "$direct_store" remote set-url origin https://github.com/devantler-tech/scope-public.git
+SCOPE_PROJECTS="$direct_store" transcript_run
+check test "$RC" = 0
+check grep -qF '[BOTH instances: 2 Claude + 0 Codex sessions]' "$FIX/transcript-output"
+# Parent-process configuration files cannot rewrite an excluded origin into
+# an admitted one, independently of the repository's own configuration.
+git config --file "$FIX/routing.config" \
+  url.https://github.com/devantler-tech/monorepo.git.insteadOf https://github.com/excluded-owner/fixture.git
+write_codex "$FIX/corpus/unlisted"
+GIT_CONFIG_SYSTEM="$FIX/routing.config" SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check not_measured
+GIT_CONFIG_GLOBAL="$FIX/routing.config" SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check not_measured
 printf 'outcome authorization: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
 scope_test_finished=1

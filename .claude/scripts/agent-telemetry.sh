@@ -694,14 +694,19 @@ PORTFOLIO_DIR_RE=__authorization_not_resolved__
 
 # True when the store root belongs to an admitted repository and selector.
 # This admits its direct records and session layout, never arbitrary child stores.
+# Return 1 for an unselected native namespace store, 2 for unresolved admission,
+# and 3 for a selected store belonging to a confirmed excluded repository.
 # The loop is fed by a redirect, not a pipe. Piping it into `grep -q` made grep
 # exit at the first `match` and killed the writer with SIGPIPE; `pipefail` then
 # reported the writer's death, so a store that IS in scope answered "no".
 store_root_in_scope() {
-  local p
-  transcript_path_authorized "$CLAUDE_PROJECTS" || return 1
+  local p admission_rc
   while IFS= read -r p; do
-    case "$CLAUDE_PROJECTS" in "$p" | "$p"/*) return 0 ;; esac
+    case "$CLAUDE_PROJECTS" in "$p" | "$p"/*)
+      admission_rc=0
+      transcript_path_authorized "$CLAUDE_PROJECTS" || admission_rc=$?
+      case "$admission_rc" in 0) return 0 ;; 1) return 3 ;; *) return 2 ;; esac ;;
+    esac
   done < <(printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$')
   return 1
 }
@@ -2641,6 +2646,7 @@ newest_first() {
 # the two cannot drift apart on the professional-work boundary; each applies
 # its own filter and cap to this list (monorepo#2613).
 scoped_session_paths() {
+  local store_admission=0
   # Filter PROJECT DIRECTORIES first, then walk only the in-scope ones. The
   # contract forbids discovering or enumerating excluded repositories at all —
   # so walking and statting every *.jsonl on the host and filtering afterwards
@@ -2648,10 +2654,12 @@ scoped_session_paths() {
   # One `ls` of directory NAMES (no descent, no stat) is the minimum needed to
   # decide scope, and out-of-scope trees are never entered.
   [ -d "$CLAUDE_PROJECTS" ] || return 0
+  store_root_in_scope || store_admission=$?
+  case "$store_admission" in 2) return 2 ;; 3) return 0 ;; esac
   # A selected store root may hold direct sessions and separate project stores.
   # Only its session layout and independently admitted project names are walked.
   {
-    if store_root_in_scope; then
+    if [ "$store_admission" = 0 ]; then
       claude_session_listing "$CLAUDE_PROJECTS" \
         | while IFS= read -r f; do stat_mtime "$f"; done
     fi
@@ -2815,9 +2823,16 @@ portfolio_repository_name() {
 transcript_git() {
   # Repository-routing environment inherited from a hook or parent process
   # cannot substitute another checkout's identity for the selected directory.
-  env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
-    -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
-    -u GIT_CEILING_DIRECTORIES -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_COUNT git "$@"
+  local git_env_name
+  local -a clean_git_env
+  clean_git_env=(-u GIT_DIR)
+  for git_env_name in "${!GIT_@}"; do
+    case "$git_env_name" in GIT_*) clean_git_env+=(-u "$git_env_name") ;; esac
+  done
+  # Metadata admission needs repository-owned configuration only. Global and
+  # system URL rewrites must not turn an excluded origin into an admitted one.
+  env "${clean_git_env[@]}" GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_CONFIG_NOSYSTEM=1 git "$@"
 }
 
 # Keep the complete value: ordinary command substitution strips all trailing
@@ -2838,21 +2853,21 @@ transcript_git_value() {
 # Names and paths may contain spaces; control characters, duplicate bindings,
 # partial records and failed reads are UNKNOWN rather than a smaller inventory.
 transcript_submodule_entries() {
-  local entries rc=0
+  local entries rc=0 newline=$'\n' tab=$'\t'
   entries=$(transcript_git -C "$1" config --file .gitmodules --null --get-regexp '\.path$' 2>/dev/null | (
     trap - EXIT HUP INT TERM
     entry=''; validated=''; seen_paths=''; seen_keys=''
     while IFS= read -r -d '' entry; do
-      case "$entry" in *$'\n'*) ;; *) exit 2 ;; esac
-      key=${entry%%$'\n'*}; sub=${entry#*$'\n'}
-      case "$key" in submodule.*.path) ;; *) exit 2 ;; esac
-      case "$key" in *[[:cntrl:]]*) exit 2 ;; esac
-      case "$sub" in ''|.|..|/*|*//*|../*|*/../*|*/..|./*|*/./*|*/.|*/|*[[:cntrl:]]*) exit 2 ;; esac
-      case $'\n'"$seen_paths" in *$'\n'"$sub"$'\n'*) exit 2 ;; esac
-      case $'\n'"$seen_keys" in *$'\n'"$key"$'\n'*) exit 2 ;; esac
-      seen_paths="$seen_paths$sub"$'\n'
-      seen_keys="$seen_keys$key"$'\n'
-      validated="$validated$key"$'\t'"$sub"$'\n'
+      case "$entry" in (*"$newline"*) : ;; (*) exit 2 ;; esac
+      key=${entry%%"$newline"*}; sub=${entry#*"$newline"}
+      case "$key" in (submodule.*.path) : ;; (*) exit 2 ;; esac
+      case "$key" in (*[[:cntrl:]]*) exit 2 ;; esac
+      case "$sub" in (''|.|..|/*|*//*|../*|*/../*|*/..|./*|*/./*|*/.|*/|*[[:cntrl:]]*) exit 2 ;; esac
+      case "$newline$seen_paths" in (*"$newline$sub$newline"*) exit 2 ;; esac
+      case "$newline$seen_keys" in (*"$newline$key$newline"*) exit 2 ;; esac
+      seen_paths="$seen_paths$sub$newline"
+      seen_keys="$seen_keys$key$newline"
+      validated="$validated$key$tab$sub$newline"
     done
     [ -z "$entry" ] || exit 2
     printf '%s' "$validated"
@@ -2883,7 +2898,7 @@ transcript_path_authorized() {
     while [ ! -d "$existing" ]; do
       [ ! -e "$existing" ] && [ ! -L "$existing" ] || return 2
       [ "$existing" != "$boundary" ] || return 2
-      existing=$(dirname "$existing") || return 2
+      existing=${existing%/*}; existing=${existing:-/}
     done
     [ -x "$existing" ] || return 2
   fi
@@ -2910,7 +2925,7 @@ transcript_repository_contains_path() {
   # Containment alone would accept a misplaced core.worktree pointing upward.
   while [ "$parent" != "$top" ]; do
     [ ! -e "$parent/.git" ] && [ ! -L "$parent/.git" ] || return 2
-    parent=$(dirname "$parent") || return 2
+    parent=${parent%/*}; parent=${parent:-/}
   done
   # An unpopulated product slot inherits the parent remote. That is not proof
   # of the product's repository identity, even if the parent itself is admitted.
@@ -3142,15 +3157,17 @@ codex_unreadable_folders() {
 # itself). A stale project slug cannot supply a removed repository's identity;
 # it remains excluded, visibly separate from failed reads and measured sessions.
 claude_unavailable_folders() {
-  local d dirs list f admission_rc presence=0
+  local d dirs list f admission_rc presence=0 store_admission=0
   worktree_presence "$CLAUDE_PROJECTS" || presence=$?
   case "$presence" in 1) return 0 ;; 2) printf 'U .\n'; return 0 ;; esac
+  store_root_in_scope || store_admission=$?
+  case "$store_admission" in 2) printf 'U .\n'; return 0 ;; 3) return 0 ;; esac
   if ! dirs=$(ls -1 "$CLAUDE_PROJECTS" 2>/dev/null); then
     printf 'U .\n'; return 0
   else
     dirs=$(printf '%s\n' "$dirs" | grep -E "^($PORTFOLIO_DIR_RE)$" || true)
   fi
-  if store_root_in_scope; then dirs=".${dirs:+
+  if [ "$store_admission" = 0 ]; then dirs=".${dirs:+
 $dirs}"; fi
   while IFS= read -r d; do
     [ -n "$d" ] || continue
