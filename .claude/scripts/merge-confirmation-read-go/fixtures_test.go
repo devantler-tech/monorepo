@@ -1,0 +1,10 @@
+package mergeconfirmation
+
+// Exact pre-port fixtures from merge-confirmation-read.test.sh; intentionally not prose surfaces.
+const badMarkdown = "plain:      `gh pr view <n> --json state,merged,mergedAt`\nequals:     `gh pr view <n> --json=merged,additions`\ndquoted:    `gh pr view <n> --json \"merged,assignees\"`\nsquoted:    `gh pr view <n> --json='merged,author'`\nspaced-eq:  `gh pr view <n> --json  =  merged,body`\nellipsis:   `gh pr view <n> --json …mergeStateStatus,merged,closed`\nwrapped:    `gh pr view <n> --json state,\nmerged,comments`\ncontinued:  gh pr view <n> --json \\\n  merged,commits\nwrap-after-flag: `gh pr view <n> --json\nstate,merged,body`\njson-escape: \"bootstrapPrompt\": \"gh pr view <n> --json\\nstate,merged,author\"\nqueue:      `gh pr view <n> --json state,isInMergeQueue,mergeStateStatus`\n"
+
+const goodMarkdown = "`gh pr view <n> --json state,mergedAt,mergedBy,mergeCommit`\n`gh pr view <n> --json=state,mergedAt`\n`gh pr view <n> --json \"mergedAt,mergeCommit\"`\n`gh pr view <n> --json='mergedBy,additions'`\n`gh pr view <n> --json …mergeStateStatus,reviewDecision`\n`gh pr view <n> --json state,\nmergedAt,mergeCommit`\ngh pr view <n> --json \\\n  state,mergedAt\n`gh pr view <n> --json\nstate,mergedAt,closed`\nprose: run it, then confirm the merged state separately\nboundary: see `gh pr view <n> --json comments`, merged PRs need no polling\nboundary2: `gh pr view <n> --json state`, and merged ones are done\n"
+
+const badJSON = "{\"prompts\":[\n  \"gh pr view <n> --json\\u0020state,merged,closed\",\n  \"gh pr view <n> --json state,\\u006derged,mergedAt\"\n]}\n"
+
+const goodJSON = "{\"prompts\":[\n  \"gh pr view <n> --json state,mergedAt,mergeCommit\",\n  \"gh pr view <n> --json\\u0020state,mergedAt\",\n  \"gh pr view <n> --json state,\\nmergedAt,mergeCommit\",\n  \"Run gh pr view <n> --json state, merged PRs need no polling.\",\n  \"Read gh pr view <n> --json mergedAt, merged work is already done.\",\n  \"CLI option --json\",\n  \"merged is not a valid field\"\n]}\n"
