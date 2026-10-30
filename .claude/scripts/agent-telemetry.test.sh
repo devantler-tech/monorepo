@@ -2883,6 +2883,49 @@ check "a checkout before the window still pairs with a build inside it" "$OUT" "
 cxtail_build_fixture "git status"
 OUT=$(cxtail_run 1)
 nocheck "a build with no checkout before the window is not a candidate" "$OUT" "npm ci --cxtail-build"
+# The checkout read is the only `head -c` of a PREFIX shorter than the file
+# (the other reads pin the whole size). A shim on it proves the first-match grep
+# stops early on a checkout and reads the whole prefix without one (#4675), and
+# that a prefix read failing before any checkout falls back to the full read
+# instead of reading as "no checkout" (#4698 review).
+mkdir -p "$FIX/cxtail-head-shim"
+cat > "$FIX/cxtail-head-shim/head" <<'EOF2'
+#!/usr/bin/env bash
+if [ "$#" = 3 ] && [ "$1" = -c ] && [ -f "$3" ] && [ "$2" -lt "$(wc -c < "$3")" ] 2>/dev/null; then
+  [ "$CXTAIL_HEAD_MODE" = fail ] && exit 1
+  "$CXTAIL_TEST_HEAD" "$@"
+  rc=$?
+  printf '%s\n' "$rc" >> "$CXTAIL_HEAD_PROBE"
+  exit "$rc"
+fi
+exec "$CXTAIL_TEST_HEAD" "$@"
+EOF2
+chmod +x "$FIX/cxtail-head-shim/head"
+cxtail_real_head=$(command -v head)
+cxtail_head_run() { # $1 = shim mode (probe|fail)
+  rm -f "$FIX/cxtail-head-probe"
+  PATH="$FIX/cxtail-head-shim:$PATH" CXTAIL_TEST_HEAD="$cxtail_real_head" CXTAIL_HEAD_MODE="$1" \
+    CXTAIL_HEAD_PROBE="$FIX/cxtail-head-probe" \
+    CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxtail" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+    bash "$TARGET" --since-days 1 --section safety 2>&1
+}
+cxtail_build_fixture "gh pr checkout 77"
+OUT=$(cxtail_head_run probe)
+check "the shimmed checkout case is still cut" "$OUT" \
+  "codex record window: 1 of 1 transcript(s) read from their first record"
+if grep -qx 141 "$FIX/cxtail-head-probe" 2>/dev/null; then
+  ok "the checkout read stops at the first match"
+else bad "the checkout read stops at the first match" "prefix read statuses: $(tr '\n' ' ' < "$FIX/cxtail-head-probe" 2>/dev/null)"; fi
+cxtail_build_fixture "git status"
+OUT=$(cxtail_head_run probe)
+if [ -s "$FIX/cxtail-head-probe" ] && ! grep -qvx 0 "$FIX/cxtail-head-probe"; then
+  ok "with no checkout the whole prefix is read"
+else bad "with no checkout the whole prefix is read" "prefix read statuses: $(tr '\n' ' ' < "$FIX/cxtail-head-probe" 2>/dev/null)"; fi
+cxtail_build_fixture "gh pr checkout 77"
+OUT=$(cxtail_head_run fail)
+check "a failed prefix read keeps the full read" "$OUT" \
+  "codex record window: 0 of 1 transcript(s) read from their first record"
+check "a failed prefix read still pairs the checkout with the build" "$OUT" "npm ci --cxtail-build"
 # The tails hold raw transcript bytes. A worker the controller kills at the
 # deadline cannot run its own traps, so the controller removes them. The grep shim
 # stalls the worker only once a tail copy exists, proving the case ran.
