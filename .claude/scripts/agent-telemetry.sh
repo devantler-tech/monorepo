@@ -2988,11 +2988,12 @@ codex_window_cut() {
   # Only whether ONE checkout exists matters, so the grep stops at its first
   # match (#4675): a full count of a 3.3 GB history took about 58 s with the
   # system grep, the first match under a second. The decision reads the PRINTED
-  # count, never the pipeline status: `head` takes a SIGPIPE when grep stops
-  # early, which a status test under pipefail would misread as "no checkout"
-  # (the reason `grep -q` is not used). With no match, grep reads to the end and
-  # prints 0; an empty or garbled result still falls back to the full read.
-  checkout=$(head -c "${cut%% *}" "$f" 2>/dev/null | LC_ALL=C grep -m1 -cE "$BUILD_CHECKOUT_RE")
+  # count, never a status: `head` takes a SIGPIPE when grep stops early, so it
+  # feeds grep through a process substitution rather than a pipe, whose pipefail
+  # status would misread that SIGPIPE as a failure (the reason `grep -q` is not
+  # used). With no match, grep reads to the end and prints 0; an empty or
+  # garbled result still falls back to the full read.
+  checkout=$(LC_ALL=C grep -m1 -cE "$BUILD_CHECKOUT_RE" < <(head -c "${cut%% *}" "$f" 2>/dev/null))
   case "$checkout" in 0) ;; [1-9]*) checkout=1 ;; *) return 0 ;; esac
   printf '%s %s\n' "$cut" "$checkout"
 }
