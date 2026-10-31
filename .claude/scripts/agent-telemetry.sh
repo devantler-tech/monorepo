@@ -2985,10 +2985,19 @@ codex_window_cut() {
             end)
         | select((.bad | not) and .cut != null and .cut > 0) | "\(.cut) \(.lines)"') || return 0
   case "$cut" in [1-9]*' '[0-9]*) ;; *) return 0 ;; esac
-  # A counting grep reads to the end: `grep -q` would stop at the first match,
-  # and the SIGPIPE to `head` would then read as "no checkout" under pipefail.
-  checkout=$(head -c "${cut%% *}" "$f" 2>/dev/null | LC_ALL=C grep -cE "$BUILD_CHECKOUT_RE")
-  case "$checkout" in 0) ;; [1-9]*) checkout=1 ;; *) return 0 ;; esac
+  # Only whether ONE checkout exists matters, so the grep stops at its first
+  # match (#4675): a full count of a 3.3 GB history took about 58 s with the
+  # system grep, the first match under a second. `head` then takes a SIGPIPE,
+  # so a match is accepted whatever `head` exited with. A zero is accepted only
+  # when `head` also exited 0: a read that failed early prints 0 too, and would
+  # otherwise hide a checkout. Anything else falls back to the full read.
+  checkout=$(head -c "${cut%% *}" "$f" 2>/dev/null | LC_ALL=C grep -m1 -cE "$BUILD_CHECKOUT_RE"
+    printf '%s\n' "${PIPESTATUS[0]}")
+  case "$checkout" in
+    $'0\n0') checkout=0 ;;
+    [1-9]*$'\n'[0-9]*) checkout=1 ;;
+    *) return 0 ;;
+  esac
   printf '%s %s\n' "$cut" "$checkout"
 }
 
