@@ -1408,7 +1408,7 @@ public and private — no per-repo loop needed to enumerate):
      `<status-field-id>`:
 
      ```sh
-     gh api --paginate "orgs/devantler-tech/projectsV2/5/items?per_page=100&q=is:open&fields=<status-field-id>" --jq '[.[] | select(.content_type=="Issue" and .archived_at==null and .content.repository.private == false and .content.repository.archived == false)] | "page on_board=\(length) status_less=\(map(select(([.fields[]?|select(.name=="Status")|.value] | length)==0)) | length)"'
+     gh api --paginate "orgs/devantler-tech/projectsV2/5/items?per_page=100&q=is:open&fields=<status-field-id>" --jq '[.[] | select(.content_type=="Issue" and .archived_at==null and .content.repository.private == false and .content.repository.archived == false)] | "page on_board=\(length) status_less=\(map(select(([.fields[]?|select(.name=="Status" and .value!=null)] | length)==0)) | length)"'
      ```
 
      `--paginate` walks every page, and `--jq` runs **once per page**, so the read prints one

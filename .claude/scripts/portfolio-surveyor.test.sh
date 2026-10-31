@@ -844,7 +844,8 @@ grep -Fq 'board_coverage=unknown:status-field-not-found' "${surveyor}" ||
 grep -Fq 'A summed `on_board` of **0** → emit `board_coverage=unknown:empty-payload`' "${surveyor}" ||
   fail "surveyor board-coverage census does not fail closed on a zero on_board, so an empty payload reports a measured 0%"
 # EXECUTE the items census filter on one fixture page rather than trusting its wording: an issue with
-# a Status and two without one (one has no `fields` key at all) count; a pull request, an archived
+# a Status and three without one (one has no `fields` key at all, and one has the `value: null` the live
+# API returns for an unset field) count; a pull request, an archived
 # repository's issue and a private repository's issue do not. A filter that stopped excluding one of
 # them, or miscounted status-less items, would change the page line.
 _board_line="$(grep -F 'gh api --paginate "orgs/devantler-tech/projectsV2/5/items?per_page=100&q=is:open&fields=<status-field-id>" --jq' "${surveyor}" | head -1)"
@@ -855,6 +856,7 @@ _board_filter="${_board_filter%\'*}"
 _board_page='[
   {"content_type":"Issue","archived_at":null,"content":{"repository":{"private":false,"archived":false}},"fields":[{"name":"Status","value":{"name":"Backlog"}}]},
   {"content_type":"Issue","archived_at":null,"content":{"repository":{"private":false,"archived":false}},"fields":[]},
+  {"content_type":"Issue","archived_at":null,"content":{"repository":{"private":false,"archived":false}},"fields":[{"name":"Status","value":null}]},
   {"content_type":"Issue","archived_at":null,"content":{"repository":{"private":false,"archived":false}}},
   {"content_type":"PullRequest","archived_at":null,"content":{"repository":{"private":false,"archived":false}},"fields":[]},
   {"content_type":"Issue","archived_at":null,"content":{"repository":{"private":false,"archived":true}},"fields":[]},
@@ -862,8 +864,8 @@ _board_page='[
 ]'
 _board_out="$(jq -r "${_board_filter}" <<<"${_board_page}" 2>&1)" ||
   fail "the board items census filter aborts on a fixture page: ${_board_out} (monorepo#2943)"
-[ "${_board_out}" = 'page on_board=3 status_less=2' ] ||
-  fail "the board items census filter miscounts a page: got '${_board_out}', want 'page on_board=3 status_less=2' (monorepo#2943)"
+[ "${_board_out}" = 'page on_board=4 status_less=3' ] ||
+  fail "the board items census filter miscounts a page: got '${_board_out}', want 'page on_board=4 status_less=3' (monorepo#2943)"
 grep -Fq 'dependency-automation PR that lacks positive self-progressing evidence' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not intervene when dependency automation cannot finish its PR"
 # Literal Markdown code spans; command substitution is intentionally disabled.
