@@ -1919,6 +1919,11 @@ printf 'Slack is retired; use a maintainer-ask issue.\n' >> "$FIX/monorepo/AGENT
 OUT=$(TWO --section drift)
 check "a loader naming a Slack DM after its retirement is drift" "$OUT" \
   "DRIFT: $ENTRY2 still sends a run to Slack"
+for wording in "Post the ask in Slack." "Ping him over Slack." "Use the slack_send_message tool."; do
+  printf '%s\n' "$wording" > "$FIX/claude-sched/$ENTRY2/SKILL.md"
+  OUT=$(TWO --section drift)
+  check "drift names the loader wording: $wording" "$OUT" "DRIFT: $ENTRY2 still sends a run to Slack"
+done
 printf 'Blocked? One maintainer-ask issue. Slack is retired.\n' > "$FIX/claude-sched/$ENTRY2/SKILL.md"
 OUT=$(TWO --section drift)
 nocheck "a loader saying Slack is retired is not drift" "$OUT" "still sends a run to Slack"

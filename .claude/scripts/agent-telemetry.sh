@@ -7551,7 +7551,7 @@ if want drift; then
     # A loader that sends a run to Slack, while the contract retired that channel, is missed
     # asks in waiting. Saying only that Slack is retired matches neither phrase. Both Claude
     # Engineer loaders named a Slack DM for 7 days after its retirement with this check clean.
-    if grep -qiE 'slack (dm|direct message|message|thread)|(on|via|through|to) slack' "$L" 2>/dev/null &&
+    if grep -qiE 'slack (dm|direct message|message|thread)|(on|in|over|via|through|to) slack|slack[ _](mcp|send)' "$L" 2>/dev/null &&
        [ -f "$AGENTS_MD" ] && grep -qiE 'slack is retired' \
         "$AGENTS_MD" "$MONOREPO"/.claude/guides/*.md 2>/dev/null; then
       echo "    ⚠️  DRIFT: $(basename "$(dirname "$L")") still sends a run to Slack,"
