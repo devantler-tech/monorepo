@@ -2827,6 +2827,29 @@ cxtail_fixture 2000-99-99T99:99:99.000Z
 OUT=$(cxtail_run 1)
 check "an impossible Codex timestamp keeps the full read" "$OUT" \
   "codex record window: 0 of 1 transcript(s) read from their first record"
+# A date that is well-formed but does not exist passes every shape check; only
+# the `usable_ts` round trip rejects it, and the file must still be read in full
+# (#4675 pins this before any faster proof of the cut can replace the jq fold).
+cxtail_fixture 2001-02-29T00:00:03.000Z
+OUT=$(cxtail_run 1)
+check "a Codex timestamp on a date that does not exist keeps the full read" "$OUT" \
+  "codex record window: 0 of 1 transcript(s) read from their first record"
+check "the nonexistent-date file's older credential is caught" "$OUT" "slack-token"
+# A clock field `fromdateiso8601` would normalize (second 60, hour 24) fails the
+# same round trip.
+for cxtail_clock in 2000-01-01T00:00:60.000Z 2000-01-01T24:00:03.000Z; do
+  cxtail_fixture "$cxtail_clock"
+  OUT=$(cxtail_run 1)
+  check "an out-of-range Codex clock ($cxtail_clock) keeps the full read" "$OUT" \
+    "codex record window: 0 of 1 transcript(s) read from their first record"
+done
+# Control: a GENUINE leap day is a real date, so the cut still happens. Without
+# it the guard above could pass by rejecting every February 29.
+cxtail_fixture 2000-02-29T00:00:03.000Z
+OUT=$(cxtail_run 1)
+check "a Codex history ending on a real leap day is still cut" "$OUT" \
+  "codex record window: 1 of 1 transcript(s) read from their first record"
+nocheck "the leap-day file's history before the window is not rescanned" "$OUT" "slack-token"
 # Provenance names the SOURCE line, not the line inside the tail copy: the
 # in-window credential is line 1504 of the transcript (meta, the old credential,
 # 1500 padding records, the last old record, then it).
@@ -2837,6 +2860,8 @@ check "a cut Codex transcript still reports provenance" "$OUT" \
   "codex record window: 1 of 1 transcript(s) read from their first record"
 check "provenance of a cut Codex transcript names the source line" "$OUT" "session=r.jsonl line=1504 "
 # A checkout in the skipped history still pairs with a build inside the window.
+# The checkout sits 1.35 MB before the cut, so the first-match grep (#4675) stops
+# there and its byte offset decides.
 cxtail_build_fixture() { # $1 = the command run before the window
   { printf '{"timestamp":"2000-01-01T00:00:00.000Z","type":"session_meta","payload":{"cwd":"%s"}}\n' "$FIX/monorepo"
     printf '{"timestamp":"2000-01-01T00:00:01.000Z","type":"response_item","payload":{"type":"function_call","arguments":"{\\"command\\":\\"%s\\"}"}}\n' "$1"
@@ -2858,6 +2883,68 @@ check "a checkout before the window still pairs with a build inside it" "$OUT" "
 cxtail_build_fixture "git status"
 OUT=$(cxtail_run 1)
 nocheck "a build with no checkout before the window is not a candidate" "$OUT" "npm ci --cxtail-build"
+# Control: text matching the checkout predicate only AFTER the cut is no checkout
+# in the skipped history, so a first match past the cut must not pair with the
+# build. The match sits in a non-command record, so only the cut's own answer
+# could make this build a candidate (#4675).
+cxtail_late_match_fixture() {
+  { printf '{"timestamp":"2000-01-01T00:00:00.000Z","type":"session_meta","payload":{"cwd":"%s"}}\n' "$FIX/monorepo"
+    cxtail_pad=$(printf '%0900d' 0) cxtail_i=0
+    while [ "$cxtail_i" -lt 1500 ]; do
+      printf '{"timestamp":"2000-01-01T00:00:02.000Z","type":"event_msg","payload":{"pad":"%s"}}\n' "$cxtail_pad"
+      cxtail_i=$((cxtail_i + 1))
+    done
+    cxtail_now=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')
+    printf '{"timestamp":"%s","type":"event_msg","payload":{"note":"gh pr checkout 77"}}\n' "$cxtail_now"
+    printf '{"timestamp":"%s","type":"response_item","payload":{"type":"function_call","arguments":"{\\"command\\":\\"npm ci --cxtail-build\\"}"}}\n' "$cxtail_now"
+  } > "$FIX/cxtail/sessions/r.jsonl"
+}
+cxtail_late_match_fixture
+OUT=$(cxtail_run 1)
+check "a checkout match only after the cut is still cut" "$OUT" \
+  "codex record window: 1 of 1 transcript(s) read from their first record"
+nocheck "a checkout match only after the cut does not pair with the build" "$OUT" "npm ci --cxtail-build"
+# A shim on the checkout read (the only grep given these flags) proves the read
+# is a first-match grep of a file and that a read which fails, or succeeds without
+# an offset, falls back to the full read instead of reading as "no checkout"
+# (#4698 review).
+mkdir -p "$FIX/cxtail-grep-shim"
+cat > "$FIX/cxtail-grep-shim/grep" <<'EOF2'
+#!/usr/bin/env bash
+case " $* " in
+  *" -a -m1 -bo "*)
+    printf '%s\n' "$*" >> "$CXTAIL_GREP_PROBE"
+    case "$CXTAIL_GREP_MODE" in
+      fail) exit 2 ;;
+      nooffset) printf 'Binary file matches\n'; exit 0 ;;
+    esac
+    ;;
+esac
+exec "$CXTAIL_TEST_GREP" "$@"
+EOF2
+chmod +x "$FIX/cxtail-grep-shim/grep"
+cxtail_real_grep=$(type -P grep)
+cxtail_grep_run() { # $1 = shim mode (probe|fail|nooffset)
+  rm -f "$FIX/cxtail-grep-probe"
+  PATH="$FIX/cxtail-grep-shim:$PATH" CXTAIL_TEST_GREP="$cxtail_real_grep" CXTAIL_GREP_MODE="$1" \
+    CXTAIL_GREP_PROBE="$FIX/cxtail-grep-probe" \
+    CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxtail" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+    bash "$TARGET" --since-days 1 --section safety 2>&1
+}
+cxtail_build_fixture "gh pr checkout 77"
+OUT=$(cxtail_grep_run probe)
+check "the shimmed checkout case is still cut" "$OUT" \
+  "codex record window: 1 of 1 transcript(s) read from their first record"
+check "the shimmed checkout case still pairs with the build" "$OUT" "npm ci --cxtail-build"
+if [ -s "$FIX/cxtail-grep-probe" ]; then
+  ok "the checkout read is a first-match grep of the file itself"
+else bad "the checkout read is a first-match grep of the file itself" "no first-match grep ran"; fi
+for cxtail_mode in fail nooffset; do
+  OUT=$(cxtail_grep_run "$cxtail_mode")
+  check "a $cxtail_mode checkout read keeps the full read" "$OUT" \
+    "codex record window: 0 of 1 transcript(s) read from their first record"
+  check "a $cxtail_mode checkout read still pairs the checkout with the build" "$OUT" "npm ci --cxtail-build"
+done
 # The tails hold raw transcript bytes. A worker the controller kills at the
 # deadline cannot run its own traps, so the controller removes them. The grep shim
 # stalls the worker only once a tail copy exists, proving the case ran.
