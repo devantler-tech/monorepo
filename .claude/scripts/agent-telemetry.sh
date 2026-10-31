@@ -3345,10 +3345,23 @@ codex_window_cut() {
             end)
         | select((.bad | not) and .cut != null and .cut > 0) | "\(.cut) \(.lines)"') || return 0
   case "$cut" in [1-9]*' '[0-9]*) ;; *) return 0 ;; esac
-  # A counting grep reads to the end: `grep -q` would stop at the first match,
-  # and the SIGPIPE to `head` would then read as "no checkout" under pipefail.
-  checkout=$(head -c "${cut%% *}" "$f" 2>/dev/null | LC_ALL=C grep -cE "$BUILD_CHECKOUT_RE")
-  case "$checkout" in 0) ;; [1-9]*) checkout=1 ;; *) return 0 ;; esac
+  # Only whether ONE checkout precedes the cut matters, so the grep stops at its
+  # first match (#4675): a full count of a 3.3 GB history took about 58 s with the
+  # system grep, the first match under a second. It reads the file itself: behind
+  # a pipe the early stop kills the writer, on SIGPIPE or EPIPE depending on the
+  # environment, and that status cannot tell a stopped read from a failed one. The
+  # first match's byte offset decides, since a first match at or past the cut means
+  # none before it. A grep that failed, or printed no offset, gets the full read.
+  checkout=$(LC_ALL=C grep -a -m1 -bo -E "$BUILD_CHECKOUT_RE" "$f" 2>/dev/null)
+  case $? in
+    0)
+      checkout=${checkout%%:*}
+      case "$checkout" in ''|*[!0-9]*) return 0 ;; esac
+      if [ "$checkout" -lt "${cut%% *}" ]; then checkout=1; else checkout=0; fi
+      ;;
+    1) checkout=0 ;;
+    *) return 0 ;;
+  esac
   printf '%s %s\n' "$cut" "$checkout"
 }
 
