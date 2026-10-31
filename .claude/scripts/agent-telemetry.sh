@@ -2985,17 +2985,21 @@ codex_window_cut() {
             end)
         | select((.bad | not) and .cut != null and .cut > 0) | "\(.cut) \(.lines)"') || return 0
   case "$cut" in [1-9]*' '[0-9]*) ;; *) return 0 ;; esac
-  # Only whether ONE checkout exists matters, so the grep stops at its first
-  # match (#4675): a full count of a 3.3 GB history took about 58 s with the
-  # system grep, the first match under a second. `head` then takes a SIGPIPE,
-  # so a match is accepted whatever `head` exited with. A zero is accepted only
-  # when `head` also exited 0: a read that failed early prints 0 too, and would
-  # otherwise hide a checkout. Anything else falls back to the full read.
-  checkout=$(head -c "${cut%% *}" "$f" 2>/dev/null | LC_ALL=C grep -m1 -cE "$BUILD_CHECKOUT_RE"
-    printf '%s\n' "${PIPESTATUS[0]}")
-  case "$checkout" in
-    $'0\n0') checkout=0 ;;
-    [1-9]*$'\n'[0-9]*) checkout=1 ;;
+  # Only whether ONE checkout precedes the cut matters, so the grep stops at its
+  # first match (#4675): a full count of a 3.3 GB history took about 58 s with the
+  # system grep, the first match under a second. It reads the file itself: behind
+  # a pipe the early stop kills the writer, on SIGPIPE or EPIPE depending on the
+  # environment, and that status cannot tell a stopped read from a failed one. The
+  # first match's byte offset decides, since a first match at or past the cut means
+  # none before it. A grep that failed, or printed no offset, gets the full read.
+  checkout=$(LC_ALL=C grep -a -m1 -bo -E "$BUILD_CHECKOUT_RE" "$f" 2>/dev/null)
+  case $? in
+    0)
+      checkout=${checkout%%:*}
+      case "$checkout" in ''|*[!0-9]*) return 0 ;; esac
+      if [ "$checkout" -lt "${cut%% *}" ]; then checkout=1; else checkout=0; fi
+      ;;
+    1) checkout=0 ;;
     *) return 0 ;;
   esac
   printf '%s %s\n' "$cut" "$checkout"
