@@ -87,12 +87,12 @@ next action, then act. Remove `blocked` when the remaining work is ours, close r
 never ask them again. Ambiguous replies are not executable approval; use the clarification path above.
 The sender suppresses responses automatically; suppression does not claim the requested work is done.
 
-**The run that files an ask prepares its changelog** ([ADR 0012](../../docs/adr/0012-digest-changelog-when-an-ask-is-filed.md)).
-A dated changelog is due only when an unanswered ask needs one, on either lane, and a pending changelog
-that already covers the same work means nothing more is due. It covers verified outcomes not yet in a
-delivered or pending digest, and it is `docs/digests/YYYY-MM-DD.md` for the first daily send its pull
-request can merge before: use the next day's date when filing close to 06:17 UTC. Never hold an ask for
-it. That send uses the short digest saying the summary is missing, and the changelog stays pending for
+**The run that files an ask prepares its changelog** ([ADR 0012](https://github.com/devantler-tech/monorepo/blob/main/docs/adr/0012-digest-changelog-when-an-ask-is-filed.md)).
+A dated changelog is due only when an unanswered ask needs one, on either lane. A reviewed pending
+changelog that already covers the same work and passes `maintainer-digest.sh check` means nothing more
+is due; a draft or a failing file does not. It covers verified outcomes not yet in a delivered or
+pending digest, and it is `docs/digests/YYYY-MM-DD.md` dated today when filed before 05:00 UTC and
+tomorrow otherwise, in UTC. Never hold an ask for it. That send uses the short digest saying the summary is missing, and the changelog stays pending for
 the next digest with an ask. Quiet days have no changelog duty. Acquire the shared `agent-claim/4285`
 coordination lease before preparing a date. Re-read open digest drafts and the reviewed dated path after acquiring it.
 

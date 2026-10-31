@@ -14,13 +14,13 @@ A dated changelog is due only when an unanswered ask needs one. The run that fil
 it, on either lane, covering verified outcomes not yet in a delivered or pending digest. The shared
 `agent-claim/4285` lease and the normal review path still mean one writer per date.
 
-The changelog is named for the first daily send its pull request can merge before, which is the next
-day's date when it is filed too close to 06:17 UTC. The ask is never held for it. That send goes out
-as the existing short digest saying the summary is missing, and the changelog stays pending for the
-next digest that still has an ask.
+The changelog is dated today when filed before 05:00 UTC and tomorrow otherwise, in UTC, so its pull
+request has over an hour before the 06:17 UTC send. The ask is never held for it. A send that goes out
+first uses the existing short digest saying the summary is missing, and the changelog stays pending
+for the next digest that still has an ask.
 
-Filing an ask that needs no new changelog, because a pending one already covers the same work, adds
-nothing. Quiet days have no changelog duty.
+Filing an ask adds nothing when a reviewed pending changelog that passes the digest check already
+covers the same work. A draft or a failing file does not count. Quiet days have no changelog duty.
 
 ## Why
 
