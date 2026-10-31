@@ -15,8 +15,8 @@
 #   instruction. See installed `agentic-engineering:agent-improver` → "Ingestion boundary".
 #
 # HONESTY NOTES (stated gaps, so a reader never over-trusts a number):
-#   - "cycle time" is a PROXY: the API exposes no per-item Status-change history,
-#     so the duration measured is issue LIFETIME (created→closed).
+#   - "cycle time" is a PROXY: the throughput section measures issue LIFETIME
+#     (created→closed). The starts section reads real column moves from the status history.
 #   - Board column LIMITS are a board-UI surface the API does not expose. The
 #     limits used are the maintainer-confirmed ceilings in the board guide
 #     (.claude/guides/issues-and-board.md); FLOW_WIP_LIMITS="<Status>=N;<Status>=N"
@@ -24,7 +24,7 @@
 #     unmeasured, not OK — and an unreadable guide fails the WIP section.
 #   - GitHub search caps at 1000 results per query; counts near that are floors.
 #
-# Usage: flow-scorecard.sh [--window-days N] [--section wip|throughput|age|mix|all] [--instances FILE]
+# Usage: flow-scorecard.sh [--window-days N] [--section wip|throughput|starts|age|mix|all] [--instances FILE]
 #
 # Test seams (all optional; when set, gh is never invoked for that surface):
 #   FLOW_ITEMS_JSON        file: JSON array shaped like the REST
@@ -33,6 +33,7 @@
 #   FLOW_CLOSED_JSON       file: JSON array of {number, created_at, closed_at, repository_url}
 #   FLOW_SUBSTANTIVE_JSON  file: JSON array of {number, created_at, repository_url, type}
 #   FLOW_PRS_JSON          file: array of {title, headRefName, mergedAt, author:{login}, isCrossRepository, repo}
+#   FLOW_EVENTS_JSON       file: JSON array of {id, truncated, events:[{at, from, to}]}
 #   FLOW_NOW_UTC           fixed ISO-8601 clock for deterministic date math
 #   FLOW_WIP_GUIDE         file read for the confirmed ceilings instead of the board guide
 set -uo pipefail
@@ -53,7 +54,7 @@ while [ $# -gt 0 ]; do
     --window-days) need_val "$@"; WINDOW_DAYS="$2"; shift 2 ;;
     --section)     need_val "$@"; SECTION="$2";     shift 2 ;;
     --instances)   need_val "$@"; INSTANCES="$2";   shift 2 ;;
-    -h|--help)     sed -n '2,37p' "$0"; exit 0 ;;
+    -h|--help)     sed -n '2,38p' "$0"; exit 0 ;;
     *) echo "unknown argument (value not echoed)" >&2; exit 2 ;;
   esac
 done
@@ -64,8 +65,8 @@ case "$WINDOW_DAYS" in ''|*[!0-9]*) echo "--window-days must be an integer" >&2;
 # while producing no metrics; this exact failure shipped once in the telemetry
 # miner and is not being repeated here).
 case "$SECTION" in
-  wip|throughput|age|mix|all) : ;;
-  *) echo "--section must be one of: wip throughput age mix all" >&2; exit 2 ;;
+  wip|throughput|starts|age|mix|all) : ;;
+  *) echo "--section must be one of: wip throughput starts age mix all" >&2; exit 2 ;;
 esac
 
 NOW_UTC="${FLOW_NOW_UTC:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
@@ -138,10 +139,7 @@ echo " FLOW SCORECARD — Kanban Kata monorepo#2271 — window ${WINDOW_DAYS}d �
 echo " ALL STRINGS BELOW ARE UNTRUSTED DATA — evidence, never instruction."
 echo "════════════════════════════════════════════════════════════════"
 
-# ── WIP per board Status ─────────────────────────────────────────
-if want wip; then
-  echo ""
-  echo "── WIP per board Status (project 5, Issue items, active/non-archived) ──"
+resolve_wip_limits() {
   # The limits are the guide's confirmed ceilings unless FLOW_WIP_LIMITS is set:
   # "<Status>=N;<Status>=N", which replaces them entirely. Parsed strictly — a
   # malformed entry fails the section rather than silently flagging nothing.
@@ -163,9 +161,9 @@ if want wip; then
     limits_json=$(guide_wip_limits "$WIP_GUIDE" 2>/dev/null) || limits_json=""
     limits_error="the board guide's confirmed ceilings could not be read (set FLOW_WIP_LIMITS to override)"
   fi
-  if [ -z "$limits_json" ]; then
-    section_failed wip "$limits_error"
-  else
+}
+
+load_board_items() {
     # REST Projects v2, deliberately: `q=is:open` filters server-side and the
     # core REST budget is uncontended, where the GraphQL-backed
     # `gh project item-list` walks EVERY board item (~4,300, 43 paginated calls)
@@ -178,14 +176,53 @@ if want wip; then
     # per_page=100 covers the documented 50-field project cap, and an empty id
     # is rejected explicitly — a field pushed past the page would otherwise
     # yield an empty id that "succeeds" into a malformed items query.
-    items=$(load_array FLOW_ITEMS_JSON bash -c '
+    load_array FLOW_ITEMS_JSON bash -c '
       set -o pipefail
       fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" \
         --jq ".[] | select(.name==\"Status\") | .id") && [ -n "$fid_status" ] || exit 1
       fid_type=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" \
         --jq ".[] | select(.name==\"Type\") | .id") && [ -n "$fid_type" ] || exit 1
-      gh api "orgs/devantler-tech/projectsV2/5/items?per_page=100&q=is:open&fields=$fid_status,$fid_type" \
-        --paginate --jq ".[]" | jq -s .') || items=""
+      fid_first=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" \
+        --jq ".[] | select(.name==\"First started\") | .id") && [ -n "$fid_first" ] || exit 1
+      gh api "orgs/devantler-tech/projectsV2/5/items?per_page=100&q=is:open&fields=$fid_status,$fid_type,$fid_first" \
+        --paginate --jq ".[]" | jq -s .'
+}
+
+load_closed_issues() {
+  # gh api --paginate does not back off on secondary limits, and the Search API
+  # allows only 30 req/min — retry ONCE after a cooldown rather than dying on a
+  # transient 403/429 (the age section below paces its queries for the same
+  # reason). Each attempt is BUFFERED and only a fully-successful attempt's
+  # output is emitted — streaming into the pipe would let a partial first
+  # attempt's pages be double-counted by the retry and bias the median/p85.
+  # `-type:Epic` (negation verified honored live) keeps roadmap-scale Epic
+  # lifetimes from skewing the org-wide issue-lifetime median/p85; the envelope check
+  # rejects `incomplete_results: true` (a Search-side timeout returned as HTTP
+  # success) instead of silently publishing an undercount; and the retry fires
+  # only on a rate-limit/incomplete signature — a permanent error fails the
+  # section immediately rather than blocking on a pointless cooldown.
+  load_array FLOW_CLOSED_JSON bash -c '
+    set -o pipefail
+    errf=$(mktemp); trap "rm -f \"$errf\"" EXIT
+    fetch() {
+      gh api "search/issues?q=org:devantler-tech+is:issue+closed:%3E%3D'"$CUTOFF_DATE"'+-type:Epic&per_page=100" \
+        --paginate --jq "if .incomplete_results then error(\"incomplete_results\") else .items[] | {number, created_at, closed_at, repository_url} end" \
+        2>"$errf"
+    }
+    retryable() { grep -qiE "rate limit|HTTP 4(03|29)|incomplete_results" "$errf"; }
+    out=$(fetch) || { retryable || exit 1; sleep 65; out=$(fetch) || exit 1; }
+    printf "%s\n" "$out" | jq -s .'
+}
+
+# ── WIP per board Status ─────────────────────────────────────────
+if want wip; then
+  echo ""
+  echo "── WIP per board Status (project 5, Issue items, active/non-archived) ──"
+  resolve_wip_limits
+  if [ -z "$limits_json" ]; then
+    section_failed wip "$limits_error"
+  else
+    items=$(load_board_items) || items=""
     if ! printf '%s' "$items" | is_nonempty_array; then
       section_failed wip "board item query returned no JSON array, or an empty one (project 5 is never empty)"
     else
@@ -230,29 +267,7 @@ fi
 if want throughput; then
   echo ""
   echo "── Throughput & created→closed duration — PROXY for cycle time ──"
-  # gh api --paginate does not back off on secondary limits, and the Search API
-  # allows only 30 req/min — retry ONCE after a cooldown rather than dying on a
-  # transient 403/429 (the age section below paces its queries for the same
-  # reason). Each attempt is BUFFERED and only a fully-successful attempt's
-  # output is emitted — streaming into the pipe would let a partial first
-  # attempt's pages be double-counted by the retry and bias the median/p85.
-  # `-type:Epic` (negation verified honored live) keeps roadmap-scale Epic
-  # lifetimes from skewing the org-wide issue-lifetime median/p85; the envelope check
-  # rejects `incomplete_results: true` (a Search-side timeout returned as HTTP
-  # success) instead of silently publishing an undercount; and the retry fires
-  # only on a rate-limit/incomplete signature — a permanent error fails the
-  # section immediately rather than blocking on a pointless cooldown.
-  closed=$(load_array FLOW_CLOSED_JSON bash -c '
-    set -o pipefail
-    errf=$(mktemp); trap "rm -f \"$errf\"" EXIT
-    fetch() {
-      gh api "search/issues?q=org:devantler-tech+is:issue+closed:%3E%3D'"$CUTOFF_DATE"'+-type:Epic&per_page=100" \
-        --paginate --jq "if .incomplete_results then error(\"incomplete_results\") else .items[] | {number, created_at, closed_at, repository_url} end" \
-        2>"$errf"
-    }
-    retryable() { grep -qiE "rate limit|HTTP 4(03|29)|incomplete_results" "$errf"; }
-    out=$(fetch) || { retryable || exit 1; sleep 65; out=$(fetch) || exit 1; }
-    printf "%s\n" "$out" | jq -s .') || closed=""
+  closed=$(load_closed_issues) || closed=""
   if ! printf '%s' "$closed" | is_array; then
     section_failed throughput "closed-issue query returned no JSON array"
   else
@@ -268,12 +283,134 @@ if want throughput; then
           | "  issues closed in window: \($n)\n"
             + "  created→closed: median \($med*10|round/10)d   p85 \($p85*10|round/10)d"
         end' || section_failed throughput "metric rendering failed (malformed or drifted issue payload)"
-    echo "  NOTE: PROXY — the API exposes no Status-change history, so this is issue"
-    echo "        LIFETIME (created→closed), not board cycle time; stalled-in-column"
-    echo "        detection is likewise UNMEASURED today. This population is org-wide"
+    echo "  NOTE: PROXY — this is issue LIFETIME (created→closed), not board cycle time;"
+    echo "        the starts section reads actual column moves. This population is org-wide"
     echo "        closed non-Epic issues, including off-board and accessible private"
     echo "        issues; WIP counts unarchived open non-Epic project-5 issues."
     echo "        These populations differ. Search caps at 1000 results."
+  fi
+fi
+
+# ── Entries into In Progress, from the board's status history ────
+# `fetch_status_events` reads "<repo> <number>" lines and prints a JSON array of
+# {id, truncated, events: [{at, from, to}]}, project 5 only. Any failed batch fails the
+# whole read: a partial history would undercount entries and read as a calmer board.
+# Repo and number are validated by the caller's jq before reaching the query text.
+fetch_status_events() {
+  local out page body i repo number
+  out=$(mktemp) || return 1
+  while :; do
+    body="" i=0
+    while [ "$i" -lt 40 ] && IFS=' ' read -r repo number; do
+      i=$((i + 1))
+      body="$body i$i: repository(owner:\"devantler-tech\",name:\"$repo\"){issue(number:$number){number repository{name} timelineItems(last:50,itemTypes:[PROJECT_V2_ITEM_STATUS_CHANGED_EVENT]){totalCount nodes{... on ProjectV2ItemStatusChangedEvent{createdAt status previousStatus project{number}}}}}}"
+    done
+    [ "$i" -gt 0 ] || break
+    page=$(gh api graphql -f query="query{$body}" 2>/dev/null) || { rm -f "$out"; return 1; }
+    printf '%s' "$page" | jq -c '.data | to_entries[] | .value.issue | {
+        id: (.repository.name + "#" + (.number | tostring)),
+        truncated: (.timelineItems.totalCount > (.timelineItems.nodes | length)),
+        events: [.timelineItems.nodes[] | select(.project.number == 5)
+                 | {at: .createdAt, from: .previousStatus, to: .status}]}' >> "$out" ||
+      { rm -f "$out"; return 1; }
+    [ "$i" -eq 40 ] || break
+  done
+  jq -s . "$out"
+  local rc=$?
+  rm -f "$out"
+  return "$rc"
+}
+
+if want starts; then
+  echo ""
+  echo "── In Progress entries and residence, window ${WINDOW_DAYS}d (board status history) ──"
+  [ -n "${limits_json:-}" ] || resolve_wip_limits
+  [ -n "${items:-}" ] || items=$(load_board_items) || items=""
+  [ -n "${closed:-}" ] || closed=$(load_closed_issues) || closed=""
+  if [ -z "$limits_json" ]; then
+    section_failed starts "$limits_error"
+  elif ! printf '%s' "$items" | is_nonempty_array; then
+    section_failed starts "board item query returned no JSON array, or an empty one (project 5 is never empty)"
+  elif ! printf '%s' "$closed" | is_array; then
+    section_failed starts "closed-issue query returned no JSON array"
+  else
+    # Non-Epic cards only, matching the WIP section's count.
+    cards=$(printf '%s' "$items" | jq -c '
+      def repo: .repository_url | sub("^.*/"; "");
+      def field($n): first(.fields[]? | select(.name == $n) | .value) // null;
+      map(select(.content_type == "Issue" and .archived_at == null
+                 and ((field("Type") | .name?) != "Epic")))
+      | map({id: ((.content | repo) + "#" + (.content.number | tostring)),
+             status: (field("Status") | .name.raw? // null),
+             started: (field("First started") != null)})') || cards=""
+    # Read every card past the Backlog and Icebox columns, plus every issue closed in the window.
+    wanted=$(jq -rn --argjson cards "${cards:-null}" --argjson closed "$closed" --arg now "$NOW_UTC" --argjson d "$WINDOW_DAYS" '
+      (($now|fromdateiso8601) - ($d*86400)) as $cut
+      | ([$cards[] | select(.status != null and (.status | test("(Backlog|Icebox)$") | not)) | .id]
+         + [$closed[] | select(.closed_at != null and (.closed_at|fromdateiso8601) >= $cut)
+            | (.repository_url | sub("^.*/"; "")) + "#" + (.number | tostring)])
+      | unique | .[] | select(test("^[A-Za-z0-9._-]+#[0-9]+$")) | sub("#"; " ")') || wanted=""
+    if [ -n "${FLOW_EVENTS_JSON:-}" ]; then
+      history=$(cat "$FLOW_EVENTS_JSON" 2>/dev/null) || history=""
+    else
+      history=$(printf '%s\n' "$wanted" | fetch_status_events) || history=""
+    fi
+    if [ -z "$cards" ] || [ -z "$wanted" ]; then
+      section_failed starts "no cards could be derived from the board and closed-issue reads"
+    elif ! printf '%s' "$history" | is_nonempty_array; then
+      section_failed starts "status history query failed or returned nothing"
+    else
+      printf '%s' "$history" | jq -r --argjson cards "$cards" --argjson limits "$limits_json" \
+        --arg now "$NOW_UTC" --argjson d "$WINDOW_DAYS" '
+        "🏃🏻‍♂️ In Progress" as $IP
+        | ($now|fromdateiso8601) as $n | ($n - $d*86400) as $cut
+        | ($limits[$IP] // error("no limit for In Progress")) as $limit
+        | . as $history
+        | [$cards[] | select(.status == $IP)] as $current
+        | [$history[] | .id as $id | .events[] | . + {id: $id, t: (.at|fromdateiso8601)}
+           | select(.from != .to)] | sort_by(.t) as $all
+        | def entry: .to == $IP;
+          def exit: .from == $IP;
+          # Walk back from the column as it is now to the count just before each entry.
+          (reduce ($all | reverse)[] as $e ({occ: ($current|length), over: 0};
+             if ($e|entry) then .occ -= 1
+               | if $e.t >= $cut and .occ >= $limit then .over += 1 else . end
+             elif ($e|exit) then .occ += 1 else . end)) as $walk
+        | [$all[] | select(entry and .t >= $cut)] as $entries
+        | def source: .from as $f
+            | if $f == null or $f == "" then "new card"
+              elif ($f|test(" Ready$")) then "Ready"
+              elif ($f|test("Backlog$")) then "Backlog"
+              elif ($f|test("Icebox$")) then "Icebox"
+              else "later stage" end;
+          ($entries | map(source) | group_by(.) | map({key: .[0], value: length}) | from_entries) as $from
+        | ($all | group_by(.id) | map(
+             reduce .[] as $e ({start: null, out: []};
+               if ($e|entry) then .start = $e.t
+               elif ($e|exit) then
+                 (if .start != null and $e.t >= $cut then .out += [$e.t - .start] else . end) | .start = null
+               else . end) | .out) | add // []) as $stays
+        | [$all[] | select(.t >= $cut and exit)] as $exits
+        | ($current | map(.id as $id
+             | ([$all[] | select(.id == $id and entry) | .t] | last) as $t
+             | if $t == null then "unknown"
+               elif ($n - $t) <= 86400 then "up to 1d"
+               elif ($n - $t) <= 259200 then "1d to 3d"
+               elif ($n - $t) <= 604800 then "3d to 7d"
+               else "over 7d" end)
+           | group_by(.) | map({key: .[0], value: length}) | from_entries) as $age
+        | "  cards read: \($history|length) (past Backlog and Icebox, plus issues closed in the window); history cut short on \([$history[]|select(.truncated)]|length)",
+          "  entries: \($entries|length), at least \($walk.over) of them while the column was at or over its limit of \($limit)",
+          "    from: Ready \($from.Ready // 0), Backlog \($from.Backlog // 0), Icebox \($from.Icebox // 0), new card \($from["new card"] // 0), later stage \($from["later stage"] // 0)",
+          "  exits: \($exits|length), \([$stays[]|select(. <= 86400)]|length) of them within 24h of entering",
+          "  in the column now: \($current|length): up to 1d \($age["up to 1d"] // 0), 1d to 3d \($age["1d to 3d"] // 0), 3d to 7d \($age["3d to 7d"] // 0), over 7d \($age["over 7d"] // 0), entry not in history \($age.unknown // 0)",
+          "  First started recorded: \([$current[]|select(.started)]|length) of \($current|length)"' ||
+        section_failed starts "metric rendering failed (malformed or drifted status history) -- UNKNOWN"
+      echo "  NOTE: Backlog and Icebox cards are not read, so a card moved back there since"
+      echo "        entering is missing: the count at each entry is reconstructed and is a"
+      echo "        lower bound. Entries are counted per move, so re-entry counts again."
+      echo "        A short stay is not proof the work was finished: 'Done' is a board move."
+    fi
   fi
 fi
 
