@@ -466,12 +466,28 @@ check excluded
 check not_measured
 write_claude "$FIX/stale-projects/$claude_slug/scope.jsonl" "$claude_root"
 mkdir -p "$FIX/stale-projects/$claude_slug/scope/subagents"
-write_claude "$FIX/stale-projects/$claude_slug/scope/subagents/agent-child.jsonl" "$claude_root/deep/folder"
+write_claude "$FIX/stale-projects/$claude_slug/scope/subagents/agent-child.jsonl" "$claude_root"
 SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
 check test "$RC" = 0
 check grep -qF '[BOTH instances: 2 Claude + 0 Codex sessions]' "$FIX/transcript-output"
 check grep -qF '1 parent + 1 delegated' "$FIX/transcript-output"
 check walked "$FIX/stale-projects/$claude_slug/scope/subagents"
+# A folder below a removed worktree may have been a nested excluded checkout, so it
+# is visibly left out rather than admitted on the outer worktree's name.
+write_claude "$FIX/stale-projects/$claude_slug/scope/subagents/agent-child.jsonl" "$claude_root/github/personal/profile"
+SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
+check test "$RC" = 0
+check grep -qF '[BOTH instances: 1 Claude + 0 Codex sessions]' "$FIX/transcript-output"
+check grep -qF 'Claude project folders left out, worktree confirmed gone: 1' "$FIX/transcript-output"
+# The first exclusion must not hide a later transcript that cannot be read.
+printf '{"type":"user"}\n' > "$FIX/stale-projects/$claude_slug/a-first.jsonl"
+touch "$FIX/stale-projects/$claude_slug/z-locked.jsonl"
+chmod 000 "$FIX/stale-projects/$claude_slug/z-locked.jsonl"
+SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
+check test "$RC" = 2
+chmod 600 "$FIX/stale-projects/$claude_slug/z-locked.jsonl"
+rm "$FIX/stale-projects/$claude_slug/z-locked.jsonl" "$FIX/stale-projects/$claude_slug/a-first.jsonl"
+write_claude "$FIX/stale-projects/$claude_slug/scope/subagents/agent-child.jsonl" "$claude_root"
 # A worktree name of another real shape is admitted the same way.
 agent_slug="$(printf '%s' "$FIX/corpus" | tr / -)--claude-worktrees-agent-a15e0db413c99f912"
 mkdir -p "$FIX/agent-projects/$agent_slug"
@@ -487,6 +503,18 @@ git -C "$claude_root" remote add origin https://github.com/devantler-tech/scope-
 SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
 check test "$RC" = 0
 check grep -qF '[BOTH instances: 2 Claude + 0 Codex sessions]' "$FIX/transcript-output"
+# A live store's transcript with no recorded folder is counted, not dropped silently.
+printf '{"type":"user"}\n' > "$FIX/stale-projects/$claude_slug/no-cwd.jsonl"
+SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
+check test "$RC" = 0
+check grep -qF 'Claude transcripts left out, no recorded folder: 1' "$FIX/transcript-output"
+rm "$FIX/stale-projects/$claude_slug/no-cwd.jsonl"
+# A deleted folder below a live worktree has nothing left to answer for it.
+write_claude "$FIX/stale-projects/$claude_slug/no-longer.jsonl" "$claude_root/removed/checkout"
+SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
+check test "$RC" = 0
+check grep -qF '[BOTH instances: 2 Claude + 0 Codex sessions]' "$FIX/transcript-output"
+rm "$FIX/stale-projects/$claude_slug/no-longer.jsonl"
 # A worktree that still exists answers for itself, whatever its checkout's slug says.
 git -C "$claude_root" remote set-url origin https://github.com/excluded-owner/fixture.git
 SCOPE_PROJECTS="$FIX/stale-projects" transcript_run

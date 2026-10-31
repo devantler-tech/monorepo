@@ -2709,7 +2709,9 @@ claude_transcript_cwd() {
 # confirmed gone. Only the harness and our own helpers create that path, under names
 # of several shapes (`<word>-<word>-<hex>`, `agent-<hex>`, `maint-<run>`), so the
 # name is checked for being one plain folder and not for a shape. A worktree that
-# still exists answers for its own identity.
+# still exists answers for its own identity. A folder below a worktree is admitted
+# only while it exists to answer: once gone, it may have been a nested checkout of
+# an excluded repository, and nothing remains that could tell.
 claude_cwd_in_scope() {
   local cwd=$1 p rest name root presence rc
   case "$cwd" in */|*//*|*/./*|*/.|*/../*|*/..) return 1 ;; esac
@@ -2721,8 +2723,12 @@ claude_cwd_in_scope() {
     root="$p/.claude/worktrees/$name"
     presence=0
     worktree_presence "$root" || presence=$?
-    case "$presence" in 1) return 0 ;; 2) return 4 ;; esac
+    case "$presence" in
+      1) [ "$cwd" = "$root" ] && return 0; return 1 ;;
+      2) return 4 ;;
+    esac
     [ -e "$root/.git" ] || [ -L "$root/.git" ] || return 4
+    [ "$cwd" = "$root" ] || [ -d "$cwd" ] || return 1
     rc=0
     transcript_path_authorized "$cwd" "$root" || rc=$?
     case "$rc" in 0) return 0 ;; 1) return 1 ;; *) return 4 ;; esac
@@ -2733,14 +2739,15 @@ claude_cwd_in_scope() {
 }
 
 # Judge one transcript by its recorded cwd. A transcript recording none is left
-# out, as for Codex. A store repeats one cwd across its sessions, so the last answer
-# is kept: each answer costs several git reads.
+# out, as for Codex, with status 5 so the walk can count it; one that cannot be read
+# is 4. A store repeats one cwd across its sessions, so the last answer is kept:
+# each answer costs several git reads.
 CLAUDE_LAST_CWD=''
 CLAUDE_LAST_CWD_RC=1
 claude_transcript_admission() {
   local cwd
-  cwd=$(claude_transcript_cwd "$1") || return 1
-  [ -n "$cwd" ] || return 1
+  cwd=$(claude_transcript_cwd "$1") || return 4
+  [ -n "$cwd" ] || return 5
   if [ "$cwd" != "$CLAUDE_LAST_CWD" ]; then
     CLAUDE_LAST_CWD_RC=0
     claude_cwd_in_scope "$cwd" || CLAUDE_LAST_CWD_RC=$?
@@ -3266,11 +3273,12 @@ codex_unreadable_folders() {
 # smaller count — the delegated share read 0% with one session folder locked.
 # Tag each unavailable in-scope folder: U for an unreadable source or an admission
 # that could not be determined, G for a removed worktree holding a transcript with
-# no acceptable cwd. Paths are relative to the store (`.` is the store itself). A
+# no acceptable cwd, N for a transcript recording no cwd in a store that still has
+# its worktree. Paths are relative to the store (`.` is the store itself). A
 # stale project slug cannot supply a removed repository's identity, so that
 # transcript stays excluded, visibly separate from failed reads and measured sessions.
 claude_unavailable_folders() {
-  local d dirs list f admission_rc presence=0 store_admission=0
+  local d dirs list f admission_rc gone presence=0 store_admission=0
   worktree_presence "$CLAUDE_PROJECTS" || presence=$?
   case "$presence" in 1) return 0 ;; 2) printf 'U .\n'; return 0 ;; esac
   store_root_in_scope || store_admission=$?
@@ -3301,6 +3309,9 @@ $dirs}"; fi
        && ! list=$(claude_session_listing "$CLAUDE_PROJECTS/$d"); then
       printf 'U %s\n' "$d"; continue
     fi
+    # A gone folder keeps being scanned: a later transcript may still be a failed
+    # read, which must not hide behind the first exclusion.
+    gone=0
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       # Open it rather than test the permission bit: an ACL or sandbox denial
@@ -3312,7 +3323,11 @@ $dirs}"; fi
       case "$admission_rc" in
         0) ;;
         4) printf 'U %s\n' "$d"; break ;;
-        *) if claude_project_removed "$d"; then printf 'G %s\n' "$d"; break; fi ;;
+        *)
+          if [ "$gone" = 1 ]; then :
+          elif claude_project_removed "$d"; then printf 'G %s\n' "$d"; gone=1
+          elif [ "$admission_rc" = 5 ]; then printf 'N %s\n' "$f"
+          fi ;;
       esac
     done <<<"$list"
   done <<<"$dirs"
@@ -3322,6 +3337,7 @@ SF_CACHE=''
 SF_COUNT=0
 CL_UNREADABLE=''
 CL_GONE=0
+CL_NO_CWD=0
 WINDOW_SINCE=''
 CX_CACHE=''
 CX_COUNT=0
@@ -3377,6 +3393,7 @@ populate_session_cache() {
   [ "$SAFETY_SCOPE" = codex ] || cl_walk="$(claude_unavailable_folders)"
   CL_UNREADABLE=$(printf '%s\n' "$cl_walk" | awk '/^U / { print substr($0, 3) }')
   CL_GONE=$(printf '%s\n' "$cl_walk" | grep -c '^G ' || true)
+  CL_NO_CWD=$(printf '%s\n' "$cl_walk" | grep -c '^N ' || true)
   SF_COUNT=$(printf '%s' "$SF_CACHE" | grep -c . || true)
   # awk applies the cap instead of `head`: it reads the whole walk, so no writer is
   # cut off mid-stream under pipefail.
@@ -3667,6 +3684,9 @@ if [ -n "$CL_UNREADABLE" ]; then
 fi
 if [ "$CL_GONE" -gt 0 ]; then
   echo " Claude project folders left out, worktree confirmed gone: ${CL_GONE}"
+fi
+if [ "$CL_NO_CWD" -gt 0 ]; then
+  echo " Claude transcripts left out, no recorded folder: ${CL_NO_CWD}"
 fi
 # The same for a transcript whose worktree could be neither found nor confirmed
 # absent: it is left out, and the reading is incomplete rather than clean.
