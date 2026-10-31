@@ -105,7 +105,7 @@ fixture_script_path() {
 # is restored because window cases depend on it. This visits only this test's own
 # fixture directories.
 fixture_project_bindings() {
-  local store name p slug cwd f tmp
+  local store name p slug cwd f tmp listing
   for store in "$1"/*; do
     [ -d "$store" ] && [ ! -L "$store" ] || continue
     name=${store##*/}
@@ -121,6 +121,7 @@ fixture_project_bindings() {
       esac
     done < <(printf '%s\n' "$PORTFOLIO_PATHS" | tr ':' '\n'; printf '%s\n' "$FIX/fixmono" "${1%/*}/nest")
     [ -n "$cwd" ] || continue
+    listing=$(find "$store" -type f -name '*.jsonl') || return 2
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       case "$(head -n 20 "$f")" in *'"cwd"'*) continue ;; esac
@@ -128,7 +129,7 @@ fixture_project_bindings() {
       { printf '{"type":"fixture-metadata","cwd":"%s"}\n' "$cwd"; cat "$f"; } > "$tmp" || return 2
       touch -r "$f" "$tmp" || return 2
       mv "$tmp" "$f" || return 2
-    done < <(find "$store" -type f -name '*.jsonl')
+    done <<<"$listing"
   done
 }
 
@@ -4612,9 +4613,9 @@ nocheck "a short PEM body line is redacted" "$OUT" "MIIBVgIBADANBgkqhkiG9w0BAQEF
 echo
 echo "round-9 regressions"
 
-# A repo whose name IMITATES Claude's worktree marker must not be admitted. The
-# real marker has a fixed shape (adjective-name-hex6), verified against the live
-# store, so an imitation like `--claude-worktrees-client` no longer matches.
+# A repo whose name IMITATES Claude's worktree marker must not be admitted. Any
+# plain folder name is a real worktree shape, so the store listing cannot tell
+# them apart: the transcript's recorded cwd does, and it names the other repo.
 mkdir -p "$FIX/imit/${BOUNDARY_SLUG}" \
          "$FIX/imit/${BOUNDARY_SLUG}--claude-worktrees-keen-proskuriakova-4c1726" \
          "$FIX/imit/${BOUNDARY_SLUG}--claude-worktrees-client"
@@ -4624,6 +4625,10 @@ for d in "${BOUNDARY_SLUG}" "${BOUNDARY_SLUG}--claude-worktrees-keen-proskuriako
 done
 printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"i2","name":"Bash","input":{"command":"sleep 9"}}]}}' \
   > "$FIX/imit/${BOUNDARY_SLUG}--claude-worktrees-client/s.jsonl"
+printf '{"type":"fixture-metadata","cwd":"%s"}\n' "${BOUNDARY_ROOT}--claude-worktrees-client" \
+  | cat - "$FIX/imit/${BOUNDARY_SLUG}--claude-worktrees-client/s.jsonl" \
+  > "$FIX/imit-client.jsonl"
+mv "$FIX/imit-client.jsonl" "$FIX/imit/${BOUNDARY_SLUG}--claude-worktrees-client/s.jsonl"
 fixture_project_bindings "$FIX/imit" || exit 1
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/imit" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$BOUNDARY_ROOT" \
       PORTFOLIO_PATHS="$BOUNDARY_ROOT" HOME="$FIX" \

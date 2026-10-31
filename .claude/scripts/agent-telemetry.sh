@@ -714,7 +714,15 @@ store_root_in_scope() {
 need() { command -v "$1" >/dev/null 2>&1 || { echo "MISSING-DEP: $1" >&2; return 1; }; }
 need jq || exit 3
 
-want() { [ "$SECTION" = all ] || [ "$SECTION" = "$1" ]; }
+# Set when `--section all` could not resolve transcript scope: only the sections
+# that consume no transcript still run.
+TRANSCRIPT_SCOPE_UNRESOLVED=0
+want() {
+  if [ "$TRANSCRIPT_SCOPE_UNRESOLVED" = 1 ]; then
+    case "$1" in drift|outcomes) ;; *) return 1 ;; esac
+  fi
+  [ "$SECTION" = all ] || [ "$SECTION" = "$1" ]
+}
 
 # A lane's scheduled entries, given as one comma-separated list (monorepo#4117):
 # one to four ids of lowercase letters, digits and hyphens, none twice. Prints
@@ -2689,9 +2697,9 @@ claude_store_authorized() {
 # when it records none, or a value holding a control character. Only that field
 # leaves this reader, so a transcript left out has none of its content used.
 claude_transcript_cwd() {
-  head -n 20 "$1" 2>/dev/null | jq -Rrn '
-    ([inputs | fromjson? | .cwd? | strings] | first // "")
-    | if explode | all(. >= 32 and . != 127) then . else "" end' 2>/dev/null
+  jq -Rrn '
+    (first(limit(20; inputs) | fromjson? | .cwd? | strings) // "")
+    | if explode | all(. >= 32 and . != 127) then . else "" end' 2>/dev/null < "$1"
 }
 
 # Return 0 for a recorded cwd in an admitted repository, 4 when that cannot be
@@ -3095,7 +3103,7 @@ prepare_transcript_scope() {
     printf '%s' "$paths" | tr ':' '\n' | grep -v '^$' | while IFS= read -r p; do
       submodule_pattern=__no_submodules__
       [ "$p" != "$MONOREPO" ] || submodule_pattern=$SUBMOD_RE
-      printf '%s(--claude-worktrees-[a-z]+-[a-z]+-[0-9a-f]{6}|--git-modules-(%s))?|' \
+      printf '%s(--claude-worktrees-[A-Za-z0-9][A-Za-z0-9._-]*|--git-modules-(%s))?|' \
         "$(rx_escape "$(path_to_slug "$p")")" "$submodule_pattern"
     done | sed 's/|$//'
   )
@@ -3621,7 +3629,10 @@ case "$SECTION" in
   *)
     if ! prepare_transcript_scope; then
       echo ' UNKNOWN: transcript authorization unresolved — no transcript discovery or body reads'
-      return 2
+      # Only `all` holds sections that need no transcript, and they keep reporting.
+      [ "$SECTION" = all ] || return 2
+      TRANSCRIPT_SCOPE_UNRESOLVED=1
+      main_rc=2
     fi ;;
 esac
 case "$SECTION" in
@@ -3629,7 +3640,7 @@ case "$SECTION" in
   safety)
     if [ "$SAFETY_WORKER" = 0 ]; then SF_COUNT='bounded inside safety worker'
     else populate_session_cache; fi ;;
-  *) populate_session_cache ;;
+  *) [ "$TRANSCRIPT_SCOPE_UNRESOLVED" = 1 ] || populate_session_cache ;;
 esac
 # An unreadable Codex folder makes every Codex figure below incomplete: name it
 # and carry it to the exit status (.claude/scripts/AGENTS.md: a failed read is
@@ -3670,16 +3681,20 @@ echo " AGENT TELEMETRY — window ${SINCE_DAYS}d — generated $(date -u '+%Y-%m
 case "$SECTION" in
   drift|outcomes) echo " transcripts: NOT COLLECTED (section does not use them)" ;;
   *)
+    if [ "$TRANSCRIPT_SCOPE_UNRESOLVED" = 1 ]; then
+      echo " transcripts: NOT COLLECTED (authorization unresolved)"
+    else
     echo " claude sessions in window: ${SF_COUNT} (cap ${MAX_FILES})"
     echo ' transcript cohort: authorized-live-v2; prior selector-only observations remain a separate series'
-    echo ' Coverage changes are not performance improvements; rebind hypothesis exposure and companion floors.' ;;
+    echo ' Coverage changes are not performance improvements; rebind hypothesis exposure and companion floors.'
+    fi ;;
 esac
 # Only the report controller prints coverage, and only when it walked the Claude
 # files itself (SF_COUNT is numeric; see main). A safety worker's banner frames
 # that one section, whose own UNKNOWNs and exit status it already owns. Drift and
 # outcomes never read the Claude walk, so a run of only those sections neither
 # prints the coverage nor takes its status: a printed UNKNOWN always fails the run.
-if [ "$SAFETY_WORKER" = 0 ] && [ "$SF_COUNT" -eq "$SF_COUNT" ] 2>/dev/null; then
+if [ "$SAFETY_WORKER" = 0 ] && [ "$TRANSCRIPT_SCOPE_UNRESOLVED" = 0 ] && [ "$SF_COUNT" -eq "$SF_COUNT" ] 2>/dev/null; then
   case "$SECTION" in
     drift|outcomes) ;;
     *) claude_delegated_coverage || main_rc=2 ;;
@@ -4246,7 +4261,7 @@ fi
 # The file set is still mtime-selected, and that stays correct as a SUPERSET: a
 # record inside the window cannot live in a file last written before it. The cap
 # is the real limit — see the note printed below.
-if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -eq 1 ]; }; then
+if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -eq 1 ] && [ "$TRANSCRIPT_SCOPE_UNRESOLVED" = 0 ]; }; then
   echo
   echo "── SIGNATURE SCORING (hypothesis verdicts) ──────────────────────"
   # The shared cutoff computed once near SF_CACHE. Sharing it is what makes the

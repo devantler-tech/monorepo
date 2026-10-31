@@ -217,7 +217,7 @@ transcript_run() {
     PORTFOLIO_PATHS="${SCOPE_SELECTORS:-$FIX/corpus}" PORTFOLIO_ORG=devantler-tech \
     AGENT_TELEMETRY_RUNTIME=codex SCOPE_TRACE="$FIX/trace" SCOPE_WALK_TRACE="$FIX/walk-trace" \
     SCOPE_PAGES="$FIX/pages.json" SCOPE_ROWS="$FIX/rows.json" SCOPE_LIST_FAIL="${SCOPE_LIST_FAIL:-0}" \
-    "$BASH" "$FIX/definition/.claude/scripts/agent-telemetry.sh" --section efficiency \
+    "$BASH" "$FIX/definition/.claude/scripts/agent-telemetry.sh" --section "${SCOPE_SECTION:-efficiency}" \
       > "$FIX/transcript-output" 2>&1
   RC=$?
   set -e
@@ -278,6 +278,16 @@ SCOPE_LIST_FAIL=1 transcript_run
 check test "$RC" = 2
 check not_measured
 check not_walked "$FIX/home/codex/sessions"
+# Under the default section, unresolved scope still fails closed for transcripts,
+# and the drift report, which reads none, is still delivered.
+SCOPE_SECTION=all SCOPE_LIST_FAIL=1 transcript_run
+check test "$RC" = 2
+check grep -qF 'UNKNOWN: transcript authorization unresolved' "$FIX/transcript-output"
+check grep -qF 'transcripts: NOT COLLECTED (authorization unresolved)' "$FIX/transcript-output"
+check grep -qF '── DRIFT (' "$FIX/transcript-output"
+check not_measured
+check not_walked "$FIX/home/codex/sessions"
+check test ! -s "$FIX/walk-trace"
 cp "$FIX/definition/AGENTS.md" "$FIX/transcript-valid-contract.md"
 printf 'Missing authorization contract.\n' > "$FIX/definition/AGENTS.md"
 transcript_run
@@ -432,17 +442,27 @@ check excluded
 check grep -qF 'Claude project folders left out, worktree confirmed gone: 1' "$FIX/transcript-output"
 # The cwd must name a worktree of this checkout, not merely any folder.
 for foreign_cwd in "$FIX/unselected/.claude/worktrees/calm-quiet-abcdef" \
-  "$FIX/corpus/.claude/elsewhere/calm-quiet-abcdef" \
-  "$FIX/corpus/.claude/worktrees/.hidden" \
   "$FIX/corpus/.claude/worktrees/calm-quiet-abcdef/../../../../unselected" \
   "$FIX/corpus/unlisted"; do
   write_claude "$FIX/stale-projects/$claude_slug/scope.jsonl" "$foreign_cwd"
   SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
+  check excluded
+  check not_measured
+done
+# A folder that is missing inside the admitted checkout cannot be confirmed either
+# way, so the transcript is left out and the reading is UNKNOWN, not clean.
+for unchecked_cwd in "$FIX/corpus/.claude/elsewhere/calm-quiet-abcdef" \
+  "$FIX/corpus/.claude/worktrees/.hidden"; do
+  write_claude "$FIX/stale-projects/$claude_slug/scope.jsonl" "$unchecked_cwd"
+  SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
+  check test "$RC" = 2
+  check grep -qF 'could not be read in full' "$FIX/transcript-output"
   check not_measured
 done
 # A control character is not a recorded folder, even after an admitted prefix.
 jq -cn --arg p "$claude_root" '{type:"user",cwd:($p+"\u0000")}' > "$FIX/stale-projects/$claude_slug/scope.jsonl"
 SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
+check excluded
 check not_measured
 write_claude "$FIX/stale-projects/$claude_slug/scope.jsonl" "$claude_root"
 mkdir -p "$FIX/stale-projects/$claude_slug/scope/subagents"
@@ -458,6 +478,7 @@ mkdir -p "$FIX/agent-projects/$agent_slug"
 write_claude "$FIX/agent-projects/$agent_slug/scope.jsonl" "$FIX/corpus/.claude/worktrees/agent-a15e0db413c99f912"
 SCOPE_PROJECTS="$FIX/agent-projects" transcript_run
 check test "$RC" = 0
+check grep -qF '[BOTH instances: 1 Claude + 0 Codex sessions]' "$FIX/transcript-output"
 mkdir -p "$claude_root"
 SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
 check test "$RC" = 2
@@ -469,6 +490,7 @@ check grep -qF '[BOTH instances: 2 Claude + 0 Codex sessions]' "$FIX/transcript-
 # A worktree that still exists answers for itself, whatever its checkout's slug says.
 git -C "$claude_root" remote set-url origin https://github.com/excluded-owner/fixture.git
 SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
+check excluded
 check not_measured
 
 # Failure to establish a populated product's identity must stop preparation,
