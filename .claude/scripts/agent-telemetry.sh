@@ -2728,7 +2728,9 @@ claude_cwd_in_scope() {
       2) return 4 ;;
     esac
     [ -e "$root/.git" ] || [ -L "$root/.git" ] || return 4
-    [ "$cwd" = "$root" ] || [ -d "$cwd" ] || return 1
+    presence=0
+    worktree_presence "$cwd" || presence=$?
+    case "$presence" in 1) return 1 ;; 2) return 4 ;; esac
     rc=0
     transcript_path_authorized "$cwd" "$root" || rc=$?
     case "$rc" in 0) return 0 ;; 1) return 1 ;; *) return 4 ;; esac
@@ -3318,11 +3320,13 @@ $dirs}"; fi
       # can pass `-r` and still fail the open the walk's readers make.
       if [ -e "$f" ] && ! { : <"$f"; } 2>/dev/null; then printf 'U %s\n' "$d"; break; fi
       [ "$d" != . ] || continue
+      # A transcript removed since the listing is gone, not unreadable.
+      [ -e "$f" ] || continue
       admission_rc=0
       claude_transcript_admission "$f" || admission_rc=$?
       case "$admission_rc" in
         0) ;;
-        4) printf 'U %s\n' "$d"; break ;;
+        4) [ -e "$f" ] || continue; printf 'U %s\n' "$d"; break ;;
         *)
           if [ "$gone" = 1 ]; then :
           elif claude_project_removed "$d"; then printf 'G %s\n' "$d"; gone=1

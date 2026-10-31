@@ -480,13 +480,19 @@ check test "$RC" = 0
 check grep -qF '[BOTH instances: 1 Claude + 0 Codex sessions]' "$FIX/transcript-output"
 check grep -qF 'Claude project folders left out, worktree confirmed gone: 1' "$FIX/transcript-output"
 # The first exclusion must not hide a later transcript that cannot be read.
-printf '{"type":"user"}\n' > "$FIX/stale-projects/$claude_slug/a-first.jsonl"
-touch "$FIX/stale-projects/$claude_slug/z-locked.jsonl"
-chmod 000 "$FIX/stale-projects/$claude_slug/z-locked.jsonl"
+# The listing is unsorted, so exclusions surround the locked file on every order.
+for n in 0 1 2 3 4 5 6 7 8 9; do
+  printf '{"type":"user"}\n' > "$FIX/stale-projects/$claude_slug/first-$n.jsonl"
+  printf '{"type":"user"}\n' > "$FIX/stale-projects/$claude_slug/z-last-$n.jsonl"
+done
+touch "$FIX/stale-projects/$claude_slug/m-locked.jsonl"
+chmod 000 "$FIX/stale-projects/$claude_slug/m-locked.jsonl"
 SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
 check test "$RC" = 2
-chmod 600 "$FIX/stale-projects/$claude_slug/z-locked.jsonl"
-rm "$FIX/stale-projects/$claude_slug/z-locked.jsonl" "$FIX/stale-projects/$claude_slug/a-first.jsonl"
+check grep -qF "the Claude projects folder $claude_slug/ exists but could not be read in full" "$FIX/transcript-output"
+chmod 600 "$FIX/stale-projects/$claude_slug/m-locked.jsonl"
+rm -f "$FIX/stale-projects/$claude_slug"/first-*.jsonl "$FIX/stale-projects/$claude_slug"/z-last-*.jsonl \
+  "$FIX/stale-projects/$claude_slug/m-locked.jsonl"
 write_claude "$FIX/stale-projects/$claude_slug/scope/subagents/agent-child.jsonl" "$claude_root"
 # A worktree name of another real shape is admitted the same way.
 agent_slug="$(printf '%s' "$FIX/corpus" | tr / -)--claude-worktrees-agent-a15e0db413c99f912"
@@ -514,6 +520,18 @@ write_claude "$FIX/stale-projects/$claude_slug/no-longer.jsonl" "$claude_root/re
 SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
 check test "$RC" = 0
 check grep -qF '[BOTH instances: 2 Claude + 0 Codex sessions]' "$FIX/transcript-output"
+# A folder that cannot be inspected is a failed read, never a deleted one.
+mkdir -p "$claude_root/locked/sub"
+ln -s "$FIX/nowhere" "$claude_root/dangling"
+write_claude "$FIX/stale-projects/$claude_slug/no-longer.jsonl" "$claude_root/dangling"
+SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
+check test "$RC" = 2
+write_claude "$FIX/stale-projects/$claude_slug/no-longer.jsonl" "$claude_root/locked/sub"
+chmod 000 "$claude_root/locked"
+SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
+check test "$RC" = 2
+chmod 700 "$claude_root/locked"
+rm -rf "$claude_root/locked" "$claude_root/dangling"
 rm "$FIX/stale-projects/$claude_slug/no-longer.jsonl"
 # A worktree that still exists answers for itself, whatever its checkout's slug says.
 git -C "$claude_root" remote set-url origin https://github.com/excluded-owner/fixture.git
