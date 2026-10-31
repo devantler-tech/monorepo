@@ -48,11 +48,14 @@ The 14-day `STALE-ASK` clock remains a re-verification alarm: read replies and v
 never renew an answered ask or manufacture another notification.
 
 **Preview a filed ask before the next send.** Run
-`.claude/scripts/maintainer-digest.sh needs-you --repo devantler-tech/monorepo`. When it holds your
-ask back as private content, reword the ask at once, because the digest then shows him neither its
-question nor its options. The check is deliberately broad: ordinary words such as "cost" trip it. Both
-asks in [digest #4561](https://github.com/devantler-tech/monorepo/issues/4561) went out held back for
-that word and were reworded only after the send.
+`.claude/scripts/maintainer-digest.sh needs-you --repo devantler-tech/monorepo` and find your ask by
+its number. A `Held back` heading on it means the digest will show him neither its question nor its
+options. The check is deliberately broad: when an ordinary word such as "cost" tripped it, reword the
+ask at once. Both asks in [digest #4561](https://github.com/devantler-tech/monorepo/issues/4561) went
+out held back for that word and were reworded only after the send. When it found real private detail,
+the ask has already published it, so remove it and follow the
+[privacy guide](egress-and-privacy.md). Exit `1` can be another ask's finding; exit `2` is UNKNOWN,
+never clean.
 
 **The workflow sends as `github-actions[bot]`.** Agents never assign the maintainer merely to
 notify him: only the reviewed digest and urgent workflow do so. The daily sender includes only
@@ -84,11 +87,9 @@ next action, then act. Remove `blocked` when the remaining work is ours, close r
 never ask them again. Ambiguous replies are not executable approval; use the clarification path above.
 The sender suppresses responses automatically; suppression does not claim the requested work is done.
 
-**A changelog is due only while an unanswered ask is open, and one writer prepares it.** A quiet day
-needs no file. The run that files an ask, or the first Engineer run on either lane that finds one open
-with no file for the next delivery date, owns `docs/digests/YYYY-MM-DD.md` for that date. It covers all
-verified work not yet in a delivered digest, so it can span many days. Acquire the shared
-`agent-claim/4285` coordination lease before preparing a date. Re-read open digest drafts and the reviewed dated path after acquiring it.
+**One writer prepares each dated changelog.** The first Codex Engineer run that can prepare it owns
+`docs/digests/YYYY-MM-DD.md`; acquire the shared `agent-claim/4285` coordination lease before
+preparing a date. Re-read open digest drafts and the reviewed dated path after acquiring it.
 An existing draft or dated file means contribute there or use the next date, never open a competing
 writer. Retain the lease through draft publication, then retire it only after reading that draft
 back. The next claimant must respect that open draft. This fixed coordination key is a lock,
