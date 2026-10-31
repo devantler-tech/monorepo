@@ -568,6 +568,104 @@ else
 fi
 AGENT_CI_DESIRED_STATE="${AGENT_CI_DESIRED_STATE:-$DEFINITION_ROOT/.claude/plugin-consumption/agentic-engineering.desired-state.json}"
 
+# Resolve forge admission from the loaded, reviewed consumer definition, never
+# from the corpus root or its .gitmodules. Environment paths select observations;
+# they cannot grant access. This is portfolio-v1's compatibility check for the
+# canonical policy, not an interpreter that turns arbitrary prose into authority.
+# Transcript and outcome admission share this exact authority resolution (#4139).
+outcome_authorized_repositories() {
+  local agents="$DEFINITION_ROOT/AGENTS.md" indexed mapped pages
+  local selection="$DEFINITION_ROOT/.claude/guides/work-selection.md"
+  local privacy="$DEFINITION_ROOT/.claude/guides/egress-and-privacy.md"
+  [ "$PORTFOLIO_ORG" = devantler-tech ] || return 1
+  [ -r "$agents" ] && [ -r "$selection" ] && [ -r "$privacy" ] || return 1
+  indexed=$(awk '
+    /^## Agent guides[[:space:]]*$/ { inside = 1; next }
+    inside && /^## / { inside = 0 }
+    inside { print }
+  ' "$agents") || return 1
+  grep -Fq '](.claude/guides/work-selection.md)' <<<"$indexed" || return 1
+  grep -Fq '](.claude/guides/egress-and-privacy.md)' <<<"$indexed" || return 1
+  grep -Fxq '## Portfolio scope — visibility and archived repositories' "$selection" || return 1
+  grep -Fq '**Archived repositories are outside the active portfolio.**' "$selection" || return 1
+  grep -Fq '**The census is the live org, not this table.** Every non-archived `devantler-tech` repository is' "$selection" || return 1
+  grep -Fxq '## Professional-work repository boundary — hard exclusion' "$privacy" || return 1
+  grep -Fq '**categorically out of scope**.' "$privacy" || return 1
+  grep -Fq '**The single exception is a product of this portfolio**' "$privacy" || return 1
+
+  # Parse the whole Repo cell in the one canonical map table. Same-owner short
+  # names in multi-product rows are explicit entries, including pathless ones.
+  # Buffer until END: a later malformed row must not leave a partial grant.
+  mapped=$(awk -F'|' '
+    function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
+    /^```/ || /^~~~/ {
+      marker = substr($0, 1, 3)
+      if (fenced == "") fenced = marker
+      else if (fenced == marker) fenced = ""
+      next
+    }
+    fenced { next }
+    /^## Portfolio map[[:space:]]*$/ { maps++; inside = 1; stage = 0; next }
+    inside && /^## / { inside = 0 }
+    inside && /^[[:space:]]*\|/ {
+      if (NF != 6) { invalid = 1; next }
+      for (i = 2; i <= 5; i++) if (trim($i) == "") invalid = 1
+      if (stage == 0) {
+        if (trim($2) != "Product" || trim($3) != "Repo" || trim($4) != "Path" || trim($5) != "Instructions") invalid = 1
+        stage = 1; next
+      }
+      if (stage == 1) {
+        for (i = 2; i <= 5; i++) if (trim($i) !~ /^:?-+:?$/) invalid = 1
+        stage = 2; next
+      }
+      cell = trim($3)
+      if (cell ~ /^— \(not a repo;/ && cell !~ /`/) next
+      while (cell != "") {
+        if (!match(cell, /^`[^`]+`/)) { invalid = 1; break }
+        name = substr(cell, 2, RLENGTH - 2)
+        cell = trim(substr(cell, RLENGTH + 1))
+        if (index(name, "/") == 0) name = "devantler-tech/" name
+        if (name !~ /^devantler-tech\/[A-Za-z0-9._-]+$/ || name ~ /\/\.\.?$/) invalid = 1
+        name = tolower(name)
+        if (!(name in seen)) { seen[name] = 1; names[++count] = name }
+        if (cell == "") break
+        if (substr(cell, 1, 1) != ",") { invalid = 1; break }
+        cell = trim(substr(cell, 2))
+        if (cell == "") invalid = 1
+      }
+      stage = 3
+    }
+    END {
+      if (invalid || fenced != "" || maps != 1 || stage != 3 || count == 0) exit 2
+      for (i = 1; i <= count; i++) print names[i]
+    }
+  ' "$agents") || return 1
+
+  # gh traverses every Link page. Do not parse or query any member until that
+  # command has succeeded and the entire response passes shape/identity checks.
+  # An error after a valid first page must not authorize that partial inventory.
+  pages=$(gh api --paginate --slurp "orgs/${PORTFOLIO_ORG}/repos?type=all&per_page=100" 2>/dev/null) || return 1
+  printf '%s' "$pages" | jq -er --arg mapped "$mapped" '
+    if type != "array" or length == 0 or any(.[]; type != "array")
+    then error("malformed inventory pages") else add end
+    | if length == 0 then error("empty inventory") else . end
+    | map(if (.id | type) != "number" or .id < 1 or .id != (.id | floor)
+              or (.full_name | type) != "string"
+              or (.private | type) != "boolean" or (.archived | type) != "boolean"
+          then error("malformed repository metadata") else . end)
+    | if any(.[]; (.full_name | test("^devantler-tech/[A-Za-z0-9._-]+$") | not)
+                    or (.full_name | test("/\\.\\.?$")))
+         or ([.[].id] | unique | length) != length
+         or ([.[].full_name | ascii_downcase] | unique | length) != length
+      then error("ambiguous repository inventory") else . end
+    | ($mapped | split("\n")) as $products
+    | [.[] | select(.archived == false)
+           | select(.private == false or ((.full_name | ascii_downcase) as $repo | $products | index($repo) != null))
+           | .full_name | ascii_downcase]
+    | if length == 0 then error("no authorized repositories") else sort[] end
+  ' 2>/dev/null
+}
+
 # ── PROFESSIONAL-WORK BOUNDARY (hard exclusion) ───────────────────────────────
 # The host's session stores hold transcripts for EVERY project worked on there,
 # not just this portfolio — including, potentially, employer/client repositories
@@ -585,88 +683,30 @@ AGENT_CI_DESIRED_STATE="${AGENT_CI_DESIRED_STATE:-$DEFINITION_ROOT/.claude/plugi
 # NOTE the `-` not `:-`: an explicitly-empty PORTFOLIO_PATHS must stay empty and
 # trigger the refusal below, rather than silently falling back to a default that
 # widens scope. Fail closed means empty scans nothing, not everything.
-# Default scope = the portfolio root PLUS each submodule checkout inside it.
-# Deriving the real submodule paths is what lets the slug matcher stay strict:
-# a product session at `$MONOREPO/applications/ksail` and a neighbouring
-# `monorepo-client` produce structurally IDENTICAL slugs (`…-monorepo-<rest>`),
-# so slug text alone cannot separate them. Enumerating the paths that actually
-# exist resolves it precisely — in-scope checkouts are named, everything else
-# stays excluded.
-default_portfolio_paths() {
-  printf '%s' "$MONOREPO"
-  [ -f "$MONOREPO/.gitmodules" ] || return 0
-  git -C "$MONOREPO" config --file .gitmodules --get-regexp '\.path$' 2>/dev/null \
-    | awk '{print $2}' | while IFS= read -r sub; do
-        [ -n "$sub" ] && printf ':%s/%s' "$MONOREPO" "$sub"
-      done
-}
-PORTFOLIO_PATHS="${PORTFOLIO_PATHS-$(default_portfolio_paths)}"
-# The GitHub org a Codex worktree's origin remote must belong to for that
-# worktree to count as portfolio scope (see in_scope_cwd).
+# Paths select observations. Live repository admission below supplies authority;
+# authorized populated submodule paths are added only after that resolution.
+PORTFOLIO_PATHS="${PORTFOLIO_PATHS-$MONOREPO}"
 PORTFOLIO_ORG="${PORTFOLIO_ORG:-devantler-tech}"
 path_to_slug() { printf '%s' "$1" | sed 's|/|-|g'; }
 rx_escape()    { printf '%s' "$1" | sed 's|[].[^$*/\\+?(){}|]|\\&|g'; }
-# Match either form: Claude names project dirs by cwd SLUG (/ → -), while a
-# store may also be laid out under the real PATH. Both denote the same project.
-#
-# ANCHORED AT A COMPONENT BOUNDARY — an unanchored substring match is a boundary
-# HOLE, not a convenience: the slug for `/Users/x/git-personal/monorepo-client`
-# contains the slug for `/Users/x/git-personal/monorepo`, so a substring test
-# silently admits a differently-named (possibly professional) repository. The
-# only legitimate continuation of a project slug is Claude's worktree marker
-# `--`; a single `-` starts a DIFFERENT repository name.
-# The `--git-modules-<path>` marker must name a REAL submodule, not any suffix:
-# a neighbouring repo slugged `monorepo--git-modules-client` matched the loose
-# form. Derived from .gitmodules, same source as the scope paths themselves.
-submodule_slug_alternation() {
-  local out=""
-  if [ -f "$MONOREPO/.gitmodules" ]; then
-    out=$(git -C "$MONOREPO" config --file .gitmodules --get-regexp '\.path$' 2>/dev/null \
-          | awk '{print $2}' | while IFS= read -r sub; do
-              [ -n "$sub" ] && printf '%s|' "$(rx_escape "$(printf '%s' "$sub" | tr '/' '-')")"
-            done | sed 's/|$//')
-  fi
-  # No submodules (or none readable) => match nothing, rather than everything.
-  printf '%s' "${out:-__no_submodules__}"
-}
-SUBMOD_RE=$(submodule_slug_alternation)
+PORTFOLIO_DIR_RE=__authorization_not_resolved__
+[ -n "$PORTFOLIO_PATHS" ] || { echo "PORTFOLIO_PATHS resolved empty — refusing to scan" >&2; exit 2; }
 
-PORTFOLIO_SLUG_RE=$(
-  printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$' \
-  | while IFS= read -r p; do
-      s=$(rx_escape "$(path_to_slug "$p")")
-      q=$(rx_escape "$p")
-      # slug dir: exactly the slug, or the slug + one of the TWO real markers.
-      # `--` alone is still a hole — a neighbouring checkout named
-      # `monorepo--client` slugs to `…-monorepo--client` and would match. Only
-      # Claude's per-session worktree marker and the submodule-path marker are
-      # legitimate continuations; anything else is a different repository.
-      printf '/%s(--claude-worktrees-[a-z]+-[a-z]+-[0-9a-f]{6}|--git-modules-('"$SUBMOD_RE"'))?/[^/]+\.jsonl$|' "$s"
-      # real path: must end at a component boundary
-      printf '^%s(/|$)|' "$q"
-    done | sed 's/|$//'
-)
-
-# The same rule expressed over a bare DIRECTORY NAME, so scope can be decided
-# from `ls` alone — before descending into any tree (see scoped_session_paths).
-PORTFOLIO_DIR_RE=$(
-  printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$' \
-  | while IFS= read -r p; do
-      printf '%s(--claude-worktrees-[a-z]+-[a-z]+-[0-9a-f]{6}|--git-modules-('"$SUBMOD_RE"'))?|' \
-        "$(rx_escape "$(path_to_slug "$p")")"
-    done | sed 's/|$//'
-)
-[ -n "$PORTFOLIO_SLUG_RE" ] || { echo "PORTFOLIO_PATHS resolved empty — refusing to scan" >&2; exit 2; }
-
-# True when the session store root is itself under an allowlisted path — then the
-# store contains only in-scope work by construction and needs no dir filtering.
+# True when the store root belongs to an admitted repository and selector.
+# This admits its direct records and session layout, never arbitrary child stores.
+# Return 1 for an unselected native namespace store, 2 for unresolved admission,
+# and 3 for a selected store belonging to a confirmed excluded repository.
 # The loop is fed by a redirect, not a pipe. Piping it into `grep -q` made grep
 # exit at the first `match` and killed the writer with SIGPIPE; `pipefail` then
 # reported the writer's death, so a store that IS in scope answered "no".
 store_root_in_scope() {
-  local p
+  local p admission_rc
   while IFS= read -r p; do
-    case "$CLAUDE_PROJECTS" in "$p" | "$p"/*) return 0 ;; esac
+    case "$CLAUDE_PROJECTS" in "$p" | "$p"/*)
+      admission_rc=0
+      transcript_path_authorized "$CLAUDE_PROJECTS" || admission_rc=$?
+      case "$admission_rc" in 0) return 0 ;; 1) return 3 ;; *) return 2 ;; esac ;;
+    esac
   done < <(printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$')
   return 1
 }
@@ -2606,6 +2646,7 @@ newest_first() {
 # the two cannot drift apart on the professional-work boundary; each applies
 # its own filter and cap to this list (monorepo#2613).
 scoped_session_paths() {
+  local store_admission=0
   # Filter PROJECT DIRECTORIES first, then walk only the in-scope ones. The
   # contract forbids discovering or enumerating excluded repositories at all —
   # so walking and statting every *.jsonl on the host and filtering afterwards
@@ -2613,18 +2654,98 @@ scoped_session_paths() {
   # One `ls` of directory NAMES (no descent, no stat) is the minimum needed to
   # decide scope, and out-of-scope trees are never entered.
   [ -d "$CLAUDE_PROJECTS" ] || return 0
-  # If the store ROOT is itself inside an allowlisted path, it is already scoped
-  # and every directory under it is in scope — no per-directory filter needed.
-  if store_root_in_scope; then
-    newest_first "$CLAUDE_PROJECTS" | sort -rn | cut -d' ' -f2-
-    return 0
+  store_root_in_scope || store_admission=$?
+  case "$store_admission" in 2) return 2 ;; 3) return 0 ;; esac
+  # A selected store root may hold direct sessions and separate project stores.
+  # Only its session layout and independently admitted project names are walked.
+  {
+    if [ "$store_admission" = 0 ]; then
+      claude_session_listing "$CLAUDE_PROJECTS" \
+        | while IFS= read -r f; do stat_mtime "$f"; done
+    fi
+    ls -1 "$CLAUDE_PROJECTS" 2>/dev/null \
+    | grep -E "^($PORTFOLIO_DIR_RE)$" \
+    | while IFS= read -r d; do
+        claude_project_authorized "$d" || continue
+        claude_session_listing "$CLAUDE_PROJECTS/$d" \
+          | while IFS= read -r f; do stat_mtime "$f"; done
+      done
+  } | sort -rn | cut -d' ' -f2-
+}
+
+# An encoded checkout name selects a candidate, never its source identity:
+# /work/foo-bar and /work/foo/bar have the same slug. A separately stored
+# corpus must itself be repository-bound to the same admitted product before
+# any transcript or delegated directory is listed. Native stores with only a
+# lossy name and no independent repository identity remain UNKNOWN.
+claude_store_authorized() {
+  local checkout=$1 store=$2 expected actual
+  transcript_path_authorized "$checkout" || return $?
+  expected=$(portfolio_repository_name "$TRANSCRIPT_GIT_VALUE") || return 2
+  # An ancestor repository is not an independent identity for a namespaced
+  # store: it could hold several colliding project names. Require the source
+  # itself to carry its repository binding, as well as checking containment.
+  [ -e "$store/.git" ] || [ -L "$store/.git" ] || return 2
+  transcript_path_authorized "$store" || return $?
+  actual=$(portfolio_repository_name "$TRANSCRIPT_GIT_VALUE") || return 2
+  [ "$expected" = "$actual" ] || return 2
+}
+
+claude_project_authorized() {
+  local name=$1 p slug suffix root sub presence
+  # A project slug identifies its checkout, not a different transcript store
+  # reached through a link. Refuse before delegated discovery can enter it.
+  [ ! -L "$CLAUDE_PROJECTS/$name" ] || return 2
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    slug=$(path_to_slug "$p")
+    case "$name" in
+      "$slug") claude_store_authorized "$p" "$CLAUDE_PROJECTS/$name"; return $? ;;
+      "$slug"--git-modules-*)
+        [ "$p" = "$MONOREPO" ] || return 1
+        suffix=${name#"$slug"--git-modules-}
+        while IFS= read -r sub; do
+          [ -n "$sub" ] || continue
+          if [ "$suffix" = "$(printf '%s' "$sub" | tr / -)" ]; then
+            claude_store_authorized "$MONOREPO/$sub" "$CLAUDE_PROJECTS/$name"; return $?
+          fi
+        done <<<"$TRANSCRIPT_SUBMODULES"
+        return 1 ;;
+      "$slug"--claude-worktrees-*)
+        suffix=${name#"$slug"--claude-worktrees-}
+        root="$p/.claude/worktrees/$suffix"
+        presence=0
+        worktree_presence "$root" || presence=$?
+        case "$presence" in 1) return 3 ;; 2) return 2 ;; esac
+        [ -e "$root/.git" ] || return 2
+        claude_store_authorized "$root" "$CLAUDE_PROJECTS/$name"; return $? ;;
+    esac
+  done < <(printf '%s\n' "$PORTFOLIO_PATHS" | tr ':' '\n')
+  return 1
+}
+
+# A project owns its direct records and their delegated-session layout. Being
+# stored inside an admitted checkout does not authorize arbitrary child project
+# stores. Prune those before descent, including when the store root is selected.
+claude_session_listing() {
+  local dir=$1 parent id
+  find "$dir" -type d ! -path "$dir" -prune -o \
+    -type f -name '*.jsonl' -mtime "-${SINCE_DAYS}" -print 2>/dev/null || return 1
+  if [ -d "$dir/subagents" ]; then
+    find "$dir/subagents" -name '*.jsonl' -mtime "-${SINCE_DAYS}" 2>/dev/null || return 1
   fi
-  ls -1 "$CLAUDE_PROJECTS" 2>/dev/null \
-  | grep -E "^($PORTFOLIO_DIR_RE)$" \
-  | while IFS= read -r d; do
-      newest_first "$CLAUDE_PROJECTS/$d"
-    done \
-  | sort -rn | cut -d' ' -f2-
+  for parent in "$dir"/*; do
+    [ -d "$parent" ] && [ ! -L "$parent" ] || continue
+    id=${parent##*/}
+    # Session ids cannot be Claude project slugs (which start with '-'). Keep
+    # orphan helpers visible: their absent parent is UNKNOWN, never zero work.
+    case "$id" in ''|[!a-zA-Z0-9]*|*[!a-zA-Z0-9_-]*) continue ;; esac
+    [ -x "$parent" ] || return 1
+    if [ -d "$parent/subagents" ]; then
+      find "$parent/subagents" -name '*.jsonl' -mtime "-${SINCE_DAYS}" 2>/dev/null || return 1
+    fi
+  done
+  return 0
 }
 
 # Root transcripts only, capped AFTER the subagent filter. Filtering downstream
@@ -2699,16 +2820,214 @@ portfolio_remote_url() {
   # Anchor the HOST, not a substring: `*github.com/org/*` also matches
   # `https://notgithub.com/org/…` and internal mirrors that merely
   # contain the string. Only these exact remote forms count.
+  local name
+  name=$(portfolio_repository_name "$1") || return 1
+  grep -qxF -- "$name" <<<"$TRANSCRIPT_AUTHORIZED_REPOS"
+}
+
+# URLs and filesystem selectors identify an observation; neither grants access.
+# Accept exact GitHub forms and repository names only, then join live admission.
+portfolio_repository_name() {
+  local name
   case "$1" in
-    "git@github.com:$PORTFOLIO_ORG/"*|\
-    "https://github.com/$PORTFOLIO_ORG/"*|\
-    "ssh://git@github.com/$PORTFOLIO_ORG/"*) return 0 ;;
+    "git@github.com:$PORTFOLIO_ORG/"*) name=${1#git@github.com:} ;;
+    "https://github.com/$PORTFOLIO_ORG/"*) name=${1#https://github.com/} ;;
+    "ssh://git@github.com/$PORTFOLIO_ORG/"*) name=${1#ssh://git@github.com/} ;;
+    *) return 1 ;;
   esac
-  return 1
+  name=${name%.git}
+  [[ $name != *$'\n'* && $name =~ ^devantler-tech/[A-Za-z0-9._-]+$ ]] || return 1
+  case "$name" in */.|*/..) return 1 ;; esac
+  printf '%s\n' "$name" | tr '[:upper:]' '[:lower:]'
+}
+
+transcript_git() {
+  # Repository-routing environment inherited from a hook or parent process
+  # cannot substitute another checkout's identity for the selected directory.
+  local git_env_name
+  local -a clean_git_env
+  clean_git_env=(-u GIT_DIR)
+  for git_env_name in "${!GIT_@}"; do
+    case "$git_env_name" in GIT_*) clean_git_env+=(-u "$git_env_name") ;; esac
+  done
+  # Metadata admission needs repository-owned configuration only. Global and
+  # system URL rewrites must not turn an excluded origin into an admitted one.
+  env "${clean_git_env[@]}" GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_CONFIG_NOSYSTEM=1 git "$@"
+}
+
+# Keep the complete value: ordinary command substitution strips all trailing
+# line breaks, which can turn a malformed remote into an admitted repository.
+# Git supplies one output terminator; remove that one only, after its success.
+transcript_git_value() {
+  local captured
+  TRANSCRIPT_GIT_VALUE=''
+  captured=$(transcript_git "$@" 2>/dev/null && printf .) || return 2
+  case "$captured" in
+    *$'\n'.) TRANSCRIPT_GIT_VALUE=${captured%$'\n'.} ;;
+    *) return 2 ;;
+  esac
+  [ -n "$TRANSCRIPT_GIT_VALUE" ] || return 2
+}
+
+# Validate the complete NUL-delimited Git response before returning any path.
+# Names and paths may contain spaces; control characters, duplicate bindings,
+# partial records and failed reads are UNKNOWN rather than a smaller inventory.
+# A literal colon is unsupported in this colon-delimited selector interface: it
+# must not turn one declared submodule path into additional observation roots.
+transcript_submodule_entries() {
+  local entries rc=0 newline=$'\n' tab=$'\t'
+  entries=$(transcript_git -C "$1" config --file .gitmodules --null --get-regexp '\.path$' 2>/dev/null | (
+    trap - EXIT HUP INT TERM
+    entry=''; validated=''; seen_paths=''; seen_keys=''
+    while IFS= read -r -d '' entry; do
+      case "$entry" in (*"$newline"*) : ;; (*) exit 2 ;; esac
+      key=${entry%%"$newline"*}; sub=${entry#*"$newline"}
+      case "$key" in (submodule.*.path) : ;; (*) exit 2 ;; esac
+      case "$key" in (*[[:cntrl:]]*) exit 2 ;; esac
+      case "$sub" in (''|.|..|/*|*:*|*//*|../*|*/../*|*/..|./*|*/./*|*/.|*/|*[[:cntrl:]]*) exit 2 ;; esac
+      case "$newline$seen_paths" in (*"$newline$sub$newline"*) exit 2 ;; esac
+      case "$newline$seen_keys" in (*"$newline$key$newline"*) exit 2 ;; esac
+      seen_paths="$seen_paths$sub$newline"
+      seen_keys="$seen_keys$key$newline"
+      validated="$validated$key$tab$sub$newline"
+    done
+    [ -z "$entry" ] || exit 2
+    printf '%s' "$validated"
+  )) || rc=$?
+  case "$rc" in
+    0) printf '%s' "$entries" ;;
+    1) [ -z "$entries" ] || return 2 ;; # No declared paths is a complete empty set.
+    *) return 2 ;;
+  esac
+}
+
+transcript_path_authorized() {
+  local path=$1 boundary=${2-} existing=$1 top physical_path marker suffix
+  # Only Form 2's independently verified runtime worktree supplies a boundary
+  # for a removed cwd. Stop there and use the nearest surviving parent, never
+  # an outer checkout in place of a nested repository that still exists.
+  if [ ! -d "$existing" ]; then
+    [ -n "$boundary" ] || return 2
+    case "$path" in "$boundary"|"$boundary"/*) ;; *) return 2 ;; esac
+    # A missing nested worktree is a separate, unverifiable checkout. Its
+    # former contents cannot acquire the outer repository's identity.
+    for marker in .claude/worktrees .codex/worktrees .Codex/worktrees; do
+      case "$path" in "$boundary/$marker/"*)
+        suffix=${path#"$boundary/$marker/"}; suffix=${suffix%%/*}
+        [ -e "$boundary/$marker/$suffix/.git" ] || [ -L "$boundary/$marker/$suffix/.git" ] || return 2 ;;
+      esac
+    done
+    while [ ! -d "$existing" ]; do
+      [ ! -e "$existing" ] && [ ! -L "$existing" ] || return 2
+      [ "$existing" != "$boundary" ] || return 2
+      existing=${existing%/*}; existing=${existing:-/}
+    done
+    [ -x "$existing" ] || return 2
+  fi
+  # Git's nearest repository distinguishes an ordinary product directory from
+  # a different checkout nested beneath an admitted aggregator.
+  transcript_git_value -C "$existing" remote get-url origin || return 2
+  portfolio_remote_url "$TRANSCRIPT_GIT_VALUE" || return 1
+  top=$(transcript_git -C "$existing" rev-parse --show-toplevel 2>/dev/null) || return 2
+  top=$(cd "$top" && pwd -P) || return 2
+  physical_path=$(cd "$existing" && pwd -P) || return 2
+  physical_path="$physical_path${path#"$existing"}"
+  transcript_repository_contains_path "$top" "$physical_path"
+}
+
+# Also checks Form 2's missing cwd: an ordinary removed subdirectory retains
+# its verified worktree witness, while an unpopulated product slot does not.
+transcript_repository_contains_path() {
+  local top=$1 physical_path=$2 sub key slots parent=$2
+  case "$physical_path" in
+    "$top"|"$top"/*) ;;
+    *) return 2 ;;
+  esac
+  # A nested checkout marker cannot belong to a different ancestor worktree.
+  # Containment alone would accept a misplaced core.worktree pointing upward.
+  while [ "$parent" != "$top" ]; do
+    [ ! -e "$parent/.git" ] && [ ! -L "$parent/.git" ] || return 2
+    parent=${parent%/*}; parent=${parent:-/}
+  done
+  # An unpopulated product slot inherits the parent remote. That is not proof
+  # of the product's repository identity, even if the parent itself is admitted.
+  if [ -e "$top/.gitmodules" ] || [ -L "$top/.gitmodules" ]; then
+    slots=$(transcript_submodule_entries "$top") || return 2
+    while IFS=$'\t' read -r key sub; do
+      [ -n "$key" ] || continue
+      case "$physical_path" in
+        "$top/$sub"|"$top/$sub"/*) [ -e "$top/$sub/.git" ] || return 2 ;;
+      esac
+    done <<<"$slots"
+  fi
+  return 0
+}
+
+prepare_transcript_scope() {
+  local p paths='' sub url declared authorized_subs='' admission_rc submodule_pattern
+  local monorepo_selected=0 slots key actual_name declared_name
+  TRANSCRIPT_SUBMODULES=''
+  TRANSCRIPT_AUTHORIZED_REPOS=$(outcome_authorized_repositories) || return 2
+  [ -n "$TRANSCRIPT_AUTHORIZED_REPOS" ] || return 2
+  while IFS= read -r p; do
+    case "$p" in ''|[!/]*) return 2 ;; */|*//*|*/./*|*/.|*/../*|*/..) return 2 ;; esac
+    admission_rc=0
+    transcript_path_authorized "$p" || admission_rc=$?
+    case "$admission_rc" in
+      0) paths="${paths:+$paths:}$p"; [ "$p" != "$MONOREPO" ] || monorepo_selected=1 ;;
+      1) ;; # Successfully identified, but outside the authorized live set.
+      *) return 2 ;;
+    esac
+  done < <(printf '%s\n' "$PORTFOLIO_PATHS" | tr ':' '\n')
+  # An unpopulated or differently owned submodule does not acquire admission
+  # from .gitmodules. Its real remote must agree with its declared identity.
+  if [ "$monorepo_selected" = 1 ] && { [ -e "$MONOREPO/.gitmodules" ] || [ -L "$MONOREPO/.gitmodules" ]; }; then
+    slots=$(transcript_submodule_entries "$MONOREPO") || return 2
+    while IFS=$'\t' read -r key sub; do
+      [ -n "$key" ] || continue
+      # Unpopulated slots have no checkout identity and acquire no alias. A
+      # populated checkout whose identity cannot be read is instead UNKNOWN.
+      [ -e "$MONOREPO/$sub/.git" ] || [ -L "$MONOREPO/$sub/.git" ] || continue
+      admission_rc=0
+      transcript_path_authorized "$MONOREPO/$sub" || admission_rc=$?
+      case "$admission_rc" in 0) ;; 1) continue ;; *) return 2 ;; esac
+      transcript_git_value -C "$MONOREPO/$sub" remote get-url origin || return 2
+      url=$TRANSCRIPT_GIT_VALUE
+      portfolio_remote_url "$url" || return 2
+      actual_name=$(portfolio_repository_name "$url") || return 2
+      declared=${key%.path}.url
+      transcript_git_value -C "$MONOREPO" config --file .gitmodules --get-all "$declared" || return 2
+      declared_name=$(portfolio_repository_name "$TRANSCRIPT_GIT_VALUE") || return 2
+      [ "$actual_name" = "$declared_name" ] || return 2
+      authorized_subs="${authorized_subs:+$authorized_subs|}$(rx_escape "$(printf '%s' "$sub" | tr '/' '-')")"
+      TRANSCRIPT_SUBMODULES="${TRANSCRIPT_SUBMODULES:+$TRANSCRIPT_SUBMODULES
+}$sub"
+      while IFS= read -r p; do
+        case "$MONOREPO/$sub" in "$p"|"$p"/*)
+          paths="${paths:+$paths:}$MONOREPO/$sub"; break ;;
+        esac
+      done < <(printf '%s\n' "$PORTFOLIO_PATHS" | tr ':' '\n')
+    done <<<"$slots"
+  fi
+  SUBMOD_RE=${authorized_subs:-__no_submodules__}
+  # Rebuild only from authorized selectors. An empty intersection scans no
+  # transcript; it must not fall back to the original, broader selector list.
+  PORTFOLIO_PATHS=$paths
+  PORTFOLIO_DIR_RE=$(
+    printf '%s' "$paths" | tr ':' '\n' | grep -v '^$' | while IFS= read -r p; do
+      submodule_pattern=__no_submodules__
+      [ "$p" != "$MONOREPO" ] || submodule_pattern=$SUBMOD_RE
+      printf '%s(--claude-worktrees-[a-z]+-[a-z]+-[0-9a-f]{6}|--git-modules-(%s))?|' \
+        "$(rx_escape "$(path_to_slug "$p")")" "$submodule_pattern"
+    done | sed 's/|$//'
+  )
+  PORTFOLIO_DIR_RE=${PORTFOLIO_DIR_RE:-__no_authorized_project__}
+  return 0
 }
 
 in_scope_cwd() {
-  local cwd="$1" recorded="${2-}" p url gone=0 unchecked=0 presence base rest id root where
+  local cwd="$1" recorded="${2-}" p gone=0 unchecked=0 presence base rest id root actual_root physical_root admission_rc
   [ -n "$cwd" ] || return 1
   # Both forms compare the recorded folder as TEXT, so it must be written plainly
   # (monorepo#4151). `<portfolio path>/../../elsewhere` starts with a portfolio
@@ -2720,8 +3039,16 @@ in_scope_cwd() {
     */|*//*|*/./*|*/.|*/../*|*/..) return 1 ;;
   esac
   while IFS= read -r p; do
-    # Form 1: literally under an allowlisted path, at a component boundary.
-    case "$cwd" in "$p" | "$p"/*) return 0 ;; esac
+    # Form 1 selects a literal path, not a runtime-owned worktree boundary.
+    # A deleted nested checkout can have an ordinary directory name, so the
+    # selector's parent identity cannot replace missing cwd metadata.
+    case "$cwd" in "$p" | "$p"/*)
+      presence=0
+      transcript_path_authorized "$cwd" || presence=$?
+      [ "$presence" -ne 0 ] || return 0
+      [ "$presence" -ne 2 ] || unchecked=1
+      continue ;;
+    esac
     # Form 2: the Codex instance's own worktree of a portfolio repo. Basename
     # alone is NOT sufficient — a professional repo checked out as
     # `$CODEX_HOME/worktrees/<id>/monorepo` would match by name while being
@@ -2729,10 +3056,10 @@ in_scope_cwd() {
     # ORIGIN REMOTE, and fail closed when it cannot be read (missing dir,
     # no remote, not a repo): an unverifiable worktree is excluded.
     #
-    # The WORKTREE ROOT is what gets judged, never the recorded folder itself
-    # (second review of monorepo#4149). The recorded folder may be a sub-folder
-    # that was deleted while the worktree lives on with another remote. So the
-    # path (already known to be plainly written, see above) must name exactly
+    # First establish the WORKTREE ROOT's own identity (monorepo#4149), then
+    # bind the cwd to its nearest surviving repository. The recorded folder may
+    # have been deleted while an outer or nested checkout lives on with another
+    # remote. The path (already known to be plainly written) must name exactly
     # `worktrees/<one id>/<name>[/…]`; anything else is not a Codex worktree by
     # its path.
     base=$(basename "$p")
@@ -2752,9 +3079,22 @@ in_scope_cwd() {
           continue
         fi
         # The root exists: its own remote decides, whatever the record says.
-        where="$cwd"; [ -d "$where" ] || where="$root"
-        url=$(git -C "$where" remote get-url origin 2>/dev/null) || continue
-        if portfolio_remote_url "$url"; then return 0; fi ;;
+        # A directory inside some other repository is not its own worktree.
+        # Resolve only these already selected paths; never accept an inherited
+        # ancestor remote as proof of the named worktree's identity.
+        [ -e "$root/.git" ] || [ -L "$root/.git" ] || continue
+        actual_root=$(transcript_git -C "$root" rev-parse --show-toplevel 2>/dev/null) || { unchecked=1; continue; }
+        actual_root=$(cd "$actual_root" && pwd -P) || { unchecked=1; continue; }
+        physical_root=$(cd "$root" && pwd -P) || { unchecked=1; continue; }
+        [ "$actual_root" = "$physical_root" ] || { unchecked=1; continue; }
+        admission_rc=0
+        transcript_path_authorized "$root" || admission_rc=$?
+        [ "$admission_rc" -ne 1 ] || continue
+        if [ "$admission_rc" -ne 0 ]; then unchecked=1; continue; fi
+        admission_rc=0
+        transcript_path_authorized "$cwd" "$root" || admission_rc=$?
+        [ "$admission_rc" -ne 0 ] || return 0
+        [ "$admission_rc" -ne 2 ] || unchecked=1 ;;
     esac
   done < <(printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$')
   [ "$unchecked" -eq 0 ] || return 4
@@ -2794,7 +3134,10 @@ codex_session_walk() {
         # as the address — a transcript with no recorded address admitting itself.
         cwd=''; rurl=''
         { IFS= read -r cwd; IFS= read -r rurl; } < <(head -n 1 "$f" 2>/dev/null \
-              | jq -r 'def oneline: if type == "string" and (test("[\n\r]") | not) then . else "" end;
+              | jq -r 'def oneline:
+                         if type == "string" and (test("[\n\r]") | not)
+                            and (contains("\u0000") | not)
+                         then . else "" end;
                        select(.type=="session_meta")
                        | ((.payload.cwd? // .cwd? // "") | oneline),
                          (((.payload.git? | objects | .repository_url? | strings) // "") | oneline)' 2>/dev/null) || true
@@ -2837,33 +3180,46 @@ codex_unreadable_folders() {
 # so a project folder, a session's `subagents/` folder or a transcript it cannot
 # open simply drops out, and every section that reads the walk printed a clean,
 # smaller count — the delegated share read 0% with one session folder locked.
-# Names, one per line, every in-scope folder (relative to the store; `.` is the
-# store itself) that exists but could not be walked or holds a transcript that
-# cannot be opened. Scope is decided exactly as the walk decides it, so an
-# excluded folder is never entered here either.
-claude_unreadable_folders() {
-  local d dirs list f
-  [ -d "$CLAUDE_PROJECTS" ] || return 0
-  if store_root_in_scope; then
-    dirs=.
-  elif ! dirs=$(ls -1 "$CLAUDE_PROJECTS" 2>/dev/null); then
-    printf '.\n'; return 0
+# Tag each unavailable in-scope folder: U for an unreadable source, G for a
+# confirmed removed worktree. Paths are relative to the store (`.` is the store
+# itself). A stale project slug cannot supply a removed repository's identity;
+# it remains excluded, visibly separate from failed reads and measured sessions.
+claude_unavailable_folders() {
+  local d dirs list f admission_rc presence=0 store_admission=0
+  worktree_presence "$CLAUDE_PROJECTS" || presence=$?
+  case "$presence" in 1) return 0 ;; 2) printf 'U .\n'; return 0 ;; esac
+  store_root_in_scope || store_admission=$?
+  case "$store_admission" in 2) printf 'U .\n'; return 0 ;; 3) return 0 ;; esac
+  if ! dirs=$(ls -1 "$CLAUDE_PROJECTS" 2>/dev/null); then
+    printf 'U .\n'; return 0
   else
     dirs=$(printf '%s\n' "$dirs" | grep -E "^($PORTFOLIO_DIR_RE)$" || true)
   fi
+  if [ "$store_admission" = 0 ]; then dirs=".${dirs:+
+$dirs}"; fi
   while IFS= read -r d; do
     [ -n "$d" ] || continue
+    if [ "$d" != . ]; then
+      admission_rc=0
+      claude_project_authorized "$d" || admission_rc=$?
+      case "$admission_rc" in
+        0) ;;
+        1) continue ;;
+        3) printf 'G %s\n' "$d"; continue ;;
+        *) printf 'U %s\n' "$d"; continue ;;
+      esac
+    fi
     # Listed twice before it counts, as for Codex: a session that settles while
     # it is listed can make one `find` fail on a folder that reads fine.
-    if ! list=$(find "$CLAUDE_PROJECTS/$d" -name '*.jsonl' -mtime "-${SINCE_DAYS}" 2>/dev/null) \
-       && ! list=$(find "$CLAUDE_PROJECTS/$d" -name '*.jsonl' -mtime "-${SINCE_DAYS}" 2>/dev/null); then
-      printf '%s\n' "$d"; continue
+    if ! list=$(claude_session_listing "$CLAUDE_PROJECTS/$d") \
+       && ! list=$(claude_session_listing "$CLAUDE_PROJECTS/$d"); then
+      printf 'U %s\n' "$d"; continue
     fi
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       # Open it rather than test the permission bit: an ACL or sandbox denial
       # can pass `-r` and still fail the open the walk's readers make.
-      if [ -e "$f" ] && ! { : <"$f"; } 2>/dev/null; then printf '%s\n' "$d"; break; fi
+      if [ -e "$f" ] && ! { : <"$f"; } 2>/dev/null; then printf 'U %s\n' "$d"; break; fi
     done <<<"$list"
   done <<<"$dirs"
 }
@@ -2871,6 +3227,7 @@ claude_unreadable_folders() {
 SF_CACHE=''
 SF_COUNT=0
 CL_UNREADABLE=''
+CL_GONE=0
 WINDOW_SINCE=''
 CX_CACHE=''
 CX_COUNT=0
@@ -2921,8 +3278,11 @@ cx_line_base() {
 # shares this cutoff, so a boundary record vanished from the metric AND its
 # control together — invisible, and in the under-reporting direction.
 populate_session_cache() {
+  local cl_walk=''
   [ "$SAFETY_SCOPE" = codex ] || SF_CACHE="$(session_files)"
-  [ "$SAFETY_SCOPE" = codex ] || CL_UNREADABLE="$(claude_unreadable_folders)"
+  [ "$SAFETY_SCOPE" = codex ] || cl_walk="$(claude_unavailable_folders)"
+  CL_UNREADABLE=$(printf '%s\n' "$cl_walk" | awk '/^U / { print substr($0, 3) }')
+  CL_GONE=$(printf '%s\n' "$cl_walk" | grep -c '^G ' || true)
   SF_COUNT=$(printf '%s' "$SF_CACHE" | grep -c . || true)
   # awk applies the cap instead of `head`: it reads the whole walk, so no writer is
   # cut off mid-stream under pipefail.
@@ -3032,10 +3392,11 @@ transcript_has_records() {
 claude_delegated_coverage() {
   local f id p lines ids rc parents=0 delegated=0 named=0 in_walk=0 outside=0 missing=0
   local unreadable=0 unreadable_named=0 expected='' unnamed=0 parent_outside=0 parent_gone=0
-  local failed_parents='' parent_unknown=0
+  local failed_parents='' parent_unknown=0 presence=0
   # A projects store that exists but cannot be listed leaves the walk empty,
   # which would print as a known "0 parent + 0 delegated".
-  if [ -d "$CLAUDE_PROJECTS" ] && { [ ! -r "$CLAUDE_PROJECTS" ] || [ ! -x "$CLAUDE_PROJECTS" ]; }; then
+  worktree_presence "$CLAUDE_PROJECTS" || presence=$?
+  if [ "$presence" = 2 ] || { [ "$presence" = 0 ] && { [ ! -r "$CLAUDE_PROJECTS" ] || [ ! -x "$CLAUDE_PROJECTS" ]; }; }; then
     echo " claude coverage: UNKNOWN (the Claude projects store exists but cannot be listed)"
     return 2
   fi
@@ -3158,6 +3519,14 @@ WINDOW_SINCE=$(date -u -v-"${SINCE_DAYS}"d '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null
 # the walk and makes independent evidence depend on unrelated admission gaps.
 case "$SECTION" in
   drift|outcomes) ;;
+  *)
+    if ! prepare_transcript_scope; then
+      echo ' UNKNOWN: transcript authorization unresolved — no transcript discovery or body reads'
+      return 2
+    fi ;;
+esac
+case "$SECTION" in
+  drift|outcomes) ;;
   safety)
     if [ "$SAFETY_WORKER" = 0 ]; then SF_COUNT='bounded inside safety worker'
     else populate_session_cache; fi ;;
@@ -3186,6 +3555,9 @@ if [ -n "$CL_UNREADABLE" ]; then
       main_rc=2 ;;
   esac
 fi
+if [ "$CL_GONE" -gt 0 ]; then
+  echo " Claude project folders left out, worktree confirmed gone: ${CL_GONE}"
+fi
 # The same for a transcript whose worktree could be neither found nor confirmed
 # absent: it is left out, and the reading is incomplete rather than clean.
 if [ "$CX_UNCHECKED" -gt 0 ]; then
@@ -3198,7 +3570,10 @@ echo "════════════════════════�
 echo " AGENT TELEMETRY — window ${SINCE_DAYS}d — generated $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 case "$SECTION" in
   drift|outcomes) echo " transcripts: NOT COLLECTED (section does not use them)" ;;
-  *) echo " claude sessions in window: ${SF_COUNT} (cap ${MAX_FILES})" ;;
+  *)
+    echo " claude sessions in window: ${SF_COUNT} (cap ${MAX_FILES})"
+    echo ' transcript cohort: authorized-live-v2; prior selector-only observations remain a separate series'
+    echo ' Coverage changes are not performance improvements; rebind hypothesis exposure and companion floors.' ;;
 esac
 # Only the report controller prints coverage, and only when it walked the Claude
 # files itself (SF_COUNT is numeric; see main). A safety worker's banner frames
@@ -7115,104 +7490,6 @@ if want drift; then
   # file says what was written, not what is running, so equality is never inferred.
   echo "    cursor loader: UNKNOWN (deployed prompt is server-side; its source file is not evidence of it)"
 fi
-
-# Resolve forge admission from the loaded, reviewed consumer definition, never
-# from the corpus root or its .gitmodules. Environment paths select observations;
-# they cannot grant access. This is portfolio-v1's compatibility check for the
-# canonical policy, not an interpreter that turns arbitrary prose into authority.
-# Transcript admission is a separate, still-open part of monorepo#4139.
-outcome_authorized_repositories() {
-  local agents="$DEFINITION_ROOT/AGENTS.md" indexed mapped pages
-  local selection="$DEFINITION_ROOT/.claude/guides/work-selection.md"
-  local privacy="$DEFINITION_ROOT/.claude/guides/egress-and-privacy.md"
-  [ "$PORTFOLIO_ORG" = devantler-tech ] || return 1
-  [ -r "$agents" ] && [ -r "$selection" ] && [ -r "$privacy" ] || return 1
-  indexed=$(awk '
-    /^## Agent guides[[:space:]]*$/ { inside = 1; next }
-    inside && /^## / { inside = 0 }
-    inside { print }
-  ' "$agents") || return 1
-  grep -Fq '](.claude/guides/work-selection.md)' <<<"$indexed" || return 1
-  grep -Fq '](.claude/guides/egress-and-privacy.md)' <<<"$indexed" || return 1
-  grep -Fxq '## Portfolio scope — visibility and archived repositories' "$selection" || return 1
-  grep -Fq '**Archived repositories are outside the active portfolio.**' "$selection" || return 1
-  grep -Fq '**The census is the live org, not this table.** Every non-archived `devantler-tech` repository is' "$selection" || return 1
-  grep -Fxq '## Professional-work repository boundary — hard exclusion' "$privacy" || return 1
-  grep -Fq '**categorically out of scope**.' "$privacy" || return 1
-  grep -Fq '**The single exception is a product of this portfolio**' "$privacy" || return 1
-
-  # Parse the whole Repo cell in the one canonical map table. Same-owner short
-  # names in multi-product rows are explicit entries, including pathless ones.
-  # Buffer until END: a later malformed row must not leave a partial grant.
-  mapped=$(awk -F'|' '
-    function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
-    /^```/ || /^~~~/ {
-      marker = substr($0, 1, 3)
-      if (fenced == "") fenced = marker
-      else if (fenced == marker) fenced = ""
-      next
-    }
-    fenced { next }
-    /^## Portfolio map[[:space:]]*$/ { maps++; inside = 1; stage = 0; next }
-    inside && /^## / { inside = 0 }
-    inside && /^[[:space:]]*\|/ {
-      if (NF != 6) { invalid = 1; next }
-      for (i = 2; i <= 5; i++) if (trim($i) == "") invalid = 1
-      if (stage == 0) {
-        if (trim($2) != "Product" || trim($3) != "Repo" || trim($4) != "Path" || trim($5) != "Instructions") invalid = 1
-        stage = 1; next
-      }
-      if (stage == 1) {
-        for (i = 2; i <= 5; i++) if (trim($i) !~ /^:?-+:?$/) invalid = 1
-        stage = 2; next
-      }
-      cell = trim($3)
-      if (cell ~ /^— \(not a repo;/ && cell !~ /`/) next
-      while (cell != "") {
-        if (!match(cell, /^`[^`]+`/)) { invalid = 1; break }
-        name = substr(cell, 2, RLENGTH - 2)
-        cell = trim(substr(cell, RLENGTH + 1))
-        if (index(name, "/") == 0) name = "devantler-tech/" name
-        if (name !~ /^devantler-tech\/[A-Za-z0-9._-]+$/ || name ~ /\/\.\.?$/) invalid = 1
-        name = tolower(name)
-        if (!(name in seen)) { seen[name] = 1; names[++count] = name }
-        if (cell == "") break
-        if (substr(cell, 1, 1) != ",") { invalid = 1; break }
-        cell = trim(substr(cell, 2))
-        if (cell == "") invalid = 1
-      }
-      stage = 3
-    }
-    END {
-      if (invalid || fenced != "" || maps != 1 || stage != 3 || count == 0) exit 2
-      for (i = 1; i <= count; i++) print names[i]
-    }
-  ' "$agents") || return 1
-
-  # gh traverses every Link page. Do not parse or query any member until that
-  # command has succeeded and the entire response passes shape/identity checks.
-  # An error after a valid first page must not authorize that partial inventory.
-  pages=$(gh api --paginate --slurp "orgs/${PORTFOLIO_ORG}/repos?type=all&per_page=100" 2>/dev/null) || return 1
-  printf '%s' "$pages" | jq -er --arg mapped "$mapped" '
-    if type != "array" or length == 0 or any(.[]; type != "array")
-    then error("malformed inventory pages") else add end
-    | if length == 0 then error("empty inventory") else . end
-    | map(if (.id | type) != "number" or .id < 1 or .id != (.id | floor)
-              or (.full_name | type) != "string"
-              or (.private | type) != "boolean" or (.archived | type) != "boolean"
-          then error("malformed repository metadata") else . end)
-    | if any(.[]; (.full_name | test("^devantler-tech/[A-Za-z0-9._-]+$") | not)
-                    or (.full_name | test("/\\.\\.?$")))
-         or ([.[].id] | unique | length) != length
-         or ([.[].full_name | ascii_downcase] | unique | length) != length
-      then error("ambiguous repository inventory") else . end
-    | ($mapped | split("\n")) as $products
-    | [.[] | select(.archived == false)
-           | select(.private == false or ((.full_name | ascii_downcase) as $repo | $products | index($repo) != null))
-           | .full_name | ascii_downcase]
-    | if length == 0 then error("no authorized repositories") else sort[] end
-  ' 2>/dev/null
-}
 
 # ── 6. OUTCOMES ───────────────────────────────────────────────────────────────
 # Did the work actually hold? Reverts and post-merge red are the quality signal
