@@ -12,7 +12,10 @@
 #   1. AGENTS.md's every-run list names the read for `agentic-engineer-2` and links the guide section;
 #   2. the guide section names the tool, the window, the threshold, the paced and UNKNOWN outcomes,
 #      and keeps `daily-ai-assistant` unpaced, so rung 0 keeps an hourly run, and says that entry
-#      works the full ladder rather than stopping early when usage is ahead (monorepo#4550).
+#      works the full ladder rather than stopping early when usage is ahead (monorepo#4550);
+#   3. the entry survives a dispatch, a run that cannot establish it is not paced, and the unpaced
+#      entry does not read usage: 1 of 109 such runs paced itself and 18 kept themselves short after
+#      that rule shipped (monorepo#4721).
 #
 # Assertions are scoped to their section and fail closed when an anchor is missing: an empty
 # extraction would satisfy every substring check.
@@ -59,7 +62,8 @@ case "${run_list}" in *"${sentinel}"*) ;; *) fail "AGENTS.md every-run list: end
 
 for needle in \
   'Claude `agentic-engineer-2` reads `get_usage` first; ahead of the week it ends after rung 0' \
-  '(.claude/guides/cadence.md#weekly-pacing-claude-lane)'; do
+  '(.claude/guides/cadence.md#weekly-pacing-claude-lane)' \
+  '`daily-ai-assistant` never reads it; a run unsure of its entry is not paced.'; do
   case "${run_list}" in *"${needle}"*) ;; *) fail "AGENTS.md every-run list lacks: ${needle}" ;; esac
 done
 
@@ -97,7 +101,10 @@ for needle in \
   '**A plan status other than `ok`, a missing window or a failed call** is UNKNOWN' \
   '`weekly_pace=UNKNOWN`, and run as usual' \
   'An unreadable reading never pauses the lane.' \
-  '`daily-ai-assistant` is never paced' \
+  'A scheduled parent names it in the prompt of any agent it dispatches.' \
+  'A run that cannot establish its entry is not paced: it records `weekly_pace=UNKNOWN` and runs as usual.' \
+  '`daily-ai-assistant` is never paced and does not call `get_usage`' \
+  'A run that has seen the number anyway does not keep itself short because of it' \
   'It ignores weekly usage and works the full work-selection ladder as usual, including new work.' \
   'A run note that says it stops early when usage is ahead is out of date.'; do
   case "${section}" in *"${needle}"*) ;; *) fail "cadence guide pacing section lacks: ${needle}" ;; esac

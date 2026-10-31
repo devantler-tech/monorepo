@@ -103,7 +103,7 @@ role behaviour changes in its owning upstream first** (resolve a bundled skill's
 `.claude/scripts/skill-owner.sh`); **deployment facts change here.** Never edit a plugin cache. Every run:
 
 - Claude `agentic-engineer-2` reads `get_usage` first; ahead of the week it ends after rung 0
-  ([pacing](.claude/guides/cadence.md#weekly-pacing-claude-lane)).
+  ([pacing](.claude/guides/cadence.md#weekly-pacing-claude-lane)). `daily-ai-assistant` never reads it; a run unsure of its entry is not paced.
 - **Before acting on a plugin-sourced role**, run `.claude/scripts/plugin-definition-currency.sh
   --runtime <claude|codex|git-ref>`. On `DRIFT` or `UNKNOWN` (exit `2` is never "current"), follow the
   reviewed definition at the default branch's gitlink and report it — never halt the run. A Claude
