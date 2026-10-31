@@ -47,6 +47,16 @@ surface. An authority-parked PR without a linked open ask is ACTIONABLE in the p
 The 14-day `STALE-ASK` clock remains a re-verification alarm: read replies and verify the need;
 never renew an answered ask or manufacture another notification.
 
+**Preview a filed ask before the next send.** Run
+`.claude/scripts/maintainer-digest.sh needs-you --repo devantler-tech/monorepo` and find your ask by
+its number. A `Held back` heading on it means the digest will show him neither its question nor its
+options. The check is deliberately broad: when an ordinary word such as "cost" tripped it, reword the
+ask at once. Both asks in [digest #4561](https://github.com/devantler-tech/monorepo/issues/4561) went
+out held back for that word and were reworded only after the send. When it found real private detail,
+the ask has already published it, so remove it and follow the
+[privacy guide](egress-and-privacy.md). Exit `1` can be another ask's finding; exit `2` is UNKNOWN,
+never clean.
+
 **The workflow sends as `github-actions[bot]`.** Agents never assign the maintainer merely to
 notify him: only the reviewed digest and urgent workflow do so. The daily sender includes only
 unanswered asks, sends nothing when none remain, and preserves pending changelogs for the next ask.

@@ -1894,6 +1894,18 @@ maintainer_channels_flat="$(awk '$0 == "## Maintainer channels" { inside=1; next
 assert_maintainer_channels_prose() {
   case "${maintainer_channels_flat}" in *"$1"*) ;; *) fail "Maintainer channels no longer says '$1' — $2" ;; esac
 }
+# Both asks in a digest went out with their text held back for the word "cost", and were reworded only
+# after the send (monorepo#4535). Filing is the moment the filer can still fix the wording, and a real
+# finding must not be reworded past the backstop.
+for ask_filing_rule in \
+  "**Preview a filed ask before the next send.**" \
+  ".claude/scripts/maintainer-digest.sh needs-you --repo devantler-tech/monorepo" \
+  "find your ask by its number" \
+  "reword the ask at once" \
+  "the ask has already published it, so remove it and follow the [privacy guide](egress-and-privacy.md)" \
+  'Exit `1` can be another ask'"'"'s finding; exit `2` is UNKNOWN, never clean.'; do
+  assert_maintainer_channels_prose "${ask_filing_rule}" "the filer of an ask no longer previews it (monorepo#4535)"
+done
 # A push notification delivered an ask that the blocker check then read as never-asked, because
 # the ask-record vocabulary excluded "push" without saying which push it meant (monorepo#3243).
 # The channels section must settle it where an escalating agent reads — the exclusion, a reason
