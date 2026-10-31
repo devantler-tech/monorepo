@@ -309,14 +309,8 @@ EOF
 for child in private allowed; do
   slug=$(printf '%s' "$FIX/corpus/$child" | tr / -)
   mkdir -p "$FIX/projects/$slug"
-  # A slug selects a source, while the source's own repository attests its
-  # identity independently. A native unbound store is tested below as UNKNOWN.
-  git -C "$FIX/projects/$slug" init -q
-  if [ "$child" = allowed ]; then
-    git -C "$FIX/projects/$slug" remote add origin https://github.com/devantler-tech/scope-public.git
-  else
-    git -C "$FIX/projects/$slug" remote add origin https://github.com/devantler-tech/scope-denied.git
-  fi
+  # A slug selects a store, and the store holds no repository of its own, as on
+  # a real host. The checkout and each transcript's recorded cwd attest identity.
   printf '{"type":"user","cwd":"%s","message":{"content":"SCOPE_ADMISSION_CANARY"}}\n' \
     "$FIX/corpus/$child" > "$FIX/projects/$slug/scope.jsonl"
 done
@@ -419,30 +413,63 @@ SCOPE_PROJECTS="$FIX/no-projects" transcript_run
 check excluded
 git -C "$FIX/corpus/private" remote set-url origin https://github.com/devantler-tech/scope-denied.git
 
-# The project-store slug survives worktree removal. A confirmed removal is a
-# visible coverage exclusion; a still-existing root with broken metadata is not.
+# The project-store slug survives worktree removal. The slug grants nothing: a
+# removed harness worktree's transcript counts only by recording a cwd under the
+# admitted checkout, and one that cannot is a visible coverage exclusion. A
+# still-existing root with broken metadata is UNKNOWN instead.
 rm "$FIX/home/codex/sessions/scope.jsonl"
 claude_root="$FIX/corpus/.claude/worktrees/calm-quiet-abcdef"
 claude_slug="$(printf '%s' "$FIX/corpus" | tr / -)--claude-worktrees-calm-quiet-abcdef"
+write_claude() {
+  printf '{"type":"user","cwd":"%s","message":{"content":"SCOPE_ADMISSION_CANARY"}}\n' "$2" > "$1"
+}
 mkdir -p "$FIX/stale-projects/$claude_slug"
 printf '{"type":"user","message":{"content":"SCOPE_ADMISSION_CANARY"}}\n' \
   > "$FIX/stale-projects/$claude_slug/scope.jsonl"
 SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
 check test "$RC" = 0
 check excluded
-check not_walked "$FIX/stale-projects/$claude_slug"
 check grep -qF 'Claude project folders left out, worktree confirmed gone: 1' "$FIX/transcript-output"
+# The cwd must name a worktree of this checkout, not merely any folder.
+for foreign_cwd in "$FIX/unselected/.claude/worktrees/calm-quiet-abcdef" \
+  "$FIX/corpus/.claude/elsewhere/calm-quiet-abcdef" \
+  "$FIX/corpus/.claude/worktrees/.hidden" \
+  "$FIX/corpus/.claude/worktrees/calm-quiet-abcdef/../../../../unselected" \
+  "$FIX/corpus/unlisted"; do
+  write_claude "$FIX/stale-projects/$claude_slug/scope.jsonl" "$foreign_cwd"
+  SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
+  check not_measured
+done
+# A control character is not a recorded folder, even after an admitted prefix.
+jq -cn --arg p "$claude_root" '{type:"user",cwd:($p+"\u0000")}' > "$FIX/stale-projects/$claude_slug/scope.jsonl"
+SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
+check not_measured
+write_claude "$FIX/stale-projects/$claude_slug/scope.jsonl" "$claude_root"
+mkdir -p "$FIX/stale-projects/$claude_slug/scope/subagents"
+write_claude "$FIX/stale-projects/$claude_slug/scope/subagents/agent-child.jsonl" "$claude_root/deep/folder"
+SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
+check test "$RC" = 0
+check grep -qF '[BOTH instances: 2 Claude + 0 Codex sessions]' "$FIX/transcript-output"
+check grep -qF '1 parent + 1 delegated' "$FIX/transcript-output"
+check walked "$FIX/stale-projects/$claude_slug/scope/subagents"
+# A worktree name of another real shape is admitted the same way.
+agent_slug="$(printf '%s' "$FIX/corpus" | tr / -)--claude-worktrees-agent-a15e0db413c99f912"
+mkdir -p "$FIX/agent-projects/$agent_slug"
+write_claude "$FIX/agent-projects/$agent_slug/scope.jsonl" "$FIX/corpus/.claude/worktrees/agent-a15e0db413c99f912"
+SCOPE_PROJECTS="$FIX/agent-projects" transcript_run
+check test "$RC" = 0
 mkdir -p "$claude_root"
 SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
 check test "$RC" = 2
-check not_walked "$FIX/stale-projects/$claude_slug"
 git -C "$claude_root" init -q
 git -C "$claude_root" remote add origin https://github.com/devantler-tech/scope-public.git
-git -C "$FIX/stale-projects/$claude_slug" init -q
-git -C "$FIX/stale-projects/$claude_slug" remote add origin https://github.com/devantler-tech/scope-public.git
 SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
 check test "$RC" = 0
-check grep -qF '[BOTH instances: 1 Claude + 0 Codex sessions]' "$FIX/transcript-output"
+check grep -qF '[BOTH instances: 2 Claude + 0 Codex sessions]' "$FIX/transcript-output"
+# A worktree that still exists answers for itself, whatever its checkout's slug says.
+git -C "$claude_root" remote set-url origin https://github.com/excluded-owner/fixture.git
+SCOPE_PROJECTS="$FIX/stale-projects" transcript_run
+check not_measured
 
 # Failure to establish a populated product's identity must stop preparation,
 # rather than shrink the admitted set and publish clean measurements.
@@ -554,7 +581,7 @@ check grep -qF 'UNKNOWN: the Claude projects folder' "$FIX/transcript-output"
 check not_measured
 check not_walked "$direct_store"
 mkdir -p "$direct_store/$allowed_slug"
-cp "$direct_store/scope.jsonl" "$direct_store/$allowed_slug/scope.jsonl"
+write_claude "$direct_store/$allowed_slug/scope.jsonl" "$FIX/corpus/allowed"
 SCOPE_PROJECTS="$direct_store" transcript_run
 check test "$RC" = 2
 check grep -qF 'UNKNOWN: the Claude projects folder' "$FIX/transcript-output"
@@ -593,7 +620,8 @@ check test "$RC" = 2
 check not_measured
 check not_walked "$FIX/linked-projects/$allowed_slug/subagents"
 # Native project slugs lose the distinction between a slash and a literal
-# hyphen. The selected checkout cannot attest an independently stored corpus.
+# hyphen. The selected checkout cannot attest what a store holds, so each
+# transcript's recorded cwd decides, with no repository inside the store.
 collision_checkout="$FIX/corpus/slug-collision"
 collision_other="$FIX/corpus/slug/collision"
 mkdir -p "$collision_checkout" "$collision_other" "$FIX/corpus/collision-projects"
@@ -605,23 +633,15 @@ collision_slug=$(printf '%s' "$collision_checkout" | tr / -)
 check test "$collision_slug" = "$(printf '%s' "$collision_other" | tr / -)"
 collision_store="$FIX/corpus/collision-projects/$collision_slug"
 mkdir -p "$collision_store/subagents"
-printf '{"type":"user","message":{"content":"COLLIDING_STORE_CANARY"}}\n' > "$collision_store/subagents/agent-foreign.jsonl"
+# A transcript from the colliding repository, or one recording no folder, stays out.
+printf '{"type":"user","cwd":"%s","message":{"content":"COLLIDING_STORE_CANARY"}}\n' "$collision_other" > "$collision_store/subagents/agent-foreign.jsonl"
+printf '{"type":"user","message":{"content":"COLLIDING_STORE_CANARY"}}\n' > "$collision_store/subagents/agent-silent.jsonl"
 SCOPE_SELECTORS="$collision_checkout" SCOPE_PROJECTS="$FIX/corpus/collision-projects" transcript_run
-check test "$RC" = 2
+check test "$RC" = 0
 check not_measured
-check not_walked "$collision_store/subagents"
-# An independently bound store for a different admitted product still cannot
-# borrow the selected checkout's identity. No transcript needs to be opened.
-git -C "$collision_store" init -q
-git -C "$collision_store" remote add origin https://github.com/devantler-tech/scope-public.git
-SCOPE_SELECTORS="$collision_checkout" SCOPE_PROJECTS="$FIX/corpus/collision-projects" transcript_run
-check test "$RC" = 2
-check not_measured
-check not_walked "$collision_store/subagents"
-# Preserve real parent/delegated coverage once both source identities agree.
-git -C "$collision_store" remote set-url origin https://github.com/devantler-tech/monorepo.git
-rm "$collision_store/subagents/agent-foreign.jsonl"
-printf '{"type":"user","message":{"content":"OWNED_STORE_CANARY"}}\n' > "$collision_store/owned.jsonl"
+# Preserve real parent/delegated coverage for the admitted checkout's own
+# transcripts, beside the colliding ones in that same store.
+printf '{"type":"user","cwd":"%s","message":{"content":"OWNED_STORE_CANARY"}}\n' "$collision_checkout" > "$collision_store/owned.jsonl"
 mkdir -p "$collision_store/owned/subagents"
 cp "$collision_store/owned.jsonl" "$collision_store/owned/subagents/agent-owned.jsonl"
 SCOPE_SELECTORS="$collision_checkout" SCOPE_PROJECTS="$FIX/corpus/collision-projects" transcript_run

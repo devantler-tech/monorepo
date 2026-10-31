@@ -98,17 +98,37 @@ fixture_script_path() {
   printf '%s/.claude/scripts/agent-telemetry.sh\n' "$root"
 }
 
-# Namespaced synthetic corpora carry an independent source identity. A native
-# slug alone is deliberately insufficient; the scope suite checks that refusal.
-# This visits only this test's own immediate fixture directories.
+# A native store holds no repository, and its slug alone admits nothing: each
+# real transcript records its cwd in its first records, so fixtures do the same
+# (the scope suite checks the refusals). A store naming no known checkout stays
+# unbound, and a transcript already recording a cwd keeps it. The original mtime
+# is restored because window cases depend on it. This visits only this test's own
+# fixture directories.
 fixture_project_bindings() {
-  local store
+  local store name p slug cwd f tmp
   for store in "$1"/*; do
     [ -d "$store" ] && [ ! -L "$store" ] || continue
-    case "${store##*/}" in -*) ;; *) continue ;; esac
-    [ ! -e "$store/.git" ] || continue
-    git -C "$store" init -q || return 2
-    git -C "$store" remote add origin https://github.com/devantler-tech/monorepo.git || return 2
+    name=${store##*/}
+    case "$name" in -*) ;; *) continue ;; esac
+    cwd=''
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      slug=$(printf '%s' "$p" | tr / -)
+      case "$name" in
+        "$slug") cwd=$p ;;
+        "$slug"--claude-worktrees-*) cwd="$p/.claude/worktrees/${name#"$slug"--claude-worktrees-}" ;;
+        "$slug"--git-modules-*) cwd="$p/${name#"$slug"--git-modules-}" ;;
+      esac
+    done < <(printf '%s\n' "$PORTFOLIO_PATHS" | tr ':' '\n'; printf '%s\n' "$FIX/fixmono" "${1%/*}/nest")
+    [ -n "$cwd" ] || continue
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      case "$(head -n 20 "$f")" in *'"cwd"'*) continue ;; esac
+      tmp="$f.fixture-cwd"
+      { printf '{"type":"fixture-metadata","cwd":"%s"}\n' "$cwd"; cat "$f"; } > "$tmp" || return 2
+      touch -r "$f" "$tmp" || return 2
+      mv "$tmp" "$f" || return 2
+    done < <(find "$store" -type f -name '*.jsonl')
   done
 }
 
@@ -2704,7 +2724,6 @@ echo
 echo "review-finding regressions"
 
 mkdir -p "$FIX/projects/${FIX_SLUG}-leak" "$FIX/codex/sessions"
-fixture_project_bindings "$FIX/projects" || exit 1
 # A REAL errored tool result carrying a token, plus benign USER TEXT that merely
 # QUOTES a denial phrase and a fine-grained PAT.
 cat > "$FIX/projects/${FIX_SLUG}-leak/s.jsonl" <<'EOF'
@@ -2721,6 +2740,7 @@ printf '%s\n' '{"type":"response_item","payload":{"type":"function_call","argume
   >> "$FIX/codex/sessions/r.jsonl"
 
 runleak() {
+  fixture_project_bindings "$FIX/projects" || exit 1
   CLAUDE_PROJECTS_DIR="$FIX/projects" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
   CLAUDE_LOADER_PATH="$FIX/claude-sched/daily-ai-assistant/SKILL.md" \
   CODEX_LOADER_PATH="$FIX/codex/automations/daily-ai-engineer/automation.toml" \
@@ -2765,7 +2785,6 @@ echo
 echo "class-level regressions (round 2)"
 
 mkdir -p "$FIX/projects/${FIX_SLUG}-r2" "$FIX/codex/sessions"
-fixture_project_bindings "$FIX/projects" || exit 1
 
 # A command carrying an inline credential (the sampler path that bypassed
 # per-call-site redaction), plus prose that merely MENTIONS a sleep.
@@ -2781,6 +2800,7 @@ EOF
 subst "$FIX/projects/${FIX_SLUG}-r2/s.jsonl"
 
 runr2() {
+  fixture_project_bindings "$FIX/projects" || exit 1
   CLAUDE_PROJECTS_DIR="$FIX/projects" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
   CLAUDE_LOADER_PATH="$FIX/claude-sched/daily-ai-assistant/SKILL.md" \
   CODEX_LOADER_PATH="$FIX/codex/automations/daily-ai-engineer/automation.toml" \
@@ -2820,7 +2840,6 @@ else bad "a real sleep command is still counted" "$(printf '%s' "$OUT" | grep 's
 # CLASS: detector/redactor pattern parity — a shape the redactor masks but the
 # detector misses reports "clean", the worst failure a leak detector has.
 mkdir -p "$FIX/projects/${FIX_SLUG}-jwt"
-fixture_project_bindings "$FIX/projects" || exit 1
 cat > "$FIX/projects/${FIX_SLUG}-jwt/s.jsonl" <<'EOF'
 {"type":"user","message":{"content":[{"type":"text","text":"bearer __JWT__"}]}}
 EOF
@@ -4341,7 +4360,6 @@ mkdir -p "$FIX/scoped/${BOUNDARY_SLUG}" \
          "$FIX/scoped/${BOUNDARY_SLUG}--claude-worktrees-keen-proskuriakova-4c1726" \
          "$FIX/scoped/-Users-x-work-employer-secret-service" \
          "$FIX/scoped/-Users-x-Library-something-else"
-fixture_project_bindings "$FIX/scoped" || exit 1
 for d in "${BOUNDARY_SLUG}" "${BOUNDARY_SLUG}--claude-worktrees-keen-proskuriakova-4c1726"; do
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"i1","name":"Bash","input":{"command":"sleep 11"}}]}}' \
     > "$FIX/scoped/$d/s.jsonl"
@@ -4353,6 +4371,7 @@ for d in "-Users-x-work-employer-secret-service" "-Users-x-Library-something-els
     > "$FIX/scoped/$d/s.jsonl"
 done
 
+fixture_project_bindings "$FIX/scoped" || exit 1
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/scoped" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$BOUNDARY_ROOT" \
       PORTFOLIO_PATHS="$BOUNDARY_ROOT" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 50 --section efficiency 2>&1)
@@ -4393,13 +4412,13 @@ echo "round-4 regressions"
 mkdir -p "$FIX/anchor/${BOUNDARY_SLUG}" \
          "$FIX/anchor/${BOUNDARY_SLUG}--claude-worktrees-admiring-babbage-4af60d" \
          "$FIX/anchor/${BOUNDARY_SLUG}-client"
-fixture_project_bindings "$FIX/anchor" || exit 1
 for d in "${BOUNDARY_SLUG}" "${BOUNDARY_SLUG}--claude-worktrees-admiring-babbage-4af60d"; do
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a1","name":"Bash","input":{"command":"sleep 5"}}]}}' \
     > "$FIX/anchor/$d/s.jsonl"
 done
 printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a2","name":"Bash","input":{"command":"sleep 6"}}]}}' \
   > "$FIX/anchor/${BOUNDARY_SLUG}-client/s.jsonl"
+fixture_project_bindings "$FIX/anchor" || exit 1
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/anchor" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$BOUNDARY_ROOT" \
       PORTFOLIO_PATHS="$BOUNDARY_ROOT" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 50 --section efficiency 2>&1)
@@ -4495,14 +4514,13 @@ mkdir -p "$FIX/mark/${MARK_SLUG}" \
          "$FIX/mark/${MARK_SLUG}--claude-worktrees-wizardly-ellis-19cf5b" \
          "$FIX/mark/${MARK_SLUG}--git-modules-platform" \
          "$FIX/mark/${MARK_SLUG}--client"
-fixture_project_bindings "$FIX/mark" || exit 1
-git -C "$FIX/mark/${MARK_SLUG}--git-modules-platform" remote set-url origin https://github.com/devantler-tech/platform.git || exit 1
 for d in "${MARK_SLUG}" "${MARK_SLUG}--claude-worktrees-wizardly-ellis-19cf5b" "${MARK_SLUG}--git-modules-platform"; do
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"m1","name":"Bash","input":{"command":"sleep 3"}}]}}' \
     > "$FIX/mark/$d/s.jsonl"
 done
 printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"m2","name":"Bash","input":{"command":"sleep 4"}}]}}' \
   > "$FIX/mark/${MARK_SLUG}--client/s.jsonl"
+fixture_project_bindings "$FIX/mark" || exit 1
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/mark" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/fixmono" \
       PORTFOLIO_PATHS="$FIX/fixmono" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 50 --section efficiency 2>&1)
@@ -4600,13 +4618,13 @@ echo "round-9 regressions"
 mkdir -p "$FIX/imit/${BOUNDARY_SLUG}" \
          "$FIX/imit/${BOUNDARY_SLUG}--claude-worktrees-keen-proskuriakova-4c1726" \
          "$FIX/imit/${BOUNDARY_SLUG}--claude-worktrees-client"
-fixture_project_bindings "$FIX/imit" || exit 1
 for d in "${BOUNDARY_SLUG}" "${BOUNDARY_SLUG}--claude-worktrees-keen-proskuriakova-4c1726"; do
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"i1","name":"Bash","input":{"command":"sleep 2"}}]}}' \
     > "$FIX/imit/$d/s.jsonl"
 done
 printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"i2","name":"Bash","input":{"command":"sleep 9"}}]}}' \
   > "$FIX/imit/${BOUNDARY_SLUG}--claude-worktrees-client/s.jsonl"
+fixture_project_bindings "$FIX/imit" || exit 1
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/imit" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$BOUNDARY_ROOT" \
       PORTFOLIO_PATHS="$BOUNDARY_ROOT" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 50 --section efficiency 2>&1)
@@ -10254,7 +10272,6 @@ echo "── extraction canary: every other per-file walk states a broken extrac
 WX="$FIX/walkcanary"
 WX_SLUG=$(printf '%s' "$WX/nest" | sed 's|/|-|g')
 mkdir -p "$WX/projects/$WX_SLUG" "$WX/codex" "$WX/nest"
-fixture_project_bindings "$WX/projects" || exit 1
 WX_TS=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')
 # One session carrying something every walk counts: two errored results
 # (reliability), a harness denial (blocked-action), a checkout of a PR ref
@@ -10266,6 +10283,7 @@ cat > "$WX/projects/$WX_SLUG/s.jsonl" <<JSONL
 JSONL
 
 wx_run() { # $1 = script, $2 = section
+  fixture_project_bindings "$WX/projects" || exit 1
   TZ=UTC PORTFOLIO_PATHS="$WX/nest" CLAUDE_PROJECTS_DIR="$WX/projects" CODEX_HOME="$WX/codex" MONOREPO_DIR="$WX/nest" \
     HOME="$WX" bash "$1" --since-days 3650 --section "$2" 2>&1
 }
@@ -10315,8 +10333,8 @@ mk_run() { # $1 = fixture name; stdin = the session's records; prints the safety
   local mk="$FIX/$1" slug
   slug=$(printf '%s' "$mk/nest" | sed 's|/|-|g')
   mkdir -p "$mk/projects/$slug" "$mk/codex" "$mk/nest"
-  fixture_project_bindings "$mk/projects" || exit 1
   cat > "$mk/projects/$slug/s.jsonl"
+  fixture_project_bindings "$mk/projects" || exit 1
   TZ=UTC PORTFOLIO_PATHS="$mk/nest" CLAUDE_PROJECTS_DIR="$mk/projects" CODEX_HOME="$mk/codex" MONOREPO_DIR="$mk/nest" \
     HOME="$mk" bash "$TARGET" --since-days 3650 --section safety 2>&1
 }
@@ -10493,7 +10511,6 @@ fi
 MKM="$FIX/makemention"
 MKM_SLUG=$(printf '%s' "$MKM/nest" | sed 's|/|-|g')
 mkdir -p "$MKM/projects/$MKM_SLUG" "$MKM/codex" "$MKM/nest"
-fixture_project_bindings "$MKM/projects" || exit 1
 MKM_N=0
 mk_mention_session() { # $1 = the line holding the mention, $2 = optional second line of the same call
   local cmd="$1"
@@ -10505,6 +10522,7 @@ mk_mention_session() { # $1 = the line holding the mention, $2 = optional second
     mk_cmd "qb${MKM_N}c" "printf 'make the report clearer'"
     mk_cmd "qb${MKM_N}d" 'npm ci'
   } > "$MKM/projects/$MKM_SLUG/s$MKM_N.jsonl"
+  fixture_project_bindings "$MKM/projects" || exit 1
 }
 mk_mention_session "'eval' 'x=1'"
 mk_mention_session "'eval' 'x=1'; echo hi"
@@ -11726,9 +11744,9 @@ mkdir -p "$FIX/cxgone/archived_sessions" "$FIX/cxgone/worktrees/kept/monorepo" "
 # Scope tests require a complete supported-runtime control when judging an A2A
 # exit status. The separate Codex-only regression above still requires UNKNOWN.
 mkdir -p "$FIX/cx-scope-control/${BOUNDARY_SLUG}"
-fixture_project_bindings "$FIX/cx-scope-control" || exit 1
 printf '%s\n' '{"type":"user","message":{"content":[{"type":"text","text":"ordinary scope control"}]}}' \
   > "$FIX/cx-scope-control/${BOUNDARY_SLUG}/s.jsonl"
+fixture_project_bindings "$FIX/cx-scope-control" || exit 1
 cxgone_file() { # $1 = name, $2 = recorded cwd, $3 = git record (JSON object or empty), $4 = sleep seconds
   local meta
   if [ -n "$3" ]; then meta="{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$2\",\"git\":$3}}"

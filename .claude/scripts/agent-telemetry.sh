@@ -2666,29 +2666,79 @@ scoped_session_paths() {
     ls -1 "$CLAUDE_PROJECTS" 2>/dev/null \
     | grep -E "^($PORTFOLIO_DIR_RE)$" \
     | while IFS= read -r d; do
+        claude_project_in_window "$d" || continue
         claude_project_authorized "$d" || continue
         claude_session_listing "$CLAUDE_PROJECTS/$d" \
-          | while IFS= read -r f; do stat_mtime "$f"; done
+          | while IFS= read -r f; do
+              claude_transcript_admission "$f" || continue
+              stat_mtime "$f"
+            done
       done
   } | sort -rn | cut -d' ' -f2-
 }
 
-# An encoded checkout name selects a candidate, never its source identity:
-# /work/foo-bar and /work/foo/bar have the same slug. A separately stored
-# corpus must itself be repository-bound to the same admitted product before
-# any transcript or delegated directory is listed. Native stores with only a
-# lossy name and no independent repository identity remain UNKNOWN.
+# An encoded checkout name selects a candidate store, never its source identity:
+# /work/foo-bar and /work/foo/bar have the same slug, and a native store holds no
+# repository of its own. So the checkout is checked here, and each transcript is
+# then bound to an admitted repository by the cwd it records.
 claude_store_authorized() {
-  local checkout=$1 store=$2 expected actual
-  transcript_path_authorized "$checkout" || return $?
-  expected=$(portfolio_repository_name "$TRANSCRIPT_GIT_VALUE") || return 2
-  # An ancestor repository is not an independent identity for a namespaced
-  # store: it could hold several colliding project names. Require the source
-  # itself to carry its repository binding, as well as checking containment.
-  [ -e "$store/.git" ] || [ -L "$store/.git" ] || return 2
-  transcript_path_authorized "$store" || return $?
-  actual=$(portfolio_repository_name "$TRANSCRIPT_GIT_VALUE") || return 2
-  [ "$expected" = "$actual" ] || return 2
+  transcript_path_authorized "$1"
+}
+
+# The first cwd a transcript records, within its leading metadata records; empty
+# when it records none, or a value holding a control character. Only that field
+# leaves this reader, so a transcript left out has none of its content used.
+claude_transcript_cwd() {
+  head -n 20 "$1" 2>/dev/null | jq -Rrn '
+    ([inputs | fromjson? | .cwd? | strings] | first // "")
+    | if explode | all(. >= 32 and . != 127) then . else "" end' 2>/dev/null
+}
+
+# Return 0 for a recorded cwd in an admitted repository, 4 when that cannot be
+# determined, and any other status when it is out of scope. A transcript outlives
+# its harness worktree: most of a week's history sits in removed ones, so one under
+# `<admitted checkout>/.claude/worktrees/<name>` stays in scope once that folder is
+# confirmed gone. Only the harness and our own helpers create that path, under names
+# of several shapes (`<word>-<word>-<hex>`, `agent-<hex>`, `maint-<run>`), so the
+# name is checked for being one plain folder and not for a shape. A worktree that
+# still exists answers for its own identity.
+claude_cwd_in_scope() {
+  local cwd=$1 p rest name root presence rc
+  case "$cwd" in */|*//*|*/./*|*/.|*/../*|*/..) return 1 ;; esac
+  while IFS= read -r p; do
+    case "$cwd" in "$p/.claude/worktrees/"*) ;; *) continue ;; esac
+    rest=${cwd#"$p/.claude/worktrees/"}
+    name=${rest%%/*}
+    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || continue
+    root="$p/.claude/worktrees/$name"
+    presence=0
+    worktree_presence "$root" || presence=$?
+    case "$presence" in 1) return 0 ;; 2) return 4 ;; esac
+    [ -e "$root/.git" ] || [ -L "$root/.git" ] || return 4
+    rc=0
+    transcript_path_authorized "$cwd" "$root" || rc=$?
+    case "$rc" in 0) return 0 ;; 1) return 1 ;; *) return 4 ;; esac
+  done < <(printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$')
+  rc=0
+  in_scope_cwd "$cwd" || rc=$?
+  return "$rc"
+}
+
+# Judge one transcript by its recorded cwd. A transcript recording none is left
+# out, as for Codex. A store repeats one cwd across its sessions, so the last answer
+# is kept: each answer costs several git reads.
+CLAUDE_LAST_CWD=''
+CLAUDE_LAST_CWD_RC=1
+claude_transcript_admission() {
+  local cwd
+  cwd=$(claude_transcript_cwd "$1") || return 1
+  [ -n "$cwd" ] || return 1
+  if [ "$cwd" != "$CLAUDE_LAST_CWD" ]; then
+    CLAUDE_LAST_CWD_RC=0
+    claude_cwd_in_scope "$cwd" || CLAUDE_LAST_CWD_RC=$?
+    CLAUDE_LAST_CWD=$cwd
+  fi
+  return "$CLAUDE_LAST_CWD_RC"
 }
 
 claude_project_authorized() {
@@ -2716,9 +2766,36 @@ claude_project_authorized() {
         root="$p/.claude/worktrees/$suffix"
         presence=0
         worktree_presence "$root" || presence=$?
-        case "$presence" in 1) return 3 ;; 2) return 2 ;; esac
+        # Removed: the checkout is what can still be checked, and each transcript
+        # must then record a cwd under it. Its slug alone grants nothing.
+        case "$presence" in 1) claude_store_authorized "$p" "$CLAUDE_PROJECTS/$name"; return $? ;; 2) return 2 ;; esac
         [ -e "$root/.git" ] || return 2
         claude_store_authorized "$root" "$CLAUDE_PROJECTS/$name"; return $? ;;
+    esac
+  done < <(printf '%s\n' "$PORTFOLIO_PATHS" | tr ':' '\n')
+  return 1
+}
+
+# False only for a store with nothing in the window: hundreds of old worktree
+# stores accumulate, and each authorization costs several git reads. A link or a
+# failed listing stays true, so authorization and the readers still judge it.
+claude_project_in_window() {
+  local dir="$CLAUDE_PROJECTS/$1" list
+  [ ! -L "$dir" ] || return 0
+  list=$(claude_session_listing "$dir") || return 0
+  [ -n "$list" ]
+}
+
+# True when this project store names a harness worktree confirmed gone.
+claude_project_removed() {
+  local name=$1 p slug presence
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    slug=$(path_to_slug "$p")
+    case "$name" in "$slug"--claude-worktrees-*)
+      presence=0
+      worktree_presence "$p/.claude/worktrees/${name#"$slug"--claude-worktrees-}" || presence=$?
+      [ "$presence" = 1 ] && return 0 ;;
     esac
   done < <(printf '%s\n' "$PORTFOLIO_PATHS" | tr ':' '\n')
   return 1
@@ -3179,10 +3256,11 @@ codex_unreadable_folders() {
 # so a project folder, a session's `subagents/` folder or a transcript it cannot
 # open simply drops out, and every section that reads the walk printed a clean,
 # smaller count — the delegated share read 0% with one session folder locked.
-# Tag each unavailable in-scope folder: U for an unreadable source, G for a
-# confirmed removed worktree. Paths are relative to the store (`.` is the store
-# itself). A stale project slug cannot supply a removed repository's identity;
-# it remains excluded, visibly separate from failed reads and measured sessions.
+# Tag each unavailable in-scope folder: U for an unreadable source or an admission
+# that could not be determined, G for a removed worktree holding a transcript with
+# no acceptable cwd. Paths are relative to the store (`.` is the store itself). A
+# stale project slug cannot supply a removed repository's identity, so that
+# transcript stays excluded, visibly separate from failed reads and measured sessions.
 claude_unavailable_folders() {
   local d dirs list f admission_rc presence=0 store_admission=0
   worktree_presence "$CLAUDE_PROJECTS" || presence=$?
@@ -3199,6 +3277,7 @@ $dirs}"; fi
   while IFS= read -r d; do
     [ -n "$d" ] || continue
     if [ "$d" != . ]; then
+      claude_project_in_window "$d" || continue
       admission_rc=0
       claude_project_authorized "$d" || admission_rc=$?
       case "$admission_rc" in
@@ -3219,6 +3298,14 @@ $dirs}"; fi
       # Open it rather than test the permission bit: an ACL or sandbox denial
       # can pass `-r` and still fail the open the walk's readers make.
       if [ -e "$f" ] && ! { : <"$f"; } 2>/dev/null; then printf 'U %s\n' "$d"; break; fi
+      [ "$d" != . ] || continue
+      admission_rc=0
+      claude_transcript_admission "$f" || admission_rc=$?
+      case "$admission_rc" in
+        0) ;;
+        4) printf 'U %s\n' "$d"; break ;;
+        *) if claude_project_removed "$d"; then printf 'G %s\n' "$d"; break; fi ;;
+      esac
     done <<<"$list"
   done <<<"$dirs"
 }
