@@ -63,7 +63,7 @@ case "${run_list}" in *"${sentinel}"*) ;; *) fail "AGENTS.md every-run list: end
 for needle in \
   'Claude `agentic-engineer-2` reads `get_usage` first; ahead of the week it ends after rung 0' \
   '(.claude/guides/cadence.md#weekly-pacing-claude-lane)' \
-  '`daily-ai-assistant` never reads it.'; do
+  '`daily-ai-assistant` never reads it; a run unsure of its entry is not paced.'; do
   case "${run_list}" in *"${needle}"*) ;; *) fail "AGENTS.md every-run list lacks: ${needle}" ;; esac
 done
 
