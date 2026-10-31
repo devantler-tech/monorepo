@@ -40,6 +40,11 @@ Scheduled Engineer runs used 79–90% of that week's tokens (monorepo#3623, mono
 window: `percentUsed` and `resetsAt`. The elapsed share of the week is
 `100 × (7 days − (resetsAt − now)) / 7 days`.
 
+A run's entry is the scheduled task's own name. A scheduled parent names it in the prompt of any agent it
+dispatches. A run that cannot establish its entry is not paced: it records `weekly_pace=UNKNOWN` and
+runs as usual. In the week ending 2026-10-31 one `daily-ai-assistant` run paced itself because its
+dispatch prompt had lost the entry (monorepo#4721).
+
 - **Ahead of pace** means `percentUsed` is more than 5 points above the elapsed share. An ahead run
   still checks rung 0 first, because the other entry may be deep in a long run. It runs
   `.claude/scripts/platform-live-health.sh`. Then it runs
@@ -62,9 +67,12 @@ window: `percentUsed` and `resetsAt`. The elapsed share of the week is
 - **A plan status other than `ok`, a missing window or a failed call** is UNKNOWN. Record
   `weekly_pace=UNKNOWN`, and run as usual. An unreadable reading never pauses the lane.
 
-`daily-ai-assistant` is never paced. It ignores weekly usage and works the full work-selection
-ladder as usual, including new work. It does not stop after rung 0 or started work, and it does not
-hold back new work because usage is ahead. A run note that says it stops early when usage is ahead
+`daily-ai-assistant` is never paced and does not call `get_usage`. It ignores weekly usage and works
+the full work-selection ladder as usual, including new work. It does not stop after rung 0 or started
+work, and it does not hold back new work because usage is ahead. A run that has seen the number anyway
+does not keep itself short because of it: 18 of 109 `daily-ai-assistant` runs did in the week ending
+2026-10-31. A run
+note that says it stops early when usage is ahead
 is out of date. Pacing therefore brings the lane down to the hourly cadence it had before 2026-10-13.
 This happens only while usage is ahead of the week, and the lane goes back to two runs an hour once
 the week catches up. The Agent Improver and the Codex lane are not paced: the Improver used 2–16% of
