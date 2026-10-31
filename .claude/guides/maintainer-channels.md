@@ -87,9 +87,15 @@ next action, then act. Remove `blocked` when the remaining work is ours, close r
 never ask them again. Ambiguous replies are not executable approval; use the clarification path above.
 The sender suppresses responses automatically; suppression does not claim the requested work is done.
 
-**One writer prepares each dated changelog.** The first Codex Engineer run that can prepare it owns
-`docs/digests/YYYY-MM-DD.md`; acquire the shared `agent-claim/4285` coordination lease before
-preparing a date. Re-read open digest drafts and the reviewed dated path after acquiring it.
+**The run that files an ask prepares its changelog** ([ADR 0012](../../docs/adr/0012-digest-changelog-when-an-ask-is-filed.md)).
+A dated changelog is due only when an unanswered ask needs one, on either lane, and a pending changelog
+that already covers the same work means nothing more is due. It covers verified outcomes not yet in a
+delivered or pending digest, and it is `docs/digests/YYYY-MM-DD.md` for the first daily send its pull
+request can merge before: use the next day's date when filing close to 06:17 UTC. Never hold an ask for
+it. That send uses the short digest saying the summary is missing, and the changelog stays pending for
+the next digest with an ask. Quiet days have no changelog duty. Acquire the shared `agent-claim/4285`
+coordination lease before preparing a date. Re-read open digest drafts and the reviewed dated path after acquiring it.
+
 An existing draft or dated file means contribute there or use the next date, never open a competing
 writer. Retain the lease through draft publication, then retire it only after reading that draft
 back. The next claimant must respect that open draft. This fixed coordination key is a lock,
@@ -97,7 +103,8 @@ not a reopened roadmap issue; each delivery still uses its own issue and reviewe
 Other lanes contribute public outcome links on the existing draft instead of racing that path.
 Follow `docs/digests/TEMPLATE.md`: plain English, grouped by product, a link for each item, and
 Agent Improver work under its own heading. The Agent Improver reviews digest feedback, links,
-clarity, length and timeliness weekly and ships useful improvements through review.
+clarity, length and timeliness weekly, including that each filed ask got its changelog, and ships
+useful improvements through review.
 
 **Slack is retired for maintainer asks.** Historical `slack` receipts and their migrated replies
 remain readable evidence only; no run reads or writes the DM after the retirement sweep.
