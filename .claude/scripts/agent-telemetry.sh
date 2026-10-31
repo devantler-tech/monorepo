@@ -3129,14 +3129,13 @@ codex_session_walk() {
         # header without touching conversation records.
         # Two values, one per line: the recorded cwd, then the recorded
         # repository address (empty when the record has none or it is not text).
-        # A value holding a line break is read as EMPTY: printed raw it would
+        # A value holding any control character is read as EMPTY: printed raw a line break would
         # span two lines, and a folder value's second line would then be taken
         # as the address — a transcript with no recorded address admitting itself.
         cwd=''; rurl=''
         { IFS= read -r cwd; IFS= read -r rurl; } < <(head -n 1 "$f" 2>/dev/null \
               | jq -r 'def oneline:
-                         if type == "string" and (test("[\n\r]") | not)
-                            and (contains("\u0000") | not)
+                         if type == "string" and (explode | all(. >= 32 and . != 127))
                          then . else "" end;
                        select(.type=="session_meta")
                        | ((.payload.cwd? // .cwd? // "") | oneline),

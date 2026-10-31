@@ -3,6 +3,10 @@
 # Exercise the shipped CLI with synthetic metadata and record every forge call.
 # No native transcript store, GitHub credential or real repository is accessed.
 set -euo pipefail
+# A Git hook can export these; each would redirect every fixture command into
+# the caller's repository. Git names its own routing variables.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 FIX=$(mktemp -d)
@@ -662,6 +666,15 @@ nul_worktree="$FIX/home/codex/worktrees/nul/corpus"
 jq -cn --arg p "$nul_worktree" '{type:"session_meta",payload:{cwd:$p,git:{repository_url:("https://github.com/devantler-tech/monorepo.git"+"\u0000")}}}' > "$FIX/home/codex/sessions/scope.jsonl"
 printf '%s\n' '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"NUL_ADMISSION_CANARY"}]}}' >> "$FIX/home/codex/sessions/scope.jsonl"
 SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check excluded
+check not_measured
+# The same allow-list refuses every control character, not only the ones a
+# past finding named: a tab in a cwd is not a real recorded folder either.
+tab_cwd="$(printf '%s\tx' "$FIX/corpus/allowed")"
+jq -cn --arg p "$tab_cwd" '{type:"session_meta",payload:{cwd:$p}}' > "$FIX/home/codex/sessions/scope.jsonl"
+printf '%s\n' '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"NUL_ADMISSION_CANARY"}]}}' >> "$FIX/home/codex/sessions/scope.jsonl"
+SCOPE_PROJECTS="$FIX/no-projects" transcript_run
+check excluded
 check not_measured
 write_codex "$nul_worktree" https://github.com/devantler-tech/monorepo.git
 SCOPE_PROJECTS="$FIX/no-projects" transcript_run
