@@ -124,6 +124,11 @@ cat > "$tmp/events.json" <<'EOF'
 ]
 EOF
 
+# The full run's own card, so every section of it reads a card it can explain.
+cat > "$tmp/events-full.json" <<'EOF'
+[{"id":"alpha#10","truncated":false,"events":[{"at":"2026-07-15T00:00:00Z","from":"🫴 Ready","to":"🏃🏻‍♂️ In Progress"}]}]
+EOF
+
 fixture_env=(
   AGENT_INSTANCES_FILE="$tmp/instances.json"
   FLOW_NOW_UTC="2026-07-19T00:00:00Z"
@@ -131,7 +136,7 @@ fixture_env=(
   FLOW_CLOSED_JSON="$tmp/closed.json"
   FLOW_SUBSTANTIVE_JSON="$tmp/substantive.json"
   FLOW_PRS_JSON="$tmp/prs.json"
-  FLOW_EVENTS_JSON="$tmp/events.json"
+  FLOW_EVENTS_JSON="$tmp/events-full.json"
 )
 
 # Registered identity joins, including non-provider namespaces. One genuine
@@ -373,27 +378,31 @@ starts_card() { # number repo status first-started
 cat > "$tmp/closed-starts.json" <<'EOF'
 [{"number":9,"created_at":"2026-07-10T00:00:00Z","closed_at":"2026-07-18T00:00:00Z","repository_url":"https://api.github.com/repos/devantler-tech/alpha"}]
 EOF
-starts_env=("${fixture_env[@]}" FLOW_ITEMS_JSON="$tmp/items-starts.json" FLOW_CLOSED_JSON="$tmp/closed-starts.json"
+starts_env=("${fixture_env[@]}" FLOW_ITEMS_JSON="$tmp/items-starts.json" FLOW_EVENTS_JSON="$tmp/events.json" FLOW_CLOSED_JSON="$tmp/closed-starts.json"
   "FLOW_WIP_LIMITS=🏃🏻‍♂️ In Progress=3")
 out="$tmp/out-starts.txt"
 env "${starts_env[@]}" bash "$tool" --section starts > "$out" 2>&1 || fail "starts section exits 0"
 contains "starts counts every card read and flags a cut history" "$out" "cards read: 6 (past Backlog and Icebox, plus issues closed in the window); history cut short on 1"
-contains "an old entry stays out, and the count at entry is reconstructed" "$out" "entries: 4, at least 3 of them while the column was at or over its limit of 3"
+contains "an old entry stays out, and the count at entry is reconstructed" "$out" "entries: 4, 3 of them with the reconstructed column count at or over its limit of 3"
 contains "entries name their source column" "$out" "from: Ready 0, Backlog 1, Icebox 1, new card 1, later stage 1"
+contains "a card in the column with no recorded entry is named as a gap" "$out" "cards whose moves do not chain: 1,"
 contains "exits separate a stay under 24h" "$out" "exits: 2, 1 of them within 24h of entering"
 contains "the column ages, with an Epic excluded and no history named" "$out" "in the column now: 4: up to 1d 1, 1d to 3d 0, 3d to 7d 1, over 7d 1, entry not in history 1"
 contains "First started coverage is reported" "$out" "First started recorded: 1 of 4"
-contains "starts states what it does not read" "$out" "Backlog and Icebox cards are not read"
+contains "starts states what it does not read" "$out" "a card moved back to Backlog or Icebox (not read)"
 # An entry older than the window never counts toward the over-limit figure, however full the column was.
 env "${starts_env[@]}" "FLOW_WIP_LIMITS=🏃🏻‍♂️ In Progress=1" bash "$tool" --section starts > "$tmp/out-starts-1.txt" 2>&1 || fail "starts section exits 0 at a limit of 1"
-contains "an entry before the window is left out of the over-limit figure" "$tmp/out-starts-1.txt" "entries: 4, at least 4 of them"
+contains "an entry before the window is left out of the over-limit figure" "$tmp/out-starts-1.txt" "entries: 4, 4 of them"
 not_contains "--section starts omits WIP" "$out" "WIP per board Status"
 not_contains "starts passes no card identifier through" "$out" "alpha#"
 # Each unusable input is UNMEASURED and fails the run, never a clean zero.
 echo '[]' > "$tmp/events-empty.json"
 echo 'not json' > "$tmp/events-broken.json"
 echo '[{"id":"alpha#2","events":[{"at":"not a date","from":null,"to":"🏃🏻‍♂️ In Progress"}]}]' > "$tmp/events-drift.json"
-for broken in empty broken drift; do
+echo '[{"id":"alpha#2","truncated":false,"events":[]},{"id":"beta#3","truncated":false,"events":[]}]' > "$tmp/events-nomoves.json"
+echo '[{"id":"alpha#9","truncated":false,"events":[{"at":"2026-07-17T00:00:00Z","from":"🧊 Icebox","to":"🏃🏻‍♂️ In Progress"},{"at":"2026-07-17T06:00:00Z","from":"🏃🏻‍♂️ In Progress","to":"✅ Done"}]}]' > "$tmp/events-unexplained.json"
+# for broken in empty, unparseable, drifted, no moves at all, and none explaining the column:
+for broken in empty broken drift nomoves unexplained; do
   if env "${starts_env[@]}" FLOW_EVENTS_JSON="$tmp/events-$broken.json" bash "$tool" --section starts > "$out" 2>/dev/null; then
     fail "$broken status history must fail the run"
   else
@@ -405,6 +414,11 @@ if env "${starts_env[@]}" "FLOW_WIP_LIMITS=👀 In Review=3" bash "$tool" --sect
 else
   contains "a column with no limit is UNMEASURED" "$out" "section 'starts' failed"
 fi
+# An exit with no entry and an entry while already in both count; a clean chain does not.
+echo '[{"id":"alpha#1","truncated":false,"events":[{"at":"2026-07-15T00:00:00Z","from":"🫴 Ready","to":"🏃🏻‍♂️ In Progress"}]},{"id":"alpha#2","truncated":false,"events":[{"at":"2026-07-15T00:00:00Z","from":"🫴 Ready","to":"🏃🏻‍♂️ In Progress"},{"at":"2026-07-16T00:00:00Z","from":"📥 Backlog","to":"🏃🏻‍♂️ In Progress"}]},{"id":"beta#3","truncated":false,"events":[{"at":"2026-07-15T00:00:00Z","from":"🫴 Ready","to":"🏃🏻‍♂️ In Progress"}]},{"id":"beta#4","truncated":false,"events":[{"at":"2026-07-15T00:00:00Z","from":"🫴 Ready","to":"🏃🏻‍♂️ In Progress"}]},{"id":"alpha#7","truncated":false,"events":[{"at":"2026-07-16T00:00:00Z","from":"🏃🏻‍♂️ In Progress","to":"👀 In Review"}]},{"id":"alpha#9","truncated":false,"events":[{"at":"2026-07-17T00:00:00Z","from":"🧊 Icebox","to":"🏃🏻‍♂️ In Progress"}]}]' > "$tmp/events-gaps.json"
+env "${starts_env[@]}" FLOW_EVENTS_JSON="$tmp/events-gaps.json" bash "$tool" --section starts > "$tmp/out-gaps.txt" 2>&1 || fail "starts exits 0 with gaps"
+# alpha#2 re-enters without an exit; alpha#7 exits with no entry; alpha#9 ends in although closed.
+contains "moves that do not chain are counted per card" "$tmp/out-gaps.txt" "cards whose moves do not chain: 3,"
 # A live read that fails is reported the same way, with no fixture to fall back on.
 if env "${starts_env[@]}" FLOW_EVENTS_JSON= bash "$tool" --section starts > "$out" 2>/dev/null; then
   fail "a failed live history read must fail the run"

@@ -344,8 +344,9 @@ if want starts; then
              status: (field("Status") | .name.raw? // null),
              started: (field("First started") != null)})') || cards=""
     # Read every card past the Backlog and Icebox columns, plus every issue closed in the window.
-    wanted=$(jq -rn --argjson cards "${cards:-null}" --argjson closed "$closed" --arg now "$NOW_UTC" --argjson d "$WINDOW_DAYS" '
-      (($now|fromdateiso8601) - ($d*86400)) as $cut
+    wanted=$(printf '%s' "$closed" | jq -r --argjson cards "${cards:-null}" --arg now "$NOW_UTC" --argjson d "$WINDOW_DAYS" '
+      . as $closed
+      | (($now|fromdateiso8601) - ($d*86400)) as $cut
       | ([$cards[] | select(.status != null and (.status | test("(Backlog|Icebox)$") | not)) | .id]
          + [$closed[] | select(.closed_at != null and (.closed_at|fromdateiso8601) >= $cut)
             | (.repository_url | sub("^.*/"; "")) + "#" + (.number | tostring)])
@@ -371,6 +372,11 @@ if want starts; then
            | select(.from != .to)] | sort_by(.t) as $all
         | def entry: .to == $IP;
           def exit: .from == $IP;
+          # A read with no moves at all, or none that explains any card in the column, says nothing.
+          (if ($all | length) == 0 then error("no status moves in the history") else . end) |
+          (if ($current | length) > 0
+              and ([$current[].id] - [$all[] | select(entry) | .id] | length) == ($current | length)
+           then error("no card in the column has an entry in the history") else . end) |
           # Walk back from the column as it is now to the count just before each entry.
           (reduce ($all | reverse)[] as $e ({occ: ($current|length), over: 0};
              if ($e|entry) then .occ -= 1
@@ -391,6 +397,15 @@ if want starts; then
                  (if .start != null and $e.t >= $cut then .out += [$e.t - .start] else . end) | .start = null
                else . end) | .out) | add // []) as $stays
         | [$all[] | select(.t >= $cut and exit)] as $exits
+        # A card whose moves do not chain (an exit with no entry, an entry while already in, or a
+        # last move that disagrees with its column) makes the count at each entry unreliable.
+        | (($all | group_by(.id) | map(.[0].id as $id
+             | reduce .[] as $e ({in: false, bad: false};
+                 if ($e|entry) then (if .in then .bad = true else . end) | .in = true
+                 elif ($e|exit) then (if .in then . else .bad = true end) | .in = false
+                 else . end)
+             | select(.bad or (.in != any($current[]; .id == $id))) | $id))
+           + ([$current[].id] - [$all[] | select(entry) | .id]) | unique | length) as $gaps
         | ($current | map(.id as $id
              | ([$all[] | select(.id == $id and entry) | .t] | last) as $t
              | if $t == null then "unknown"
@@ -400,15 +415,16 @@ if want starts; then
                else "over 7d" end)
            | group_by(.) | map({key: .[0], value: length}) | from_entries) as $age
         | "  cards read: \($history|length) (past Backlog and Icebox, plus issues closed in the window); history cut short on \([$history[]|select(.truncated)]|length)",
-          "  entries: \($entries|length), at least \($walk.over) of them while the column was at or over its limit of \($limit)",
+          "  entries: \($entries|length), \($walk.over) of them with the reconstructed column count at or over its limit of \($limit)",
+          "  cards whose moves do not chain: \($gaps), so that count can be off by about as many",
           "    from: Ready \($from.Ready // 0), Backlog \($from.Backlog // 0), Icebox \($from.Icebox // 0), new card \($from["new card"] // 0), later stage \($from["later stage"] // 0)",
           "  exits: \($exits|length), \([$stays[]|select(. <= 86400)]|length) of them within 24h of entering",
           "  in the column now: \($current|length): up to 1d \($age["up to 1d"] // 0), 1d to 3d \($age["1d to 3d"] // 0), 3d to 7d \($age["3d to 7d"] // 0), over 7d \($age["over 7d"] // 0), entry not in history \($age.unknown // 0)",
           "  First started recorded: \([$current[]|select(.started)]|length) of \($current|length)"' ||
         section_failed starts "metric rendering failed (malformed or drifted status history) -- UNKNOWN"
-      echo "  NOTE: Backlog and Icebox cards are not read, so a card moved back there since"
-      echo "        entering is missing: the count at each entry is reconstructed and is a"
-      echo "        lower bound. Entries are counted per move, so re-entry counts again."
+      echo "  NOTE: the count at each entry is reconstructed backwards from today's column, so"
+      echo "        a card moved back to Backlog or Icebox (not read) or a move the history lacks"
+      echo "        shifts it. Entries and exits are counted per recorded move: floors, not totals."
       echo "        A short stay is not proof the work was finished: 'Done' is a board move."
     fi
   fi
