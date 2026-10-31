@@ -71,8 +71,7 @@ dispatch prompt had lost the entry (monorepo#4721).
 the full work-selection ladder as usual, including new work. It does not stop after rung 0 or started
 work, and it does not hold back new work because usage is ahead. A run that has seen the number anyway
 does not keep itself short because of it: 18 of 109 `daily-ai-assistant` runs did in the week ending
-2026-10-31. A run
-note that says it stops early when usage is ahead
+2026-10-31. A run note that says it stops early when usage is ahead
 is out of date. Pacing therefore brings the lane down to the hourly cadence it had before 2026-10-13.
 This happens only while usage is ahead of the week, and the lane goes back to two runs an hour once
 the week catches up. The Agent Improver and the Codex lane are not paced: the Improver used 2–16% of
@@ -83,7 +82,8 @@ the week's tokens, and Codex has its own allowance and no `get_usage` tool.
 Each lane's engineer starts from **two hourly scheduler entries**: its first entry
 (`daily-ai-assistant` on Claude at `:50`, `daily-ai-engineer` on Codex at `:10`) and
 `agentic-engineer-2` half an hour later (`:20` on Claude, `:40` on Codex). The second entry is the
-first one again with another start minute: the same prompt, working folder, model and settings, the
+first one again with another start minute: the same prompt apart from its own entry name, the same
+working folder, model and settings, the
 same branch namespace, and the same memory (for Codex, see the
 [durable memory guide](durable-memory.md)).
 
