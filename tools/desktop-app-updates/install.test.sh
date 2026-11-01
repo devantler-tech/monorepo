@@ -18,7 +18,7 @@ mkdir -p "$test_root/toolchain"
 go_tool=$(command -v go)
 {
   printf '#!/bin/bash\n'
-  printf 'printf invoked > "$HOME/go-invoked"\n'
+  printf 'printf invoked > %q\n' "$test_root/home/go-invoked"
   printf 'exec %q "$@"\n' "$go_tool"
 } > "$test_root/toolchain/go"
 chmod +x "$test_root/toolchain/go"
