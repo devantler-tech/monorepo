@@ -1494,14 +1494,14 @@ too. Reconcile each run with one bounded call —
 disagrees with **the list below**, survey the live set and flag the drift in the digest rather than
 dropping any repo. (A live repo absent from the portfolio map is *not* drift — the map intentionally
 names only products; flag map drift only when a product row's repo is missing or renamed in the live
-set, and a product row the map itself marks **archived** — e.g. `reusable-workflows` — is an
+set, and a product row the map itself marks **archived** is an
 intentional tombstone, never drift.) The list:
 `ksail`, `khoist`, `platform`, `monorepo`, `.github`, `go-template`, `dotnet-template`,
-`platform-tenant-template`, `platform-template`, `actions`, `homebrew-tap`, `agent-skills`,
+`platform-tenant-template`, `platform-template`, `homebrew-tap`, `agent-skills`,
 `agent-plugins`, `provider-upjet-unifi`, `kyverno-policies`, `fleet-gitops`, `aws`,
 `cloudflare`, `world-at-ruin`, `wedding-app`, `ascoachingogvaner`, `unifi`, `business-site`,
 `setup-agent-skills-action`, `update-agent-skills-action`, `guard-installed-skill-edits-action`.
-Archived repos (currently `reusable-workflows`, `data-product`, `doggy-countdown`) are
+Archived repos (read `.archived` live) are
 read-only: skip them entirely —
 no CI-red pass, no actionable signal (their stale bot PRs are unmergeable by design).
 
