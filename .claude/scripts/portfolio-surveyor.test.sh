@@ -26,7 +26,7 @@ trap on_exit EXIT
 maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 monorepo_skill="${repo_root}/.claude/skills/products/monorepo/SKILL.md"
 product_engineering_skill="${repo_root}/.claude/skills/product-engineering/SKILL.md"
-agent_skills_card="${repo_root}/.claude/skills/products/agent-skills/SKILL.md"
+agent_skills_card="${repo_root}/.claude/skills/products/agent-plugins/SKILL.md"
 ksail_card="${repo_root}/.claude/skills/products/ksail/SKILL.md"
 platform_card="${repo_root}/.claude/skills/products/platform/SKILL.md"
 platform_security_surveyor="${repo_root}/.claude/agents/platform-security-surveyor.md"
@@ -122,7 +122,7 @@ echo "portfolio surveyor contract: portfolio-map coverage assertion passed"
 
 # Every product in the canonical Portfolio map must have its maintenance card indexed in
 # portfolio-maintenance/SKILL.md, so the run loop loads its maintenance guidance.
-# Legitimate multi-repo cards (templates, applications, agent-skills, github-actions) are
+# Legitimate multi-repo cards (templates, applications, agent-plugins, github-actions) are
 # resolved explicitly to their shared card; org defaults (.github) carries no maintenance card.
 mapped_product_cards="$({
   awk -F '|' '
@@ -144,7 +144,7 @@ mapped_product_cards="$({
         sub(/`.*/, "", repo)
         if (repo == ".github") next
         if (repo == "actions") { print "github-actions"; next }
-        if (repo == "agent-plugins") { print "agent-skills"; next }
+        if (repo == "agent-plugins") { print "agent-plugins"; next }
         if (repo ~ /-template$/) { print "templates"; next }
         if (repo == "wedding-app" || repo == "ascoachingogvaner" || repo == "unifi") { print "applications"; next }
         print repo
@@ -883,11 +883,11 @@ grep -Fq 'when one cannot finish autonomously' "${monorepo_skill}" ||
 grep -Fq 'when they cannot finish autonomously' "${product_engineering_skill}" ||
   fail "product-engineering skill does not make stalled dependency PRs agent work"
 grep -Fq 'intervene when dependency automation cannot finish its PR' "${agent_skills_card}" ||
-  fail "agent-skills product card does not make stalled dependency PRs agent work"
+  fail "agent-plugins product card does not make stalled dependency PRs agent work"
 grep -Fq 'never spend a review lane on exit-0 exemptions' "${agent_skills_card}" ||
-  fail "agent-skills product card does not preserve the narrow no-review path"
+  fail "agent-plugins product card does not preserve the narrow no-review path"
 grep -Fq 'classifier exits 3' "${agent_skills_card}" ||
-  fail "agent-skills product card does not require semantic review for marketplace updates"
+  fail "agent-plugins product card does not require semantic review for marketplace updates"
 grep -Fq 'dependency-bot PRs that cannot finish autonomously' "${ksail_card}" ||
   fail "KSail product card does not make stalled dependency PRs agent work"
 grep -Fq 'Dependency automation is first-responder, not sole owner' "${constitution}" ||
@@ -1589,7 +1589,7 @@ expect_review_gated "agent-plugins per-skill update from another author" \
 # upstream is written by that upstream. So authorization comes from the reviewed allowlist beside the
 # classifier, and the frontmatter is only a corroborator that can withdraw the carve-out, never grant
 # it (#2614). `ways-of-working` is the one genuinely suite-owned skill installed in each consumer.
-suite_skill_owner="https://github.com/devantler-tech/agent-skills"
+suite_skill_owner="https://github.com/devantler-tech/agent-plugins"
 allowed_skills_files='[".agents/skills/ways-of-working/SKILL.md"]'
 allowed_skills_owners="$(jq -cn --arg o "${suite_skill_owner}" '{
   ".agents/skills/ways-of-working": $o
@@ -1945,7 +1945,7 @@ expect_allowlist_rejects() {
 allowlist_control_tmp="$(mktemp -d)"
 mkdir -p "${allowlist_control_tmp}/scripts"
 cp "${classifier}" "${allowlist_control_tmp}/scripts/"
-printf 'platform\t.agents/skills/ways-of-working\thttps://github.com/devantler-tech/agent-skills\n' \
+printf 'platform\t.agents/skills/ways-of-working\thttps://github.com/devantler-tech/agent-plugins\n' \
   >"${allowlist_control_tmp}/skill-ownership-allowlist.tsv"
 "${allowlist_control_tmp}/scripts/$(basename "${classifier}")" \
   "platform" "app/botantler-1" "deps/agent-skills-update" \
@@ -1960,9 +1960,9 @@ expect_allowlist_rejects "empty owner column" \
 expect_allowlist_rejects "owner drifted to another upstream" \
   "$(printf 'platform\t.agents/skills/ways-of-working\thttps://github.com/github/awesome-copilot')"
 expect_allowlist_rejects "root outside the installed-skill tree" \
-  "$(printf 'platform\t.github/workflows\thttps://github.com/devantler-tech/agent-skills')"
+  "$(printf 'platform\t.github/workflows\thttps://github.com/devantler-tech/agent-plugins')"
 expect_allowlist_rejects "duplicate root" \
-  "$(printf 'platform\t.agents/skills/ways-of-working\thttps://github.com/devantler-tech/agent-skills\nplatform\t.agents/skills/ways-of-working\thttps://github.com/devantler-tech/agent-skills')"
+  "$(printf 'platform\t.agents/skills/ways-of-working\thttps://github.com/devantler-tech/agent-plugins\nplatform\t.agents/skills/ways-of-working\thttps://github.com/devantler-tech/agent-plugins')"
 
 expect_exempt \
   "GoReleaser KSail cask" \

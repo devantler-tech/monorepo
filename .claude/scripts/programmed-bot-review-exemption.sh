@@ -108,7 +108,7 @@ repo="${repo#devantler-tech/}"
 # upstream it is meant to identify. It may name exactly one upstream: the carve-out exists for
 # content already reviewed here, so any other value is a malformed row rather than another owner.
 allowlist_file="$(cd "$(dirname "$0")/.." && pwd)/skill-ownership-allowlist.tsv"
-suite_skill_owner="https://github.com/devantler-tech/agent-skills"
+suite_skill_owner="https://github.com/devantler-tech/agent-plugins"
 
 commit_schema='type == "array" and length > 0 and all(.[];
   type == "object" and

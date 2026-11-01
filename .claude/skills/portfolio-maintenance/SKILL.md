@@ -6,7 +6,7 @@ description: The run procedure for the Agentic Engineer (the products' primary e
 # Portfolio engineering — the run loop
 
 > **Deployment compatibility overlay — not a generic authoring source.** Portable procedure changes
-> belong in the bundled `portfolio-maintenance` skill's provenance-recorded upstream and reach this
+> belong in the authored `portfolio-maintenance` skill in `devantler-tech/agent-plugins` and reach this
 > repository through the reviewed `agentic-engineering` plugin. Keep only devantler-tech deployment
 > deltas here; never add a second copy of generic behaviour.
 
@@ -525,7 +525,7 @@ It makes a few hundred API reads, which is why it is daily rather than every run
 `needs_attention`, and the
 CI/link caches — since the surveyor reads only live GitHub, not memory. ~Monthly, also do the
 **holistic review** (contract *Holistic review*): scan the suite for generic patterns to extract into
-the shared libraries (`devantler-tech/.github`, `agent-skills`, `agent-plugins`, and
+the shared libraries (`devantler-tech/.github`, `agent-plugins`, and
 `kyverno-policies` for cluster guardrail/admission/generation policy patterns) — and, on
 the same cadence (plus after any credential or agent-tooling change), a **read-only local-host
 least-privilege review** (contract *Local agent host*): token scopes, both agents' permission/sandbox
@@ -539,7 +539,7 @@ org-wide `gh search` first, deepen only the candidates — never the old per-rep
 
 Products → cards: [ksail](../products/ksail/SKILL.md) · [khoist](../products/khoist/SKILL.md) · [platform](../products/platform/SKILL.md) · [aws](../products/aws/SKILL.md) · [fleet-gitops](../products/fleet-gitops/SKILL.md) ·
 [cloudflare](../products/cloudflare/SKILL.md) · [monorepo](../products/monorepo/SKILL.md) · [business-site](../products/business-site/SKILL.md) · [templates](../products/templates/SKILL.md) ·
-[github-actions](../products/github-actions/SKILL.md) · [skills (+ plugins)](../products/agent-skills/SKILL.md) ·
+[github-actions](../products/github-actions/SKILL.md) · [agent plugins and skills](../products/agent-plugins/SKILL.md) ·
 [homebrew-tap](../products/homebrew-tap/SKILL.md) · [applications](../products/applications/SKILL.md) ·
 [provider-upjet-unifi](../products/provider-upjet-unifi/SKILL.md) ·
 [kyverno-policies](../products/kyverno-policies/SKILL.md) ·

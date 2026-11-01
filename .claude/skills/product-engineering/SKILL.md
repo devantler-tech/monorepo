@@ -6,7 +6,7 @@ description: "The ADVANCE playbook for the Agentic Engineer (the products' prima
 # Product engineering — moving products forward
 
 > **Deployment compatibility overlay — not a generic authoring source.** Portable procedure changes
-> belong in the bundled `product-engineering` skill's provenance-recorded upstream and reach this
+> belong in the authored `product-engineering` skill in `devantler-tech/agent-plugins` and reach this
 > repository through the reviewed `agentic-engineering` plugin. Keep only devantler-tech deployment
 > deltas here; never add a second copy of generic behaviour.
 
@@ -376,7 +376,7 @@ at once** — the highest-leverage advance work is often cross-cutting (contract
   step, a release/`.releaserc` setup, a workflow, a lint/test config, an agent skill, a docs
   convention), it's now *generic* — it belongs in a **shared library**, not copied per repo:
   - CI building blocks → `devantler-tech/.github` (shared composite actions and reusable workflows).
-  - Agent skills → `devantler-tech/agent-skills` (generic Copilot/agent skills, `gh skill`-installable).
+  - Agent skills → `devantler-tech/agent-plugins` (generic Copilot/agent skills, `gh skill`-installable).
   - Plugins → `devantler-tech/agent-plugins` — if a plugin-shaped pattern is ready and the
     repo doesn't exist, propose creating it (flag to the maintainer) rather than forcing it elsewhere.
   - Cluster guardrail / admission / generation policies → `devantler-tech/kyverno-policies` (the

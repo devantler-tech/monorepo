@@ -199,8 +199,7 @@ upstream, not in this guide.
   coverage. Track secret merge protection and other unsupported plan/API/provider paths as gaps;
   enabled secret scanning or push protection does not establish merge protection.
 - **Ownership and evidence:** repository/security settings belong to `devantler-tech/.github`'s
-  declarative configuration; portable intake belongs to `devantler-tech/agent-skills` and reaches
-  this deployment through `devantler-tech/agent-plugins`. Never round-trip unsupported rules through
+  declarative configuration; portable intake belongs to `devantler-tech/agent-plugins` and reaches this deployment through the reviewed plugin gitlink. Never round-trip unsupported rules through
   a lossy provider, imperatively fight reconciliation, or hand-edit bundle/cache copies. Keep
   repository-level findings, billing and access details in private out-of-repository evidence;
   request server-side secret-value hiding before any alert read. Publish only sanitized issue
@@ -399,7 +398,7 @@ work misses:
   in 2+ products has become *generic* — extract the reusable mechanism into the right **shared library**
   so its actual consumers inherit it instead of drifting: CI → `devantler-tech/.github` (composite actions
   + reusable workflows); agent skills →
-  `devantler-tech/agent-skills`; (plugins → `devantler-tech/agent-plugins` once created); cluster
+  `devantler-tech/agent-plugins` (skills and their plugin delivery); cluster
   guardrail / admission / generation policies → `devantler-tech/kyverno-policies`. Then propagate consumers
   to the shared version.
 - **Consistency & drift.** Versions, pinned actions, toolchains, conventions, and `AGENTS.md
@@ -414,8 +413,7 @@ backward-compatibly. A single-product finding stays in that product's repository
 
 **Shared libraries** (leverage points across the whole suite — see *Holistic review* and the
 `product-engineering` skill): the CI building blocks in `devantler-tech/.github` (shared composite
-actions and reusable workflows), the agent extensions `devantler-tech/agent-skills` (generic,
-cross-tool agent skills) + `devantler-tech/agent-plugins` (a tool-neutral marketplace bundling those skills
+actions and reusable workflows), the agent extensions `devantler-tech/agent-plugins` (maintained generic skills and a tool-neutral marketplace
 for VS Code / Copilot CLI / Claude Code), and the cluster-guardrail
 catalog `devantler-tech/kyverno-policies` (shared, tested Kyverno policies the platform and
 platform-template consume instead of vendoring copies). A generic pattern proven in one

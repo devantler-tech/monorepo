@@ -38,10 +38,6 @@
 	path = applications/ascoachingogvaner
 	url = git@github.com:devantler-tech/ascoachingogvaner.git
 	branch = main
-[submodule "libraries/agent-skills"]
-	path = libraries/agent-skills
-	url = git@github.com:devantler-tech/agent-skills.git
-	branch = main
 [submodule "libraries/agent-plugins"]
 	path = libraries/agent-plugins
 	url = git@github.com:devantler-tech/agent-plugins.git
