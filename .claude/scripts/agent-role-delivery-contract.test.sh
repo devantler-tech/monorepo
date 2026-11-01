@@ -326,6 +326,10 @@ fi
 
 # Maintained skills are now authored in their plugin, with the same narrow grant.
 skill_path='plugins/agentic-engineering/skills/agent-improvement/SKILL.md'
+plugin_root="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering"
+bundled_skill="${repo_root}/libraries/agent-plugins/${skill_path}"
+[ -d "$plugin_root" ] && [ -f "$bundled_skill" ] ||
+  fail "initialise the reviewed plugin with .claude/scripts/submodule-init.sh libraries/agent-plugins"
 skill_bullet="$(awk '
   !inb && /devantler-tech\/agent-plugins.*authors maintained skills/ { inb=1; print; next }
   inb { if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*[-*+] /) exit; print }
@@ -338,7 +342,11 @@ esac
 command -v yq >/dev/null || fail "yq is required to verify skill ownership"
 observed_owner="$("${repo_root}/.claude/scripts/skill-owner.sh" --plugin agentic-engineering --skill agent-improvement --check-reviewed)" ||
   fail "maintained skill ownership cannot be verified against the reviewed mapping"
-case "$observed_owner" in LOCAL*) ;; *) fail "maintained skill must be authored locally in agent-plugins" ;; esac
+printf '%s\n' "$observed_owner" | awk -F '\t' -v path="$skill_path" '
+  NF == 5 && $1 == "MATCH" && $2 == "LOCAL" && $3 == "LOCAL" &&
+    $4 == "agent-improvement" && $5 == path { valid++ }
+  END { exit !(NR == 1 && valid == 1) }
+' || fail "maintained skill must be authored locally in agent-plugins"
 
 # Every machine-readable entrypoint pointer must resolve to an agent the pinned plugin
 # actually BUNDLES. Derived from the submodule rather than hard-coded, so the next upstream
