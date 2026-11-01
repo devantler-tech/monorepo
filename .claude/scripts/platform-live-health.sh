@@ -26,6 +26,13 @@
 # deploy does, so it is reported as PROGRESSING and never fails the check. Condition MESSAGES are
 # never printed: they can carry internal hostnames, and the reason is enough to act on.
 #
+# A SUSPENSION NEVER FAILS THE CHECK, and `deploy-fence=` says who holds one. A production deploy
+# suspends Flux layers while it swaps registry credentials and records itself in an owner
+# annotation on each. Such a layer is that deploy's to release: never resume it by hand, even when
+# no deploy seems to be running, because the platform's own recovery tests the owner before it
+# releases. Only the annotation's name is printed; its value identifies a run. A SUSPENDED line
+# with no `deploy-fence=` has no owner this read can name.
+#
 # USAGE
 #   platform-live-health.sh [--context <kube-context>]
 #
@@ -51,7 +58,7 @@ usage_die() { printf 'platform-live-health: %s\n' "$1" >&2; exit 2; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --context) [ $# -ge 2 ] || usage_die "--context needs a value"; context="$2"; shift 2 ;;
-    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,48p' "$0"; exit 0 ;;
     *) usage_die "unknown argument: $1" ;;
   esac
 done
@@ -131,7 +138,13 @@ flux_rows='
      elif ($ready.status // "") != "True" then
        "PROGRESSING \($id)"
      else empty end),
-    (if (.spec.suspend // false) then "SUSPENDED \($id)" else empty end)
+    (if (.spec.suspend // false) then
+       "SUSPENDED \($id)\(
+         (.metadata.annotations // {}) | keys
+         | map(select(. == "platform.devantler.tech/ghcr-policy-handoff-owner"
+                      or . == "platform.devantler.tech/ghcr-policy-parent-owner"))
+         | if length > 0 then " deploy-fence=\(.[0] | split("/")[1]) (held by a deploy: never resume by hand)" else "" end)"
+     else empty end)
 '
 
 if read_json kustomizations kustomizations.kustomize.toolkit.fluxcd.io -A; then

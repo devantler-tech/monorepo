@@ -206,6 +206,20 @@ scenario suspended
 printf '{"items":[{"kind":"Kustomization","metadata":{"namespace":"flux-system","name":"apps"},"spec":{"suspend":true},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' >"$FAKE/kustomizations.json"
 run
 expect "a suspension is reported" 0 "SUSPENDED Kustomization flux-system/apps"
+grep -qF deploy-fence "$tmp/out" && fail "a suspension with no owner annotation must not name a deploy fence"
+
+# A deploy fence names the annotation and never its value, which identifies a run.
+scenario fenced
+list \
+  '{"kind":"Kustomization","metadata":{"namespace":"flux-system","name":"flux-system","annotations":{"platform.devantler.tech/ghcr-policy-parent-owner":"holder-value"}},"spec":{"suspend":true},"status":{"conditions":[{"type":"Ready","status":"True"}]}}' \
+  '{"kind":"Kustomization","metadata":{"namespace":"flux-system","name":"infrastructure","annotations":{"platform.devantler.tech/ghcr-policy-handoff-owner":"holder-value"}},"spec":{"suspend":true},"status":{"conditions":[{"type":"Ready","status":"True"}]}}' \
+  '{"kind":"Kustomization","metadata":{"namespace":"flux-system","name":"apps","annotations":{"example.com/other":"holder-value"}},"spec":{"suspend":true},"status":{"conditions":[{"type":"Ready","status":"True"}]}}' \
+  >"$FAKE/kustomizations.json"
+run
+expect "the parent fence is named" 0 "SUSPENDED Kustomization flux-system/flux-system deploy-fence=ghcr-policy-parent-owner"
+expect "the child fence is named" 0 "SUSPENDED Kustomization flux-system/infrastructure deploy-fence=ghcr-policy-handoff-owner (held by a deploy: never resume by hand)"
+grep -qxF "SUSPENDED Kustomization flux-system/apps" "$tmp/out" || fail "an unrelated annotation must not read as a deploy fence"
+grep -qF holder-value "$tmp/out" && fail "the fence owner value must never be printed"
 
 # Every way a read can fail is UNKNOWN, never healthy.
 scenario refused
