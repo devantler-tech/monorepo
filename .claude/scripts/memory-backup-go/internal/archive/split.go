@@ -8,6 +8,10 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/text"
 )
 
 var (
@@ -36,6 +40,11 @@ func Split(source []byte, selector string) ([]byte, []byte, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid selector: %w", err)
 	}
+	htmlSource, err := maskSameLineCode(source)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	type boundary struct {
 		offset, depth int
 		selected      bool
@@ -61,6 +70,7 @@ func Split(source []byte, selector string) ([]byte, []byte, error) {
 			offset += len(record)
 			continue
 		}
+		htmlLine := strings.TrimSuffix(strings.TrimSuffix(string(htmlSource[offset:offset+len(record)]), "\n"), "\r")
 		f := fence.FindStringSubmatch(line)
 		if marker != "" {
 			if f != nil && f[1][0] == marker[0] && len(f[1]) >= len(marker) && strings.TrimSpace(f[2]) == "" {
@@ -68,10 +78,10 @@ func Split(source []byte, selector string) ([]byte, []byte, error) {
 			}
 		} else if f != nil && (f[1][0] != '`' || !strings.Contains(f[2], "`")) {
 			marker = f[1]
-		} else if strings.Contains(line, "<!--") || strings.Contains(line, "-->") {
+		} else if strings.Contains(htmlLine, "<!--") || strings.Contains(htmlLine, "-->") {
 			// Conserving bytes does not justify splitting an unmatched delimiter.
 			return nil, nil, errors.New("HTML comments are unsupported outside fenced text")
-		} else if rawHTML.MatchString(line) {
+		} else if rawHTML.MatchString(htmlLine) {
 			return nil, nil, errors.New("raw HTML is unsupported outside fenced text")
 		} else if wasParagraph && setext.MatchString(line) {
 			return nil, nil, errors.New("setext headings are unsupported; use ATX headings")
@@ -111,6 +121,46 @@ func Split(source []byte, selector string) ([]byte, []byte, error) {
 		return nil, nil, err
 	}
 	return keep, moved, nil
+}
+
+// maskSameLineCode uses CommonMark parsing to distinguish code from autolinks,
+// HTML and other inline syntax. The copy is only for conservative HTML checks;
+// section selection and conservation always operate on the untouched source.
+func maskSameLineCode(source []byte) ([]byte, error) {
+	masked := bytes.Clone(source)
+	document := goldmark.DefaultParser().Parse(text.NewReader(source))
+	err := ast.Walk(document, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering || node.Kind() != ast.KindCodeSpan {
+			return ast.WalkContinue, nil
+		}
+		// Goldmark retains one text segment per source line. Multiline code is
+		// outside this archive grammar, so it never receives an HTML exemption.
+		if node.ChildCount() != 1 {
+			return ast.WalkSkipChildren, nil
+		}
+		content, ok := node.FirstChild().(*ast.Text)
+		if !ok {
+			return ast.WalkStop, errors.New("unproven inline code source segment")
+		}
+		start, stop := content.Segment.Start, content.Segment.Stop
+		if start < 0 || stop < start || stop > len(source) {
+			return ast.WalkStop, errors.New("invalid inline code source range")
+		}
+		// CommonMark may trim one padding space or newline at either end.
+		// Include those adjacent bytes when establishing physical-line scope.
+		left, right := max(0, start-1), min(len(source), stop+1)
+		if bytes.ContainsAny(source[left:right], "\r\n") {
+			return ast.WalkSkipChildren, nil
+		}
+		for i := start; i < stop; i++ {
+			masked[i] = '*'
+		}
+		return ast.WalkSkipChildren, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("inspect inline code: %w", err)
+	}
+	return masked, nil
 }
 
 // records preserves the final unterminated line and every duplicate verbatim.
