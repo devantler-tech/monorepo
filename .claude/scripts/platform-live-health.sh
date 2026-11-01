@@ -143,7 +143,7 @@ flux_rows='
          (.metadata.annotations // {}) | keys
          | map(select(. == "platform.devantler.tech/ghcr-policy-handoff-owner"
                       or . == "platform.devantler.tech/ghcr-policy-parent-owner"))
-         | if length > 0 then " deploy-fence=\(.[0] | split("/")[1])" else "" end)"
+         | if length > 0 then " deploy-fence=\(.[0] | split("/")[1]) (held by a deploy: never resume by hand)" else "" end)"
      else empty end)
 '
 

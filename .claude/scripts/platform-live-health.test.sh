@@ -217,7 +217,7 @@ list \
   >"$FAKE/kustomizations.json"
 run
 expect "the parent fence is named" 0 "SUSPENDED Kustomization flux-system/flux-system deploy-fence=ghcr-policy-parent-owner"
-expect "the child fence is named" 0 "SUSPENDED Kustomization flux-system/infrastructure deploy-fence=ghcr-policy-handoff-owner"
+expect "the child fence is named" 0 "SUSPENDED Kustomization flux-system/infrastructure deploy-fence=ghcr-policy-handoff-owner (held by a deploy: never resume by hand)"
 grep -qxF "SUSPENDED Kustomization flux-system/apps" "$tmp/out" || fail "an unrelated annotation must not read as a deploy fence"
 grep -qF holder-value "$tmp/out" && fail "the fence owner value must never be printed"
 
