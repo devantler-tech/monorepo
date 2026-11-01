@@ -1909,6 +1909,25 @@ printf 'NEVER self-promote those drafts.\n' > "$FIX/claude-sched/$ENTRY2/SKILL.m
 OUT=$(TWO --section drift)
 check "a second loader asserting a retired rule is drift" "$OUT" \
   "DRIFT: $ENTRY2 still asserts the definition-PR promotion gate"
+# A loader naming the retired channel is drift; one that only says it is retired is not, and
+# neither wording is drift until the contract records the retirement.
+cp "$FIX/monorepo/AGENTS.md" "$FIX/monorepo/AGENTS.md.slack-off"
+printf 'Blocked? Send one Slack DM to the maintainer.\n' > "$FIX/claude-sched/$ENTRY2/SKILL.md"
+OUT=$(TWO --section drift)
+nocheck "a Slack ask is not drift while the contract keeps the channel" "$OUT" "still sends a run to Slack"
+printf 'Slack is retired; use a maintainer-ask issue.\n' >> "$FIX/monorepo/AGENTS.md"
+OUT=$(TWO --section drift)
+check "a loader naming a Slack DM after its retirement is drift" "$OUT" \
+  "DRIFT: $ENTRY2 still sends a run to Slack"
+for wording in "Post the ask in Slack." "Ping him over Slack." "Use the slack_send_message tool."; do
+  printf '%s\n' "$wording" > "$FIX/claude-sched/$ENTRY2/SKILL.md"
+  OUT=$(TWO --section drift)
+  check "drift names the loader wording: $wording" "$OUT" "DRIFT: $ENTRY2 still sends a run to Slack"
+done
+printf 'Blocked? One maintainer-ask issue. Slack is retired.\n' > "$FIX/claude-sched/$ENTRY2/SKILL.md"
+OUT=$(TWO --section drift)
+nocheck "a loader saying Slack is retired is not drift" "$OUT" "still sends a run to Slack"
+mv "$FIX/monorepo/AGENTS.md.slack-off" "$FIX/monorepo/AGENTS.md"
 cp "$FIX/claude-sched/daily-ai-assistant/SKILL.md" "$FIX/claude-sched/$ENTRY2/SKILL.md"
 mv "$FIX/claude-sched/$ENTRY2/SKILL.md" "$FIX/claude-sched/$ENTRY2/SKILL.md.hidden"
 OUT=$(TWO --section drift)
