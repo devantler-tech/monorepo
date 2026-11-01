@@ -45,8 +45,8 @@ endpoints, or synthetic chat continuations are used.
 A native save/quit confirmation, refusal, timeout, or remaining process defers
 the update. The per-app pending record is retained: later checks do not send
 repeated quit requests. Complete the native quit when work is saved and ready;
-the next hourly run restores the client, even if that quit happened after the
-original timeout. The other app can still update independently. Failed updates
+the next hourly run finishes the queued update and restores the client, even if
+that quit happened after the original timeout. The other app can still update independently. Failed updates
 also attempt normal restoration; a failed reopen is retried before network work.
 
 App reopening relies on the application's own saved-state/session restoration.

@@ -1,7 +1,6 @@
 #!/bin/bash
 # Homebrew maintenance for this Mac's two desktop apps. No agent or chat access.
 set -uo pipefail
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1
 export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 HOMEBREW_NO_INSTALL_UPGRADE=1
 export HOMEBREW_NO_UPGRADE_QUIT_CASKS=1 HOMEBREW_NO_ANALYTICS=1
@@ -13,6 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIFECYCLE="$SCRIPT_DIR/app-lifecycle"
 MODE=check
 RECOVERED_TOKENS=""
+RESUMING_TOKEN=""
 
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 brew_cmd() {
@@ -103,6 +103,10 @@ recover_one() {
   else
     rc=$?
     [[ "$rc" == 1 ]] || { log "ERROR $token: cannot read client state for restoration"; return 1; }
+    if [[ "$phase" == quit_requested && "${2:-false}" == true ]]; then
+      log "READY $token: delayed normal quit completed; finish the queued update before reopening"
+      return 0
+    fi
     reopen_app "$app" "$bundle_id" || { log "ERROR $token: automatic reopen failed; retained restart journal"; return 1; }
     did_reopen=true
   fi
@@ -129,7 +133,7 @@ recover_pending() {
     jq '. + {phase:"update_started"}' "$legacy" > "$STATE_DIR/pending-$token.json.tmp" &&
       mv "$STATE_DIR/pending-$token.json.tmp" "$STATE_DIR/pending-$token.json" && rm "$legacy" || return 1
   fi
-  for token in claude chatgpt; do recover_one "$token" || failed=1; done
+  for token in claude chatgpt; do recover_one "$token" true || failed=1; done
   return "$failed"
 }
 
@@ -141,9 +145,36 @@ snapshot_result() {
 }
 
 update_one() {
-  local token="$1" app="$2" bundle_id="$3"
-  local metadata refreshed definition next_definition available receipt before build identity comparison rc snapshot after pending="$STATE_DIR/pending-$token.json" was_running=false reopened=false
+  local token="$1" app="$2" bundle_id="$3" rc=0 pending="$STATE_DIR/pending-$1.json"
+  local RESUMING_TOKEN=""
   if [[ -f "$pending" ]]; then
+    # Resume only a validated, completed normal quit. Every exit path below
+    # restores the client, including metadata/network/version-check failures.
+    if ! jq -e --arg token "$token" --arg app "$app" --arg id "$bundle_id" \
+      '.cask==$token and .path==$app and .bundleId==$id and .wasRunning==true and .phase=="quit_requested"' \
+      "$pending" >/dev/null; then
+      log "WAIT $token: unfinished app restoration is retained"
+      return 1
+    fi
+    if client_running "$app" "$bundle_id"; then
+      log "WAIT $token: native quit is pending or cancelled; no new quit or update"
+      return 0
+    else rc=$?; [[ "$rc" == 1 ]] || return 1; fi
+    # Check mode must never apply or restore anything.
+    [[ "$MODE" == apply ]] || { log "READY $token: delayed quit completed; --apply will update and reopen"; return 0; }
+    jq '.phase="update_started"' "$pending" > "$pending.tmp" && mv "$pending.tmp" "$pending" || return 1
+    RESUMING_TOKEN="$token"
+  fi
+  rc=0
+  perform_update "$token" "$app" "$bundle_id" || rc=$?
+  if [[ "$RESUMING_TOKEN" == "$token" ]]; then recover_one "$token" || rc=1; fi
+  return "$rc"
+}
+
+perform_update() {
+  local token="$1" app="$2" bundle_id="$3"
+  local metadata refreshed definition next_definition available receipt before build identity comparison rc snapshot after pending="$STATE_DIR/pending-$token.json" was_running=false needs_quit=false reopened=false
+  if [[ -f "$pending" && "$RESUMING_TOKEN" != "$token" ]]; then
     log "WAIT $token: pending app restoration is retained; no new quit or update"
     return 0
   fi
@@ -173,7 +204,7 @@ update_one() {
   comparison=$(compare_versions "$before" "$available") || { log "ERROR $token: unsupported version format"; return 1; }
   if [[ "$comparison" == 1 ]]; then log "SKIP $token: installed $before is newer than Homebrew $available"; return 0; fi
   if [[ "$comparison" == 0 ]]; then log "CURRENT $token: $before (Homebrew managed)"; return 0; fi
-  if app_running "$app"; then was_running=true;
+  if app_running "$app"; then was_running=true; needs_quit=true;
   else rc=$?; [[ "$rc" == 1 ]] || { log "ERROR $token: process state unknown"; return 1; }; fi
   if [[ "$MODE" == check ]]; then
     log "PLAN $token: $before -> $available; gracefully quit/reopen if running (currently running=$was_running)"
@@ -190,8 +221,10 @@ update_one() {
     return 0
   fi
   was_running=false
-  if app_running "$app"; then was_running=true;
+  needs_quit=false
+  if app_running "$app"; then was_running=true; needs_quit=true;
   else rc=$?; [[ "$rc" == 1 ]] || { log "ERROR $token: process state unknown after download"; return 1; }; fi
+  [[ "$RESUMING_TOKEN" != "$token" ]] || was_running=true
   [[ $(plist_value "$app" CFBundleShortVersionString) == "$before" &&
      $(plist_value "$app" CFBundleVersion) == "$build" &&
      $(plist_value "$app" CFBundleIdentifier) == "$identity" ]] || { log "DEFER $token: bundle changed during download"; return 0; }
@@ -203,7 +236,7 @@ update_one() {
     > "$snapshot" || return 1
   if [[ "$was_running" == true ]]; then
     cp "$snapshot" "$pending.tmp" && mv "$pending.tmp" "$pending" || return 1
-    if ! quit_app_gracefully "$app" "$bundle_id"; then
+    if [[ "$needs_quit" == true ]] && ! quit_app_gracefully "$app" "$bundle_id"; then
       log "DEFER $token: normal quit was refused or timed out; no update performed"
       recover_one "$token" || return 1
       if [[ ! -f "$pending" ]]; then reopened=$(jq -r '.reopened' "$STATE_DIR/recovery-last-$token.json") || return 1; fi
@@ -291,6 +324,7 @@ acquire_lock() {
 main() {
   local failed=0 rc
   [[ $# -le 1 ]] || { printf 'Usage: update-agent-desktops [--check|--apply]\n' >&2; return 2; }
+  export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   case "${1:---check}" in
     --check) MODE=check ;;
     --apply) MODE=apply ;;
@@ -306,7 +340,12 @@ main() {
     trap 'exit 143' TERM
     recover_pending || failed=1
     [[ ! -f "$STATE_DIR/reopen-pending.json" ]] || { log 'ERROR: unresolved legacy recovery journal'; return 1; }
-    brew_cmd update --quiet || { log 'ERROR: Homebrew refresh failed'; return 1; }
+    if ! brew_cmd update --quiet; then
+      log 'ERROR: Homebrew refresh failed; restoring any closed clients'
+      recover_one claude
+      recover_one chatgpt
+      return 1
+    fi
   fi
   update_one claude /Applications/Claude.app com.anthropic.claudefordesktop || failed=1
   update_one chatgpt /Applications/ChatGPT.app com.openai.codex || failed=1

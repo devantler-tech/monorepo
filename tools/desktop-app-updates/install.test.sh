@@ -14,7 +14,16 @@ cmp "$script_dir/update.sh" "$deployment/current/update.sh"
 # Installing again must retain the previous immutable release and unrelated files.
 previous=$(readlink "$deployment/current")
 touch "$deployment/unrelated"
-HOME="$test_root/home" bash "$script_dir/install.sh" --no-schedule
+mkdir -p "$test_root/toolchain"
+go_tool=$(command -v go)
+{
+  printf '#!/bin/bash\n'
+  printf 'printf invoked > "$HOME/go-invoked"\n'
+  printf 'exec %q "$@"\n' "$go_tool"
+} > "$test_root/toolchain/go"
+chmod +x "$test_root/toolchain/go"
+HOME="$test_root/home" PATH="$test_root/toolchain:$PATH" bash "$script_dir/install.sh" --no-schedule
+[[ -f "$test_root/home/go-invoked" ]] || { printf 'FAIL: installer discarded the selected Go toolchain\n' >&2; exit 1; }
 [[ -d "$deployment/$previous" && -f "$deployment/unrelated" ]]
 cmp "$script_dir/update.sh" "$deployment/current/update.sh"
 printf 'PASS: reproducible install, immutable previous release, source identity and schedule opt-in\n'

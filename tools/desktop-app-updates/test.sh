@@ -32,12 +32,14 @@ setup_case() {
   reopen_failure=0
   quit_changes_version=0
   metadata_drift=0
+  refresh_failure=0
   RECOVERED_TOKENS=""
 }
 brew_cmd() {
   printf '%s\n' "$*" >> "$CASE_DIR/calls"
   local token="${!#}"
   case "$1" in
+    update) [[ "$refresh_failure" == 0 ]] || return 1 ;;
     info)
       if [[ "$metadata_bad" == 1 ]]; then printf '{}\n'; return; fi
       local available=4.2.0 receipt=4.0.0 app=Claude.app
@@ -122,8 +124,30 @@ recover_pending > "$CASE_DIR/recovery-output"
 # Simulate the user completing the native quit after the updater timed out.
 running=1
 recover_pending > "$CASE_DIR/recovery-output"
+run_claude
+[[ $(cat "$CASE_DIR/claude.version") == 4.2.0 ]] || fail 'late quit did not finish the queued update before reopening'
 [[ "$running" == 0 ]] || fail 'late quit left the original client closed'
 [[ ! -f "$STATE_DIR/pending-claude.json" ]] || fail 'late reopen did not finish recovery'
+
+setup_case late_quit_download_failure
+running=0
+quit_refused=1
+run_claude
+running=1
+fetch_failure=1
+if run_claude; then fail 'late-quit download failure was hidden'; fi
+[[ "$running" == 0 ]] || fail 'download failure left delayed-quit client closed'
+[[ ! -f "$STATE_DIR/pending-claude.json" ]] || fail 'restored client retained stale recovery'
+
+setup_case late_quit_refresh_failure
+running=0
+quit_refused=1
+run_claude
+running=1
+refresh_failure=1
+if (main --apply > "$CASE_DIR/refresh-output" 2>&1); then fail 'Homebrew refresh failure was hidden'; fi
+grep -q '^reopen /Applications/Claude.app$' "$CASE_DIR/calls" || fail 'failed refresh stranded delayed-quit client'
+[[ ! -f "$STATE_DIR/pending-claude.json" ]] || fail 'failed refresh lost completed recovery'
 
 setup_case failed_update_reopens
 running=0
