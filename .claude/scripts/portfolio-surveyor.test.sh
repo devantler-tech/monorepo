@@ -4006,6 +4006,9 @@ _fallback_inventory=$(sed -n '/^Portfolio repos\./,/^Archived repos/p' "${survey
 if grep -Fq "\`maintenance\`" <<<"${_fallback_inventory}"; then
   fail 'retired maintenance remains in the surveyor fallback inventory (round 11)'
 fi
+if grep -Fq "\`actions\`" <<<"${_fallback_inventory}"; then
+  fail 'retired actions remains in the surveyor fallback inventory (round 11)'
+fi
 echo "portfolio surveyor contract: round-11 product-vs-infra exclusion assertions passed (${_exclusion_count} statements)"
 unset _exclusion_lists _exclusion_count _control_product _fallback_inventory _portfolio_map
 
