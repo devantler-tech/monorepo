@@ -26,4 +26,25 @@ HOME="$test_root/home" PATH="$test_root/toolchain:$PATH" bash "$script_dir/insta
 [[ -f "$test_root/home/go-invoked" ]] || { printf 'FAIL: installer discarded the selected Go toolchain\n' >&2; exit 1; }
 [[ -d "$deployment/$previous" && -f "$deployment/unrelated" ]]
 cmp "$script_dir/update.sh" "$deployment/current/update.sh"
-printf 'PASS: reproducible install, immutable previous release, source identity and schedule opt-in\n'
+# launchd can still be removing the old job when bootstrap runs: a transient
+# refusal must not leave the hourly schedule unloaded, and a lasting one must fail.
+mkdir -p "$test_root/launchd"
+cat > "$test_root/launchd/launchctl" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$1" >> "$HOME/launchctl-calls"
+if [[ "$1" == bootstrap ]]; then
+  count=$(grep -c '^bootstrap$' "$HOME/launchctl-calls")
+  ((count > ${BOOTSTRAP_REFUSALS:-0})) || exit 5
+fi
+STUB
+printf '#!/bin/bash\n' > "$test_root/launchd/sleep"
+chmod +x "$test_root/launchd/launchctl" "$test_root/launchd/sleep"
+HOME="$test_root/home" PATH="$test_root/launchd:$PATH" BOOTSTRAP_REFUSALS=2 bash "$script_dir/install.sh" --schedule >/dev/null 2>&1 \
+  || { printf 'FAIL: a transient bootstrap refusal failed the install\n' >&2; exit 1; }
+[[ $(grep -c '^bootstrap$' "$test_root/home/launchctl-calls") == 3 ]] || { printf 'FAIL: bootstrap was not retried until it loaded\n' >&2; exit 1; }
+rm "$test_root/home/launchctl-calls"
+if HOME="$test_root/home" PATH="$test_root/launchd:$PATH" BOOTSTRAP_REFUSALS=99 bash "$script_dir/install.sh" --schedule >/dev/null 2>&1; then
+  printf 'FAIL: a lasting bootstrap refusal reported success\n' >&2; exit 1
+fi
+[[ $(grep -c '^bootstrap$' "$test_root/home/launchctl-calls") == 5 ]] || { printf 'FAIL: bootstrap retries are not bounded at five\n' >&2; exit 1; }
+printf 'PASS: reproducible install, immutable previous release, source identity, schedule opt-in and bootstrap retry\n'

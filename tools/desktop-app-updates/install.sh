@@ -68,7 +68,13 @@ if [[ "$schedule" == true ]]; then
     launchctl bootout "$domain/$label"
   fi
   mv "$plist.tmp-$$" "$plist"
-  launchctl bootstrap "$domain" "$plist"
+  # bootout can return before launchd has removed the old job.
+  attempt=1
+  until launchctl bootstrap "$domain" "$plist"; do
+    ((attempt < 5)) || { printf 'launchd refused the hourly schedule after %s attempts\n' "$attempt" >&2; exit 1; }
+    attempt=$((attempt + 1))
+    sleep 1
+  done
   printf 'Hourly schedule loaded; no app restart is triggered by installation.\n'
 fi
 printf 'Installed source %s from revision %s\n' "$digest" "$revision"
