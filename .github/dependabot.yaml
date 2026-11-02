@@ -32,9 +32,12 @@ updates:
     # One pull request per moved product starts about 1,800 CI jobs at once and
     # makes Platform's production deploys wait for runners (#4775). Group them;
     # agent-plugins stays separate because it moves the reviewed agent definition.
+    # fleet-gitops stays separate because each bump must also move its exact-pin
+    # row in .claude/submodule-agents-drift-exceptions.tsv, or the group goes red.
     groups:
       products:
         patterns:
           - "*"
         exclude-patterns:
           - "libraries/agent-plugins"
+          - "applications/fleet-gitops"
