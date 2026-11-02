@@ -1,8 +1,12 @@
 # ADR 0008: Portfolio frontend foundation
 
-Status: Proposed — Svelte migration direction selected; comparative spike remains open
+Status: Superseded by [ADR 0013](0013-product-owned-frontend-decisions.md) on 2026-11-02
 
 Date: 2026-10-15
+
+This dated proposal and its incomplete measurements are retained as history. ADR 0013
+replaces its prospective shared-frontend decision and broad-comparison prerequisite;
+it does not turn the unperformed comparisons below into successful results.
 
 ## Context
 
