@@ -27,7 +27,7 @@
 #
 # `LOCAL` means the skill declares no `metadata.github-repo` and is therefore authored in the plugin
 # repository itself. Any other value is printed VERBATIM so a caller can compare it exactly — a
-# prefix-extended lookalike (`agent-skills-v2`) must not be mistaken for the suite upstream.
+# prefix-extended lookalike (`unlisted-source-v2`) must not be mistaken for the suite upstream.
 #
 # `--check-reviewed [file]` compares what each skill CLAIMS against the REVIEWED mapping in
 # `.claude/bundled-skill-ownership.tsv` (rows `<plugin>\t<skill>\t<owner>`), which lives outside the
@@ -146,7 +146,7 @@ if [ "$CHECK_REVIEWED" = 1 ]; then
         $0 == "" { next }
         NF != 3 || $1 == "" || $2 == "" || $3 == "" { print "MALFORMED: " $0 > "/dev/stderr"; exit 1 }
         # A `#` is only ever a whole-line comment here: stripping it mid-line would rewrite a value
-        # (`…/agent-skills#readme` would compare as `…/agent-skills`), and a control character in a
+        # (`…/skills-source#readme` would compare as `…/skills-source`), and a control character in a
         # key or value would let one row print as two. Both are malformed, never a different owner.
         $1 ~ /[#[:cntrl:]]/ || $2 ~ /[#[:cntrl:]]/ || $3 ~ /[#[:cntrl:]]/ { print "MALFORMED: " $0 > "/dev/stderr"; exit 1 }
         $1 ~ /\// || $2 ~ /\// { print "MALFORMED: " $0 > "/dev/stderr"; exit 1 }

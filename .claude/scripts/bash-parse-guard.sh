@@ -6,7 +6,7 @@
 #   that dies on a parse error AFTER installing `trap 'rm -rf "$tmp"' EXIT` exits with the
 #   trap's status — 0 — so a structurally broken `.test.sh` reports success with no
 #   assertion run and nothing to read. It was noticed only because `bash -n` disagreed with
-#   the suite's exit status (agent-skills#103). Whether a given bash masks the status is a
+#   the suite's exit status (the original shared-guard regression). Whether a given bash masks the status is a
 #   per-version accident; `bash -n` reports a parse error on every version, so this guard
 #   checks the property directly instead of depending on the runtime status.
 #
