@@ -24,7 +24,10 @@ Subsequent product work answered its immediate decisions separately:
   Its remaining comparison [#142](https://github.com/devantler-tech/business-site/issues/142)
   was concluded as not planned and the candidate was removed.
 - Existing Svelte sites, KSail's embedded interface and KHoist's API-only direction
-  have different product needs. A common package name does not prove their quality.
+  have different product needs. KHoist retains an embedded API catalog workspace,
+  independent offline publisher review and Astro documentation; API-only product
+  integration does not mean it has no interface. A common package name does not
+  prove quality.
 
 The original spike's integrated framework comparison, constrained-device measurements,
 hosting/resource comparison and final weighted matrix are incomplete. Restarting them
@@ -34,16 +37,24 @@ reason to change its frozen success criteria or infer a timing/rollback pass.
 
 ## Decision
 
-End the broad portfolio framework experiment as **not planned**. Retain Svelte /
+End the broad portfolio framework experiment as **not planned**. Also retire the
+framework-replacement comparisons in
+[KSail #7796](https://github.com/devantler-tech/ksail/issues/7796) and
+[KHoist #426](https://github.com/devantler-tech/khoist/issues/426) as **not planned**:
+neither identifies a current user problem or imminent consumer decision that requires
+a Svelte replacement. These are explicit retention decisions, not completed comparisons
+or quality audits. Retain Svelte /
 SvelteKit / TypeScript as the direction for compatible new or materially changed
 general-purpose web interfaces, based on demonstrated consumers and product fit.
 Retain the business portal's reviewed Go presentation and server authority.
 
 No universal performance winner or completed portfolio standardization is declared.
 Keep existing healthy interfaces unless a named product outcome justifies a change.
-KSail's embedded interface and documentation, World at Ruin's native game and vendor
-applications retain their own appropriate technology. Do not benchmark a KHoist UI
-that the API-only programme is retiring merely to complete the abandoned comparison.
+KSail retains React/MUI/xterm for its embedded application and Astro/Starlight for
+documentation. KHoist retains its API catalog, offline review and Astro documentation.
+World at Ruin's native game and vendor applications retain their own appropriate
+technology. Do not benchmark a retiring KHoist product UI merely to complete the
+abandoned comparison.
 
 Keep shared quality requirements: accessible native navigation/forms, measured browser
 work appropriate to the actual route, private server-side authority and cache/origin
@@ -65,14 +76,16 @@ complete it or any unchecked product acceptance criterion:
 - [#4224](https://github.com/devantler-tech/monorepo/issues/4224) owns supported starter
   placement and guidance, using demonstrated consumers rather than a speculative service.
 - [#4223](https://github.com/devantler-tech/monorepo/issues/4223) owns existing-site
-  quality; [KSail #7796](https://github.com/devantler-tech/ksail/issues/7796) owns its
-  embedded-interface assessment.
+  quality. Future KSail interface changes retain functional, accessibility, trust,
+  packaging, publication and recovery gates; retiring #7796 passes none of them.
 - [Business-site #131](https://github.com/devantler-tech/business-site/issues/131)
   retains Go portal integration, identity, authorization and real-user-path acceptance.
-- [KHoist #426](https://github.com/devantler-tech/khoist/issues/426) must follow the
-  API-only product decision under [#390](https://github.com/devantler-tech/khoist/issues/390)
-  and [#392](https://github.com/devantler-tech/khoist/issues/392), preserving any
-  independent compatibility and retirement obligations.
+- KHoist's API-only product decision under
+  [#390](https://github.com/devantler-tech/khoist/issues/390) and
+  [#392](https://github.com/devantler-tech/khoist/issues/392), together with
+  [Platform #4890](https://github.com/devantler-tech/platform/issues/4890), retains
+  consumer, authorization, compatibility, installed-artifact and rollback acceptance.
+  Retiring #426 does not retire its catalog/offline review or clear those obligations.
 
 The portfolio stack map continues to route changes to their existing product owners;
 this decision creates no new buildable product or hosting permission. Deployment,
