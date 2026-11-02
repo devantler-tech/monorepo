@@ -3461,11 +3461,13 @@ jobs:
       - test-portfolio-map-drift
       - test-agent-instructions-layout
       - test-maintainer-digest
-    permissions: {}
+    permissions:
+      actions: read
     steps:
       - name: Check job results
         uses: devantler-tech/.github/actions/aggregate-job-checks@da5f0839b418626a8a0b69df1f04ba931a38e371 # v19.1.0
         with:
+          check-workflow-startup: "true"
           job-results: >-
             ${{ needs.test-macos-batch-1.result }}
             ${{ needs.test-macos-batch-2.result }}
