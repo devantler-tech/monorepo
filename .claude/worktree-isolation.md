@@ -257,8 +257,8 @@ section) too. **Cautionary tale (2026-06-25):** `projects/ksail` was wrongly ann
 in this doc and removed — it actually had ~23 live sessions, and was only recoverable because of the
 pre-removal backup. The genuinely-orphaned gitdirs cleanly removed that day (de-registered renames /
 leftovers with **zero** live worktrees) were: `dotfiles`, `github/devantler-tech/.github-private`,
-`homebrew-formulas` (→ `homebrew-tap`), `libraries/plugins` (→ `agent-plugins`), and `libraries/skills`
-(→ the former standalone skills checkout).
+`homebrew-formulas` (→ `homebrew-tap`), `libraries/plugins` (→ `agent-plugins`), and the predecessor
+of the former standalone skills checkout.
 
 ## Rollout status
 
@@ -281,7 +281,7 @@ leftovers with **zero** live worktrees) were: `dotfiles`, `github/devantler-tech
   relying on any submodule's isolation, especially right after a fresh `git submodule update --init`.**
 - ✅ **Orphaned gitdirs pruned (2026-06-25)** — de-registered leftovers removed per *Orphaned gitdirs*
   (with backups): `dotfiles`, `github/devantler-tech/.github-private`, `homebrew-formulas`,
-  `libraries/plugins`, `libraries/skills` (plus their stale working trees and `.git/config` sections).
+  `libraries/plugins`, and the retired skills gitdir (plus their stale working trees and `.git/config` sections).
   `projects/ksail` was **kept** — it is an active second checkout, not an orphan.
 - This is **per-machine** state: a fresh clone reproduces the stray `core.worktree`, so the procedure
   above still applies there. New submodules should be initialized with `extensions.worktreeConfig=true`
