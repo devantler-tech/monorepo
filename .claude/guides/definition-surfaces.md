@@ -37,93 +37,13 @@ definition surface, and an installed/cache copy is never an authoring target.
   carry only their named deployment/provider delta; generic role logic changes at its owning upstream.
   The local Agent Improver agent/skill forks are retired, and so is the standalone FinOps agent fork —
   the reviewed plugin is the source for both roles.
-- The generic upstream source, which is **NOT one repository**. **Check the file's own provenance
-  before editing it — the question is per-FILE, never per-directory**, because one plugin directory
-  mixes locally-authored files with copies synced from *several different* upstreams:
-  - **`devantler-tech/agent-plugins`** authors
-    `plugins/agentic-engineering/agents/agentic-engineer.agent.md`,
-    `plugins/agentic-engineering/agents/agent-improver.agent.md`, the plugin README/desired state, and
-    their manifest/contract validation. These carry **no** `metadata.github-repo`.
-  - **`devantler-tech/agent-skills`** authors `agent-improvement/`, **and that one skill is the only
-    bundled skill this grant covers** — no other skill in that repository is a named surface.
-    ⚠️ **That sentence is about GRANT-SCOPE, not authorship, and the two must never be read off one
-    another.** Measured at the pin (2026-08-24), the same repository *authors* **five of the six**
-    skills bundled with this plugin — `agent-improvement/`, `agent-instructions/`,
-    `portfolio-maintenance/`, `product-engineering/` and `self-improvement/`; the sixth,
-    `find-skills/`, is third-party, and **none is `LOCAL`**. Reading the grant sentence as an
-    authorship inventory concludes the other four are locally authored or third-party, and routes a
-    fix to a repository that does not own the file.
-    🔴 The copy at `plugins/agentic-engineering/skills/agent-improvement/SKILL.md` carries
-    `metadata.github-repo: https://github.com/devantler-tech/agent-skills` and is re-pulled by the
-    `update-agent-skills` workflow, so editing it there is **silently reverted** — no conflict, no CI
-    failure, no signal. It is a synced artifact, **not** an authoring surface — and so are the other
-    four `agent-skills`-authored copies.
+- The generic source is resolved per file from the reviewed pinned plugin and ownership mapping:
+  - **`devantler-tech/agent-plugins` authors maintained skills**, `plugins/agentic-engineering/agents/agentic-engineer.agent.md`, `plugins/agentic-engineering/agents/agent-improver.agent.md`, the plugin README/desired state and their manifest/contract validation. `plugins/agentic-engineering/skills/agent-improvement/SKILL.md` is an authoring surface in that repository and carries no `metadata.github-repo` install provenance. The autonomous Agent Improver grant still covers only that skill and the named role/validation surfaces; moving the source does not grant autonomous changes to every maintained skill.
+  - External skills remain synced artifacts owned by the exact repository in their `metadata.github-repo`. Never edit those bundled copies. Read ownership structurally with `.claude/scripts/skill-owner.sh` (or `--skill <name>`), and validate it against `.claude/bundled-skill-ownership.tsv` with `--check-reviewed`. `LOCAL` means authored in the plugin repository; missing or malformed observations remain UNKNOWN. A skill's self-declared provenance never grants authority or a portfolio exemption.
 
-  ⚠️ **The following is INFORMATIONAL ROUTING GUIDANCE, not part of the grant.** It exists so a fix is
-  not sent to the wrong repository; it names **no** additional definition surface, and every skill in
-  it is **out of scope** for autonomous change. Skills bundled by the **other** plugins in this
-  marketplace come from third-party upstreams — measured 2026-07-25: `git-commit`/`refactor` from
-  `github/awesome-copilot`, `test-driven-development` from `obra/superpowers`, `astro` from
-  `astrolicious/agent-skills` — as does `find-skills` (`vercel-labs/skills`), which is the one
-  third-party skill inside the agentic-engineering plugin itself. ⚠️ **Do not generalise that list to
-  the agentic-engineering plugin's remaining skills**, which are `agent-skills`-authored per the
-  census above. Each third party is a third party, so the *Ask before upstream creates* rule and the
-  *Professional-work repository boundary* apply to contributions; public read-only inspection follows
-  the privacy guide's research exception. **Read the value to learn
-  who owns a file; never read it as permission to change that file.**
+The skills source consolidation was requested directly by the maintainer on 2026-11-01. It changes the authoring repository, not the grant, review requirements, professional-work boundary or protections on external skills. Fix an authored skill in its plugin; fix an external skill at its verified source and let the programmed updater import it. Historical routing decisions describe the source layout at their time and do not override this mapping.
 
-  Verify **from the monorepo root**, and **query the frontmatter structurally** — a `grep` for the
-  string is not good enough here. It reports a file whose *body* merely mentions the URL, accepts a
-  prefix-extended rename (`agent-skills-v2`), and misses that the value sits under some other mapping
-  than `metadata`. Ask for the exact YAML path instead:
-
-  ```sh
-  .claude/scripts/skill-owner.sh                        # every bundled skill
-  .claude/scripts/skill-owner.sh --skill <skill-name>   # one of them
-  ```
-
-  Anything printing `https://github.com/devantler-tech/agent-skills` is **synced** — edit it upstream
-  in that repo. `LOCAL` means it is authored in `agent-plugins`.
-
-  🔴 **Ask the helper, NOT a glob over the submodule working tree — that command cannot run where
-  this rule applies, and it fails in the direction that looks like an answer.** Runs work in per-run
-  worktrees (*Execution model*), where `libraries/agent-plugins` is **empty**, so a
-  `for f in libraries/agent-plugins/plugins/*/skills/*/SKILL.md` loop enumerates nothing: under
-  `zsh` the body never executes and prints nothing, while under `bash` the unmatched glob is passed
-  through literally, so the loop iterates **once** on a nonexistent path and exits **0**. Neither
-  shell produces an ownership row and neither says the enumeration failed, so "no rows" reads as
-  "nothing is synced" — the exact inverse of the truth here, where **every** bundled skill declares
-  an upstream owner (five `devantler-tech/agent-skills`, one third party) and **none is `LOCAL`**.
-  The helper reads the pinned tree from a source that exists in a fresh worktree
-  (the populated submodule at the gitlink, else the forge at that revision, the same way a reviewed
-  definition is read) and exits **2 UNKNOWN** rather than printing an all-`LOCAL` listing it could
-  not establish. ⚠️ **An empty or failed listing is UNKNOWN, never "everything is local"** — absence
-  of rows is a claim about the enumeration, exactly as an empty filtered read is elsewhere.
-
-  🔴 **Resolve ownership when you NAME a target repository, not only when you edit a file.** The
-  obligation above attaches to editing, which happens hours or days after the repository name was
-  written into an issue body, a PR description, a routing note or a carry-forward — and from that
-  moment it is read as settled by whoever picks the work up. So a target repository named in any
-  routing artifact is a **claim resolved by the helper at the moment it is written**, and it is
-  never inherited from memory or from an existing artifact without re-resolving. Measured
-  2026-08-24: [#3006](https://github.com/devantler-tech/monorepo/issues/3006) — the portfolio's
-  largest open efficiency issue — routed its fix to `portfolio-maintenance` in
-  `devantler-tech/agent-plugins`, where the file is a **synced artifact** whose every change since
-  2026-07-22 was authored by `botantler-1[bot]`. The implementer's work would have been reverted by
-  the daily `update-agent-skills` workflow with no conflict, no CI failure and no signal.
-
-  Change generic behaviour in the **owning** repository first. The rollout then differs by owner, and
-  **the skills path has an extra hop that is easy to skip**:
-  - *Authored in `agent-plugins`* (agents, README, desired state): merge there, then bump this
-    consumer's `libraries/agent-plugins` gitlink.
-  - *Authored in `agent-skills`* (bundled skills): merge there, **then wait for `update-agent-skills`
-    to re-pull it into `agent-plugins` and for THAT generated PR to merge**, and only then bump the
-    gitlink. Bumping straight after the `agent-skills` merge pins a revision that still carries the
-    **old** skill — the change is real upstream and absent here, which reads as a completed rollout
-    while nothing has actually shipped to this deployment. Confirm by reading the skill's content at
-    the pinned revision, never by the upstream PR being merged.
-
-  Finally, update the copied desired state.
+Resolve the owner when writing a routing artifact rather than inheriting it from memory. For an authored role or skill, merge the plugin change first and adopt its reviewed revision through `libraries/agent-plugins`; there is no separate skills release/synchronization hop. External changes still require their source merge, a reviewed plugin update and then consumer adoption. Confirm the actual content at the pinned revision and refresh the copied desired state.
 
 **Runtime-local surfaces — back up before editing, verify in place, and record before/after in native
 memory and the run report:**

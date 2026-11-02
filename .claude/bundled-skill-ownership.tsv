@@ -17,22 +17,22 @@
 # Format: <plugin>\t<skill>\t<upstream repository that owns its content>
 # Lines beginning with `#` and blank lines are ignored.
 
-agentic-engineering	agent-improvement	https://github.com/devantler-tech/agent-skills
-agentic-engineering	agent-instructions	https://github.com/devantler-tech/agent-skills
+agentic-engineering	agent-improvement	LOCAL
+agentic-engineering	agent-instructions	LOCAL
 agentic-engineering	find-skills	https://github.com/vercel-labs/skills
 agentic-engineering	grilling	https://github.com/mattpocock/skills
-agentic-engineering	portfolio-maintenance	https://github.com/devantler-tech/agent-skills
-agentic-engineering	product-documentation	https://github.com/devantler-tech/agent-skills
-agentic-engineering	product-engineering	https://github.com/devantler-tech/agent-skills
+agentic-engineering	portfolio-maintenance	LOCAL
+agentic-engineering	product-documentation	LOCAL
+agentic-engineering	product-engineering	LOCAL
 agentic-engineering	prototype	https://github.com/mattpocock/skills
-agentic-engineering	self-improvement	https://github.com/devantler-tech/agent-skills
-engineering-practices	conventional-release	https://github.com/devantler-tech/agent-skills
+agentic-engineering	self-improvement	LOCAL
+engineering-practices	conventional-release	LOCAL
 engineering-practices	git-commit	https://github.com/github/awesome-copilot
 engineering-practices	refactor	https://github.com/github/awesome-copilot
 engineering-practices	test-driven-development	https://github.com/obra/superpowers
-engineering-practices	ways-of-working	https://github.com/devantler-tech/agent-skills
-engineering-practices	write-contributing	https://github.com/devantler-tech/agent-skills
-engineering-practices	write-readme	https://github.com/devantler-tech/agent-skills
+engineering-practices	ways-of-working	LOCAL
+engineering-practices	write-contributing	LOCAL
+engineering-practices	write-readme	LOCAL
 frontend-design	astro	https://github.com/astrolicious/agent-skills
 frontend-design	frontend-design	https://github.com/anthropics/skills
 frontend-design	web-design-guidelines	https://github.com/vercel-labs/agent-skills
@@ -42,9 +42,10 @@ github	github-actions-docs	https://github.com/xixu-me/skills
 github	github-issues	https://github.com/github/awesome-copilot
 gitops-kubernetes	gitops-cluster-debug	https://github.com/fluxcd/agent-skills
 gitops-kubernetes	gitops-knowledge	https://github.com/fluxcd/agent-skills
-gitops-kubernetes	gitops-tenant-onboarding	https://github.com/devantler-tech/agent-skills
+gitops-kubernetes	gitops-tenant-onboarding	LOCAL
 go	golang-pro	https://github.com/Jeffallan/claude-skills
 ksail	ksail	https://github.com/devantler-tech/ksail
-vibe-coding	allowed-stack-guardrail	https://github.com/devantler-tech/agent-skills
-vibe-coding	jargon-free-voice	https://github.com/devantler-tech/agent-skills
-vibe-coding	needs-stack-mapping	https://github.com/devantler-tech/agent-skills
+vibe-coding	allowed-stack-guardrail	LOCAL
+vibe-coding	jargon-free-voice	LOCAL
+vibe-coding	needs-stack-mapping	LOCAL
+engineering-practices	write-docs-introduction	LOCAL

@@ -60,8 +60,8 @@ Two rules shape *how* the engineer is built:
 
 **Definition routing has two layers.** Never use the bare word *constitution* as an edit destination:
 name the concern and its owner. Portable role or procedure behaviour changes in the file's canonical
-upstream first — `agent-plugins` for plugin-authored agents, or the provenance-recorded skills
-repository for a synced skill — and reaches this deployment through the reviewed plugin rollout.
+upstream first — `agent-plugins` for authored agents and maintained skills, or the provenance-recorded
+repository for an external synced skill — and reaches this deployment through the reviewed plugin rollout.
 Portfolio membership, trusted identities, cadence, runtime paths, channels, and other deployment facts
 change in this consumer contract or a specifically declared local overlay. A provider bootstrap may
 only point at those sources. When one change spans both layers, merge upstream first, verify the

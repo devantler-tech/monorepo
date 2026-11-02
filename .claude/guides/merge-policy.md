@@ -896,7 +896,7 @@ only semantic review caught, and every mechanical signal on that PR was valid.
 design and it is self-attesting. There is no lockfile and no install manifest: the **only** record of a
 skill's origin is frontmatter inside the copied `SKILL.md`, authored by the very upstream it names and
 copied verbatim by the updater. A third-party release that sets
-`metadata.github-repo: https://github.com/devantler-tech/agent-skills` alongside an unsafe instruction
+`metadata.github-repo: https://github.com/devantler-tech/agent-plugins` alongside an unsafe instruction
 would then be read back as proof of our ownership and skip review — the same hole one level down.
 
 Authorization comes instead from
@@ -923,7 +923,7 @@ gh api "repos/devantler-tech/<repo>/contents/<skill-root>/SKILL.md?ref=<head>" \
 ```
 
 and expect **3** whenever it disagrees with the allowlisted upstream — including a prefix-extended
-`agent-skills-v2`-style lookalike, since the comparison is exact. The PR is the unit, so one unproven
+`agent-plugins-v2`-style lookalike, since the comparison is exact. The PR is the unit, so one unproven
 skill sends the whole PR to semantic review.
 
 Apply either exemption only when `.claude/scripts/programmed-bot-review-exemption.sh` validates the

@@ -65,11 +65,11 @@ git -C "$plug" config user.name t
 
 P="$plug/plugins/agentic-engineering/skills"
 skill_file "$P/synced/SKILL.md" 'metadata:
-  github-repo: https://github.com/devantler-tech/agent-skills' 'synced body'
-skill_file "$P/local/SKILL.md" '' 'see https://github.com/devantler-tech/agent-skills for context'
+  github-repo: https://github.com/devantler-tech/agent-plugins' 'synced body'
+skill_file "$P/local/SKILL.md" '' 'see https://github.com/devantler-tech/agent-plugins for context'
 skill_file "$P/lookalike/SKILL.md" 'metadata:
-  github-repo: https://github.com/devantler-tech/agent-skills-v2' 'lookalike body'
-skill_file "$P/misplaced/SKILL.md" 'github-repo: https://github.com/devantler-tech/agent-skills' 'key outside metadata'
+  github-repo: https://github.com/devantler-tech/agent-plugins-v2' 'lookalike body'
+skill_file "$P/misplaced/SKILL.md" 'github-repo: https://github.com/devantler-tech/agent-plugins' 'key outside metadata'
 
 # A SECOND plugin. The resolver's default used to hard-code one plugin name, so every skill bundled
 # by another plugin answered "no skill named X" — while the run that asked looked like it had checked
@@ -86,7 +86,7 @@ skill_file "$plug/plugins/other-plugin/skills/elsewhere/SKILL.md" 'metadata:
 # the whole forge path answered UNKNOWN for every skill while this suite passed on small bodies.
 # The size is what makes this fixture a test rather than a duplicate of `synced`.
 skill_file "$plug/plugins/agentic-engineering/skills/bigbody/SKILL.md" 'metadata:
-  github-repo: https://github.com/devantler-tech/agent-skills' "$(yes 'filler line that pushes this body past any pipe buffer' | head -4000)"
+  github-repo: https://github.com/devantler-tech/agent-plugins' "$(yes 'filler line that pushes this body past any pipe buffer' | head -4000)"
 
 # A revision carrying ONLY well-formed declarations. It exists so the suite can assert a plain
 # exit 0: with the malformed fixtures below folded into the same commit, EVERY end-to-end arm
@@ -102,7 +102,7 @@ skill_file "$P/emptyval/SKILL.md" 'metadata:
   github-repo: ""' 'declared empty'
 skill_file "$P/mapval/SKILL.md" 'metadata:
   github-repo:
-    url: https://github.com/devantler-tech/agent-skills' 'declared as a mapping'
+    url: https://github.com/devantler-tech/agent-plugins' 'declared as a mapping'
 # A non-STRING scalar. yq renders any scalar as text, so a tag-blind reader prints `false` as
 # though it were a repository and exits 0 — a malformed declaration answered with a well-formed
 # looking row, which is the fail-open direction this helper exists to close.
@@ -173,16 +173,16 @@ ln -s "$plug" "$cons/libraries/agent-plugins"
 # ---- 1. GREEN: ownership resolves per file, from the pinned tree
 run
 assert_eq 'green: malformed declarations make the listing exit 2, never 0' 2 "$RC"
-assert_contains 'synced skill reports its upstream' "$OUT" 'https://github.com/devantler-tech/agent-skills	synced'
+assert_contains 'synced skill reports its upstream' "$OUT" 'https://github.com/devantler-tech/agent-plugins	synced'
 assert_contains 'skill with no metadata reports LOCAL' "$OUT" 'LOCAL	local'
 
 # ---- 2. A URL in the BODY does not set ownership (structural read, never a grep)
 #     Ablation: `local/SKILL.md` contains the suite URL in its body. A grep-based reader would
 #     report it as ours and skip the review that the sync trap requires.
-assert_not_contains 'body-mention does not make a skill upstream-owned' "$OUT" 'https://github.com/devantler-tech/agent-skills	local'
+assert_not_contains 'body-mention does not make a skill upstream-owned' "$OUT" 'https://github.com/devantler-tech/agent-plugins	local'
 
 # ---- 3. A prefix-extended lookalike is printed VERBATIM, so an exact compare separates it
-assert_contains 'lookalike prints its own url' "$OUT" 'https://github.com/devantler-tech/agent-skills-v2	lookalike'
+assert_contains 'lookalike prints its own url' "$OUT" 'https://github.com/devantler-tech/agent-plugins-v2	lookalike'
 
 # ---- 4. The key must live under `metadata`, not merely somewhere in the frontmatter
 assert_contains 'top-level github-repo is not metadata.github-repo' "$OUT" 'LOCAL	misplaced'
@@ -296,7 +296,7 @@ OUT_C="$("$SUT" --repo-root "$cons_clean" --source submodule --submodule-path li
 RC_C=$?
 set -e
 assert_eq 'a wholly well-formed revision exits 0' 0 "$RC_C"
-assert_contains 'clean revision resolves the synced skill' "$OUT_C" 'https://github.com/devantler-tech/agent-skills	synced'
+assert_contains 'clean revision resolves the synced skill' "$OUT_C" 'https://github.com/devantler-tech/agent-plugins	synced'
 assert_contains 'clean revision resolves the local skill'  "$OUT_C" 'LOCAL	local'
 assert_not_contains 'clean revision reports no UNKNOWN'    "$OUT_C" 'UNKNOWN'
 
@@ -309,7 +309,7 @@ assert_not_contains 'clean revision reports no UNKNOWN'    "$OUT_C" 'UNKNOWN'
 assert_contains 'default enumerates OTHER plugins, not just one' "$OUT_C" \
   'https://github.com/third-party/other-skills	elsewhere'
 assert_contains 'a body larger than a pipe buffer still resolves' "$OUT_C" \
-  'https://github.com/devantler-tech/agent-skills	bigbody'
+  'https://github.com/devantler-tech/agent-plugins	bigbody'
 assert_not_contains 'a large body is never UNKNOWN' "$OUT_C" 'UNKNOWN	bigbody'
 
 # --plugin still NARROWS. The default widened; the selector must not have lost the ability to scope,
@@ -429,7 +429,7 @@ run_forge() { # -> OUT_F / RC_F / ERR_F
 : > "$tmp/ghcalls"; : > "$tmp/ghslug"
 run_forge 0
 assert_contains 'forge path reports source=forge'        "$ERR_F" 'source=forge'
-assert_contains 'forge path resolves the synced skill'   "$OUT_F" 'https://github.com/devantler-tech/agent-skills	synced'
+assert_contains 'forge path resolves the synced skill'   "$OUT_F" 'https://github.com/devantler-tech/agent-plugins	synced'
 assert_contains 'forge path resolves the local skill'    "$OUT_F" 'LOCAL	local'
 assert_contains 'forge path still fails closed on a malformed value' "$OUT_F" 'UNKNOWN	boolval'
 # Rows alone are not the contract: a caller reads the EXIT STATUS. If the forge path printed
@@ -469,7 +469,7 @@ assert_contains 'auto falls back and reports source=forge' "$ERR_A" 'source=forg
 # An empty call log with a `source=forge` line would mean the source was mislabelled.
 assert_eq 'auto actually invoked the forge shim' 1 "$(grep -c 'git/trees' "$tmp/ghcalls_a" | tr -d ' ')"
 # Same answers as the forced arm — the flag must select a path, never change the verdict.
-assert_contains 'auto resolves the synced skill' "$OUT_A" 'https://github.com/devantler-tech/agent-skills	synced'
+assert_contains 'auto resolves the synced skill' "$OUT_A" 'https://github.com/devantler-tech/agent-plugins	synced'
 assert_contains 'auto resolves the local skill'  "$OUT_A" 'LOCAL	local'
 assert_eq 'auto exits 2 when a value is malformed' 2 "$RC_A"
 # An empty submodule DIRECTORY still satisfies `[ -e "$sub" ]`, so the fallback hinges on the
@@ -560,7 +560,7 @@ OUT_S="$(PATH="$git_shim_bin:$PATH" FAKE_GIT_POISON=1 \
          "$SUT" --repo-root "$cons" --source submodule --submodule-path libraries/agent-plugins 2>/dev/null)"
 RC_S=$?
 set -e
-assert_contains 'shim is inert when not poisoning (control)' "$OUT_S0" 'https://github.com/devantler-tech/agent-skills	synced'
+assert_contains 'shim is inert when not poisoning (control)' "$OUT_S0" 'https://github.com/devantler-tech/agent-plugins	synced'
 assert_eq       'shim is inert when not poisoning: exit unchanged' 2 "$RC_S0"
 assert_eq 'submodule: a failed enumeration is UNKNOWN, never a partial listing' 2 "$RC_S"
 assert_not_contains 'submodule: a failed enumeration prints no ownership rows' "$OUT_S" 'synced'
@@ -574,7 +574,7 @@ assert_not_contains 'submodule: a failed enumeration prints no ownership rows' "
 cons_rv="$tmp/cons-rv"
 mk_consumer "$cons_rv" "$PIN_CLEAN"
 mkdir -p "$cons_rv/libraries"; ln -s "$plug" "$cons_rv/libraries/agent-plugins"   # the object store, as the clean-consumer case does
-SUITE='https://github.com/devantler-tech/agent-skills'
+SUITE='https://github.com/devantler-tech/agent-plugins'
 map_full() { # every skill bundled at PIN_CLEAN, each with the owner it actually claims
   printf '# comment line\n'
   printf 'agentic-engineering\tsynced\t%s\n' "$SUITE"
@@ -693,9 +693,9 @@ assert_eq 'reviewed: without the flag the row shape is still three columns' 3 "$
 # what a skill named `synced` looks like once awk has expanded a `-v` value (`synce\144`), and a
 # skill whose claim carries a newline followed by a forged MATCH row.
 skill_file "$P/synce\\144/SKILL.md" 'metadata:
-  github-repo: https://github.com/devantler-tech/agent-skills' 'name shaped like an awk escape'
+  github-repo: https://github.com/devantler-tech/agent-plugins' 'name shaped like an awk escape'
 skill_file "$P/forge/SKILL.md" 'metadata:
-  github-repo: "https://github.com/third/y\nMATCH\thttps://github.com/devantler-tech/agent-skills\thttps://github.com/devantler-tech/agent-skills\tsynced\tplugins/agentic-engineering/skills/synced/SKILL.md"' 'claim carries a newline'
+  github-repo: "https://github.com/third/y\nMATCH\thttps://github.com/devantler-tech/agent-plugins\thttps://github.com/devantler-tech/agent-plugins\tsynced\tplugins/agentic-engineering/skills/synced/SKILL.md"' 'claim carries a newline'
 mkdir -p "$plug/plugins/xengineering/skills/a"
 skill_file "$plug/plugins/xengineering/skills/a/SKILL.md" 'metadata:
   github-repo: https://github.com/third-party/other-skills' 'a plugin whose name has a suffix-shaped sibling'
@@ -724,14 +724,14 @@ map_adv() {
 #      the `synced` row (awk expands the escape) and printed MATCH; it must be UNLISTED, exit 1.
 { map_adv; printf 'agentic-engineering\tforge\thttps://github.com/third/y\n'; } > "$tmp/map-adv-esc.tsv"
 runadv "$tmp/map-adv-esc.tsv"
-assert_contains 'reviewed: an awk-escape-shaped skill name never borrows another row' "$OUT_RV" 'UNLISTED	-	https://github.com/devantler-tech/agent-skills	synce\144	'
+assert_contains 'reviewed: an awk-escape-shaped skill name never borrows another row' "$OUT_RV" 'UNLISTED	-	https://github.com/devantler-tech/agent-plugins	synce\144	'
 assert_eq 'reviewed: the adversarial revision exits 2 (the newline claim is UNKNOWN, which outranks the UNLISTED drift)' 2 "$RC_RV"
 assert_eq 'reviewed: the escape-shaped name never reads MATCH' '' "$(printf '%s\n' "$OUT_RV" | grep -E '^MATCH	' | grep -F 'synce' | grep -vF 'synced	' || true)"
 
 # 13k. A claim carrying a newline is UNKNOWN (exit 2) and never yields a second, forged row: the
 #      output must contain no line beginning `MATCH` for `synced` that this claim manufactured, and
 #      the skill's own row must be a single UNKNOWN line with the control bytes neutralised.
-{ map_adv; printf 'agentic-engineering\tsynce\\144\thttps://github.com/devantler-tech/agent-skills\n'; printf 'agentic-engineering\tforge\thttps://github.com/third/y\n'; } > "$tmp/map-adv-nl.tsv"
+{ map_adv; printf 'agentic-engineering\tsynce\\144\thttps://github.com/devantler-tech/agent-plugins\n'; printf 'agentic-engineering\tforge\thttps://github.com/third/y\n'; } > "$tmp/map-adv-nl.tsv"
 runadv "$tmp/map-adv-nl.tsv"
 assert_eq 'reviewed: a claim carrying a newline makes the run exit 2' 2 "$RC_RV"
 assert_contains 'reviewed: a claim carrying a newline is UNKNOWN on one line' "$OUT_RV" 'UNKNOWN	https://github.com/third/y	UNKNOWN	forge	'
@@ -741,7 +741,7 @@ assert_eq 'reviewed: every output line has exactly five columns' '' "$(printf '%
 # 13l. A reviewed row whose plugin is a SUFFIX of a bundled plugin's name (`engineering` beside
 #      `agentic-engineering`, `a` in both) must still be STALE: the seen-key containment test is
 #      anchored on both sides.
-{ map_adv; printf 'agentic-engineering\tsynce\\144\thttps://github.com/devantler-tech/agent-skills\n'; printf 'agentic-engineering\tforge\thttps://github.com/third/y\n'; printf 'engineering\ta\thttps://github.com/nobody/retired\n'; } > "$tmp/map-adv-suffix.tsv"
+{ map_adv; printf 'agentic-engineering\tsynce\\144\thttps://github.com/devantler-tech/agent-plugins\n'; printf 'agentic-engineering\tforge\thttps://github.com/third/y\n'; printf 'engineering\ta\thttps://github.com/nobody/retired\n'; } > "$tmp/map-adv-suffix.tsv"
 runadv "$tmp/map-adv-suffix.tsv"
 assert_contains 'reviewed: a suffix-named plugin row is STALE, not hidden by a longer key' "$OUT_RV" 'STALE	https://github.com/nobody/retired	-	a	plugins/engineering/skills/a/SKILL.md'
 

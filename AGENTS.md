@@ -36,9 +36,8 @@ Populate a submodule with `.claude/scripts/submodule-init.sh <path>` — never a
 | Platform-tenant template | `devantler-tech/platform-tenant-template` | `templates/platform-tenant-template` | `AGENTS.md` |
 | Platform template | `devantler-tech/platform-template` | `templates/platform-template` | `AGENTS.md` |
 | Homebrew tap | `devantler-tech/homebrew-tap` | `homebrew-tap` | `AGENTS.md` |
-| Agent skills (shared lib) | `devantler-tech/agent-skills` | `libraries/agent-skills` | `AGENTS.md` |
 | Agent plugins (shared lib) | `devantler-tech/agent-plugins` | `libraries/agent-plugins` | `AGENTS.md` |
-| Skill actions | `devantler-tech/setup-agent-skills-action`, `update-agent-skills-action`, `guard-installed-skill-edits-action` | — | `AGENTS.md`, [product card](.claude/skills/products/agent-skills/SKILL.md) |
+| Skill actions | `devantler-tech/setup-agent-skills-action`, `update-agent-skills-action`, `guard-installed-skill-edits-action` | — | `AGENTS.md`, [product card](.claude/skills/products/agent-plugins/SKILL.md) |
 | UniFi Crossplane provider (shared lib) | `devantler-tech/provider-upjet-unifi` | `libraries/provider-upjet-unifi` | `AGENTS.md` |
 | Kyverno policy library (shared lib) | `devantler-tech/kyverno-policies` | `libraries/kyverno-policies` | `AGENTS.md` |
 | World at Ruin (game) | `devantler-tech/world-at-ruin` | `applications/world-at-ruin` | `AGENTS.md` |
@@ -75,7 +74,7 @@ filed. Needs matching no row are filed on the **default intake repo** below.
 | KSail | Command-line tooling for creating and operating Kubernetes clusters and their workloads | `devantler-tech/ksail` |
 | KHoist data products | Creating, composing, publishing, and exploring reusable data products backed by new or existing data sources | `devantler-tech/khoist` |
 | Repo automation | Automatic checks, releases and chores on code repositories | `devantler-tech/.github` |
-| AI assistant skills | Teaching the AI assistants new individual skills and behaviours | `devantler-tech/agent-skills` |
+| AI assistant skills | Teaching the AI assistants new individual skills and behaviours through their owning plugins | `devantler-tech/agent-plugins` |
 | AI assistant plugin bundles | Bundling skills into installable plugins / marketplace entries for VS Code, Copilot CLI, Claude Code | `devantler-tech/agent-plugins` |
 | Go project template | The starter template new Go repositories are created from | `devantler-tech/go-template` |
 | .NET project template | The starter template new .NET repositories are created from | `devantler-tech/dotnet-template` |
