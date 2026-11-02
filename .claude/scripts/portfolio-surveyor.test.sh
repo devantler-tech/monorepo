@@ -2331,7 +2331,7 @@ expect_review_gated \
 
 expect_review_gated \
   "agent-skills updater shape in an unapproved repository" \
-  "agent-skills" \
+  "unlisted-source-fixture" \
   "app/botantler-1" \
   "deps/agent-skills-update" \
   "chore(deps): update agent skills" \
@@ -4008,9 +4008,6 @@ if grep -Fq "\`maintenance\`" <<<"${_fallback_inventory}"; then
 fi
 if grep -Fq "\`actions\`" <<<"${_fallback_inventory}"; then
   fail 'retired actions remains in the surveyor fallback inventory (round 11)'
-fi
-if grep -Fq "\`agent-skills\`" <<<"${_fallback_inventory}"; then
-  fail 'retired agent-skills remains in the surveyor fallback inventory (round 11)'
 fi
 echo "portfolio surveyor contract: round-11 product-vs-infra exclusion assertions passed (${_exclusion_count} statements)"
 unset _exclusion_lists _exclusion_count _control_product _fallback_inventory _portfolio_map

@@ -4,7 +4,7 @@
 #
 # Why this needs enforcing rather than merely being correct once: `required_review_thread_resolution`
 # is `true` on ALL NINETEEN portfolio repositories (2026-08-20: monorepo, platform, ksail,
-# world-at-ruin, actions, agent-skills, agent-plugins, kyverno-policies, homebrew-tap, dotnet-template,
+# world-at-ruin, actions, the former standalone skills source, agent-plugins, kyverno-policies, homebrew-tap, dotnet-template,
 # go-template, platform-template, platform-tenant-template, provider-upjet-unifi, unifi, wedding-app,
 # ascoachingogvaner, doggy-countdown, .github) — every repo in the Portfolio map, no exception — so an
 # unresolved review thread blocks a merge exactly like a failing required check.
