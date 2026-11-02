@@ -61,7 +61,7 @@ At the monthly product review and after material plugin changes, follow the revi
 [native usage and evaluation procedure](../../../../libraries/agent-plugins/docs/plugin-effectiveness.md).
 The repository command is `bash libraries/agent-plugins/scripts/plugin-scorecard.sh`.
 Supply only explicitly selected, private, portfolio-scoped exports and evaluation artifacts; record
-the source, window and coverage in the existing private run report. When a private source or runtime
-coverage cannot be resolved, report **UNKNOWN** and name the missing evidence. This card declares
+the source, window and coverage in the existing private run report. When a private source, evaluation
+artifact, or runtime coverage cannot be resolved, report **UNKNOWN** and name the missing evidence. This card declares
 no export destination and authorizes no runtime configuration change. Improvements and retirements
 remain ordinary evidence-backed issues and reviewed delivery work under the upstream procedure.
