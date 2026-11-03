@@ -2371,39 +2371,6 @@ def usable_ts:
        | $r != null and $r == ($o | sub("\\.[0-9]+Z$";"Z")));
 '
 
-# BYTE GATE for whole-file parses (monorepo efficiency-section cost, 2026-11-03).
-# The efficiency walk parses every cached transcript several times with no
-# window cut; two Codex files alone were 5.48 GB, one pass took 57 s on one of
-# them and the timeout-description slurp peaked at 7.4 GB RSS, while those files
-# held zero of the keys or phrases the passes select on. A structural match on a
-# key or an ASCII phrase can only succeed when its bytes are in the file (JSON
-# writers do not \u-escape ASCII letters), so a file without them yields exactly
-# what the parse would: nothing. Returns 0 (parse the file) on a match AND on a
-# read error, so an unreadable file still takes the original path and never
-# turns into a silent skip. Only a clean "no match" (grep rc 1) skips.
-# Gate only on bytes that the jq normalisation cannot ASSEMBLE: a key or a
-# flag value, never result prose. block_text joins array text blocks with a
-# space, so a phrase split across blocks is matched after decoding although the
-# raw file never holds it contiguously (#4793 review). Several needles are ORed.
-# JSON may still spell a letter or `_` as an escape (`"\u0069s_error"` decodes
-# to `is_error`), so a file holding any escape in that range (U+0040-U+007F) is
-# parsed as before; the gate skips only a file that can hold no spelling of a needle.
-file_may_contain() {
-  local f="$1" a; shift
-  local args=()
-  for a in "$@"; do args+=(-e "$a"); done
-  LC_ALL=C grep -aqF "${args[@]}" -- "$f" && return 0
-  [ "$?" -ne 1 ] && return 0
-  json_may_escape_ascii "$f"
-}
-
-# 0 when the file holds a JSON escape that may spell an ASCII letter or `_`, or
-# cannot be read; 1 only on a clean "none". A raw-byte filter is safe only on 1.
-json_may_escape_ascii() {
-  LC_ALL=C grep -aqE '\\u00[4-7][0-9A-Fa-f]' -- "$1" && return 0
-  [ "$?" -ne 1 ]
-}
-
 # tool_use ids whose result shows the call never ran, resolved once per file.
 #
 # The content is NORMALISED to its text before matching, exactly as the safety
@@ -2413,9 +2380,6 @@ json_may_escape_ascii() {
 # as an executed foreground launch even though it never ran. Anchoring without
 # normalising is precisely that bug.
 denied_ids() {
-  # Byte gate: a denial needs `is_error`, so a file without those bytes yields
-  # the same empty list without a full parse (see file_may_contain).
-  file_may_contain "$1" 'is_error' || { printf '[]\n'; return 0; }
   jq -Rr --arg re "$NEVER_RAN_RE" "$JQ_SHAPE_DEFS"'select(length>0)|(try fromjson catch empty)
           | select(.type=="user") | content_blocks
           | select(.type=="tool_result" and .is_error==true)
@@ -4694,14 +4658,9 @@ if want efficiency; then
     # let prose quoting "Command timed out after 2m" inflate the count, the same
     # fabrication route already closed for denials and sleeps.
     all_files() { printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$'; }
-    # Both passes skip a file lacking the flag bytes they select on (file_may_contain);
-    # the timeout pass gates on the error flag, never the phrase, which can span blocks.
-    TIMEOUTS=$(all_files | while IFS= read -r f; do
-                 file_may_contain "$f" 'is_error' '"error"' || continue
-                 tool_result_failure_text "$f"
-               done | grep -cE 'Command timed out after' || true)
+    TIMEOUTS=$(all_files | while IFS= read -r f; do tool_result_failure_text "$f"; done \
+               | grep -cE 'Command timed out after' || true)
     INTERRUPT=$(all_files | while IFS= read -r f; do
-                  file_may_contain "$f" 'interrupted' || continue
                   jq -Rr 'select(length>0)|(try fromjson catch empty)
                           | .. | objects | select(.interrupted? == true) | "1"' "$f" 2>/dev/null
                 done | wc -l | tr -d ' ')
@@ -5325,35 +5284,35 @@ if want efficiency; then
     # previous version listed the most common descriptions in the corpus and
     # labelled them "timeout victims" — in a window with zero timeouts it still
     # produced a confident-looking list, which is worse than an empty one.
-    # The slurp reads only the lines it can use. Every record is one JSONL line
-    # parsed with `try fromjson catch empty`, so dropping a line that holds
-    # neither a "tool_use" block nor an is_error flag changes no output; it
-    # only stops a multi-GB file being held in memory for nothing. A file whose
-    # escapes could spell a selected key, or that grep cannot read, takes the
-    # whole-file parse instead. A read that still fails makes the whole list
-    # UNKNOWN (exit 2): a partial list beside the clean-empty footer would read
-    # as a complete observation (#4793 review). Rows are tagged D (description)
-    # and U (unread) on a channel transcript text cannot reach: jq folds any
-    # newline inside a description, so every line it prints starts with D.
-    TIMEOUT_DESC_JQ="$JQ_SHAPE_DEFS"'split("\n")|map(select(length>0)|(try fromjson catch empty))|
-        (reduce (.[] | select(.type=="assistant") | content_blocks
-                 | select(.type=="tool_use")) as $t ({};
-                   .[$t.id] = ($t.input?.description? // $t.input?.command? // "?"))) as $desc
-        | .[] | select(.type=="user") | content_blocks
-        | select(.type=="tool_result" and .is_error==true)
-        | select((block_text) | test("Command timed out after"))
-        | "D\t" + (($desc[.tool_use_id] // "<unknown command>") | .[0:60] | gsub("[\r\n]"; " "))
+    # STREAMED, one JSONL line at a time, so memory stays flat whatever the file
+    # size. A whole-file slurp would hold a multi-GB Codex transcript in memory
+    # (measured 6.3 GB RSS on one) to keep a few kilobytes of tool calls (#4793).
+    # jq emits each tool_use's description (T) and each timed-out result's id
+    # (E); awk joins them per file, and the last description for an id wins.
+    # Matching stays structural after JSON decoding, so
+    # escaped keys and timeout text split across blocks are still found.
+    # A read that fails makes the whole list UNKNOWN (exit 2): a partial list
+    # beside the clean-empty footer would read as a complete observation
+    # (#4793 review). Rows are tagged D (description) and U (unread) on a
+    # channel transcript text cannot reach: jq folds any newline inside a
+    # description, so every line awk prints starts with D.
+    TIMEOUT_DESC_JQ="$JQ_SHAPE_DEFS"'select(length>0)|(try fromjson catch empty)
+        | if .type=="assistant" then content_blocks | select(.type=="tool_use")
+            | "T\t\(.id)\t" + ((.input?.description? // .input?.command? // "?") | .[0:60] | gsub("[\r\n]"; " "))
+          elif .type=="user" then content_blocks
+            | select(.type=="tool_result" and .is_error==true)
+            | select((block_text) | test("Command timed out after"))
+            | "E\t\(.tool_use_id)"
+          else empty end
       '
+    # shellcheck disable=SC2016  # $1/$2 are awk fields, not shell expansions
+    TIMEOUT_DESC_JOIN='$1=="T" { d[$2] = substr($0, length($2) + 4); next }
+      $1=="E" { e[++n] = $2 }
+      END { for (i = 1; i <= n; i++) print "D\t" ((e[i] in d) ? d[e[i]] : "<unknown command>") }'
     TIMEOUT_DESC_ROWS=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      file_may_contain "$f" 'is_error' || continue
-      if json_may_escape_ascii "$f"; then
-        jq -Rrs "$TIMEOUT_DESC_JQ" "$f" 2>/dev/null || echo U
-      else
-        LC_ALL=C grep -aF -e '"tool_use"' -e 'is_error' -- "$f" \
-          | jq -Rrs "$TIMEOUT_DESC_JQ" 2>/dev/null
-        st=("${PIPESTATUS[@]}")
-        { [ "${st[0]}" -le 1 ] && [ "${st[1]}" -eq 0 ]; } || echo U
-      fi
+      jq -Rr "$TIMEOUT_DESC_JQ" "$f" 2>/dev/null | awk -F'\t' "$TIMEOUT_DESC_JOIN"
+      st=("${PIPESTATUS[@]}")
+      { [ "${st[0]}" -eq 0 ] && [ "${st[1]}" -eq 0 ]; } || echo U
     done)
     if TIMEOUT_DESC_UNREAD=$(printf '%s\n' "$TIMEOUT_DESC_ROWS" | grep -c '^U$'); then
       echo "    UNKNOWN — ${TIMEOUT_DESC_UNREAD} transcript(s) could not be read; the list is withheld"

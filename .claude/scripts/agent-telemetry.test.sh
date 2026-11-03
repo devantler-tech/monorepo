@@ -5814,114 +5814,105 @@ if grep -qE 'interrupted tool calls \.+ 0' <<<"$OUT"; then
   ok "prose quoting the interrupt flag does not fabricate one"
 else bad "prose quoting the interrupt flag does not fabricate one" "$(printf '%s' "$OUT" | grep 'interrupted')"; fi
 
-# The efficiency byte gate (file_may_contain) skips only files that cannot
-# match. Real interrupts, timeouts and their descriptions must still be counted,
-# including a key written with spaces and a description separated from its
-# result by unrelated records, while a sibling file holding none of the bytes
-# contributes nothing and does not hide the others.
-mkdir -p "$FIX/bytegate"
-cat > "$FIX/bytegate/hit.jsonl" <<'EOF'
+# The efficiency passes read every record structurally. Real interrupts,
+# timeouts and their descriptions are counted, including a key written with
+# spaces and a description separated from its result by unrelated records,
+# while a sibling file with nothing to select contributes nothing.
+mkdir -p "$FIX/effscan"
+cat > "$FIX/effscan/hit.jsonl" <<'EOF'
 {"type":"assistant","message":{"content":[{"type": "tool_use","id":"tg1","name":"Bash","input":{"command":"sleep 900","description":"gated slow wait"}}]}}
 {"type":"user","message":{"content":[{"type":"text","text":"unrelated filler without the selected bytes"}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tg1","is_error":true,"content":"Command timed out after 2m 0.0s"}]}}
 {"type":"user","toolUseResult":{"interrupted" : true},"message":{"content":[{"type":"text","text":"x"}]}}
 EOF
-cat > "$FIX/bytegate/miss.jsonl" <<'EOF'
+cat > "$FIX/effscan/miss.jsonl" <<'EOF'
 {"type":"user","message":{"content":[{"type":"text","text":"nothing to select here"}]}}
 EOF
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/bytegate" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/effscan" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
 if grep -qE 'interrupted tool calls \.+ 1$' <<<"$OUT"; then
-  ok "byte gate keeps a spaced interrupted key counted"
-else bad "byte gate keeps a spaced interrupted key counted" "$(grep 'interrupted' <<<"$OUT")"; fi
+  ok "a spaced interrupted key is counted"
+else bad "a spaced interrupted key is counted" "$(grep 'interrupted' <<<"$OUT")"; fi
 if grep -qE 'bash timeouts \.+ 1 ' <<<"$OUT"; then
-  ok "byte gate keeps a real timeout counted"
-else bad "byte gate keeps a real timeout counted" "$(grep 'timeouts' <<<"$OUT")"; fi
-check "line-filtered slurp still joins the timed-out description" "$OUT" "gated slow wait"
+  ok "a real timeout is counted"
+else bad "a real timeout is counted" "$(grep 'timeouts' <<<"$OUT")"; fi
+check "the streamed join keeps a timed-out description across unrelated records" "$OUT" "gated slow wait"
 
 # A timeout whose text is split across array blocks is only contiguous after
-# block_text joins them, so the gate must not key on the phrase (#4793 review).
-mkdir -p "$FIX/bytesplit"
-cat > "$FIX/bytesplit/split.jsonl" <<'EOF'
+# block_text joins them (#4793 review).
+mkdir -p "$FIX/effsplit"
+cat > "$FIX/effsplit/split.jsonl" <<'EOF'
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"ts1","name":"Bash","input":{"command":"sleep 900","description":"split block wait"}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"ts1","is_error":true,"content":[{"type":"text","text":"Command timed out"},{"type":"text","text":"after 2m 0s"}]}]}}
 EOF
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/bytesplit" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/effsplit" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
 if grep -qE 'bash timeouts \.+ 1 ' <<<"$OUT"; then
-  ok "byte gate keeps a timeout split across text blocks counted"
-else bad "byte gate keeps a timeout split across text blocks counted" "$(grep 'timeouts' <<<"$OUT")"; fi
+  ok "a timeout split across text blocks is counted"
+else bad "a timeout split across text blocks is counted" "$(grep 'timeouts' <<<"$OUT")"; fi
 check "split-block timeout keeps its description" "$OUT" "split block wait"
 
-# JSON may spell a selected key or type with escapes; jq decodes them, so the
-# raw-byte gate and the line filter must not drop such a file (#4793 review).
-mkdir -p "$FIX/byteesc"
-cat > "$FIX/byteesc/esc.jsonl" <<'EOF'
-{"type":"assistant","message":{"content":[{"type":"tool\u005fuse","id":"te1","name":"Bash","input":{"command":"sleep 900","description":"escaped key wait"}}]}}
-{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"te1","\u0069s_error":true,"content":"Command timed out after 2m 0.0s"}]}}
-{"type":"user","toolUseResult":{"\u0069nterrupted":true},"message":{"content":[{"type":"text","text":"x"}]}}
+# JSON may spell a selected key or type with escapes; jq decodes them, so such
+# a record is still selected (#4793 review).
+mkdir -p "$FIX/effesc"
+cat > "$FIX/effesc/esc.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"te1","name":"Bash","input":{"command":"sleep 900","description":"escaped key wait"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"te1","is_error":true,"content":"Command timed out after 2m 0.0s"}]}}
+{"type":"user","toolUseResult":{"interrupted":true},"message":{"content":[{"type":"text","text":"x"}]}}
 EOF
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/byteesc" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/effesc" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
 if grep -qE 'interrupted tool calls \.+ 1$' <<<"$OUT"; then
-  ok "byte gate keeps an escaped interrupted key counted"
-else bad "byte gate keeps an escaped interrupted key counted" "$(grep 'interrupted' <<<"$OUT")"; fi
+  ok "an escaped interrupted key is counted"
+else bad "an escaped interrupted key is counted" "$(grep 'interrupted' <<<"$OUT")"; fi
 if grep -qE 'bash timeouts \.+ 1 ' <<<"$OUT"; then
-  ok "byte gate keeps an escaped is_error timeout counted"
-else bad "byte gate keeps an escaped is_error timeout counted" "$(grep 'timeouts' <<<"$OUT")"; fi
+  ok "an escaped is_error timeout is counted"
+else bad "an escaped is_error timeout is counted" "$(grep 'timeouts' <<<"$OUT")"; fi
 check "escaped tool_use type keeps its timed-out description" "$OUT" "escaped key wait"
 
-# The gate exists to skip parses, not only to keep the output: trace every jq
-# call that names a file and prove the gated passes read hit.jsonl but never
-# miss.jsonl (#4793 review). The markers are fragments of each gated program.
-mkdir -p "$FIX/bytetrace/bin"
-bytetrace_jq=$(command -v jq)
-cat > "$FIX/bytetrace/bin/jq" <<'EOF'
+# The description list is streamed per line, never slurped, so a multi-GB
+# transcript is not held in memory (#4793). Trace the description program's jq
+# calls and prove none of them slurps its file.
+mkdir -p "$FIX/effstream/bin"
+effstream_jq=$(command -v jq)
+cat > "$FIX/effstream/bin/jq" <<'EOF'
 #!/usr/bin/env bash
-for a in "$@"; do
-  case "$a" in *.jsonl)
-    case "$*" in
-      *'interrupted? == true'*) printf 'interrupt %s\n' "${a##*/}" >> "$BYTETRACE_LOG" ;;
-      *"(((.is_error? // false) == true)"*) printf 'failtext %s\n' "${a##*/}" >> "$BYTETRACE_LOG" ;;
-    esac ;;
-  esac
-done
-exec "$BYTETRACE_REAL_JQ" "$@"
+case "$*" in *'Command timed out after'*'tool_use'*|*'tool_use'*'Command timed out after'*)
+  case "$1" in *s*) printf 'slurp %s\n' "$1" >> "$EFFSTREAM_LOG" ;; *) printf 'stream %s\n' "$1" >> "$EFFSTREAM_LOG" ;; esac ;;
+esac
+exec "$EFFSTREAM_REAL_JQ" "$@"
 EOF
-chmod +x "$FIX/bytetrace/bin/jq"
-: > "$FIX/bytetrace/log"
-OUT=$(PATH="$FIX/bytetrace/bin:$PATH" BYTETRACE_REAL_JQ="$bytetrace_jq" BYTETRACE_LOG="$FIX/bytetrace/log" \
-      CLAUDE_PROJECTS_DIR="$FIX/bytegate" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+chmod +x "$FIX/effstream/bin/jq"
+: > "$FIX/effstream/log"
+OUT=$(PATH="$FIX/effstream/bin:$PATH" EFFSTREAM_REAL_JQ="$effstream_jq" EFFSTREAM_LOG="$FIX/effstream/log" \
+      CLAUDE_PROJECTS_DIR="$FIX/effscan" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-TRACE=$(sort -u "$FIX/bytetrace/log")
-if grep -qx 'interrupt hit.jsonl' <<<"$TRACE" && grep -qx 'failtext hit.jsonl' <<<"$TRACE"; then
-  ok "gated passes still parse a matching file"
-else bad "gated passes still parse a matching file" "$TRACE"; fi
-if grep -q 'miss.jsonl' <<<"$TRACE"; then
-  bad "gated passes skip a file holding none of their bytes" "$TRACE"
-else ok "gated passes skip a file holding none of their bytes"; fi
+TRACE=$(sort -u "$FIX/effstream/log")
+if grep -q '^stream ' <<<"$TRACE" && ! grep -q '^slurp ' <<<"$TRACE"; then
+  ok "the timeout description list streams each transcript instead of slurping it"
+else bad "the timeout description list streams each transcript instead of slurping it" "$TRACE"; fi
 
-# A line-filter read that fails after emitting part of the file must make the
-# description list UNKNOWN and the run exit 2, never a partial list beside the
-# clean-empty footer (#4793 review). The shim fails only the filter's grep.
-mkdir -p "$FIX/bytefail/bin"
-bytefail_grep=$(command -v grep)
-cat > "$FIX/bytefail/bin/grep" <<'SHIM'
+# A description read that fails after emitting part of the file must make the
+# list UNKNOWN and the run exit 2, never a partial list beside the clean-empty
+# footer (#4793 review). The shim fails only the description program's jq.
+mkdir -p "$FIX/efffail/bin"
+efffail_jq=$(command -v jq)
+cat > "$FIX/efffail/bin/jq" <<'SHIM'
 #!/usr/bin/env bash
 case "$*" in
-  *'-aF -e "tool_use" -e is_error -- '*) head -n 1 "${!#}"; exit 2 ;;
+  *'"E\t\(.tool_use_id)"'*) "$EFFFAIL_REAL_JQ" "$@" | head -n 1; exit 2 ;;
 esac
-exec "$BYTEFAIL_REAL_GREP" "$@"
+exec "$EFFFAIL_REAL_JQ" "$@"
 SHIM
-chmod +x "$FIX/bytefail/bin/grep"
-OUT=$(PATH="$FIX/bytefail/bin:$PATH" BYTEFAIL_REAL_GREP="$bytefail_grep" \
-      CLAUDE_PROJECTS_DIR="$FIX/bytegate" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+chmod +x "$FIX/efffail/bin/jq"
+OUT=$(PATH="$FIX/efffail/bin:$PATH" EFFFAIL_REAL_JQ="$efffail_jq" \
+      CLAUDE_PROJECTS_DIR="$FIX/effscan" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
 RC=$?
-if [ "$RC" -eq 2 ] && grep -q 'UNKNOWN — 1 transcript(s) could not be read' <<<"$OUT" \
+if [ "$RC" -eq 2 ] && grep -q 'UNKNOWN — 2 transcript(s) could not be read' <<<"$OUT" \
    && ! grep -q 'empty = nothing timed out' <<<"$OUT" && ! grep -q 'gated slow wait' <<<"$OUT"; then
-  ok "a partial line-filter read makes the timeout descriptions UNKNOWN and exits 2"
-else bad "a partial line-filter read makes the timeout descriptions UNKNOWN and exits 2" "rc=$RC $(grep -A3 'ACTUALLY timed out' <<<"$OUT")"; fi
+  ok "a failed description read makes the timeout descriptions UNKNOWN and exits 2"
+else bad "a failed description read makes the timeout descriptions UNKNOWN and exits 2" "rc=$RC $(grep -A3 'ACTUALLY timed out' <<<"$OUT")"; fi
 
 # The scorecard requires injection attempts to be SURFACED.
 OUT=$(run --section safety)
