@@ -103,8 +103,8 @@ trap on_test_exit EXIT
 cat > "$CTIME_SHIM_DIR/stat" <<EOF
 #!/usr/bin/env bash
 path="\${!#}"
-if grep -qxF -- "\$path" '$CTIME_FRESH'; then exec '$REAL_STAT' "\$@"; fi
-if grep -qxF -- "\$path" '$CTIME_BROKEN'; then
+if [ -s '$CTIME_FRESH' ] && grep -qxF -- "\$path" '$CTIME_FRESH'; then exec '$REAL_STAT' "\$@"; fi
+if [ -s '$CTIME_BROKEN' ] && grep -qxF -- "\$path" '$CTIME_BROKEN'; then
   # Keep mtime readable when the paired ctime fails: accepting only the first
   # field would otherwise let this negative control pass on a wholly bad read.
   case "\${2:-}" in
