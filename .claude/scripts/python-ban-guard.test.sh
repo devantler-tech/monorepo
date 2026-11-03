@@ -487,6 +487,7 @@ report "control: correcting the malformed shell makes the same surface clean" \
 parser_error_dir="$tmp/parser-error-ablation"
 mkdir -p "$parser_error_dir"
 cp -R "$here/python-ban-guard-go" "$parser_error_dir/"
+cp "$here/go-helper-build.sh" "$parser_error_dir/"
 sed 's/    \*) exit 2 ;;/    *) ;;/' "$guard" >"$parser_error_dir/python-ban-guard.sh"
 report "parser-error ablation edit landed" \
   "$(grep -Fq '    *) ;;' "$parser_error_dir/python-ban-guard.sh" && echo yes || echo no)"
@@ -605,6 +606,7 @@ done
 ablated_dir="$tmp/ablation"
 mkdir -p "$ablated_dir"
 cp -R "$here/python-ban-guard-go" "$ablated_dir/"
+cp "$here/go-helper-build.sh" "$ablated_dir/"
 ablated="$ablated_dir/python-ban-guard.sh"
 sed 's/(py|python\[23\]?(\[\.\]\[0-9\]+)?|pip\[23\]?(\[\.\]\[0-9\]+)?|pytest)/(pyZZ|pythonZZ[23]?([.][0-9]+)?|pipZZ[23]?([.][0-9]+)?|pytestZZ)/' "$guard" >"$ablated"
 sed 's/(py|python\[23\]?(\[\.\]\[0-9\]+)?|pip\[23\]?(\[\.\]\[0-9\]+)?|pytest)/(pyZZ|pythonZZ[23]?([.][0-9]+)?|pipZZ[23]?([.][0-9]+)?|pytestZZ)/' "$here/python-ban-guard-go/main.go" >"$ablated_dir/python-ban-guard-go/main.go"

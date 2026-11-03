@@ -82,7 +82,9 @@ fi
 
 guard_binary="$(mktemp "${TMPDIR:-/tmp}/maintainer-comment-candidates.XXXXXX")" ||
   die "failed to allocate temporary binary"
-go -C "${script_dir}/comment-disclosure-drift-go" build -o "${guard_binary}" . ||
+# shellcheck source=go-helper-build.sh
+. "$script_dir/go-helper-build.sh" || die "cannot load the shared Go builder"
+go_helper_build "${script_dir}/comment-disclosure-drift-go" "${guard_binary}" . ||
   die "failed to build the comment-disclosure-drift Go guard"
 
 status=0

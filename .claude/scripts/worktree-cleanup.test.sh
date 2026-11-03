@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# test-timeout-seconds: 900
+# Measured 561 s for all 272 cases on 2026-11-03; retain a bounded local run (#4394).
 # Contract tests for worktree-cleanup.sh.
 #
 # Each test builds a scratch repo with a real remote and real worktrees, then asserts
@@ -101,8 +103,8 @@ trap on_test_exit EXIT
 cat > "$CTIME_SHIM_DIR/stat" <<EOF
 #!/usr/bin/env bash
 path="\${!#}"
-if grep -qxF -- "\$path" '$CTIME_FRESH'; then exec '$REAL_STAT' "\$@"; fi
-if grep -qxF -- "\$path" '$CTIME_BROKEN'; then
+if [ -s '$CTIME_FRESH' ] && grep -qxF -- "\$path" '$CTIME_FRESH'; then exec '$REAL_STAT' "\$@"; fi
+if [ -s '$CTIME_BROKEN' ] && grep -qxF -- "\$path" '$CTIME_BROKEN'; then
   # Keep mtime readable when the paired ctime fails: accepting only the first
   # field would otherwise let this negative control pass on a wholly bad read.
   case "\${2:-}" in
@@ -6722,8 +6724,176 @@ t_salvage_carries_one_submodule_and_clears_another() {
   rm -rf "$root"
 }
 
+# Load only the read-only fingerprint functions, so small hash-boundary controls do
+# not each create a repository and run a whole cleanup sweep. The normal cases below
+# still exercise their callers, including the executable-after-snapshot KEEP gate.
+fingerprint_test_functions() {
+  awk '
+    /^dir_listable\(\)/ { print; next }
+    /^(module_state_files|module_fingerprint_batch|modules_fingerprint)\(\) \{/ { copying=1 }
+    copying { print; if ($0 == "}") copying=0 }
+  ' "$SUT" > "$1"
+}
+
+t_modules_fingerprint_batches_literal_paths() {
+  local root real_git name="metadata fingerprints batch file hashes without changing their records"
+  root=$(mktemp -d) || { bad "$name" "FIXTURE: cannot allocate scratch"; return; }
+  real_git=$(command -v git)
+  mkdir -p "$root/admin/modules"
+  fingerprint_test_functions "$root/functions"
+  if (
+    # shellcheck disable=SC1090,SC1091 # trusted function definitions from this test's SUT
+    . "$root/functions"
+    declare -F modules_fingerprint >/dev/null || exit 1
+    local f i blob expected first second changed
+    local paths=("-leading" "00 space" "01 quote'\"" $'02 line\nbreak')
+    for ((i=4; i<32; i++)); do paths+=("file-$i"); done
+    for f in "${paths[@]}"; do printf 'fixture\n' > "$root/admin/modules/$f"; done
+    blob=$(printf 'fixture\n' | "$real_git" hash-object --stdin) || exit 1
+    # Build the pre-existing wire format independently of the SUT's file hashing.
+    printf '%s\0' "${paths[@]}" | LC_ALL=C sort -z > "$root/ordered"
+    while IFS= read -r -d '' f; do
+      printf '%s %s %s\0' - "$blob" "$root/admin/modules/$f"
+    done < "$root/ordered" > "$root/expected-records"
+    expected=$("$real_git" hash-object --stdin < "$root/expected-records") || exit 1
+    # shellcheck disable=SC2329 # called by the sourced production functions
+    git() {
+      if [ "${1:-}" = hash-object ]; then
+        case "${2:-}" in
+          --no-filters) printf 'files=%s\n' "$(($# - 3))" >> "$root/calls" ;;
+          --stdin) printf 'final\n' >> "$root/calls" ;;
+        esac
+      fi
+      "$real_git" "$@"
+    }
+    first=$(modules_fingerprint "$root/admin") || exit 1
+    second=$(modules_fingerprint "$root/admin") || exit 1
+    [ "$first" = "$expected" ] && [ "$second" = "$expected" ] || exit 1
+    printf 'files=32\nfinal\nfiles=32\nfinal\n' > "$root/expected-calls"
+    cmp -s "$root/expected-calls" "$root/calls" || {
+      echo "expected four hash launches for two 32-file scans; observed $(wc -l < "$root/calls")"
+      exit 1
+    }
+    chmod u+x "$root/admin/modules/00 space"
+    changed=$(modules_fingerprint "$root/admin") || exit 1
+    [ "$changed" != "$first" ] || { echo 'executable-bit change was cached'; exit 1; }
+    chmod u-x "$root/admin/modules/00 space"
+    printf 'changed\n' > "$root/admin/modules/00 space"
+    changed=$(modules_fingerprint "$root/admin") || exit 1
+    [ "$changed" != "$first" ] || { echo 'changed bytes were cached'; exit 1; }
+  ) > "$root/output" 2>&1; then
+    ok "$name (33 to 2 launches per 32-file scan; 66 to 4 for both reads)"
+  else
+    bad "$name" "$(cat "$root/output")"
+  fi
+  rm -rf "$root"
+}
+
+t_modules_fingerprint_refuses_bad_hash_output() {
+  local root real_git scenario name="metadata fingerprints reject incomplete or malformed hash batches"
+  root=$(mktemp -d) || { bad "$name" "FIXTURE: cannot allocate scratch"; return; }
+  real_git=$(command -v git)
+  mkdir -p "$root/admin/modules"
+  printf 'one\n' > "$root/admin/modules/a"
+  printf 'two\n' > "$root/admin/modules/b"
+  printf 'three\n' > "$root/admin/modules/c"
+  fingerprint_test_functions "$root/functions"
+  for scenario in missing-middle short extra garbage blank unterminated nul; do
+    printf 'two\n' > "$root/admin/modules/b"
+    if (
+      # shellcheck disable=SC1090,SC1091 # trusted function definitions from this test's SUT
+      . "$root/functions"
+      local out rc
+      # shellcheck disable=SC2329 # called by the sourced production functions
+      git() {
+        if [ "${1:-}:${2:-}" = hash-object:--no-filters ]; then
+          case "$scenario" in
+            missing-middle) rm -f "$root/admin/modules/b"; "$real_git" "$@"; return $? ;;
+            short) "$real_git" "$@" | sed '$d'; return 0 ;;
+            extra) "$real_git" "$@"; printf '%040d\n' 0; return 0 ;;
+            garbage) printf 'not-an-object-id\n'; return 0 ;;
+            blank) "$real_git" "$@"; printf '\n'; return 0 ;;
+            unterminated) printf '%040d' 0; return 0 ;;
+            nul) "$real_git" "$@"; printf '\0'; return 0 ;;
+          esac
+        fi
+        "$real_git" "$@"
+      }
+      out=$(modules_fingerprint "$root/admin"); rc=$?
+      if [ "$rc" -ne 0 ] && [ -z "$out" ]; then exit 0; fi
+      echo "expected refusal without a fingerprint for $scenario; status=$rc output=$out"
+      exit 1
+    ) > "$root/output" 2>&1; then
+      ok "$name ($scenario)"
+    else
+      bad "$name ($scenario)" "$(cat "$root/output")"
+    fi
+  done
+  rm -rf "$root"
+}
+
+t_modules_fingerprint_bounds_arguments_and_empty_input() {
+  local root real_git name="metadata fingerprint batches bound literal arguments and preserve empty input"
+  root=$(mktemp -d) || { bad "$name" "FIXTURE: cannot allocate scratch"; return; }
+  real_git=$(command -v git)
+  mkdir -p "$root/admin/modules"
+  fingerprint_test_functions "$root/functions"
+  if (
+    # shellcheck disable=SC1090,SC1091 # trusted function definitions from this test's SUT
+    . "$root/functions"
+    local empty result dir="$root/admin/modules" component='' i calls=0 batches=0
+    empty=$("$real_git" hash-object --stdin < /dev/null) || exit 1
+    # shellcheck disable=SC2329 # called by the sourced production functions
+    git() {
+      if [ "${1:-}" = hash-object ]; then
+        calls=$((calls + 1))
+        if [ "${2:-}" = --no-filters ]; then
+          local arg argv_bytes=0 argv_count=0
+          for arg in "${@:4}"; do argv_bytes=$((argv_bytes + ${#arg} + 1)); argv_count=$((argv_count + 1)); done
+          [ "$argv_count" -le 32 ] && [ "$argv_bytes" -le 8192 ] || {
+            echo "unbounded hash arguments: count=$argv_count bytes=$argv_bytes" > "$root/rejected-arguments"; return 1;
+          }
+          batches=$((batches + 1))
+        fi
+      fi
+      "$real_git" "$@"
+    }
+    modules_fingerprint "$root/admin" > "$root/fingerprint" || exit 1
+    [ "$(cat "$root/fingerprint")" = "$empty" ] && [ "$calls" -eq 1 ] && [ "$batches" -eq 0 ] || exit 1
+    rmdir "$root/admin/modules"
+    modules_fingerprint "$root/admin" > "$root/fingerprint" || exit 1
+    [ ! -s "$root/fingerprint" ] && [ "$calls" -eq 1 ] || exit 1
+    # Each component is legal on both hosts. Together the 33 literal paths exceed
+    # the byte budget before the count limit, without needing an oversized argv.
+    for ((i=0; i<70; i++)); do component+=x; done
+    dir="$dir/$component/$component/$component/$component"
+    mkdir -p "$dir"
+    for ((i=0; i<33; i++)); do printf 'fixture\n' > "$dir/file-$i"; done
+    if ! modules_fingerprint "$root/admin" > "$root/fingerprint"; then
+      cat "$root/rejected-arguments" 2>/dev/null
+      exit 1
+    fi
+    [ -s "$root/fingerprint" ] && [ "$batches" -ge 2 ] || exit 1
+    result=$(cat "$root/fingerprint")
+    # Moving bytes between files preserves their concatenation, but must never
+    # preserve a fingerprint: each file remains a separately hashed record.
+    printf a > "$dir/file-0"; printf bc > "$dir/file-1"
+    result=$(modules_fingerprint "$root/admin") || exit 1
+    printf ab > "$dir/file-0"; printf c > "$dir/file-1"
+    [ "$(modules_fingerprint "$root/admin")" != "$result" ] || exit 1
+  ) > "$root/output" 2>&1; then
+    ok "$name"
+  else
+    bad "$name" "$(cat "$root/output")"
+  fi
+  rm -rf "$root"
+}
+
 case_registry() {
   cat <<'CLEANUP_CASES'
+t_modules_fingerprint_batches_literal_paths
+t_modules_fingerprint_refuses_bad_hash_output
+t_modules_fingerprint_bounds_arguments_and_empty_input
 t_reaps_spent
 t_keeps_unpushed
 t_keeps_detached_orphan

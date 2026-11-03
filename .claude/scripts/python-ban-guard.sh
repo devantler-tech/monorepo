@@ -97,7 +97,9 @@ python_ban_guard_cleanup() {
 }
 trap python_ban_guard_cleanup EXIT
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if ! go -C "$script_dir/python-ban-guard-go" build -o "$parser_binary" .; then
+# shellcheck source=go-helper-build.sh
+. "$script_dir/go-helper-build.sh" || exit 2
+if ! go_helper_build "$script_dir/python-ban-guard-go" "$parser_binary" .; then
   echo "python-ban-guard: cannot build command parser" >&2
   exit 2
 fi
