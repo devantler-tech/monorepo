@@ -5330,7 +5330,11 @@ if want efficiency; then
     # neither a "tool_use" block nor an is_error flag changes no output; it
     # only stops a multi-GB file being held in memory for nothing. A file whose
     # escapes could spell a selected key, or that grep cannot read, takes the
-    # whole-file parse instead; a read that still fails is listed, never dropped.
+    # whole-file parse instead. A read that still fails makes the whole list
+    # UNKNOWN (exit 2): a partial list beside the clean-empty footer would read
+    # as a complete observation (#4793 review). Rows are tagged D (description)
+    # and U (unread) on a channel transcript text cannot reach: jq folds any
+    # newline inside a description, so every line it prints starts with D.
     TIMEOUT_DESC_JQ="$JQ_SHAPE_DEFS"'split("\n")|map(select(length>0)|(try fromjson catch empty))|
         (reduce (.[] | select(.type=="assistant") | content_blocks
                  | select(.type=="tool_use")) as $t ({};
@@ -5338,22 +5342,27 @@ if want efficiency; then
         | .[] | select(.type=="user") | content_blocks
         | select(.type=="tool_result" and .is_error==true)
         | select((block_text) | test("Command timed out after"))
-        | ($desc[.tool_use_id] // "<unknown command>") | .[0:60]
+        | "D\t" + (($desc[.tool_use_id] // "<unknown command>") | .[0:60] | gsub("[\r\n]"; " "))
       '
-    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
+    TIMEOUT_DESC_ROWS=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
       file_may_contain "$f" 'is_error' || continue
       if json_may_escape_ascii "$f"; then
-        jq -Rrs "$TIMEOUT_DESC_JQ" "$f" 2>/dev/null \
-          || echo "<UNREAD transcript: list under-counts>"
+        jq -Rrs "$TIMEOUT_DESC_JQ" "$f" 2>/dev/null || echo U
       else
         LC_ALL=C grep -aF -e '"tool_use"' -e 'is_error' -- "$f" \
           | jq -Rrs "$TIMEOUT_DESC_JQ" 2>/dev/null
         st=("${PIPESTATUS[@]}")
-        { [ "${st[0]}" -le 1 ] && [ "${st[1]}" -eq 0 ]; } \
-          || echo "<UNREAD transcript: list under-counts>"
+        { [ "${st[0]}" -le 1 ] && [ "${st[1]}" -eq 0 ]; } || echo U
       fi
-    done | redact | sort | uniq -c | sort -rn | head -8 | sed 's/^/    /'
-    echo "    (empty = nothing timed out in this window)"
+    done)
+    if TIMEOUT_DESC_UNREAD=$(printf '%s\n' "$TIMEOUT_DESC_ROWS" | grep -c '^U$'); then
+      echo "    UNKNOWN — ${TIMEOUT_DESC_UNREAD} transcript(s) could not be read; the list is withheld"
+      main_rc=2
+    else
+      printf '%s\n' "$TIMEOUT_DESC_ROWS" | awk -F'\t' '$1=="D" {print substr($0, 3)}' \
+        | redact | sort | uniq -c | sort -rn | head -8 | sed 's/^/    /'
+      echo "    (empty = nothing timed out in this window)"
+    fi
   fi
 fi
 

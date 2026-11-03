@@ -5901,6 +5901,28 @@ if grep -q 'miss.jsonl' <<<"$TRACE"; then
   bad "gated passes skip a file holding none of their bytes" "$TRACE"
 else ok "gated passes skip a file holding none of their bytes"; fi
 
+# A line-filter read that fails after emitting part of the file must make the
+# description list UNKNOWN and the run exit 2, never a partial list beside the
+# clean-empty footer (#4793 review). The shim fails only the filter's grep.
+mkdir -p "$FIX/bytefail/bin"
+bytefail_grep=$(command -v grep)
+cat > "$FIX/bytefail/bin/grep" <<'SHIM'
+#!/usr/bin/env bash
+case "$*" in
+  *'-aF -e "tool_use" -e is_error -- '*) head -n 1 "${!#}"; exit 2 ;;
+esac
+exec "$BYTEFAIL_REAL_GREP" "$@"
+SHIM
+chmod +x "$FIX/bytefail/bin/grep"
+OUT=$(PATH="$FIX/bytefail/bin:$PATH" BYTEFAIL_REAL_GREP="$bytefail_grep" \
+      CLAUDE_PROJECTS_DIR="$FIX/bytegate" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+RC=$?
+if [ "$RC" -eq 2 ] && grep -q 'UNKNOWN — 1 transcript(s) could not be read' <<<"$OUT" \
+   && ! grep -q 'empty = nothing timed out' <<<"$OUT" && ! grep -q 'gated slow wait' <<<"$OUT"; then
+  ok "a partial line-filter read makes the timeout descriptions UNKNOWN and exits 2"
+else bad "a partial line-filter read makes the timeout descriptions UNKNOWN and exits 2" "rc=$RC $(grep -A3 'ACTUALLY timed out' <<<"$OUT")"; fi
+
 # The scorecard requires injection attempts to be SURFACED.
 OUT=$(run --section safety)
 check "injection attempts are surfaced" "$OUT" "INJECTION ATTEMPTS"
