@@ -215,6 +215,8 @@ release_lock() {
   worktree_claim_lock_release || fail "ownership lock changed owner before release: $ref"
 }
 
+# Ignore ownership metadata in the target repository. Resolve its exclude file
+# absolutely so a relative Git metadata path cannot be applied to the caller.
 ignore_marker() {
   local wt="$1"
   local exclude
