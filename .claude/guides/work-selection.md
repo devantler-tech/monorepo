@@ -265,6 +265,20 @@ governs the issue work that follows.) Two rules enforce that:
    `last-verified` result. A missing, malformed, or merely prose "waiting on upstream" record is
    under-specified for (b) — repair the line and verify it (or unblock) rather than skipping.
 
+   **Choosing the source, and when it covers the blocker (monorepo#2859).** Choose the source by the
+   identifier's **class**, never from a table of per-project destinations, which goes stale: a fully
+   qualified issue or pull request (`owner/repo#n`) is checked at that public repository's own record
+   of it; a package or module version at the ecosystem's public registry or module proxy; a hosted
+   service's capability at the provider's own public documentation or changelog. A source **covers**
+   the blocker only when it shows that exact identifier (or that exact package and version) together
+   with a state that settles it: open or closed, merged, released or published, or a dated changelog
+   entry that names it. A page about the project in general, a snippet without the identifier, a
+   release that does not mention it, or silence covers nothing. **Unable to establish coverage means
+   unverified, and an unverified blocker is not a skip**: record `not verified: no covering source` as
+   the `last-verified` result, keep the issue selectable, and repair or escalate the blocker instead of
+   skipping it. The chosen source is never written into the blocker line, which keeps only the
+   identity, kind, date and result.
+
    🔴 **`<blocker-kind>` is exactly `upstream`, `authority` or `outcome`, and the difference decides
    whether re-verification is sufficient or futile.** This is separate from the provider-outage **cause
    class** (`quota/billing`, `credentials/auth`, `runtime/config`, `unknown`). For an outage, put
