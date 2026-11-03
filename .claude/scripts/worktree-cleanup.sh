@@ -1732,6 +1732,33 @@ module_state_files() {
   return 0
 }
 
+# module_fingerprint_batch <records> <hashes> <path...> — append the existing per-file
+# records only after one bounded Git read returns exactly one complete object ID per
+# literal argument. A failed command can print a valid prefix; none of it proves the batch.
+module_fingerprint_batch() {
+  local records=$1 hashes=$2 blob f mode i=0 ids=()
+  shift 2
+  [ "$#" -gt 0 ] || return 1
+  git hash-object --no-filters -- "$@" > "$hashes" 2>/dev/null || return 1
+  # Bash read can silently discard NUL bytes. Detect one before parsing lines,
+  # otherwise a malformed response could look like the expected valid IDs.
+  if IFS= read -r -d '' blob < "$hashes"; then return 1; fi
+  while IFS= read -r blob; do
+    [ "${#ids[@]}" -lt "$#" ] || return 1
+    case "$blob" in ''|*[!0-9a-f]*) return 1 ;; esac
+    case "${#blob}" in 40|64) ;; *) return 1 ;; esac
+    ids+=("$blob")
+  done < "$hashes"
+  # read leaves an unterminated final line in blob; even a complete-looking ID
+  # without its record delimiter is a truncated response, not another valid row.
+  [ -z "$blob" ] && [ "${#ids[@]}" -eq "$#" ] || return 1
+  for f in "$@"; do
+    mode=-; [ -x "$f" ] && mode=x
+    printf '%s %s %s\0' "$mode" "${ids[$i]}" "$f" >> "$records" || return 1
+    i=$((i + 1))
+  done
+}
+
 # modules_fingerprint <admin> -> prints one id for the name, executable bit and bytes of every file under
 # the admin directory's modules/ outside the object stores (empty when there is none).
 # Taken before the snapshot and compared immediately before the removal: a branch created,
@@ -1739,7 +1766,7 @@ module_state_files() {
 # the parent's tree and index exactly as snapshotted, and can leave the repository
 # pristine too. Non-zero on any read failure.
 modules_fingerprint() {
-  local admin=$1 names f blob mode
+  local admin=$1 names f bytes=0 batch=() LC_ALL=C
   # An empty or missing admin directory is a lookup that failed in the caller, not a
   # worktree without submodules.
   [ -n "$admin" ] && [ -d "$admin" ] || return 1
@@ -1752,20 +1779,26 @@ modules_fingerprint() {
   fi
   rm -f "$names.raw"
   # One record per file: whether it is executable (the one mode bit module_files_tree
-  # records), the id of its own bytes, and its name, NUL-terminated. Hashing each file on
-  # its own keeps the boundaries: bytes moved from the end of one file to the start of the
-  # next would leave a single concatenated stream unchanged.
+  # records), the id of its own bytes, and its name, NUL-terminated. Git still hashes
+  # each file separately; only its process launches are batched (#4394). Both a
+  # path-count and byte bound keep quoted arguments small without splitting names.
   : > "$names.records" || { rm -f "$names"; return 1; }
   while IFS= read -r -d '' f; do
-    blob=$(git hash-object --no-filters -- "$f" 2>/dev/null) && [ -n "$blob" ] \
-      || { rm -f "$names" "$names.records"; return 1; }
-    mode=-; [ -x "$f" ] && mode=x
-    printf '%s %s %s\0' "$mode" "$blob" "$f" >> "$names.records" || { rm -f "$names" "$names.records"; return 1; }
+    if [ "${#batch[@]}" -gt 0 ] && { [ "${#batch[@]}" -ge 32 ] || [ "$((bytes + ${#f} + 1))" -gt 8192 ]; }; then
+      module_fingerprint_batch "$names.records" "$names.hashes" "${batch[@]}" \
+        || { rm -f "$names" "$names.records" "$names.hashes"; return 1; }
+      batch=(); bytes=0
+    fi
+    batch+=("$f"); bytes=$((bytes + ${#f} + 1))
   done < "$names"
-  if ! git hash-object --stdin < "$names.records" 2>/dev/null; then
-    rm -f "$names" "$names.records"; return 1
+  if [ "${#batch[@]}" -gt 0 ]; then
+    module_fingerprint_batch "$names.records" "$names.hashes" "${batch[@]}" \
+      || { rm -f "$names" "$names.records" "$names.hashes"; return 1; }
   fi
-  rm -f "$names" "$names.records"
+  if ! git hash-object --stdin < "$names.records" 2>/dev/null; then
+    rm -f "$names" "$names.records" "$names.hashes"; return 1
+  fi
+  rm -f "$names" "$names.records" "$names.hashes"
 }
 
 # module_remote_rows <git-dir> -> sets MODULE_REMOTE_ROWS to what the repository's origin
