@@ -5853,6 +5853,54 @@ if grep -qE 'bash timeouts \.+ 1 ' <<<"$OUT"; then
 else bad "byte gate keeps a timeout split across text blocks counted" "$(grep 'timeouts' <<<"$OUT")"; fi
 check "split-block timeout keeps its description" "$OUT" "split block wait"
 
+# JSON may spell a selected key or type with escapes; jq decodes them, so the
+# raw-byte gate and the line filter must not drop such a file (#4793 review).
+mkdir -p "$FIX/byteesc"
+cat > "$FIX/byteesc/esc.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool\u005fuse","id":"te1","name":"Bash","input":{"command":"sleep 900","description":"escaped key wait"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"te1","\u0069s_error":true,"content":"Command timed out after 2m 0.0s"}]}}
+{"type":"user","toolUseResult":{"\u0069nterrupted":true},"message":{"content":[{"type":"text","text":"x"}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/byteesc" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if grep -qE 'interrupted tool calls \.+ 1$' <<<"$OUT"; then
+  ok "byte gate keeps an escaped interrupted key counted"
+else bad "byte gate keeps an escaped interrupted key counted" "$(grep 'interrupted' <<<"$OUT")"; fi
+if grep -qE 'bash timeouts \.+ 1 ' <<<"$OUT"; then
+  ok "byte gate keeps an escaped is_error timeout counted"
+else bad "byte gate keeps an escaped is_error timeout counted" "$(grep 'timeouts' <<<"$OUT")"; fi
+check "escaped tool_use type keeps its timed-out description" "$OUT" "escaped key wait"
+
+# The gate exists to skip parses, not only to keep the output: trace every jq
+# call that names a file and prove the gated passes read hit.jsonl but never
+# miss.jsonl (#4793 review). The markers are fragments of each gated program.
+mkdir -p "$FIX/bytetrace/bin"
+bytetrace_jq=$(command -v jq)
+cat > "$FIX/bytetrace/bin/jq" <<'EOF'
+#!/usr/bin/env bash
+for a in "$@"; do
+  case "$a" in *.jsonl)
+    case "$*" in
+      *'interrupted? == true'*) printf 'interrupt %s\n' "${a##*/}" >> "$BYTETRACE_LOG" ;;
+      *"(((.is_error? // false) == true)"*) printf 'failtext %s\n' "${a##*/}" >> "$BYTETRACE_LOG" ;;
+    esac ;;
+  esac
+done
+exec "$BYTETRACE_REAL_JQ" "$@"
+EOF
+chmod +x "$FIX/bytetrace/bin/jq"
+: > "$FIX/bytetrace/log"
+OUT=$(PATH="$FIX/bytetrace/bin:$PATH" BYTETRACE_REAL_JQ="$bytetrace_jq" BYTETRACE_LOG="$FIX/bytetrace/log" \
+      CLAUDE_PROJECTS_DIR="$FIX/bytegate" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+TRACE=$(sort -u "$FIX/bytetrace/log")
+if grep -qx 'interrupt hit.jsonl' <<<"$TRACE" && grep -qx 'failtext hit.jsonl' <<<"$TRACE"; then
+  ok "gated passes still parse a matching file"
+else bad "gated passes still parse a matching file" "$TRACE"; fi
+if grep -q 'miss.jsonl' <<<"$TRACE"; then
+  bad "gated passes skip a file holding none of their bytes" "$TRACE"
+else ok "gated passes skip a file holding none of their bytes"; fi
+
 # The scorecard requires injection attempts to be SURFACED.
 OUT=$(run --section safety)
 check "injection attempts are surfaced" "$OUT" "INJECTION ATTEMPTS"

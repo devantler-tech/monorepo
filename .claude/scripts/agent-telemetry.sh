@@ -2385,11 +2385,22 @@ def usable_ts:
 # flag value, never result prose. block_text joins array text blocks with a
 # space, so a phrase split across blocks is matched after decoding although the
 # raw file never holds it contiguously (#4793 review). Several needles are ORed.
+# JSON may still spell a letter or `_` as an escape (`"\u0069s_error"` decodes
+# to `is_error`), so a file holding any escape in that range (U+0040-U+007F) is
+# parsed as before; the gate skips only a file that can hold no spelling of a needle.
 file_may_contain() {
   local f="$1" a; shift
   local args=()
   for a in "$@"; do args+=(-e "$a"); done
   LC_ALL=C grep -aqF "${args[@]}" -- "$f" && return 0
+  [ "$?" -ne 1 ] && return 0
+  json_may_escape_ascii "$f"
+}
+
+# 0 when the file holds a JSON escape that may spell an ASCII letter or `_`, or
+# cannot be read; 1 only on a clean "none". A raw-byte filter is safe only on 1.
+json_may_escape_ascii() {
+  LC_ALL=C grep -aqE '\\u00[4-7][0-9A-Fa-f]' -- "$1" && return 0
   [ "$?" -ne 1 ]
 }
 
@@ -5317,11 +5328,10 @@ if want efficiency; then
     # The slurp reads only the lines it can use. Every record is one JSONL line
     # parsed with `try fromjson catch empty`, so dropping a line that holds
     # neither a "tool_use" block nor an is_error flag changes no output; it
-    # only stops a multi-GB file being held in memory for nothing.
-    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      file_may_contain "$f" 'is_error' || continue
-      { LC_ALL=C grep -aF -e '"tool_use"' -e 'is_error' -- "$f" || true; } \
-      | jq -Rrs "$JQ_SHAPE_DEFS"'split("\n")|map(select(length>0)|(try fromjson catch empty))|
+    # only stops a multi-GB file being held in memory for nothing. A file whose
+    # escapes could spell a selected key, or that grep cannot read, takes the
+    # whole-file parse instead; a read that still fails is listed, never dropped.
+    TIMEOUT_DESC_JQ="$JQ_SHAPE_DEFS"'split("\n")|map(select(length>0)|(try fromjson catch empty))|
         (reduce (.[] | select(.type=="assistant") | content_blocks
                  | select(.type=="tool_use")) as $t ({};
                    .[$t.id] = ($t.input?.description? // $t.input?.command? // "?"))) as $desc
@@ -5329,7 +5339,19 @@ if want efficiency; then
         | select(.type=="tool_result" and .is_error==true)
         | select((block_text) | test("Command timed out after"))
         | ($desc[.tool_use_id] // "<unknown command>") | .[0:60]
-      ' 2>/dev/null
+      '
+    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
+      file_may_contain "$f" 'is_error' || continue
+      if json_may_escape_ascii "$f"; then
+        jq -Rrs "$TIMEOUT_DESC_JQ" "$f" 2>/dev/null \
+          || echo "<UNREAD transcript: list under-counts>"
+      else
+        LC_ALL=C grep -aF -e '"tool_use"' -e 'is_error' -- "$f" \
+          | jq -Rrs "$TIMEOUT_DESC_JQ" 2>/dev/null
+        st=("${PIPESTATUS[@]}")
+        { [ "${st[0]}" -le 1 ] && [ "${st[1]}" -eq 0 ]; } \
+          || echo "<UNREAD transcript: list under-counts>"
+      fi
     done | redact | sort | uniq -c | sort -rn | head -8 | sed 's/^/    /'
     echo "    (empty = nothing timed out in this window)"
   fi
