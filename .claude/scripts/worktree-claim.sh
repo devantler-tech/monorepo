@@ -218,7 +218,7 @@ release_lock() {
 ignore_marker() {
   local wt="$1"
   local exclude
-  exclude="$(git -C "$wt" rev-parse --git-path info/exclude)" ||
+  exclude="$(git -C "$wt" rev-parse --path-format=absolute --git-path info/exclude)" ||
     fail "cannot resolve git exclude file for worktree: $wt"
   mkdir -p "$(dirname "$exclude")"
   if ! grep -qxF "/$WORKTREE_CLAIM_MARKER_NAME*" "$exclude" 2>/dev/null; then

@@ -86,6 +86,25 @@ check "relative marker is repo-relative" 0 "$([ -f "$repo/$relative_wt/.claude-w
 sess="$repo/.claude/worktrees/sess-a"
 mkdir -p "$repo/.claude/worktrees"
 git -C "$repo" worktree add -q --detach "$sess"
+
+# A standalone clone returns a relative Git metadata path even when the caller
+# is a linked worktree. Its marker must be ignored by the target, never the caller.
+standalone="$tmp/standalone"
+git init -q -b main "$standalone"
+git -C "$standalone" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit --allow-empty -qm init
+caller_exclude="$(git -C "$sess" rev-parse --path-format=absolute --git-path info/exclude)"
+caller_exclude_before="$(cat "$caller_exclude")"
+rc=0
+out="$(cd "$sess" && "$script" acquire "$standalone" "session-standalone" 2>&1)" || rc=$?
+check "acquire standalone from a linked caller succeeds" 0 "$rc" "$out" "owner=session-standalone"
+check "standalone marker is written" 0 "$([ -f "$standalone/.claude-worktree-owner" ] && echo 0 || echo 1)"
+check "standalone marker is ignored by its own repository" 0 "$(git -C "$standalone" check-ignore -q .claude-worktree-owner && echo 0 || echo 1)"
+check "standalone claim leaves its repository clean" "" "$(git -C "$standalone" status --porcelain --untracked-files=all)"
+check "standalone claim preserves the caller exclude file" "$caller_exclude_before" "$(cat "$caller_exclude")"
+rc=0
+out="$(cd "$sess" && "$script" acquire "$standalone" "session-foreign" 2>&1)" || rc=$?
+check "standalone claim still refuses a foreign owner" 3 "$rc" "$out" "LIVE"
+
 rc=0
 out="$(cd "$sess" && "$script" add "$repo" "$repo/.claude/worktrees/maint-sibling" "claim-branch-sibling" "session-sib" 2>&1)" || rc=$?
 check "add refuses a sibling worktree of the session" 1 "$rc" "$out" "outside this session's worktree"
