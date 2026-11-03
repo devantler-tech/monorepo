@@ -9,6 +9,7 @@ if [ "$BASH" != /bin/bash ] && [ -x /bin/bash ]; then exec /bin/bash "$0" "$@"; 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/go-helper-build-test.XXXXXX")"
 finished=0
+# Release this test's fixtures without turning an interrupted suite into a pass.
 cleanup() {
   local rc=$?
   rm -rf -- "$tmp"
@@ -49,6 +50,8 @@ chmod +x "$output"
 GO
 chmod +x "$tmp/bin/go"
 
+# Run the real launcher with one controlled compiler/cache scenario. Check the
+# result, attempt count, cache cleanup and owned-process termination together.
 run_case() {
   local mode=$1 verdict=$2 expected=$3 expected_calls=$4
   local case_dir="$tmp/$mode-$verdict" rc=0 actual_calls cache modules pid

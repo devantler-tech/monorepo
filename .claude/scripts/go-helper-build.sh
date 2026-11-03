@@ -4,6 +4,9 @@
 # A stalled shared cache gets one bounded retry using private internal caches.
 # Ordinary compiler failures stay failures. Existing caches are never removed.
 
+# go_helper_build compiles package into binary from module with bounded attempts.
+# Retry only a stalled build or a default-cache permission failure, using caches
+# owned by this invocation. Return compiler failures and reject missing output.
 go_helper_build() (
   set -uo pipefail
   if [ "$#" -ne 3 ]; then
@@ -113,6 +116,8 @@ go_helper_run() (
   local module=$1 package=$2 binary='' rc=0 finished=0
   shift 2
   binary=$(mktemp /tmp/go-helper-run.XXXXXX) || exit 2
+  # Remove only this invocation's executable and preserve an incomplete run as
+  # UNKNOWN, including an unset-variable abort that Bash may otherwise call 0.
   # shellcheck disable=SC2329 # Invoked by this subshell's EXIT trap.
   cleanup_go_helper_run() {
     local cleanup_rc=$?
