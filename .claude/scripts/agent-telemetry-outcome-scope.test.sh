@@ -641,6 +641,23 @@ printf '{"type":"user","message":{"content":"SCOPE_ADMISSION_CANARY"}}\n' > "$di
 SCOPE_PROJECTS="$direct_store" transcript_run
 check test "$RC" = 0
 check grep -qF '[BOTH instances: 1 Claude + 0 Codex sessions]' "$FIX/transcript-output"
+# A literal backslash or a find pattern character in the store's path must not
+# hide its direct records. find reads a -path operand as a pattern, so such a
+# root did not match itself and was pruned with its records (monorepo#4810).
+# A child project store inside it is still never entered.
+for pattern_store in "$FIX/corpus/back\\slash/nested-store" "$FIX/corpus/pattern [st]*?/nested-store"; do
+  mkdir -p "$pattern_store/-unadmitted-child-project"
+  git -C "$pattern_store" init -q
+  git -C "$pattern_store" remote add origin https://github.com/devantler-tech/scope-public.git
+  printf '{"type":"user","message":{"content":"SCOPE_ADMISSION_CANARY"}}\n' > "$pattern_store/scope.jsonl"
+  printf '{"type":"user","message":{"content":"CHILD_STORE_CANARY"}}\n' \
+    > "$pattern_store/-unadmitted-child-project/child.jsonl"
+  SCOPE_PROJECTS="$pattern_store" transcript_run
+  check test "$RC" = 0
+  check grep -qF '[BOTH instances: 1 Claude + 0 Codex sessions]' "$FIX/transcript-output"
+  check not_walked "$pattern_store/-unadmitted-child-project"
+  rm -rf "$pattern_store"
+done
 cp "$direct_store/.git/config" "$FIX/direct-store-git-config"
 printf '[broken\n' > "$direct_store/.git/config"
 SCOPE_PROJECTS="$direct_store" transcript_run

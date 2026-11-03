@@ -2821,10 +2821,14 @@ claude_project_removed() {
 # A project owns its direct records and their delegated-session layout. Being
 # stored inside an admitted checkout does not authorize arbitrary child project
 # stores. Prune those before descent, including when the store root is selected.
+# The depth bound lists only the store's own records and never enters a child.
+# It replaced `! -path "$dir" -prune`, which read the store path as a pattern:
+# a literal backslash or `[*?` in it stopped the root matching itself, so the
+# root was pruned and its records silently dropped (monorepo#4810).
 claude_session_listing() {
   local dir=$1 parent id
-  find "$dir" -type d ! -path "$dir" -prune -o \
-    -type f -name '*.jsonl' -mtime "-${SINCE_DAYS}" -print 2>/dev/null || return 1
+  find "$dir" -mindepth 1 -maxdepth 1 -type f -name '*.jsonl' \
+    -mtime "-${SINCE_DAYS}" -print 2>/dev/null || return 1
   if [ -d "$dir/subagents" ]; then
     find "$dir/subagents" -name '*.jsonl' -mtime "-${SINCE_DAYS}" 2>/dev/null || return 1
   fi
