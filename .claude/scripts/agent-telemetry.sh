@@ -2381,8 +2381,15 @@ def usable_ts:
 # what the parse would: nothing. Returns 0 (parse the file) on a match AND on a
 # read error, so an unreadable file still takes the original path and never
 # turns into a silent skip. Only a clean "no match" (grep rc 1) skips.
+# Gate only on bytes that the jq normalisation cannot ASSEMBLE: a key or a
+# flag value, never result prose. block_text joins array text blocks with a
+# space, so a phrase split across blocks is matched after decoding although the
+# raw file never holds it contiguously (#4793 review). Several needles are ORed.
 file_may_contain() {
-  LC_ALL=C grep -aqF -e "$2" -- "$1" && return 0
+  local f="$1" a; shift
+  local args=()
+  for a in "$@"; do args+=(-e "$a"); done
+  LC_ALL=C grep -aqF "${args[@]}" -- "$f" && return 0
   [ "$?" -ne 1 ]
 }
 
@@ -4676,9 +4683,10 @@ if want efficiency; then
     # let prose quoting "Command timed out after 2m" inflate the count, the same
     # fabrication route already closed for denials and sleeps.
     all_files() { printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$'; }
-    # Both passes skip a file lacking the bytes they select on (file_may_contain).
+    # Both passes skip a file lacking the flag bytes they select on (file_may_contain);
+    # the timeout pass gates on the error flag, never the phrase, which can span blocks.
     TIMEOUTS=$(all_files | while IFS= read -r f; do
-                 file_may_contain "$f" 'Command timed out after' || continue
+                 file_may_contain "$f" 'is_error' '"error"' || continue
                  tool_result_failure_text "$f"
                done | grep -cE 'Command timed out after' || true)
     INTERRUPT=$(all_files | while IFS= read -r f; do
@@ -5308,11 +5316,11 @@ if want efficiency; then
     # produced a confident-looking list, which is worse than an empty one.
     # The slurp reads only the lines it can use. Every record is one JSONL line
     # parsed with `try fromjson catch empty`, so dropping a line that holds
-    # neither a "tool_use" block nor the timeout phrase changes no output; it
+    # neither a "tool_use" block nor an is_error flag changes no output; it
     # only stops a multi-GB file being held in memory for nothing.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      file_may_contain "$f" 'Command timed out after' || continue
-      { LC_ALL=C grep -aF -e '"tool_use"' -e 'Command timed out after' -- "$f" || true; } \
+      file_may_contain "$f" 'is_error' || continue
+      { LC_ALL=C grep -aF -e '"tool_use"' -e 'is_error' -- "$f" || true; } \
       | jq -Rrs "$JQ_SHAPE_DEFS"'split("\n")|map(select(length>0)|(try fromjson catch empty))|
         (reduce (.[] | select(.type=="assistant") | content_blocks
                  | select(.type=="tool_use")) as $t ({};

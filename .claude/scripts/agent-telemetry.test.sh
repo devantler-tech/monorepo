@@ -5839,6 +5839,20 @@ if grep -qE 'bash timeouts \.+ 1 ' <<<"$OUT"; then
 else bad "byte gate keeps a real timeout counted" "$(grep 'timeouts' <<<"$OUT")"; fi
 check "line-filtered slurp still joins the timed-out description" "$OUT" "gated slow wait"
 
+# A timeout whose text is split across array blocks is only contiguous after
+# block_text joins them, so the gate must not key on the phrase (#4793 review).
+mkdir -p "$FIX/bytesplit"
+cat > "$FIX/bytesplit/split.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"ts1","name":"Bash","input":{"command":"sleep 900","description":"split block wait"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"ts1","is_error":true,"content":[{"type":"text","text":"Command timed out"},{"type":"text","text":"after 2m 0s"}]}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/bytesplit" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if grep -qE 'bash timeouts \.+ 1 ' <<<"$OUT"; then
+  ok "byte gate keeps a timeout split across text blocks counted"
+else bad "byte gate keeps a timeout split across text blocks counted" "$(grep 'timeouts' <<<"$OUT")"; fi
+check "split-block timeout keeps its description" "$OUT" "split block wait"
+
 # The scorecard requires injection attempts to be SURFACED.
 OUT=$(run --section safety)
 check "injection attempts are surfaced" "$OUT" "INJECTION ATTEMPTS"
