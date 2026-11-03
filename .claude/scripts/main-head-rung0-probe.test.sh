@@ -116,6 +116,19 @@ fixture cancelled-after-green-other-event "${head_ok}" "$(checks 1 "${check_ok}"
   "$(runs 2 "${cancelled_push}" "$(run 1 "${ci}" workflow_dispatch 8 completed success)")"
 fixture cancelled-then-green-other-workflow "${head_ok}" "$(checks 1 "${check_ok}")" \
   "$(runs 2 "${cancelled_push}" "$(run 5 other.yaml workflow_dispatch 10 completed success)")"
+# monorepo#4814 (the platform head after #5825 merged): a cancelled merge-queue run has no verdict and
+# never re-runs at the head, so it is dropped. Only `cancelled` merge_group runs: a failed merge-group
+# run, a cancelled run of any other event, and a FAILED job inside the cancelled run still count.
+mg_cancel="$(run 1 "${ci}" merge_group 20 completed cancelled 77)"
+fixture merge-group-cancelled "${head_ok}" \
+  "$(checks 3 "${check_ok}" "$(suite_check Deploy success 77)" "$(suite_check Watch cancelled 77)")" \
+  "$(runs 2 "${mg_cancel}" "$(run 6 validate-main.yaml push 4 completed success)")"
+fixture merge-group-failed "${head_ok}" "$(checks 1 "${check_ok}")" \
+  "$(runs 1 "$(run 1 "${ci}" merge_group 20 completed failure)")"
+fixture merge-group-cancelled-failed-job "${head_ok}" \
+  "$(checks 2 "${check_ok}" "$(suite_check Heal failure 77)")" "$(runs 1 "${mg_cancel}")"
+fixture merge-group-cancelled-beside-red-push "${head_ok}" "$(checks 1 "${check_ok}")" \
+  "$(runs 2 "${mg_cancel}" "$(run 1 "${ci}" push 21 completed failure)")"
 # monorepo#4529: an earlier genuine failure survives anything that is not a later qualifying
 # success of the same workflow and event. Filtering happens BEFORE the latest run is chosen, so a
 # cancellation, a pending run or a non-deciding conclusion can never stand in for the failure.
@@ -204,6 +217,10 @@ expect cancelled-then-red-other-event 1 "BREAKAGE workflow:${ci}=cancelled,workf
 expect cancelled-then-unfinished-other-event 1 "BREAKAGE workflow:${ci}=cancelled"
 expect cancelled-after-green-other-event 1 "BREAKAGE workflow:${ci}=cancelled"
 expect cancelled-then-green-other-workflow 1 "BREAKAGE workflow:${ci}=cancelled"
+expect merge-group-cancelled 0 'checks=3 runs=2 OK'
+expect merge-group-failed 1 "BREAKAGE workflow:${ci}=failure"
+expect merge-group-cancelled-failed-job 1 'BREAKAGE check:Heal=failure'
+expect merge-group-cancelled-beside-red-push 1 "BREAKAGE workflow:${ci}=failure"
 expect failure-cancel-other-event-green 1 "BREAKAGE workflow:${ci}=failure"
 expect failure-then-pending 1 "BREAKAGE workflow:${ci}=failure"
 expect failure-then-skipped 1 "BREAKAGE workflow:${ci}=failure"
