@@ -3,7 +3,8 @@
 > Part of the devantler-tech agent contract. [`AGENTS.md`](../../AGENTS.md) is the always-on core
 > and indexes every guide; this guide carries the full rules for value-first shaping, the
 > enhancement levers, security hardening without a DevEx tax, feature flags, the scripting stack,
-> and shared-library stewardship. Read it before starting advance (non-hotfix) work.
+> shared-library stewardship and dogfooding KSail. Read it before starting advance (non-hotfix)
+> work, and before any task that needs a Kubernetes cluster.
 
 ## Build the right thing — value before output
 Bringing user value is the portfolio's highest goal. Engineering quality is necessary, but it cannot
@@ -420,3 +421,22 @@ platform-template consume instead of vendoring copies). A generic pattern proven
 product remains owned by that product. Move it into a shared library only after demonstrated use in
 at least two repositories proves a product-neutral contract worth inheriting — keep shared components
 **industry-standard and tool-neutral** (the portability principle).
+
+## Dogfood KSail — use our own cluster tool
+
+KSail is the portfolio's own Kubernetes tool, and using it on our own work is how we learn what to
+improve. Whenever a task needs a Kubernetes cluster or operates one, **do it with KSail first**: its
+CLI, or its MCP server through the `ksail` plugin. That covers a throwaway cluster to test a
+manifest, chart or policy; validating workloads; a template's smoke test; and the platform's own
+clusters, which KSail already provisions.
+
+- Reach for `kind`, `k3d`, `talosctl`, `kubectl` or `helm` directly only for a step KSail cannot do.
+  Never block work on a KSail gap: work around it, and say so in the pull request body.
+- **File every gap and every friction** on `devantler-tech/ksail`: a missing capability, a
+  confusing error, a slow step, a missing flag or a misleading doc. Search for an existing issue
+  first and add your evidence there. Give the command you ran, what KSail did, what you expected,
+  and the workaround you used. Set the issue's Type and add it to the board, as for any issue.
+- Filing issues is exempt from the draft caps; fixing KSail is ordinary KSail work, chosen through
+  the work-selection ladder.
+- Local clusters are cheap and need no special approval. A real cloud-cluster trial keeps the
+  cadence limit and the cost rules in *Cadence & focus*.
