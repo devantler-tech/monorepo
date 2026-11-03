@@ -2813,25 +2813,42 @@ claude_project_in_window() {
 
 # #4800: both Claude walks ask every store (about 1,800 on the live host) whether
 # it holds an in-window transcript, and each answer costs several `find`
-# processes: about 70 s per walk on a 7-day window. One listing of the whole
-# store answers that for every store in well under a second. It is a SUPERSET of
-# claude_session_listing (any depth, any type), so a store it keeps still takes
-# the exact per-store check. Any failed listing — an unreadable store, a file
-# removed mid-walk — leaves the prefilter off, and every store takes the
-# per-store check exactly as before. Top-level files belong to the store root,
-# which this check never judges.
+# processes. One `find` over the portfolio stores answers that for all of them
+# at once (7-day corpus: each Claude walk about 10 s faster, identical output).
+# It is a SUPERSET of claude_session_listing (any depth, any type), so a store
+# it keeps still takes the exact per-store check. Any failed listing — an
+# unreadable store, a file removed mid-walk — leaves the prefilter off, and
+# every store takes the per-store check exactly as before. Top-level files
+# belong to the store root, which this check never judges.
 CLAUDE_WINDOW_STORES=''
 CLAUDE_WINDOW_STORES_OK=0
 claude_window_stores_prepare() {
-  local out
+  local out dirs d presence=0 store_admission=0
+  local -a stores=()
   CLAUDE_WINDOW_STORES=''
   CLAUDE_WINDOW_STORES_OK=0
   [ -d "$CLAUDE_PROJECTS" ] && [ ! -L "$CLAUDE_PROJECTS" ] || return 0
-  out=$(find "$CLAUDE_PROJECTS" -mindepth 2 -name '*.jsonl' -mtime "-${SINCE_DAYS}" -print 2>/dev/null) \
-    || return 0
-  CLAUDE_WINDOW_STORES=$(printf '%s\n' "$out" | LC_ALL=C awk -v r="$CLAUDE_PROJECTS/" '
-    index($0, r) == 1 { s = substr($0, length(r) + 1); sub(/\/.*/, "", s); if (s != "") print s }' \
-    | LC_ALL=C sort -u) || { CLAUDE_WINDOW_STORES=''; return 0; }
+  # Admission first, exactly as both walks do it: only a store root that is
+  # present and not excluded or unresolved is listed, and only the portfolio
+  # stores below it, never an excluded project's store (professional-work
+  # boundary). Anything else leaves the prefilter off.
+  worktree_presence "$CLAUDE_PROJECTS" || presence=$?
+  [ "$presence" = 0 ] || return 0
+  store_root_in_scope || store_admission=$?
+  case "$store_admission" in 0|1) ;; *) return 0 ;; esac
+  dirs=$(ls -1 "$CLAUDE_PROJECTS" 2>/dev/null) || return 0
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    [ -d "$CLAUDE_PROJECTS/$d" ] && [ ! -L "$CLAUDE_PROJECTS/$d" ] || continue
+    stores+=("$CLAUDE_PROJECTS/$d")
+  done < <(printf '%s\n' "$dirs" | grep -E "^($PORTFOLIO_DIR_RE)$" || true)
+  if [ "${#stores[@]}" -gt 0 ]; then
+    out=$(find "${stores[@]}" -mindepth 1 -name '*.jsonl' -mtime "-${SINCE_DAYS}" -print 2>/dev/null) \
+      || return 0
+    CLAUDE_WINDOW_STORES=$(printf '%s\n' "$out" | LC_ALL=C awk -v r="$CLAUDE_PROJECTS/" '
+      index($0, r) == 1 { s = substr($0, length(r) + 1); sub(/\/.*/, "", s); if (s != "") print s }' \
+      | LC_ALL=C sort -u) || { CLAUDE_WINDOW_STORES=''; return 0; }
+  fi
   CLAUDE_WINDOW_STORES_OK=1
 }
 

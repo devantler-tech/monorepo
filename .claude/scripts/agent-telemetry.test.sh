@@ -4431,6 +4431,10 @@ printf '%s\n' "$WP_REC" > "$WP/${BOUNDARY_SLUG}/s.jsonl"
 printf '%s\n' "$WP_REC" > "$WP/$WP_WT1/old.jsonl"
 printf '%s\n' "$WP_REC" > "$WP/$WP_WT1/abc123/subagents/agent-a.jsonl"
 printf '%s\n' "$WP_REC" > "$WP/$WP_WT2/old.jsonl"
+# An out-of-scope project's store with a recent transcript: the listing must
+# never descend into it (professional-work boundary).
+mkdir -p "$WP/-Users-x-work-employer-secret-service"
+printf '%s\n' "$WP_REC" > "$WP/-Users-x-work-employer-secret-service/s.jsonl"
 fixture_project_bindings "$WP" || exit 1
 touch -t 202001010000 "$WP/$WP_WT1/old.jsonl" "$WP/$WP_WT2/old.jsonl"
 WP_REAL_FIND=$(command -v find)
@@ -4439,7 +4443,7 @@ cat > "$FIX/findlog-bin/find" <<'FINDSHIM'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$WP_FINDLOG"
 case " $* " in
-  *" -mindepth 2 "*)
+  *" -mindepth 1 -name "*)
     if [ -n "${WP_FAIL_LISTING:-}" ]; then "$WP_REAL_FIND" "$@"; exit 1; fi ;;
 esac
 exec "$WP_REAL_FIND" "$@"
@@ -4456,9 +4460,13 @@ OUT=$(wp_run)
 # The root session and the nested delegated transcript are in the window; the
 # store holding only an old transcript is not.
 check "prefilter keeps the in-window sessions, including a nested delegated one" "$OUT" "sessions in window: 2 "
-if grep -qF -- "$WP -mindepth 2 " "$FIX/findlog.txt"; then
-  ok "one store-wide listing runs"
-else bad "one store-wide listing runs" "no store-wide find in the shim log"; fi
+if [ "$(grep -cF -- " -mindepth 1 -name *.jsonl" "$FIX/findlog.txt")" = 1 ]; then
+  ok "exactly one store-wide listing runs"
+else bad "exactly one store-wide listing runs" "$(grep -cF -- " -mindepth 1 -name" "$FIX/findlog.txt") listings in the shim log"; fi
+if grep -qF -- "employer-secret-service" "$FIX/findlog.txt" \
+   || grep -qF -- "$WP -mindepth" "$FIX/findlog.txt"; then
+  bad "the listing never names an out-of-scope project's store" "an excluded store reached find"
+else ok "the listing never names an out-of-scope project's store"; fi
 if grep -qF -- "$WP/$WP_WT2 -type d" "$FIX/findlog.txt"; then
   bad "a store with no in-window transcript skips its per-store finds" "per-store find ran for the out-of-window store"
 else ok "a store with no in-window transcript skips its per-store finds"; fi
