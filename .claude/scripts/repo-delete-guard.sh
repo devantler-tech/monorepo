@@ -152,11 +152,13 @@ for heading in '## Portfolio map' '## Stack map'; do
 done
 check "not named in the Portfolio map or the Stack map"
 
-# The trust gate's trusted authors, exact logins in backticks on its first bullet.
+# The trust gate's trusted authors, exact logins in backticks on its first bullet. Only that
+# bullet's own lines are read, up to its first sentence end: the next bullet names the untrusted
+# authors in the same backtick form, and they must never be read as trusted.
 trusted_line=$(awk '
-  /^- \*\*Trusted authors, exact login match only:\*\*/ { ins = 1 }
-  ins { printf "%s ", $0 }
-  ins && /\. / { exit }
+  /^- \*\*Trusted authors, exact login match only:\*\*/ { ins = 1; printf "%s ", $0; if ($0 ~ /\.( |$)/) exit; next }
+  ins && (/^[[:space:]]*$/ || /^[[:space:]]*- / || /^#/) { exit }
+  ins { printf "%s ", $0; if ($0 ~ /\.( |$)/) exit }
 ' "$contract")
 trusted_line=${trusted_line#*only:\*\*}
 trusted_line=${trusted_line%%. *}

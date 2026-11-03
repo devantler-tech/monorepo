@@ -325,6 +325,21 @@ for broken in 'stack-map-heading' 'trusted-authors'; do
   cp "${tmp}/agents.saved" "${tree}/AGENTS.md"
 done
 
+# The next trust-gate bullet names the UNTRUSTED authors in the same backtick form. A trusted-author
+# bullet reworded to end without a sentence stop must not run on into it and trust them.
+scenario
+cp "${tree}/AGENTS.md" "${tmp}/agents.saved"
+awk '
+  /^- \*\*Trusted authors, exact login match only:\*\*/ { print; getline; print "  `github-actions[bot]`, `renovate[bot]`"; getline; next }
+  { print }
+' "${tmp}/agents.saved" >"${tree}/AGENTS.md"
+if grep -Fq '`renovate[bot]`. Agent work' "${tree}/AGENTS.md" || ! grep -Fq '`copilot-swe-agent[bot]`' "${tree}/AGENTS.md"; then
+  fail "fixture: could not reword the trusted-author bullet to end without a sentence stop"
+fi
+fixture "repos/devantler-tech/stray/commits?sha=${SHA_MAIN}&per_page=100" '[{"sha":"aaaa","author":{"login":"copilot-swe-agent[bot]"},"committer":{"login":"web-flow"}}]'
+expect "an untrusted author named in the next trust-gate bullet stays untrusted" 1 '^REFUSE devantler-tech/stray has a commit by copilot-swe-agent\[bot\]' --repo stray --issue 4289
+cp "${tmp}/agents.saved" "${tree}/AGENTS.md"
+
 # --- Usage: refused before anything is read -------------------------------------------------------
 for args in "--repo stray" "--issue 4289" "--repo other-owner/stray --issue 4289" "--repo ../stray --issue 4289" \
   "--repo .. --issue 4289" "--repo stray --issue 12a" "--repo stray --issue 4289 --actor maintainer"; do
