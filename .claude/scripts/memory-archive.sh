@@ -21,7 +21,9 @@ cleanup() {
   exit "$rc"
 }
 trap cleanup EXIT
-if ! go -C "$script_dir/memory-backup-go" build -o "$memory_archive_binary" ./cmd/memory-archive; then
+# shellcheck source=go-helper-build.sh
+. "$script_dir/go-helper-build.sh" || exit 2
+if ! go_helper_build "$script_dir/memory-backup-go" "$memory_archive_binary" ./cmd/memory-archive; then
   echo 'memory-archive: failed to build Go helper' >&2
   exit 2
 fi

@@ -47,6 +47,8 @@ set -uo pipefail
 
 script_dir="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)" || exit 2
 command -v go >/dev/null 2>&1 || { echo "UNKNOWN Go is required for local body-reference parsing" >&2; exit 2; }
+# shellcheck source=go-helper-build.sh
+. "$script_dir/go-helper-build.sh" || exit 2
 
 ORG=devantler-tech
 issues=()
@@ -216,7 +218,7 @@ for ref in "${issues[@]}"; do
   [ "$(jq -r '.total_count' <<<"$search")" -le 100 ] 2>/dev/null || unknown "$ref: more than 100 PRs match its number"
   jq -e '(.items | type) == "array" and (.items | length) == .total_count' >/dev/null 2>&1 <<<"$search" ||
     unknown "$ref: mention search returned fewer items than it counted"
-  mentions=$(go -C "$script_dir/issue-body-references-go" run . "$owner/$name" "$number" <<<"$search") ||
+  mentions=$(go_helper_run "$script_dir/issue-body-references-go" . "$owner/$name" "$number" <<<"$search") ||
     unknown "$ref: cannot parse body references"
 
   # One row per distinct PR: a PR can be cross-referenced several times and also linked manually.

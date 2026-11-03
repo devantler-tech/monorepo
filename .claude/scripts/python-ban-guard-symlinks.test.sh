@@ -125,6 +125,7 @@ check_regular invocation 'python3 --version' 1 tools/check.sh
 # grep has already opened its target. This pins the need for both boundaries.
 mkdir -p "$tmp/ablated"
 cp -R "$here/python-ban-guard-go" "$tmp/ablated/python-ban-guard-go"
+cp "$here/go-helper-build.sh" "$tmp/ablated/go-helper-build.sh"
 # Match the source's literal variable reference, not this fixture's environment.
 # shellcheck disable=SC2016
 sed 's/if \[ -L "\$file" \]; then/if false; then/' \

@@ -19,7 +19,9 @@ blocked_label_blocker_line_cleanup() {
   exit "$rc"
 }
 trap blocked_label_blocker_line_cleanup EXIT
-if ! go -C "$HERE/blocked-label-blocker-line-go" build -o "$BINARY" .; then
+# shellcheck source=go-helper-build.sh
+. "$HERE/go-helper-build.sh" || exit 2
+if ! go_helper_build "$HERE/blocked-label-blocker-line-go" "$BINARY" .; then
   echo "blocked-label-blocker-line.sh: could not build Go guard -- UNKNOWN" >&2
   exit 2
 fi

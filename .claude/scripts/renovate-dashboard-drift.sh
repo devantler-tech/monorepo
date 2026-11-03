@@ -40,7 +40,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if ! go -C "$script_dir/renovate-dashboard-drift-go" build -o "$drift_binary" .; then
+# shellcheck source=go-helper-build.sh
+. "$script_dir/go-helper-build.sh" || exit 2
+if ! go_helper_build "$script_dir/renovate-dashboard-drift-go" "$drift_binary" .; then
   echo "renovate-dashboard-drift: failed to build Go guard" >&2
   exit 2
 fi

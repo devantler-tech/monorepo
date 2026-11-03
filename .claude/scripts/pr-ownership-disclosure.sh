@@ -119,7 +119,9 @@ trap cleanup EXIT
 guard_binary="$(mktemp "${TMPDIR:-/tmp}/pr-ownership-disclosure.XXXXXX")" ||
   die "failed to allocate temporary binary"
 
-if ! go -C "$script_dir/pr-ownership-disclosure-go" build -o "$guard_binary" .; then
+# shellcheck source=go-helper-build.sh
+. "$script_dir/go-helper-build.sh" || exit 2
+if ! go_helper_build "$script_dir/pr-ownership-disclosure-go" "$guard_binary" .; then
   die "failed to build Go guard"
 fi
 
