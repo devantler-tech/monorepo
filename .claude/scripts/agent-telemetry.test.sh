@@ -4441,17 +4441,19 @@ WP_REAL_FIND=$(command -v find)
 mkdir -p "$FIX/findlog-bin"
 cat > "$FIX/findlog-bin/find" <<'FINDSHIM'
 #!/usr/bin/env bash
+set -o pipefail
 printf '%s\n' "$*" >> "$WP_FINDLOG"
 case " $* " in
-  *" -mindepth 1 -name "*)
+  *" -mindepth 1 "*)
     if [ -n "${WP_FAIL_LISTING:-}" ]; then "$WP_REAL_FIND" "$@"; exit 1; fi ;;
 esac
-exec "$WP_REAL_FIND" "$@"
+"$WP_REAL_FIND" "$@" | tee -a "$WP_RESULTLOG"
 FINDSHIM
 chmod +x "$FIX/findlog-bin/find"
 wp_run() {
   : > "$FIX/findlog.txt"
-  PATH="$FIX/findlog-bin:$PATH" WP_FINDLOG="$FIX/findlog.txt" WP_REAL_FIND="$WP_REAL_FIND" \
+  : > "$FIX/find-results.txt"
+  PATH="$FIX/findlog-bin:$PATH" WP_FINDLOG="$FIX/findlog.txt" WP_RESULTLOG="$FIX/find-results.txt" WP_REAL_FIND="$WP_REAL_FIND" \
     CLAUDE_PROJECTS_DIR="$WP" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$BOUNDARY_ROOT" \
     PORTFOLIO_PATHS="$BOUNDARY_ROOT" HOME="$FIX" \
     bash "$TARGET" --since-days 1 --max-files 50 --section reliability 2>&1
@@ -4460,9 +4462,9 @@ OUT=$(wp_run)
 # The root session and the nested delegated transcript are in the window; the
 # store holding only an old transcript is not.
 check "prefilter keeps the in-window sessions, including a nested delegated one" "$OUT" "sessions in window: 2 "
-if [ "$(grep -cF -- " -mindepth 1 -name *.jsonl" "$FIX/findlog.txt")" = 1 ]; then
-  ok "exactly one store-wide listing runs"
-else bad "exactly one store-wide listing runs" "$(grep -cF -- " -mindepth 1 -name" "$FIX/findlog.txt") listings in the shim log"; fi
+if [ "$(grep -cF -- " -mindepth 1 " "$FIX/findlog.txt")" = 1 ]; then
+  ok "exactly one direct-record listing runs"
+else bad "exactly one direct-record listing runs" "$(grep -cF -- " -mindepth 1 " "$FIX/findlog.txt") listings in the shim log"; fi
 if grep -qF -- "employer-secret-service" "$FIX/findlog.txt" \
    || grep -qF -- "$WP -mindepth" "$FIX/findlog.txt"; then
   bad "the listing never names an out-of-scope project's store" "an excluded store reached find"
@@ -4478,6 +4480,27 @@ check "a failed store-wide listing selects the same sessions" "$OUT" "sessions i
 if grep -qF -- "$WP/$WP_WT2 -type d" "$FIX/findlog.txt"; then
   ok "a failed store-wide listing restores the per-store check for every store"
 else bad "a failed store-wide listing restores the per-store check for every store" "out-of-window store was skipped without a listing"; fi
+
+# The admission of a store never admits a different project nested below it.
+# Observe the real find output, even when later readers would discard it.
+mkdir -p "$WP/${BOUNDARY_SLUG}/-excluded-child-project"
+printf '%s\n' "$WP_REC" > "$WP/${BOUNDARY_SLUG}/-excluded-child-project/private.jsonl"
+OUT=$(wp_run)
+check "nested child-store exclusion preserves admitted sessions" "$OUT" "sessions in window: 2 "
+if grep -qF -- '/-excluded-child-project/private.jsonl' "$FIX/find-results.txt"; then
+  bad "the prefilter never enumerates an excluded nested project" "excluded transcript appeared in real find output"
+else ok "the prefilter never enumerates an excluded nested project"; fi
+
+# awk -v interprets backslash escapes. A literal directory name must retain
+# the admitted delegated session rather than enabling an empty prefilter.
+WP_SAVED=$WP
+WP_LITERAL="${WP}\\today"
+cp -Rp "$WP" "$WP_LITERAL"
+rm "$WP_LITERAL/${BOUNDARY_SLUG}/s.jsonl"
+WP=$WP_LITERAL
+OUT=$(wp_run)
+check "a literal backslash in the store root preserves admitted delegated sessions" "$OUT" "sessions in window: 1 "
+WP=$WP_SAVED
 
 # Empty allowlist must refuse to scan rather than default to everything.
 CLAUDE_PROJECTS_DIR="$FIX/scoped" HOME="$FIX" PORTFOLIO_PATHS="" MONOREPO_DIR="" \
