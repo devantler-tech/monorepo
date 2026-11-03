@@ -216,7 +216,9 @@ trap cleanup EXIT
 guard_binary="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-drift.XXXXXX")" ||
   die "failed to allocate temporary binary"
 
-if ! go -C "$script_dir/comment-disclosure-drift-go" build -o "$guard_binary" .; then
+# shellcheck source=go-helper-build.sh
+. "$script_dir/go-helper-build.sh" || exit 2
+if ! go_helper_build "$script_dir/comment-disclosure-drift-go" "$guard_binary" .; then
   die "failed to build Go guard"
 fi
 
@@ -241,7 +243,7 @@ response_cache="${DISCLOSURE_API_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/comm
 if [ "$response_cache" != off ]; then
   read_binary="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-read.XXXXXX")" ||
     die "failed to allocate conditional reader"
-  if ! go -C "$script_dir/comment-disclosure-drift-go" build -o "$read_binary" ./cmd/conditional-get; then
+  if ! go_helper_build "$script_dir/comment-disclosure-drift-go" "$read_binary" ./cmd/conditional-get; then
     die "failed to build conditional reader"
   fi
 fi

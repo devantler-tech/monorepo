@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# test-timeout-seconds: 900
+# Measured 561 s for all 272 cases on 2026-11-03; retain a bounded local run (#4394).
 # Contract tests for worktree-cleanup.sh.
 #
 # Each test builds a scratch repo with a real remote and real worktrees, then asserts

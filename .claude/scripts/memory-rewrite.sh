@@ -221,7 +221,9 @@ fi
 # Compile before persistent artifacts. The final native exchange retains the
 # actually displaced inode, closing the last digest-to-rename data-loss window.
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if ! go -C "$script_dir/memory-backup-go" build -o "$workdir/memory-replace" ./cmd/memory-replace; then
+# shellcheck source=go-helper-build.sh
+. "$script_dir/go-helper-build.sh" || exit 2
+if ! go_helper_build "$script_dir/memory-backup-go" "$workdir/memory-replace" ./cmd/memory-replace; then
   echo 'memory-rewrite: replacement backend unavailable; target untouched' >&2
   exit 2
 fi

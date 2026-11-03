@@ -13,7 +13,9 @@ not a public issue or PR.
 
 You need Git, Bash, `jq`, [Mike Farah's `yq` v4](https://github.com/mikefarah/yq), and Go to run the
 selected checks. The guard module declares Go 1.24.0 as its minimum; use a compatible Go toolchain.
-A cold Go cache needs network access to download its public dependencies. The unrelated Python
+A cold Go cache needs network access to download its public dependencies. The Go helper launchers
+also require GNU `timeout` (normally `timeout` on Linux, or `gtimeout` from Homebrew's `coreutils`
+on macOS) to bound compilation and retry with isolated caches. The unrelated Python
 `yq` package is not a substitute. The first change below needs no submodules, application runtime,
 cluster or organization token.
 

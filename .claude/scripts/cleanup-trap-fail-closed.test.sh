@@ -258,6 +258,7 @@ business-site-ci.test.sh|
 memory-backup.sh|
 memory-archive.sh|
 memory-hygiene.sh|
+go-helper-build.test.sh||exit:1
 automation-memory-read.sh|--file $tmp/converted/memory.md
 automation-memory-read.test.sh|
 memory-rewrite.sh|--file $tmp/converted/memory.md --from $tmp/converted/replacement.md --backup-dir $tmp/converted/backups

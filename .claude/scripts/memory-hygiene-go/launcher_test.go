@@ -78,7 +78,7 @@ chmod +x "$output"
 			}
 			for name, script := range map[string]string{
 				"rm":     "#!/usr/bin/env bash\nif [ \"$MOCK_MODE\" = cleanup-fails ] && [ \"${1:-}\" = -rf ]; then exit 1; fi\nexec /bin/rm \"$@\"\n",
-				"mktemp": "#!/usr/bin/env bash\nif [ \"$MOCK_MODE\" = allocation-fails ] && [ \"${1:-}\" = -d ]; then exit 1; fi\nexec /usr/bin/mktemp \"$@\"\n",
+				"mktemp": "#!/usr/bin/env bash\nif [ \"$MOCK_MODE\" = allocation-fails ] && [ \"${1:-}\" = -d ]; then exit 1; fi\nif [ \"${1:-}\" = -d ] && [[ \"${2:-}\" == /tmp/go-helper-cache.* ]]; then exec /usr/bin/mktemp -d \"$TMPDIR/go-helper-cache.XXXXXX\"; fi\nexec /usr/bin/mktemp \"$@\"\n",
 			} {
 				if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o700); err != nil {
 					t.Fatal(err)
@@ -117,7 +117,9 @@ chmod +x "$output"
 			if len(builds) != tc.builds {
 				t.Errorf("build calls=%d want=%d; %s", len(builds), tc.builds, out)
 			}
-			wantGuard := tc.mode == "success" || tc.mode == "root-permission" || tc.mode == "cleanup-fails" || (tc.mode == "permission" && tc.cache == "")
+			// Shared build-cache cleanup now completes before the guard runs;
+			// a cleanup failure must not yield even a provisional guard verdict.
+			wantGuard := tc.mode == "success" || tc.mode == "root-permission" || (tc.mode == "permission" && tc.cache == "")
 			if strings.Contains(string(out), "guard-executed") != wantGuard {
 				t.Errorf("guard execution mismatch: %s", out)
 			}
