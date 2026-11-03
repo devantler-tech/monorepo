@@ -94,6 +94,10 @@ EOF
 chmod +x "${tmp}/bin/gh"
 
 fake="${tmp}/fake"
+SHA_MAIN=1111111111111111111111111111111111111111
+SHA_TAG=2222222222222222222222222222222222222222
+SHA_PULL=3333333333333333333333333333333333333333
+SHA_TAG_OBJECT=4444444444444444444444444444444444444444
 fixture() { # fixture <api path> <json>
   local key
   key=$(printf '%s' "$1" | sed 's/[^A-Za-z0-9]/_/g')
@@ -117,8 +121,9 @@ scenario() { # scenario [name]
   fixture "repos/devantler-tech/${name}" \
     "{\"full_name\":\"devantler-tech/${name}\",\"archived\":false,\"private\":true,\"size\":1,\"created_at\":\"2026-10-17T18:14:58Z\",\"default_branch\":\"main\"}"
   fixture "repos/devantler-tech/.github/contents/deploy/repositories" '[{"name":"ksail.yaml"},{"name":"client-orders.yaml"}]'
-  fixture "repos/devantler-tech/${name}/branches?per_page=11" '[{"name":"main"}]'
-  fixture "repos/devantler-tech/${name}/commits?sha=main&per_page=100" \
+  fixture "repos/devantler-tech/${name}/git/refs?per_page=100" \
+    "[{\"ref\":\"refs/heads/main\",\"object\":{\"type\":\"commit\",\"sha\":\"${SHA_MAIN}\"}}]"
+  fixture "repos/devantler-tech/${name}/commits?sha=${SHA_MAIN}&per_page=100" \
     '[{"sha":"aaaa","author":{"login":"devantler"},"committer":{"login":"web-flow"}}]'
   fixture "repos/devantler-tech/${name}/issues?state=all&per_page=100" '[]'
   fixture "repos/devantler-tech/${name}/issues/comments?per_page=100" '[]'
@@ -221,22 +226,65 @@ expect "empty manifest list is UNKNOWN, never 'not managed'" 2 '^UNKNOWN the Cro
 
 # --- Who wrote it: anyone outside the trust gate's trusted authors is refused ------------------
 scenario
-fixture "repos/devantler-tech/stray/commits?sha=main&per_page=100" \
+fixture "repos/devantler-tech/stray/commits?sha=${SHA_MAIN}&per_page=100" \
   '[{"sha":"aaaa","author":{"login":"devantler"},"committer":{"login":"web-flow"}},{"sha":"bbbb","author":{"login":"someone-else"},"committer":{"login":"someone-else"}}]'
 expect "commit by an outsider refused" 1 '^REFUSE devantler-tech/stray has a commit by someone-else' --repo stray --issue 4289
 scenario
-fixture "repos/devantler-tech/stray/commits?sha=main&per_page=100" '[{"sha":"aaaa","author":null,"committer":{"login":"web-flow"}}]'
+fixture "repos/devantler-tech/stray/commits?sha=${SHA_MAIN}&per_page=100" '[{"sha":"aaaa","author":null,"committer":{"login":"web-flow"}}]'
 expect "commit by an unlinked account refused" 1 '^REFUSE devantler-tech/stray has a commit by an account GitHub cannot link' --repo stray --issue 4289
 scenario
-fixture "repos/devantler-tech/stray/commits?sha=main&per_page=100" '[{"sha":"aaaa","author":{"login":"dependabot[bot]"},"committer":{"login":"copilot-swe-agent[bot]"}}]'
+fixture "repos/devantler-tech/stray/commits?sha=${SHA_MAIN}&per_page=100" '[{"sha":"aaaa","author":{"login":"dependabot[bot]"},"committer":{"login":"copilot-swe-agent[bot]"}}]'
 expect "commit committed by an untrusted bot refused" 1 '^REFUSE devantler-tech/stray has a commit committed by copilot-swe-agent\[bot\]' --repo stray --issue 4289
+# History reachable only through a tag, a pull-request head or an annotated tag is walked too: a
+# branch-only walk would pass a repository whose outsider commits outlived their branch.
+outsider_rows='[{"sha":"cccc","author":{"login":"outsider"},"committer":{"login":"outsider"}}]'
+refs_with() { # refs_with <extra ref json>: main plus one more ref
+  fixture "repos/devantler-tech/stray/git/refs?per_page=100" \
+    "[{\"ref\":\"refs/heads/main\",\"object\":{\"type\":\"commit\",\"sha\":\"${SHA_MAIN}\"}},$1]"
+}
 scenario
-fixture "repos/devantler-tech/stray/branches?per_page=11" '[{"name":"main"},{"name":"feature/x y"}]'
-fixture "repos/devantler-tech/stray/commits?sha=feature%2Fx%20y&per_page=100" '[{"sha":"cccc","author":{"login":"outsider"},"committer":{"login":"outsider"}}]'
-expect "outsider commit on a second branch refused" 1 '^REFUSE devantler-tech/stray has a commit by outsider' --repo stray --issue 4289
+refs_with "{\"ref\":\"refs/tags/v1.0.0\",\"object\":{\"type\":\"commit\",\"sha\":\"${SHA_TAG}\"}}"
+fixture "repos/devantler-tech/stray/commits?sha=${SHA_TAG}&per_page=100" "${outsider_rows}"
+expect "outsider commit reachable only from a tag refused" 1 '^REFUSE devantler-tech/stray has a commit by outsider' --repo stray --issue 4289
 scenario
-fixture "repos/devantler-tech/stray/issues?state=all&per_page=100" '[{"user":{"login":"devantler"}},{"user":{"login":"drive-by"}}]'
+refs_with "{\"ref\":\"refs/pull/3/head\",\"object\":{\"type\":\"commit\",\"sha\":\"${SHA_PULL}\"}}"
+fixture "repos/devantler-tech/stray/commits?sha=${SHA_PULL}&per_page=100" "${outsider_rows}"
+expect "outsider commit reachable only from a pull-request head refused" 1 '^REFUSE devantler-tech/stray has a commit by outsider' --repo stray --issue 4289
+scenario
+refs_with "{\"ref\":\"refs/tags/v2\",\"object\":{\"type\":\"tag\",\"sha\":\"${SHA_TAG_OBJECT}\"}}"
+fixture "repos/devantler-tech/stray/git/tags/${SHA_TAG_OBJECT}" "{\"object\":{\"type\":\"commit\",\"sha\":\"${SHA_TAG}\"}}"
+fixture "repos/devantler-tech/stray/commits?sha=${SHA_TAG}&per_page=100" "${outsider_rows}"
+expect "outsider commit behind an annotated tag refused" 1 '^REFUSE devantler-tech/stray has a commit by outsider' --repo stray --issue 4289
+# The same annotated tag over trusted history passes, so the peel is what reached the outsider.
+fixture "repos/devantler-tech/stray/commits?sha=${SHA_TAG}&per_page=100" \
+  '[{"sha":"dddd","author":{"login":"devantler"},"committer":{"login":"web-flow"}}]'
+expect "annotated tag over trusted history accepted" 0 '^WOULD-DELETE devantler-tech/stray \(private, created [^,]+, 2 commit' --repo stray --issue 4289
+scenario
+refs_with "{\"ref\":\"refs/tags/tree\",\"object\":{\"type\":\"tag\",\"sha\":\"${SHA_TAG_OBJECT}\"}}"
+fixture "repos/devantler-tech/stray/git/tags/${SHA_TAG_OBJECT}" "{\"object\":{\"type\":\"tree\",\"sha\":\"${SHA_TAG}\"}}"
+expect "a tag pointing at a tree is refused, never skipped" 1 '^REFUSE devantler-tech/stray has refs/tags/tree pointing at a tree' --repo stray --issue 4289
+scenario
+refs_with "{\"ref\":\"refs/tags/v3\",\"object\":{\"type\":\"tag\",\"sha\":\"${SHA_TAG_OBJECT}\"}}"
+fixture_fails "repos/devantler-tech/stray/git/tags/${SHA_TAG_OBJECT}" 'gh: Server Error (HTTP 502)'
+expect "an unreadable annotated tag is UNKNOWN" 2 '^UNKNOWN cannot read the annotated tag behind refs/tags/v3' --repo stray --issue 4289
+scenario
+refs_with "{\"ref\":\"refs/notes/commits\",\"object\":{\"type\":\"commit\",\"sha\":\"${SHA_TAG}\"}}"
+expect "an unreadable history behind any ref is UNKNOWN" 2 '^UNKNOWN cannot list the commits of devantler-tech/stray reachable from refs/notes/commits' --repo stray --issue 4289
+scenario
+fixture_fails "repos/devantler-tech/stray/git/refs?per_page=100" 'gh: Server Error (HTTP 502)'
+expect "an unreadable ref list is UNKNOWN" 2 '^UNKNOWN cannot list the refs of devantler-tech/stray' --repo stray --issue 4289
+scenario
+fixture "repos/devantler-tech/stray/issues?state=all&per_page=100" '[{"number":1,"user":{"login":"devantler"}},{"number":2,"user":{"login":"drive-by"}}]'
 expect "issue by an outsider refused" 1 '^REFUSE devantler-tech/stray has an issue or pull request by drive-by' --repo stray --issue 4289
+# A review's own body is on none of the comment lists, so each pull request's reviews are read.
+scenario
+fixture "repos/devantler-tech/stray/issues?state=all&per_page=100" '[{"number":3,"user":{"login":"devantler"},"pull_request":{}}]'
+fixture "repos/devantler-tech/stray/pulls/3/reviews?per_page=100" '[{"user":{"login":"devantler"}},{"user":{"login":"reviewer"}}]'
+expect "an outsider's review body refused" 1 '^REFUSE devantler-tech/stray has a pull-request review by reviewer' --repo stray --issue 4289
+fixture "repos/devantler-tech/stray/pulls/3/reviews?per_page=100" '[{"user":{"login":"devantler"}}]'
+expect "a pull request reviewed only by trusted authors accepted" 0 '^WOULD-DELETE devantler-tech/stray \(private, created [^,]+, 1 commit\(s\), 1 issue' --repo stray --issue 4289
+fixture_fails "repos/devantler-tech/stray/pulls/3/reviews?per_page=100" 'gh: Server Error (HTTP 502)'
+expect "unreadable reviews are UNKNOWN" 2 '^UNKNOWN cannot list the reviews of devantler-tech/stray#3' --repo stray --issue 4289
 for kind in issues/comments pulls/comments comments; do
   scenario
   fixture "repos/devantler-tech/stray/${kind}?per_page=100" '[{"user":{"login":"commenter"}}]'
@@ -244,23 +292,24 @@ for kind in issues/comments pulls/comments comments; do
 done
 # Every trusted author from the AGENTS.md trust gate is accepted, so the list is read, not guessed.
 scenario
-fixture "repos/devantler-tech/stray/commits?sha=main&per_page=100" \
+fixture "repos/devantler-tech/stray/commits?sha=${SHA_MAIN}&per_page=100" \
   '[{"sha":"a1","author":{"login":"ksail-bot[bot]"},"committer":{"login":"web-flow"}},{"sha":"a2","author":{"login":"renovate[bot]"},"committer":{"login":"renovate[bot]"}},{"sha":"a3","author":{"login":"github-actions[bot]"},"committer":{"login":"devantler"}}]'
 expect "commits by every trusted author accepted" 0 '^WOULD-DELETE devantler-tech/stray \(private, created [^,]+, 3 commit' --repo stray --issue 4289
 # More history than one page could hold is refused, never judged on the rows that were read.
 scenario
 rows=$(jq -nc '[range(100) | {sha: "s\(.)", author: {login: "devantler"}, committer: {login: "web-flow"}}]')
-fixture "repos/devantler-tech/stray/commits?sha=main&per_page=100" "${rows}"
-expect "a full page of commits refused" 1 '^REFUSE devantler-tech/stray has at least 100 commits on main' --repo stray --issue 4289
+fixture "repos/devantler-tech/stray/commits?sha=${SHA_MAIN}&per_page=100" "${rows}"
+expect "a full page of commits refused" 1 '^REFUSE devantler-tech/stray has at least 100 commits reachable from refs/heads/main' --repo stray --issue 4289
 scenario
-fixture "repos/devantler-tech/stray/branches?per_page=11" "$(jq -nc '[range(11) | {name: "b\(.)"}]')"
-expect "more than ten branches refused" 1 '^REFUSE devantler-tech/stray has more than 10 branches' --repo stray --issue 4289
+fixture "repos/devantler-tech/stray/git/refs?per_page=100" \
+  "$(jq -nc --arg s "${SHA_MAIN}" '[range(31) | {ref: "refs/heads/b\(.)", object: {type: "commit", sha: $s}}]')"
+expect "more than thirty refs refused" 1 '^REFUSE devantler-tech/stray has more than 30 refs' --repo stray --issue 4289
 scenario
 fixture_fails "repos/devantler-tech/stray/pulls/comments?per_page=100" 'gh: Server Error (HTTP 502)'
 expect "unreadable review comments are UNKNOWN" 2 '^UNKNOWN cannot list the pulls/comments of devantler-tech/stray' --repo stray --issue 4289
-# An empty repository has no branch, so no commit read is needed.
+# An empty repository has no refs, which GitHub reports as a 409, so no commit read is needed.
 scenario
-fixture "repos/devantler-tech/stray/branches?per_page=11" '[]'
+fixture_fails "repos/devantler-tech/stray/git/refs?per_page=100" 'gh: Git Repository is empty. (HTTP 409)'
 expect "empty repository accepted" 0 '^WOULD-DELETE devantler-tech/stray \(private, created [^,]+, 0 commit' --repo stray --issue 4289
 
 # --- The contract the guard reads must be intact, or nothing is judged ---------------------------
@@ -327,7 +376,7 @@ else
   fail "record failure: rc=${rc} ${out}"
 fi
 scenario
-fixture "repos/devantler-tech/stray/issues?state=all&per_page=100" '[{"user":{"login":"drive-by"}}]'
+fixture "repos/devantler-tech/stray/issues?state=all&per_page=100" '[{"number":2,"user":{"login":"drive-by"}}]'
 expect "apply still refuses an outsider's repository" 1 '^REFUSE devantler-tech/stray has an issue or pull request by drive-by' --repo stray --issue 4289 --apply
 
 # --- The contract names the guard as the only deletion path ---------------------------------------

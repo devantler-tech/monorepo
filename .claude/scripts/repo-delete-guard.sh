@@ -13,8 +13,10 @@
 #     - a repository named in the AGENTS.md Portfolio map or Stack map;
 #     - a repository Crossplane manages (`deploy/repositories/<name>.yaml` in devantler-tech/.github);
 #     - an archived repository;
-#     - one with a commit, issue, pull request or comment by anyone other than the trust gate's
-#       trusted authors (read from AGENTS.md, so the two lists cannot drift);
+#     - one with a commit reachable from any ref (branch, tag, pull-request head or other), or an
+#       issue, pull request, review or comment, by anyone other than the trust gate's trusted
+#       authors (read from AGENTS.md, so the two lists cannot drift), and one with history it
+#       cannot walk;
 #     - one the open devantler-tech/monorepo issue given with --issue does not name.
 #   After deleting it reads back that the repository is gone and records the deletion, and the
 #   90-day window in which an organization owner can restore it, on that issue.
@@ -47,7 +49,7 @@ ORG=devantler-tech
 # rows exist, so a full page is refused rather than paged: more history than that is not a stray,
 # and a row left unread must never read as "no outsider".
 PAGE=100
-MAX_BRANCHES=10
+MAX_REFS=30
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 contract="${script_dir}/../../AGENTS.md"
@@ -187,7 +189,8 @@ named=$(awk -v r="$full" '
 check "requested by open ${ORG}/monorepo#${issue}"
 
 # --- 3. The repository itself ----------------------------------------------------------------
-# api_read <path> [jq]: prints the result; exit 1 for a 404, 2 for any other failure.
+# api_read <path> [jq]: prints the result; exit 1 for a 404, 3 for a 409 (GitHub's answer for an
+# empty repository's git data), 2 for any other failure.
 api_read() {
   local out err rc
   err=$(mktemp) || return 2
@@ -198,7 +201,13 @@ api_read() {
   fi
   rc=$?
   if [ "$rc" -ne 0 ]; then
-    if grep -q 'HTTP 404' "$err"; then rc=1; else rc=2; fi
+    if grep -q 'HTTP 404' "$err"; then
+      rc=1
+    elif grep -q 'HTTP 409' "$err"; then
+      rc=3
+    else
+      rc=2
+    fi
     rm -f "$err"
     return "$rc"
   fi
@@ -245,41 +254,68 @@ one_page() {
     refuse "${full} has at least ${PAGE} $1: that is not a stray repository"
 }
 
-branches=$(api_read "repos/${full}/branches?per_page=$((MAX_BRANCHES + 1))" '.[].name') ||
-  unknown "cannot list the branches of ${full}"
-branch_count=$(count_lines "$branches")
-[ "$branch_count" -le "$MAX_BRANCHES" ] ||
-  refuse "${full} has more than ${MAX_BRANCHES} branches: that is not a stray repository"
+# Every ref, not only branches: a commit can stay reachable only through a tag, a pull-request
+# head, a notes ref or any other namespace after its branch is gone, and history that was never
+# walked must never read as "no outsider" (monorepo#4289 review). An empty repository has no refs,
+# which GitHub reports as a 409.
+refs=$(api_read "repos/${full}/git/refs?per_page=${PAGE}" '.[] | [.ref, .object.type, .object.sha] | @tsv')
+case $? in
+  0) ;;
+  3) refs='' ;;
+  *) unknown "cannot list the refs of ${full}" ;;
+esac
+one_page "refs" "$refs"
+ref_count=$(count_lines "$refs")
+[ "$ref_count" -le "$MAX_REFS" ] ||
+  refuse "${full} has more than ${MAX_REFS} refs: that is not a stray repository"
 commit_shas=""
-while IFS= read -r branch; do
-  [ -n "$branch" ] || continue
-  # Branch names are passed as a query value, so encode the characters a ref may hold.
-  ref=$(jq -rn --arg b "$branch" '$b | @uri')
-  rows=$(api_read "repos/${full}/commits?sha=${ref}&per_page=${PAGE}" \
+while IFS=$'\t' read -r ref type sha; do
+  [ -n "$ref" ] || continue
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || unknown "cannot read the object ${ref} points at"
+  # An annotated tag is peeled once to its commit; anything else it can point at (a tree, a blob,
+  # another tag) is history this guard cannot walk, so it is refused rather than skipped.
+  if [ "$type" = tag ]; then
+    peeled=$(api_read "repos/${full}/git/tags/${sha}" '[.object.type, .object.sha] | @tsv') ||
+      unknown "cannot read the annotated tag behind ${ref}"
+    IFS=$'\t' read -r type sha <<<"$peeled"
+    [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || unknown "cannot read the object the tag behind ${ref} points at"
+  fi
+  [ "$type" = commit ] || refuse "${full} has ${ref} pointing at a ${type:-unknown object}, which this guard cannot examine"
+  rows=$(api_read "repos/${full}/commits?sha=${sha}&per_page=${PAGE}" \
     '.[] | [.sha, (.author.login // "-"), (.committer.login // "-")] | @tsv') ||
-    unknown "cannot list the commits of ${full} on ${branch}"
-  one_page "commits on ${branch}" "$rows"
+    unknown "cannot list the commits of ${full} reachable from ${ref}"
+  one_page "commits reachable from ${ref}" "$rows"
   outsiders "a commit" "$(cut -f2 <<<"$rows")"
   # GitHub's own committer for web edits and merges is not an author; any other committer is.
   outsiders "a commit committed" "$(cut -f3 <<<"$rows" | grep -vxF web-flow || true)"
   commit_shas+="$(cut -f1 <<<"$rows")"$'\n'
-done <<<"$branches"
+done <<<"$refs"
 commit_count=$(sort -u <<<"$commit_shas" | grep -c . || true)
-check "${commit_count} commit(s) on ${branch_count} branch(es), all by trusted authors"
+check "${commit_count} commit(s) reachable from ${ref_count} ref(s), all by trusted authors"
 
-issue_logins=$(api_read "repos/${full}/issues?state=all&per_page=${PAGE}" '.[] | (.user.login // "-")') ||
+items=$(api_read "repos/${full}/issues?state=all&per_page=${PAGE}" \
+  '.[] | [.number, (.user.login // "-"), (if .pull_request then "pr" else "issue" end)] | @tsv') ||
   unknown "cannot list the issues and pull requests of ${full}"
-one_page "issues and pull requests" "$issue_logins"
-item_count=$(count_lines "$issue_logins")
-outsiders "an issue or pull request" "$issue_logins"
-# Issue and pull-request comments, review comments, and comments on commits.
+one_page "issues and pull requests" "$items"
+item_count=$(count_lines "$items")
+outsiders "an issue or pull request" "$(cut -f2 <<<"$items")"
+# Issue and pull-request comments, inline review comments, and comments on commits.
 for kind in issues/comments pulls/comments comments; do
   logins=$(api_read "repos/${full}/${kind}?per_page=${PAGE}" '.[] | (.user.login // "-")') ||
     unknown "cannot list the ${kind} of ${full}"
   one_page "${kind}" "$logins"
   outsiders "a comment" "$logins"
 done
-check "${item_count} issue(s) and pull request(s), and every comment, by trusted authors"
+# A review's own body is on none of those lists: it lives on each pull request's reviews.
+while IFS=$'\t' read -r number _ kind; do
+  [ "$kind" = pr ] || continue
+  [[ "$number" =~ ^[1-9][0-9]*$ ]] || unknown "cannot read a pull request number of ${full}"
+  logins=$(api_read "repos/${full}/pulls/${number}/reviews?per_page=${PAGE}" '.[] | (.user.login // "-")') ||
+    unknown "cannot list the reviews of ${full}#${number}"
+  one_page "reviews on #${number}" "$logins"
+  outsiders "a pull-request review" "$logins"
+done <<<"$items"
+check "${item_count} issue(s) and pull request(s), and every comment and review, by trusted authors"
 
 summary="($(jq -r 'if .private then "private" else "public" end' <<<"$meta"), created $(jq -r '.created_at' <<<"$meta"), ${commit_count} commit(s), ${item_count} issue(s) and pull request(s))"
 
