@@ -266,10 +266,12 @@ governs the issue work that follows.) Two rules enforce that:
    under-specified for (b) — repair the line and verify it (or unblock) rather than skipping.
 
    **Choosing the source, and when it covers the blocker (monorepo#2859).** Choose the source by the
-   identifier's **class**, never from a table of per-project destinations, which goes stale: a fully
-   qualified issue or pull request (`owner/repo#n`) is checked at that public repository's own record
-   of it; a package or module version at the ecosystem's public registry or module proxy; a hosted
-   service's capability at the provider's own public documentation or changelog. A source **covers**
+   identifier's **class**, never from a table of per-project destinations, which goes stale: for a
+   fully qualified issue or pull request (`owner/repo#n`), that public project's own issue, pull
+   request and release records; for a package or module version, the ecosystem's public registry or
+   module proxy; for a hosted service's capability, the provider's own public documentation or
+   changelog. The query is still built only from independently confirmed public-safe terms, as above,
+   and the identifier is matched locally in what comes back. A source **covers**
    the blocker only when it shows that exact identifier (or that exact package and version) together
    with a state that settles it: open or closed, merged, released or published, or a dated changelog
    entry that names it. A page about the project in general, a snippet without the identifier, a

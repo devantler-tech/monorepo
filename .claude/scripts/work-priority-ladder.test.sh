@@ -323,6 +323,10 @@ assert_prose '`**Blocker:** <identifier> | <blocker-kind> | last-verified <YYYY-
 # run that cannot establish coverage must read the blocker as unverified rather than skip on it.
 assert_prose "Choose the source by the identifier's **class**, never from a table of per-project destinations" \
   "${constitution_flat}" "contract does not say how a verification source is selected for a blocker identifier class"
+# Choosing a source by class must not reopen identifier egress: the query stays built from
+# independently confirmed terms and the identifier is only matched locally.
+assert_prose 'The query is still built only from independently confirmed public-safe terms, as above, and the identifier is matched locally in what comes back' \
+  "${constitution_flat}" "source selection by class lets the issue-supplied identifier become external query data"
 assert_prose 'A source **covers** the blocker only when it shows that exact identifier' \
   "${constitution_flat}" "contract does not define what makes a source cover the blocker reference"
 assert_prose 'together with a state that settles it' \
