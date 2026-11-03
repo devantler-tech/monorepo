@@ -3415,11 +3415,34 @@ jobs:
           bash .claude/scripts/hypothesis-id-reserve.test.sh || batch_status=1
           exit "$batch_status"
 
+  # Read native startup metadata after unconditional admission checks (#4788).
+  # No checkout or candidate code receives this narrowly scoped token.
+  workflow-startup:
+    name: Check workflow startup
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs:
+      - changes
+      - test-egress-third-party-qualifier-contract
+      - test-ci-aggregate-contract
+      - test-ci-job-wiring
+    permissions:
+      actions: read
+    steps:
+      - name: Inspect workflow startup metadata
+        uses: devantler-tech/.github/actions/aggregate-job-checks@da5f0839b418626a8a0b69df1f04ba931a38e371 # v19.1.0
+        with:
+          check-name: Workflow startup snapshot
+          check-workflow-startup: "true"
+          # Validation results remain independently enforced by status below.
+          job-results: success
+
   status:
     name: "CI - Required Checks"
     runs-on: ubuntu-latest
     if: always()
     needs:
+      - workflow-startup
       - test-macos-batch-1
       - test-macos-batch-2
       - test-macos-batch-3
@@ -3517,14 +3540,14 @@ jobs:
       - test-portfolio-map-drift
       - test-agent-instructions-layout
       - test-maintainer-digest
-    permissions:
-      actions: read
+    permissions: {}
     steps:
       - name: Check job results
         uses: devantler-tech/.github/actions/aggregate-job-checks@da5f0839b418626a8a0b69df1f04ba931a38e371 # v19.1.0
         with:
-          check-workflow-startup: "true"
           job-results: >-
+            ${{ needs.workflow-startup.result }}
+            ${{ needs.workflow-startup.result == 'success' && 'success' || 'failure' }}
             ${{ needs.test-macos-batch-1.result }}
             ${{ needs.test-macos-batch-2.result }}
             ${{ needs.test-macos-batch-3.result }}

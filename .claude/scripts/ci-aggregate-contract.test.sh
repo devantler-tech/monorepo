@@ -105,5 +105,60 @@ jq -e '. == {version:1,"timeout-minutes":10}' "$root/.github/pr-admission.json" 
   fail "shared admission must retain a bounded product-owned execution budget"
 [[ "$(yq -r '.jobs.validate."timeout-minutes"' "$workflow")" == "$(jq -r '."timeout-minutes"' "$root/.github/pr-admission.json")" ]] ||
   fail "the workflow timeout must match the shared admission budget"
+# #4788/#4789: inspect startup metadata after admission without giving the final
+# aggregate a token. The separate reader executes only the pinned maintained action.
+cat >"$tmp/startup.jq" <<'JQ'
+.jobs as $jobs |
+$jobs["workflow-startup"] as $reader |
+$jobs.status as $status |
+($status.steps[0].uses) as $aggregate |
+($status.steps[0].with["job-results"]) as $results |
+($reader | type == "object") and
+($reader | keys == ["name", "needs", "permissions", "runs-on", "steps", "timeout-minutes"]) and
+$reader["runs-on"] == "ubuntu-latest" and
+$reader["timeout-minutes"] == 10 and
+$reader.permissions == {actions:"read"} and
+($reader.needs | type == "array" and length > 0) and
+($reader.needs | sort) == ([$jobs | to_entries[] |
+  select(.key != "status" and .key != "workflow-startup" and (.value | has("if") | not)) | .key] | sort) and
+($reader.needs | index("workflow-startup")) == null and
+($reader.steps | length == 1) and
+($reader.steps[0] | keys == ["name", "uses", "with"]) and
+($aggregate | test("^devantler-tech/[.]github/actions/aggregate-job-checks@[0-9a-f]{40}$")) and
+$reader.steps[0].uses == $aggregate and
+$reader.steps[0].with == {
+  "check-name":"Workflow startup snapshot",
+  "check-workflow-startup":"true",
+  "job-results":"success"
+} and
+$status.permissions == {} and
+$status.if == "always()" and
+($status.needs | map(select(. == "workflow-startup")) | length) == 1 and
+($status.steps | length == 1) and
+($status.steps[0].with | has("check-workflow-startup") | not) and
+($results | contains("${{ needs.workflow-startup.result }}")) and
+($results | contains("${{ needs.workflow-startup.result == 'success' && 'success' || 'failure' }}"))
+JQ
+yq -o=json '.' "$root/.github/workflows/ci.yaml" >"$tmp/startup.json"
+jq -e -f "$tmp/startup.jq" "$tmp/startup.json" >/dev/null ||
+  fail "startup inspection must follow admission with a read-only token and gate the credential-free aggregate"
+for mutation in \
+  'del(.jobs["workflow-startup"])' \
+  '.jobs["workflow-startup"].needs = ["changes"]' \
+  '.jobs["workflow-startup"].if = "success()"' \
+  '.jobs["workflow-startup"].permissions.contents = "read"' \
+  '.jobs["workflow-startup"].steps += [{run:"echo bypass"}]' \
+  '.jobs["workflow-startup"].steps[0]."continue-on-error" = true' \
+  '.jobs["workflow-startup"].steps[0].with["check-workflow-startup"] = "false"' \
+  '.jobs.status.permissions.actions = "read"' \
+  '.jobs.status.needs |= map(select(. != "workflow-startup"))' \
+  '.jobs.status.steps[0].with["job-results"] |= (split("\n") | map(select(contains("==") | not)) | join("\n"))' \
+  '.jobs.status.steps[0].with["job-results"] = "success"'; do
+  jq "$mutation" "$tmp/startup.json" >"$tmp/mutated.json"
+  mutation_status=0
+  jq -e -f "$tmp/startup.jq" "$tmp/mutated.json" >/dev/null || mutation_status=$?
+  [[ "$mutation_status" == 1 ]] ||
+    fail "startup reader must reject unsafe mutation without a checker error: $mutation (exit $mutation_status)"
+done
 completed=1
 echo "ci-aggregate-contract: OK"
