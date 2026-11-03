@@ -201,6 +201,11 @@ scenario
 printf '{"state":"OPEN","title":"Cleanup","body":"See https://github.com/devantler-tech/stray, created by mistake.","url":"u"}\n' >"${fake}/issue.json"
 expect "request naming the repository in its body accepted" 0 '^WOULD-DELETE devantler-tech/stray ' --repo stray --issue 4289
 scenario
+printf '{"state":"OPEN","title":"Cleanup","body":"Please delete devantler-tech/stray.","url":"u"}\n' >"${fake}/issue.json"
+expect "a name that ends its sentence is still named" 0 '^WOULD-DELETE devantler-tech/stray ' --repo stray --issue 4289
+printf '{"state":"OPEN","title":"Cleanup","body":"Please delete devantler-tech/stray.old instead.","url":"u"}\n' >"${fake}/issue.json"
+expect "a dotted longer name is not this name" 1 '^REFUSE devantler-tech/monorepo#4289 does not name devantler-tech/stray' --repo stray --issue 4289
+scenario
 rm "${fake}/issue.json"
 expect "unreadable request is UNKNOWN" 2 '^UNKNOWN cannot read devantler-tech/monorepo#4289' --repo stray --issue 4289
 

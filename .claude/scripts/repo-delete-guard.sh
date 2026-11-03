@@ -181,6 +181,9 @@ named=$(awk -v r="$full" '
     while ((i = index(line, r)) > 0) {
       before = (i > 1) ? substr(line, i - 1, 1) : ""
       after = substr(line, i + length(r), 1)
+      # A full stop that ends the sentence is not part of the name; one followed by more name
+      # characters is (`devantler-tech/foo.bar` does not name `devantler-tech/foo`).
+      if (after == ".") { after = substr(line, i + length(r) + 1, 1) }
       if (before !~ /[A-Za-z0-9_.-]/ && after !~ /[A-Za-z0-9_.-]/) { found = 1 }
       line = substr(line, i + length(r))
     }
