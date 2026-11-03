@@ -11,8 +11,33 @@ tmp="$(mktemp -d "${TMPDIR:-/tmp}/go-helper-build-test.XXXXXX")"
 finished=0
 # Release this test's fixtures without turning an interrupted suite into a pass.
 cleanup() {
-  local rc=$?
-  rm -rf -- "$tmp"
+  local rc=$? modules='' cache_root='' binary=''
+  if [ -s "$tmp/real-binary-path" ]; then
+    IFS= read -r binary < "$tmp/real-binary-path" || rc=1
+    case "$binary" in
+      /tmp/go-helper-run.*|/private/tmp/go-helper-run.*) rm -f -- "$binary" || rc=1 ;;
+      *) rc=1 ;;
+    esac
+  fi
+  # A failing regression may leave the invocation-owned module cache read-only.
+  # Its wrapper records both the path and an ownership marker before compiling.
+  if [ -f "$tmp/dependency-private-cache" ]; then
+    IFS= read -r modules < "$tmp/dependency-private-cache" || rc=1
+    case "$modules" in
+      /tmp/go-helper-cache.*/modules)
+        cache_root=${modules%/modules}
+        if [ -d "$cache_root" ]; then
+          if [ "$(cat "$cache_root/regression-owner" 2>/dev/null)" = "$tmp" ]; then
+            find -P "$cache_root" -type d -exec chmod u+w {} + || rc=1
+            rm -rf -- "$cache_root" || rc=1
+          else rc=1; fi
+        fi
+        ;;
+      *) rc=1 ;;
+    esac
+  fi
+  find -P "$tmp" -type d -exec chmod u+w {} + || rc=1
+  rm -rf -- "$tmp" || rc=1
   if [ "$finished" != 1 ] && [ "$rc" -eq 0 ]; then rc=1; fi
   exit "$rc"
 }
@@ -128,14 +153,26 @@ echo 'PASS: zero, excessive and invalid deadlines cannot disable the watchdog'
 # The minimal local module has no external module dependencies.
 mkdir "$tmp/module"
 printf 'module example.test/go-helper-build\n\ngo 1.24.0\n' > "$tmp/module/go.mod"
-printf 'package main\nfunc main() { println("real-helper-executed") }\n' > "$tmp/module/main.go"
+cat > "$tmp/module/main.go" <<'PROGRAM'
+package main
+import "os"
+func main() {
+  path, err := os.Executable()
+  if err != nil { panic(err) }
+  if err := os.WriteFile(os.Getenv("GO_HELPER_TEST_BINARY_PATH"), []byte(path+"\n"), 0600); err != nil { panic(err) }
+  println("real-helper-executed")
+}
+PROGRAM
 real_rc=0
-"$BASH" -c '. "$1"; go_helper_run "$2" .' bash "$here/go-helper-build.sh" "$tmp/module" > "$tmp/real-out" 2>&1 || real_rc=$?
+env GO_HELPER_TEST_BINARY_PATH="$tmp/real-binary-path" \
+  "$BASH" -c '. "$1"; go_helper_run "$2" .' bash "$here/go-helper-build.sh" "$tmp/module" > "$tmp/real-out" 2>&1 || real_rc=$?
 if [ "$real_rc" -ne 0 ] || ! grep -q real-helper-executed "$tmp/real-out"; then
   echo 'FAIL: actual Go build/run did not execute the local helper' >&2
   cat "$tmp/real-out" >&2
   exit 1
 fi
+IFS= read -r real_binary < "$tmp/real-binary-path"
+[ ! -e "$real_binary" ] || { echo 'FAIL: actual Go runner leaked its temporary executable' >&2; exit 1; }
 printf 'package main\nfunc main( {\n' > "$tmp/module/main.go"
 real_rc=0
 "$BASH" -c '. "$1"; go_helper_run "$2" .' bash "$here/go-helper-build.sh" "$tmp/module" > "$tmp/real-error" 2>&1 || real_rc=$?
@@ -144,6 +181,63 @@ if [ "$real_rc" -eq 0 ] || ! grep -q 'main.go' "$tmp/real-error" || grep -q real
   exit 1
 fi
 echo 'PASS: actual Go program runs and actual compiler errors remain failures'
+
+# Fetch an actual dependency through a local file proxy. Its archive is entirely
+# authored here, so this exercises Go's cache permissions without network access.
+real_go=$(command -v go)
+[ "$(id -u)" -ne 0 ] || { echo 'UNKNOWN: module-cache permission control requires an unprivileged account' >&2; exit 2; }
+mkdir -p "$tmp/proxy/example.test/dependency/@v" \
+  "$tmp/dependency-zip/example.test/dependency@v0.1.0" "$tmp/dependency-helper" "$tmp/retry-real-bin"
+printf 'module example.test/dependency\n\ngo 1.24.0\n' > "$tmp/dependency-zip/example.test/dependency@v0.1.0/go.mod"
+printf 'package dependency\nfunc Value() string { return "dependency-helper-executed" }\n' > "$tmp/dependency-zip/example.test/dependency@v0.1.0/dependency.go"
+(
+  cd "$tmp/dependency-zip"
+  zip -qr "$tmp/proxy/example.test/dependency/@v/v0.1.0.zip" example.test/dependency@v0.1.0
+)
+cp "$tmp/dependency-zip/example.test/dependency@v0.1.0/go.mod" "$tmp/proxy/example.test/dependency/@v/v0.1.0.mod"
+printf '{"Version":"v0.1.0","Time":"2026-01-01T00:00:00Z"}\n' > "$tmp/proxy/example.test/dependency/@v/v0.1.0.info"
+printf 'v0.1.0\n' > "$tmp/proxy/example.test/dependency/@v/list"
+printf 'module example.test/dependency-helper\n\ngo 1.24.0\n\nrequire example.test/dependency v0.1.0\n' > "$tmp/dependency-helper/go.mod"
+printf 'package main\nimport "example.test/dependency"\nfunc main() { println(dependency.Value()) }\n' > "$tmp/dependency-helper/main.go"
+env GOMODCACHE="$tmp/seed-modules" GOPROXY="file://$tmp/proxy" GOSUMDB=off \
+  GOPRIVATE=none GONOPROXY=none GOFLAGS='' GOWORK=off GOTOOLCHAIN=local \
+  "$real_go" -C "$tmp/dependency-helper" mod download all
+[ ! -w "$tmp/seed-modules/example.test/dependency@v0.1.0" ] || {
+  echo 'FAIL: actual Go download did not establish the read-only module control' >&2; exit 1;
+}
+cat > "$tmp/retry-real-bin/go" <<'REALGO'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ ! -f "$MOCK_TEST_ROOT/dependency-first-build" ]; then
+  : > "$MOCK_TEST_ROOT/dependency-first-build"
+  trap '' TERM
+  exec sleep 30
+fi
+printf '%s\n' "$GOMODCACHE" > "$MOCK_TEST_ROOT/dependency-private-cache"
+printf '%s\n' "$MOCK_TEST_ROOT" > "${GOMODCACHE%/modules}/regression-owner"
+ln -s "$MOCK_TEST_ROOT/unrelated-read-only-cache" "${GOMODCACHE%/modules}/external-cache-link"
+exec "$MOCK_REAL_GO" "$@"
+REALGO
+chmod +x "$tmp/retry-real-bin/go"
+mkdir "$tmp/unrelated-read-only-cache"
+chmod 555 "$tmp/unrelated-read-only-cache"
+dependency_rc=0
+env PATH="$tmp/retry-real-bin:$PATH" MOCK_TEST_ROOT="$tmp" MOCK_REAL_GO="$real_go" \
+  GOPROXY="file://$tmp/proxy" GOSUMDB=off GOPRIVATE=none GONOPROXY=none \
+  GOFLAGS='' GOWORK=off GOTOOLCHAIN=local \
+  GO_HELPER_BUILD_TIMEOUT_SECONDS=1 GO_HELPER_BUILD_KILL_AFTER_SECONDS=1 \
+  GO_HELPER_BUILD_RETRY_TIMEOUT_SECONDS=180 \
+  "$BASH" -c '. "$1"; go_helper_run "$2" .' bash "$here/go-helper-build.sh" "$tmp/dependency-helper" \
+  > "$tmp/dependency-result" 2>&1 || dependency_rc=$?
+if [ "$dependency_rc" -ne 0 ] || ! grep -q dependency-helper-executed "$tmp/dependency-result"; then
+  echo "FAIL: dependency-bearing retry did not run its helper (status $dependency_rc)" >&2
+  cat "$tmp/dependency-result" >&2
+  exit 1
+fi
+IFS= read -r dependency_modules < "$tmp/dependency-private-cache"
+[ ! -e "${dependency_modules%/modules}" ] || { echo 'FAIL: real downloaded module cache leaked' >&2; exit 1; }
+[ ! -w "$tmp/unrelated-read-only-cache" ] || { echo 'FAIL: cleanup changed an unrelated cache' >&2; exit 1; }
+echo 'PASS: real downloaded read-only modules are cleaned before the helper runs; unrelated cache unchanged'
 
 # Exercise both real library traps after a reached unset-variable abort, also
 # on the host's Bash 3.2. A library is sourced rather than executed by the

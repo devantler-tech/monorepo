@@ -11,7 +11,7 @@ go_helper_build() (
   set -uo pipefail
   if [ "$#" -ne 3 ]; then
     echo 'go-helper-build: expected module directory, output binary and package' >&2
-    exit 2
+    return 2
   fi
   local module=$1 binary=$2 package=$3 timer value
   local first_seconds=${GO_HELPER_BUILD_TIMEOUT_SECONDS:-30}
@@ -21,24 +21,29 @@ go_helper_build() (
   for value in "$first_seconds" "$retry_seconds" "$kill_seconds"; do
     if ! [[ "$value" =~ ^[1-9][0-9]*$ ]] || [ "${#value}" -gt 3 ] || [ "$value" -gt 600 ]; then
       echo 'go-helper-build: deadlines must be positive integers no greater than 600 seconds' >&2
-      exit 2
+      return 2
     fi
   done
   if ! timer=$(command -v gtimeout || command -v timeout); then
     echo 'go-helper-build: GNU timeout is required; build was not started' >&2
-    exit 2
+    return 2
   fi
 
-  # The subshell owns only its newly allocated private cache. Never install an
-  # EXIT trap in the caller or replace its guard-completion/error handling.
+  # The subshell owns only its newly allocated private cache. Return from its
+  # body: Bash 3.2 discards function locals before an explicit exit's EXIT trap.
+  # An abrupt abort may still lose locals; missing state must never mean success.
   # shellcheck disable=SC2329 # Invoked by the subshell's EXIT trap.
   cleanup_go_helper_build() {
     local cleanup_rc=$?
-    if [ -n "$cache" ] && ! rm -rf -- "$cache"; then
-      echo 'go-helper-build: failed to clean private Go cache' >&2
-      cleanup_rc=2
+    if [ -n "${cache:-}" ]; then
+      # Go downloads read-only module directories. Change only directories in
+      # this invocation's fresh cache; physical traversal does not follow links.
+      if ! find -P "$cache" -type d -exec chmod u+w {} + || ! rm -rf -- "$cache"; then
+        echo 'go-helper-build: failed to clean private Go cache' >&2
+        cleanup_rc=2
+      fi
     fi
-    if [ "$finished" != 1 ] && [ "$cleanup_rc" -eq 0 ]; then
+    if [ "${finished:-0}" != 1 ] && [ "$cleanup_rc" -eq 0 ]; then
       echo 'go-helper-build: aborted before completion; reporting UNKNOWN' >&2
       cleanup_rc=2
     fi
@@ -54,10 +59,10 @@ go_helper_build() (
     [ -z "$output" ] || printf '%s\n' "$output" >&2
     if [ ! -s "$binary" ] || [ ! -x "$binary" ]; then
       echo 'go-helper-build: compiler returned success without an executable' >&2
-      exit 2
+      return 2
     fi
     finished=1
-    exit 0
+    return 0
   fi
   [ -z "$output" ] || printf '%s\n' "$output" >&2
   case "$rc" in
@@ -80,16 +85,16 @@ go_helper_build() (
   esac
   if [ "$retry" -ne 1 ]; then
     finished=1
-    exit "$rc"
+    return "$rc"
   fi
 
   # /tmp is internal on the maintained host. TMPDIR and the normal cache paths
   # may themselves point onto the unavailable external volume.
   cache=$(mktemp -d /tmp/go-helper-cache.XXXXXX) || {
     echo 'go-helper-build: failed to allocate private Go cache' >&2
-    exit 2
+    return 2
   }
-  mkdir -p "$cache/build" "$cache/modules" || exit 2
+  mkdir -p "$cache/build" "$cache/modules" || return 2
   echo 'go-helper-build: shared build unavailable; retrying once with private build and module caches' >&2
   rc=0
   "$timer" --kill-after="$kill_seconds" "$retry_seconds" \
@@ -98,36 +103,36 @@ go_helper_build() (
   if [ "$rc" -ne 0 ]; then
     echo "go-helper-build: private build failed (status $rc); no guard verdict" >&2
     finished=1
-    exit "$rc"
+    return "$rc"
   fi
   if [ ! -s "$binary" ] || [ ! -x "$binary" ]; then
     echo 'go-helper-build: retry returned success without an executable' >&2
-    exit 2
+    return 2
   fi
   finished=1
-  exit 0
+  return 0
 )
 
 # Preserve the runtime and argv of former `go run` callers while bounding only
 # compilation. Each invocation owns its temporary executable.
 go_helper_run() (
   set -uo pipefail
-  [ "$#" -ge 2 ] || { echo 'go-helper-build: expected module and package' >&2; exit 2; }
+  [ "$#" -ge 2 ] || { echo 'go-helper-build: expected module and package' >&2; return 2; }
   local module=$1 package=$2 binary='' rc=0 finished=0
   shift 2
-  binary=$(mktemp /tmp/go-helper-run.XXXXXX) || exit 2
+  binary=$(mktemp /tmp/go-helper-run.XXXXXX) || return 2
   # Remove only this invocation's executable and preserve an incomplete run as
   # UNKNOWN, including an unset-variable abort that Bash may otherwise call 0.
   # shellcheck disable=SC2329 # Invoked by this subshell's EXIT trap.
   cleanup_go_helper_run() {
     local cleanup_rc=$?
-    rm -f -- "$binary" || cleanup_rc=2
-    if [ "$finished" != 1 ] && [ "$cleanup_rc" -eq 0 ]; then cleanup_rc=2; fi
+    if [ -n "${binary:-}" ]; then rm -f -- "$binary" || cleanup_rc=2; fi
+    if [ "${finished:-0}" != 1 ] && [ "$cleanup_rc" -eq 0 ]; then cleanup_rc=2; fi
     exit "$cleanup_rc"
   }
   trap cleanup_go_helper_run EXIT
-  go_helper_build "$module" "$binary" "$package" || exit 2
+  go_helper_build "$module" "$binary" "$package" || return 2
   "$binary" "$@" || rc=$?
   finished=1
-  exit "$rc"
+  return "$rc"
 )
