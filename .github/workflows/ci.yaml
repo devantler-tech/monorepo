@@ -1335,6 +1335,9 @@ jobs:
         with:
           go-version-file: .claude/scripts/cleanup-trap-census-go/go.mod
           cache: false
+      - name: Install GNU build deadline utility
+        if: runner.os == 'macOS'
+        run: brew install coreutils
       # Temporary fixtures exercise classification and abort behavior. The census
       # reads the checked-out index and shell syntax without executing scanned scripts.
       - name: Self-test the fail-closed cleanup-trap shape
@@ -1642,6 +1645,9 @@ jobs:
         with:
           go-version-file: .claude/scripts/blocked-label-blocker-line-go/go.mod
           cache: false
+      - name: Install GNU build deadline utility
+        if: runner.os == 'macOS'
+        run: brew install coreutils
       # Hermetic Go and CLI fixtures exercise the same guard on both operating systems.
       - name: Verify the blocked-label blocker-line check
         run: bash .claude/scripts/blocked-label-blocker-line.test.sh
@@ -1882,7 +1888,7 @@ jobs:
       # --candidates mode over local payloads, so this makes no API call (monorepo#3163).
       - name: Verify the maintainer-comment candidate classifier
         run: |
-          shellcheck .claude/scripts/maintainer-comment-candidates.sh .claude/scripts/maintainer-comment-candidates.test.sh
+          shellcheck -x -P SCRIPTDIR .claude/scripts/maintainer-comment-candidates.sh .claude/scripts/maintainer-comment-candidates.test.sh
           bash .claude/scripts/maintainer-comment-candidates.test.sh
 
   test-surveyor-forge-vocabulary:
@@ -2055,6 +2061,9 @@ jobs:
         with:
           go-version-file: .claude/scripts/memory-hygiene-go/go.mod
           cache: false
+      - name: Install GNU build deadline utility
+        if: runner.os == 'macOS'
+        run: brew install coreutils
       - name: Verify build deadlines and isolated retry
         run: bash .claude/scripts/go-helper-build.test.sh
 
@@ -2175,6 +2184,9 @@ jobs:
         with:
           go-version-file: .claude/scripts/memory-backup-go/go.mod
           cache: false
+      - name: Install GNU build deadline utility
+        if: runner.os == 'macOS'
+        run: brew install coreutils
       - name: Verify the memory backup helper
         run: |
           go -C .claude/scripts/memory-backup-go test ./...
@@ -2776,6 +2788,9 @@ jobs:
         with:
           go-version-file: .claude/scripts/issue-body-references-go/go.mod
           cache: false
+      - name: Install GNU build deadline utility
+        if: runner.os == 'macOS'
+        run: brew install coreutils
       - name: Test the body-reference parser
         run: go -C .claude/scripts/issue-body-references-go test ./...
       - name: Verify the delivered-open candidate listing
