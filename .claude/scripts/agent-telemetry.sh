@@ -2799,8 +2799,80 @@ claude_project_authorized() {
 claude_project_in_window() {
   local dir="$CLAUDE_PROJECTS/$1" list
   [ ! -L "$dir" ] || return 0
+  # #4800: a store absent from one complete corpus-wide listing holds no
+  # in-window transcript in the admitted session layout, so its per-store
+  # finds are skipped.
+  if [ "$CLAUDE_WINDOW_STORES_OK" = 1 ]; then
+    case $'\n'"$CLAUDE_WINDOW_STORES"$'\n' in
+      *$'\n'"$1"$'\n'*) ;;
+      *) return 1 ;;
+    esac
+  fi
   list=$(claude_session_listing "$dir") || return 0
   [ -n "$list" ]
+}
+
+# #4800: both Claude walks ask every store (about 1,800 on the live host) whether
+# it holds an in-window transcript, and each answer costs several `find`
+# processes. Batched direct and delegated listings answer that with at most two
+# `find` processes rather than repeating those listings for every store.
+# Direct records and admitted delegated roots are listed separately so an
+# arbitrary child project is pruned before descent, as in claude_session_listing.
+# A store it keeps still takes the exact per-store check. Any failed listing — an
+# unreadable store, a file removed mid-walk — leaves the prefilter off, and
+# every store takes the per-store check exactly as before. Top-level files
+# belong to the store root, which this check never judges.
+CLAUDE_WINDOW_STORES=''
+CLAUDE_WINDOW_STORES_OK=0
+claude_window_stores_prepare() {
+  local out direct_out delegated_out='' dirs d parent id presence=0 store_admission=0
+  local -a stores=() delegated_roots=()
+  CLAUDE_WINDOW_STORES=''
+  CLAUDE_WINDOW_STORES_OK=0
+  [ -d "$CLAUDE_PROJECTS" ] && [ ! -L "$CLAUDE_PROJECTS" ] || return 0
+  # Admission first, exactly as both walks do it: only a store root that is
+  # present and not excluded or unresolved is listed, and only the portfolio
+  # stores below it, never an excluded project's store (professional-work
+  # boundary). Anything else leaves the prefilter off.
+  worktree_presence "$CLAUDE_PROJECTS" || presence=$?
+  [ "$presence" = 0 ] || return 0
+  store_root_in_scope || store_admission=$?
+  case "$store_admission" in 0|1) ;; *) return 0 ;; esac
+  dirs=$(ls -1 "$CLAUDE_PROJECTS" 2>/dev/null) || return 0
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    [ -d "$CLAUDE_PROJECTS/$d" ] && [ ! -L "$CLAUDE_PROJECTS/$d" ] || continue
+    stores+=("$CLAUDE_PROJECTS/$d")
+    if [ -d "$CLAUDE_PROJECTS/$d/subagents" ]; then
+      delegated_roots+=("$CLAUDE_PROJECTS/$d/subagents")
+    fi
+    # Match claude_session_listing's delegated-session admission. Merely being
+    # a child directory does not make a nested project store readable.
+    for parent in "$CLAUDE_PROJECTS/$d"/*; do
+      [ -d "$parent" ] && [ ! -L "$parent" ] || continue
+      id=${parent##*/}
+      case "$id" in ''|[!a-zA-Z0-9]*|*[!a-zA-Z0-9_-]*) continue ;; esac
+      [ -x "$parent" ] || return 0
+      if [ -d "$parent/subagents" ]; then
+        delegated_roots+=("$parent/subagents")
+      fi
+    done
+  done < <(printf '%s\n' "$dirs" | grep -E "^($PORTFOLIO_DIR_RE)$" || true)
+  if [ "${#stores[@]}" -gt 0 ]; then
+    direct_out=$(find "${stores[@]}" -mindepth 1 -type d -prune -o \
+      -name '*.jsonl' -mtime "-${SINCE_DAYS}" -print 2>/dev/null) \
+      || return 0
+    if [ "${#delegated_roots[@]}" -gt 0 ]; then
+      delegated_out=$(find "${delegated_roots[@]}" -name '*.jsonl' -mtime "-${SINCE_DAYS}" -print 2>/dev/null) \
+        || return 0
+    fi
+    out="${direct_out}${direct_out:+$'\n'}${delegated_out}"
+    CLAUDE_WINDOW_STORES=$(printf '%s\n' "$out" | CLAUDE_PROJECTS_PREFIX="$CLAUDE_PROJECTS/" LC_ALL=C awk '
+      BEGIN { r = ENVIRON["CLAUDE_PROJECTS_PREFIX"] }
+      index($0, r) == 1 { s = substr($0, length(r) + 1); sub(/\/.*/, "", s); if (s != "") print s }' \
+      | LC_ALL=C sort -u) || { CLAUDE_WINDOW_STORES=''; return 0; }
+  fi
+  CLAUDE_WINDOW_STORES_OK=1
 }
 
 # True when this project store names a harness worktree confirmed gone.
@@ -3393,6 +3465,7 @@ cx_line_base() {
 # control together — invisible, and in the under-reporting direction.
 populate_session_cache() {
   local cl_walk=''
+  [ "$SAFETY_SCOPE" = codex ] || claude_window_stores_prepare
   [ "$SAFETY_SCOPE" = codex ] || SF_CACHE="$(session_files)"
   [ "$SAFETY_SCOPE" = codex ] || cl_walk="$(claude_unavailable_folders)"
   CL_UNREADABLE=$(printf '%s\n' "$cl_walk" | awk '/^U / { print substr($0, 3) }')
