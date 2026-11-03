@@ -18,6 +18,17 @@
   close an issue its body only marks `Part of`, and its remedy moves the keyword to the body, never a
   rewrite of the branch's history.
 - Open code/manifest PRs as **drafts** (`gh pr create --draft`).
+- **Repositories are created only through Crossplane manifests** in `devantler-tech/.github`
+  (`deploy/repositories/<name>.yaml`), never with `gh repo create`, and a product is retired by
+  archiving it there, not by deleting it (maintainer direction 2026-10-17). The shared token keeps the
+  `delete_repo` scope so a stray repository can be removed without the maintainer, which makes the
+  guard the control: **delete a repository only through
+  [`repo-delete-guard.sh`](../scripts/repo-delete-guard.sh) `--apply`, never a bare `gh repo delete`**
+  (monorepo#4289). It takes the open monorepo issue that asks for the deletion and refuses a
+  repository that issue does not name, one in the Portfolio or Stack map, one Crossplane manages, an
+  archived one, and one with a commit, issue, pull request or comment by anyone outside the trust
+  gate's trusted authors. A refusal is final for that run: never work around it. After deleting it
+  reads the absence back and records the deletion and its 90-day restore window on the issue.
 - **PR bodies are written for the maintainer as PROJECT MANAGER — high-level, SHORT, ZERO code
   detail** (maintainer direction 2026-07-03; codified org-wide in `devantler-tech/.github`'s
   `PULL_REQUEST_TEMPLATE.md` — follow it). The body is his after-the-fact review surface: he reads it to

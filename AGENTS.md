@@ -344,7 +344,7 @@ Guides govern their topics; summaries must agree, and rule changes update both i
 | [egress-and-privacy](.claude/guides/egress-and-privacy.md) | Professional-work boundary · Egress · Sensitive information · Local agent host | publishing, handling a credential, or leaving the portfolio |
 | [git-and-worktrees](.claude/guides/git-and-worktrees.md) | Execution model · Git safety | a worktree, checkout or push |
 | [tool-call-discipline](.claude/guides/tool-call-discipline.md) | Context & token · Latency discipline | a long wait or a large command |
-| [github-artifacts](.claude/guides/github-artifacts.md) | GitHub artifact conventions | opening or editing a PR or issue |
+| [github-artifacts](.claude/guides/github-artifacts.md) | GitHub artifact conventions | opening or editing a PR or issue, or creating or deleting a repository |
 | [cadence](.claude/guides/cadence.md) | Cadence & focus · the WIP limit | planning a run |
 | [durable-memory](.claude/guides/durable-memory.md) | Durable memory | reading or writing memory |
 | [worktree-isolation](.claude/worktree-isolation.md) | submodule isolation | repairing a submodule worktree |
