@@ -5814,6 +5814,31 @@ if grep -qE 'interrupted tool calls \.+ 0' <<<"$OUT"; then
   ok "prose quoting the interrupt flag does not fabricate one"
 else bad "prose quoting the interrupt flag does not fabricate one" "$(printf '%s' "$OUT" | grep 'interrupted')"; fi
 
+# The efficiency byte gate (file_may_contain) skips only files that cannot
+# match. Real interrupts, timeouts and their descriptions must still be counted,
+# including a key written with spaces and a description separated from its
+# result by unrelated records, while a sibling file holding none of the bytes
+# contributes nothing and does not hide the others.
+mkdir -p "$FIX/bytegate"
+cat > "$FIX/bytegate/hit.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type": "tool_use","id":"tg1","name":"Bash","input":{"command":"sleep 900","description":"gated slow wait"}}]}}
+{"type":"user","message":{"content":[{"type":"text","text":"unrelated filler without the selected bytes"}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tg1","is_error":true,"content":"Command timed out after 2m 0.0s"}]}}
+{"type":"user","toolUseResult":{"interrupted" : true},"message":{"content":[{"type":"text","text":"x"}]}}
+EOF
+cat > "$FIX/bytegate/miss.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"nothing to select here"}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/bytegate" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if grep -qE 'interrupted tool calls \.+ 1$' <<<"$OUT"; then
+  ok "byte gate keeps a spaced interrupted key counted"
+else bad "byte gate keeps a spaced interrupted key counted" "$(grep 'interrupted' <<<"$OUT")"; fi
+if grep -qE 'bash timeouts \.+ 1 ' <<<"$OUT"; then
+  ok "byte gate keeps a real timeout counted"
+else bad "byte gate keeps a real timeout counted" "$(grep 'timeouts' <<<"$OUT")"; fi
+check "line-filtered slurp still joins the timed-out description" "$OUT" "gated slow wait"
+
 # The scorecard requires injection attempts to be SURFACED.
 OUT=$(run --section safety)
 check "injection attempts are surfaced" "$OUT" "INJECTION ATTEMPTS"

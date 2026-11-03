@@ -2371,6 +2371,21 @@ def usable_ts:
        | $r != null and $r == ($o | sub("\\.[0-9]+Z$";"Z")));
 '
 
+# BYTE GATE for whole-file parses (monorepo efficiency-section cost, 2026-11-03).
+# The efficiency walk parses every cached transcript several times with no
+# window cut; two Codex files alone were 5.48 GB, one pass took 57 s on one of
+# them and the timeout-description slurp peaked at 7.4 GB RSS, while those files
+# held zero of the keys or phrases the passes select on. A structural match on a
+# key or an ASCII phrase can only succeed when its bytes are in the file (JSON
+# writers do not \u-escape ASCII letters), so a file without them yields exactly
+# what the parse would: nothing. Returns 0 (parse the file) on a match AND on a
+# read error, so an unreadable file still takes the original path and never
+# turns into a silent skip. Only a clean "no match" (grep rc 1) skips.
+file_may_contain() {
+  LC_ALL=C grep -aqF -e "$2" -- "$1" && return 0
+  [ "$?" -ne 1 ]
+}
+
 # tool_use ids whose result shows the call never ran, resolved once per file.
 #
 # The content is NORMALISED to its text before matching, exactly as the safety
@@ -2380,6 +2395,9 @@ def usable_ts:
 # as an executed foreground launch even though it never ran. Anchoring without
 # normalising is precisely that bug.
 denied_ids() {
+  # Byte gate: a denial needs `is_error`, so a file without those bytes yields
+  # the same empty list without a full parse (see file_may_contain).
+  file_may_contain "$1" 'is_error' || { printf '[]\n'; return 0; }
   jq -Rr --arg re "$NEVER_RAN_RE" "$JQ_SHAPE_DEFS"'select(length>0)|(try fromjson catch empty)
           | select(.type=="user") | content_blocks
           | select(.type=="tool_result" and .is_error==true)
@@ -4658,9 +4676,13 @@ if want efficiency; then
     # let prose quoting "Command timed out after 2m" inflate the count, the same
     # fabrication route already closed for denials and sleeps.
     all_files() { printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$'; }
-    TIMEOUTS=$(all_files | while IFS= read -r f; do tool_result_failure_text "$f"; done \
-               | grep -cE 'Command timed out after' || true)
+    # Both passes skip a file lacking the bytes they select on (file_may_contain).
+    TIMEOUTS=$(all_files | while IFS= read -r f; do
+                 file_may_contain "$f" 'Command timed out after' || continue
+                 tool_result_failure_text "$f"
+               done | grep -cE 'Command timed out after' || true)
     INTERRUPT=$(all_files | while IFS= read -r f; do
+                  file_may_contain "$f" 'interrupted' || continue
                   jq -Rr 'select(length>0)|(try fromjson catch empty)
                           | .. | objects | select(.interrupted? == true) | "1"' "$f" 2>/dev/null
                 done | wc -l | tr -d ' ')
@@ -5284,8 +5306,14 @@ if want efficiency; then
     # previous version listed the most common descriptions in the corpus and
     # labelled them "timeout victims" — in a window with zero timeouts it still
     # produced a confident-looking list, which is worse than an empty one.
+    # The slurp reads only the lines it can use. Every record is one JSONL line
+    # parsed with `try fromjson catch empty`, so dropping a line that holds
+    # neither a "tool_use" block nor the timeout phrase changes no output; it
+    # only stops a multi-GB file being held in memory for nothing.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      jq -Rrs "$JQ_SHAPE_DEFS"'split("\n")|map(select(length>0)|(try fromjson catch empty))|
+      file_may_contain "$f" 'Command timed out after' || continue
+      { LC_ALL=C grep -aF -e '"tool_use"' -e 'Command timed out after' -- "$f" || true; } \
+      | jq -Rrs "$JQ_SHAPE_DEFS"'split("\n")|map(select(length>0)|(try fromjson catch empty))|
         (reduce (.[] | select(.type=="assistant") | content_blocks
                  | select(.type=="tool_use")) as $t ({};
                    .[$t.id] = ($t.input?.description? // $t.input?.command? // "?"))) as $desc
@@ -5293,7 +5321,7 @@ if want efficiency; then
         | select(.type=="tool_result" and .is_error==true)
         | select((block_text) | test("Command timed out after"))
         | ($desc[.tool_use_id] // "<unknown command>") | .[0:60]
-      ' "$f" 2>/dev/null
+      ' 2>/dev/null
     done | redact | sort | uniq -c | sort -rn | head -8 | sed 's/^/    /'
     echo "    (empty = nothing timed out in this window)"
   fi
