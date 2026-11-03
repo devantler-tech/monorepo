@@ -4416,6 +4416,61 @@ if grep -qE 'sessions in window: 2 ' <<<"$OUT"; then
   ok "per-session worktree dirs are still in scope"
 else bad "per-session worktree dirs are still in scope" "worktree sessions dropped"; fi
 
+# #4800: one store-wide listing skips the per-store finds for a store with no
+# in-window transcript. The find shim logs every call, so the test proves the
+# skip happened (not only that the count stayed right), and that a failed
+# store-wide listing restores the per-store check for every store.
+echo
+echo "in-window store prefilter (#4800)"
+WP="$FIX/winpre"
+WP_WT1="${BOUNDARY_SLUG}--claude-worktrees-keen-proskuriakova-4c1726"
+WP_WT2="${BOUNDARY_SLUG}--claude-worktrees-wizardly-ellis-19cf5b"
+mkdir -p "$WP/${BOUNDARY_SLUG}" "$WP/$WP_WT1/abc123/subagents" "$WP/$WP_WT2"
+WP_REC='{"type":"assistant","message":{"content":[{"type":"tool_use","id":"w1","name":"Bash","input":{"command":"echo hi"}}]}}'
+printf '%s\n' "$WP_REC" > "$WP/${BOUNDARY_SLUG}/s.jsonl"
+printf '%s\n' "$WP_REC" > "$WP/$WP_WT1/old.jsonl"
+printf '%s\n' "$WP_REC" > "$WP/$WP_WT1/abc123/subagents/agent-a.jsonl"
+printf '%s\n' "$WP_REC" > "$WP/$WP_WT2/old.jsonl"
+fixture_project_bindings "$WP" || exit 1
+touch -t 202001010000 "$WP/$WP_WT1/old.jsonl" "$WP/$WP_WT2/old.jsonl"
+WP_REAL_FIND=$(command -v find)
+mkdir -p "$FIX/findlog-bin"
+cat > "$FIX/findlog-bin/find" <<'FINDSHIM'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$WP_FINDLOG"
+case " $* " in
+  *" -mindepth 2 "*)
+    if [ -n "${WP_FAIL_LISTING:-}" ]; then "$WP_REAL_FIND" "$@"; exit 1; fi ;;
+esac
+exec "$WP_REAL_FIND" "$@"
+FINDSHIM
+chmod +x "$FIX/findlog-bin/find"
+wp_run() {
+  : > "$FIX/findlog.txt"
+  PATH="$FIX/findlog-bin:$PATH" WP_FINDLOG="$FIX/findlog.txt" WP_REAL_FIND="$WP_REAL_FIND" \
+    CLAUDE_PROJECTS_DIR="$WP" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$BOUNDARY_ROOT" \
+    PORTFOLIO_PATHS="$BOUNDARY_ROOT" HOME="$FIX" \
+    bash "$TARGET" --since-days 1 --max-files 50 --section reliability 2>&1
+}
+OUT=$(wp_run)
+# The root session and the nested delegated transcript are in the window; the
+# store holding only an old transcript is not.
+check "prefilter keeps the in-window sessions, including a nested delegated one" "$OUT" "sessions in window: 2 "
+if grep -qF -- "$WP -mindepth 2 " "$FIX/findlog.txt"; then
+  ok "one store-wide listing runs"
+else bad "one store-wide listing runs" "no store-wide find in the shim log"; fi
+if grep -qF -- "$WP/$WP_WT2 -type d" "$FIX/findlog.txt"; then
+  bad "a store with no in-window transcript skips its per-store finds" "per-store find ran for the out-of-window store"
+else ok "a store with no in-window transcript skips its per-store finds"; fi
+if grep -qF -- "$WP/$WP_WT1 -type d" "$FIX/findlog.txt"; then
+  ok "a store kept by the listing still takes the exact per-store check"
+else bad "a store kept by the listing still takes the exact per-store check" "no per-store find for the kept store"; fi
+OUT=$(WP_FAIL_LISTING=1 wp_run)
+check "a failed store-wide listing selects the same sessions" "$OUT" "sessions in window: 2 "
+if grep -qF -- "$WP/$WP_WT2 -type d" "$FIX/findlog.txt"; then
+  ok "a failed store-wide listing restores the per-store check for every store"
+else bad "a failed store-wide listing restores the per-store check for every store" "out-of-window store was skipped without a listing"; fi
+
 # Empty allowlist must refuse to scan rather than default to everything.
 CLAUDE_PROJECTS_DIR="$FIX/scoped" HOME="$FIX" PORTFOLIO_PATHS="" MONOREPO_DIR="" \
   bash "$TARGET" --since-days 3650 --section reliability >/dev/null 2>&1

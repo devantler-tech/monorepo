@@ -2799,8 +2799,40 @@ claude_project_authorized() {
 claude_project_in_window() {
   local dir="$CLAUDE_PROJECTS/$1" list
   [ ! -L "$dir" ] || return 0
+  # #4800: a store absent from one complete corpus-wide listing holds no
+  # in-window transcript at any depth, so its per-store finds are skipped.
+  if [ "$CLAUDE_WINDOW_STORES_OK" = 1 ]; then
+    case $'\n'"$CLAUDE_WINDOW_STORES"$'\n' in
+      *$'\n'"$1"$'\n'*) ;;
+      *) return 1 ;;
+    esac
+  fi
   list=$(claude_session_listing "$dir") || return 0
   [ -n "$list" ]
+}
+
+# #4800: both Claude walks ask every store (about 1,800 on the live host) whether
+# it holds an in-window transcript, and each answer costs several `find`
+# processes: about 70 s per walk on a 7-day window. One listing of the whole
+# store answers that for every store in well under a second. It is a SUPERSET of
+# claude_session_listing (any depth, any type), so a store it keeps still takes
+# the exact per-store check. Any failed listing — an unreadable store, a file
+# removed mid-walk — leaves the prefilter off, and every store takes the
+# per-store check exactly as before. Top-level files belong to the store root,
+# which this check never judges.
+CLAUDE_WINDOW_STORES=''
+CLAUDE_WINDOW_STORES_OK=0
+claude_window_stores_prepare() {
+  local out
+  CLAUDE_WINDOW_STORES=''
+  CLAUDE_WINDOW_STORES_OK=0
+  [ -d "$CLAUDE_PROJECTS" ] && [ ! -L "$CLAUDE_PROJECTS" ] || return 0
+  out=$(find "$CLAUDE_PROJECTS" -mindepth 2 -name '*.jsonl' -mtime "-${SINCE_DAYS}" -print 2>/dev/null) \
+    || return 0
+  CLAUDE_WINDOW_STORES=$(printf '%s\n' "$out" | LC_ALL=C awk -v r="$CLAUDE_PROJECTS/" '
+    index($0, r) == 1 { s = substr($0, length(r) + 1); sub(/\/.*/, "", s); if (s != "") print s }' \
+    | LC_ALL=C sort -u) || { CLAUDE_WINDOW_STORES=''; return 0; }
+  CLAUDE_WINDOW_STORES_OK=1
 }
 
 # True when this project store names a harness worktree confirmed gone.
@@ -3393,6 +3425,7 @@ cx_line_base() {
 # control together — invisible, and in the under-reporting direction.
 populate_session_cache() {
   local cl_walk=''
+  [ "$SAFETY_SCOPE" = codex ] || claude_window_stores_prepare
   [ "$SAFETY_SCOPE" = codex ] || SF_CACHE="$(session_files)"
   [ "$SAFETY_SCOPE" = codex ] || cl_walk="$(claude_unavailable_folders)"
   CL_UNREADABLE=$(printf '%s\n' "$cl_walk" | awk '/^U / { print substr($0, 3) }')
