@@ -819,9 +819,16 @@ public and private — no per-repo loop needed to enumerate):
      `recent_review_status` or `recent_review` block, the latter's range header ending at the head, no did-not-run marker — a walkthrough
      or a rate-limit shell naming the head is `none`; monorepo#2653), and its **command-invocation reply comment
      carrying a verdict** as three alternative substantive artifacts; the review object does **not**
-     require a `Review completed` status conjunct. The verdict reply must state
-     `Reviewed pull request #<n> at <sha>` with `<sha>` a **prefix of `headRefOid`**, together with
-     `I found no actionable issues`, and be updated after that request. `@coderabbitai full review` states its completion as `Full review is complete for <sha>` with `I found no blocking issues`; that counts too, and its `<sha>` must still match `headRefOid` (ksail#6930 emitted 4 such completions and ZERO in the other wording, so a matcher pinned to one wording saw no green at all). Report any alternative green
+     require a `Review completed` status conjunct. **Judge each reply with the contract's classifier,
+     never by eye or by a phrase list**, by exactly
+     `gh api repos/devantler-tech/<repo>/issues/comments/<comment-id> --jq '{head:"<headRefOid>",author:.user.login,body:.body}' | <repo-root>/.claude/scripts/coderabbit-comment-verdict.sh --input -`
+     (monorepo#3008). It reads the verdict by structure, so `Reviewed pull request #<n> at <sha>` with
+     `I found no actionable issues`, `Full review is complete for <sha>` with `I found no blocking
+     issues`, and `I reviewed <sha>` all count. The first sha a reply names must be a **prefix of
+     `headRefOid`**, so a full-review completion's sha must still match `headRefOid` too; a
+     two-wording matcher read platform#3316's `I reviewed <sha>` as no review. `GREEN` is the reply
+     satisfier, `FINDINGS <n>` counts toward the row's body findings, and `NONE` or a failed call
+     means no review. The reply must also be updated after that request. Report any alternative green
      only when its threads, review-body sections, and explicit ancillary problem count are all zero.
      **Every one of these artifacts — the review object, the summary, and BOTH verdict-reply wordings — must have `user.login == "coderabbitai[bot]"`**: the reply is matched on
      plain prose, so without the author bind any account could post those phrases and be read green.
