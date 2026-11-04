@@ -32,6 +32,13 @@ JSON
 pass=0; fail=0
 ok() { pass=$((pass + 1)); printf 'ok   %s\n' "$1"; }
 bad() { fail=$((fail + 1)); printf 'FAIL %s\n     %s\n' "$1" "${2:-}"; }
+# unsigned-commit-report.sh launches the Go implementation in unsigned-commit-report-go/
+# (monorepo#3224). Its unit tests run first; every case below then drives it through the launcher.
+if go -C "$HERE/unsigned-commit-report-go" test ./... >"$TMP/go-test.out" 2>&1; then
+  ok "Go unit tests pass"
+else
+  bad "Go unit tests pass" "$(cat "$TMP/go-test.out")"
+fi
 run() { OUT="$(env -u GITHUB_ACTIONS -u GITHUB_STEP_SUMMARY "$CHECK" --instances "$INSTANCES" "$@" 2>&1)"; RC=$?; }
 expect_rc() { # name rc args...
   local name="$1" want="$2"; shift 2; run "$@"
@@ -222,6 +229,9 @@ if [ "$RC" = 0 ] && grep -q '^examined=6 signed=6 .* prs=3 foreign=1 lanes=claud
 # CONTROL: without the foreign row the same sweep reports foreign=0
 OUT="$(stub 3 2 --repo o/r --merged-since 2026-09-01 --lanes claude)"; RC=$?
 if [ "$RC" = 0 ] && grep -q ' prs=3 foreign=0 ' <<<"$OUT"; then ok "CONTROL: an all-own sweep reports foreign=0"; else bad "CONTROL: an all-own sweep reports foreign=0" "rc=$RC out=${OUT:0:200}"; fi
+# The writer identity alone is not provenance: the lane's own author on a fork head is foreign too.
+OUT="$(FAKE_CROSS=true stub 1 2 --repo o/r --merged-since 2026-09-01 --lanes claude)"; RC=$?
+if [ "$RC" = 0 ] && grep -q '^examined=0 .* prs=0 foreign=1 lanes=claude lane=sweep$' <<<"$OUT" && ! grep -q '^T  ' <<<"$OUT"; then ok "a cross-repository head by the lane's own writer is foreign, not examined"; else bad "a cross-repository head by the lane's own writer is foreign, not examined" "rc=$RC out=${OUT:0:300}"; fi
 
 # ------------------------------------------------------------------ 15. a repeated lane name is refused, never double-counted
 OUT="$(stub 3 2 --repo o/r --merged-since 2026-09-01 --lanes claude,claude)"; RC=$?
@@ -342,6 +352,33 @@ SH
     # Its default registry path does not exist there, so successful reporting
     # also proves the workflow forwards --instances explicitly.
     cp "$CHECK" "$CI_FIX/real-reporter.sh"
+    # The reporter is a launcher over the Go implementation (monorepo#3224): it builds from the
+    # module and the shared build helper beside it. The fixture carries exactly the scripts the
+    # workflow's trusted sparse checkout lists, so a list that drops either one fails the
+    # current-base case below, and the trusted job must set Go up from the trusted copy only.
+    CI_JOB="$(awk '/^  report-unsigned-commits:$/ { injob = 1 } injob && /^  [a-z]/ && !/^  report-unsigned-commits:$/ { exit } injob' "$CI_YAML")"
+    CI_SPARSE="$(awk '
+      /^          sparse-checkout: \|$/ { insparse = 1; next }
+      insparse && /^            [^ ]/ { sub(/^            /, ""); print; next }
+      insparse { exit }
+    ' <<<"$CI_JOB")"
+    for need in .claude/scripts/unsigned-commit-report-go/ .claude/scripts/go-helper-build.sh; do
+      if grep -qxF -- "$need" <<<"$CI_SPARSE"; then ok "CI trusted checkout carries $need"; else bad "CI trusted checkout carries $need" "sparse list: $CI_SPARSE"; fi
+    done
+    while IFS= read -r entry; do
+      case "$entry" in
+        .claude/scripts/unsigned-commit-report.sh | "") ;;
+        .claude/scripts/*) rel="${entry#.claude/scripts/}"; rel="${rel%/}"; cp -R "$HERE/$rel" "$CI_FIX/$rel" ;;
+      esac
+    done <<<"$CI_SPARSE"
+    CI_GO_FILES="$(grep -E 'go-version-file:' <<<"$CI_JOB" || true)"
+    if grep -qF -- "if: hashFiles('trusted-base/.claude/scripts/unsigned-commit-report-go/go.mod') != ''" <<<"$CI_JOB" &&
+       grep -qF -- 'go-version-file: trusted-base/.claude/scripts/unsigned-commit-report-go/go.mod' <<<"$CI_JOB" &&
+       ! grep -vqF 'trusted-base/' <<<"$CI_GO_FILES"; then
+      ok "CI trusted job sets Go up only from the trusted copy, and only when it carries the port"
+    else
+      bad "CI trusted job sets Go up only from the trusted copy, and only when it carries the port" "$CI_JOB"
+    fi
     cat >"$CI_FIX/trusted-base/.claude/scripts/unsigned-commit-report.sh" <<'SH'
 #!/usr/bin/env bash
 printf 'TRUSTED_REPORTER_EXECUTED\n' >"$CI_EXEC_MARKER"

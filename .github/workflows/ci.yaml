@@ -123,7 +123,6 @@ jobs:
             macos-batch-1:
               - '.claude/guides/**'
               - '.claude/guides/git-and-worktrees.md'
-              - '.claude/plugin-consumption/agent-instances.json'
               - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/gh-json-read.sh'
               - '.claude/scripts/gh-json-read.test.sh'
@@ -131,8 +130,6 @@ jobs:
               - '.claude/scripts/security-advisory-sweep.test.sh'
               - '.claude/scripts/shared-checkout-freshness.sh'
               - '.claude/scripts/shared-checkout-freshness.test.sh'
-              - '.claude/scripts/unsigned-commit-report.sh'
-              - '.claude/scripts/unsigned-commit-report.test.sh'
               - '.claude/scripts/worktree-lane-sweep.sh'
               - '.claude/scripts/worktree-lane-sweep.test.sh'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
@@ -370,6 +367,9 @@ jobs:
               - '.claude/plugin-consumption/agent-instances.json'
               - '.claude/scripts/unsigned-commit-report.sh'
               - '.claude/scripts/unsigned-commit-report.test.sh'
+              # The launcher builds the Go implementation through the shared bounded build.
+              - '.claude/scripts/unsigned-commit-report-go/**'
+              - '.claude/scripts/go-helper-build.sh'
               - '.github/workflows/ci.yaml'
             prod-kube-context:
               - '.claude/scripts/prod-kube-context.sh'
@@ -1680,8 +1680,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # The harness's `go test` runs outside the launcher's bounded build, so the
+    # job carries the deadline a stalled module cache would otherwise lack.
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -1689,8 +1692,18 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Hand-built commit payloads through the --input seam only -- no network. Both OSes because
-      # the classifier splits TSV with BSD/GNU-divergent tools.
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/unsigned-commit-report-go/go.mod
+          cache: false
+      - name: Install GNU build deadline utility
+        if: runner.os == 'macOS'
+        run: brew install coreutils
+      # Go unit tests, then hand-built commit payloads through the --input seam and a stubbed
+      # `gh` -- no network. Both OSes because the scheduled runs happen on macOS. This job has its
+      # own macOS leg rather than a macOS batch slot: the launcher builds Go, which the batches
+      # do not set up.
       - name: Verify the unsigned-commit report
         run: bash .claude/scripts/unsigned-commit-report.test.sh
 
@@ -1718,11 +1731,23 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: trusted-base
+          # The reporter is a launcher over its Go implementation (monorepo#3224), built from the
+          # trusted module with the shared bounded build helper.
           sparse-checkout: |
             .claude/scripts/unsigned-commit-report.sh
+            .claude/scripts/unsigned-commit-report-go/
+            .claude/scripts/go-helper-build.sh
             .claude/plugin-consumption/agent-instances.json
           sparse-checkout-cone-mode: false
           persist-credentials: false
+      # Only a base that already carries the Go implementation needs Go; a base from before the
+      # port still runs its Bash reporter. The toolchain version comes from the trusted copy.
+      - name: Set up Go for the trusted reporter
+        if: hashFiles('trusted-base/.claude/scripts/unsigned-commit-report-go/go.mod') != ''
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: trusted-base/.claude/scripts/unsigned-commit-report-go/go.mod
+          cache: false
       # The only step that holds a token, and it runs no pull-request code: the payload is read here
       # with an inline `gh api`, then the trusted reporter runs on that file with no token in its
       # environment.
@@ -3368,7 +3393,6 @@ jobs:
         run: |
           batch_status=0
           bash .claude/scripts/worktree-lane-sweep.test.sh || batch_status=1
-          bash .claude/scripts/unsigned-commit-report.test.sh || batch_status=1
           bash .claude/scripts/shared-checkout-freshness.test.sh || batch_status=1
           bash .claude/scripts/security-advisory-sweep.test.sh || batch_status=1
           bash .claude/scripts/gh-json-read.test.sh || batch_status=1

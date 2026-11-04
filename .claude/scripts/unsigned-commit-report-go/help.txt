@@ -1,0 +1,51 @@
+unsigned-commit-report.sh — report unsigned or unverifiable commits on agent-lane branches
+WITHOUT failing the pull request (monorepo#3212).
+
+WHY THIS EXISTS
+  Roughly one agent-lane commit in eleven reaches a merged pull request without a verifiable
+  signature (monorepo#3020), and nothing anywhere emits a signal when it happens: every
+  diagnostic pass has had to rediscover the incidence by sampling commits after the fact. This
+  is that standing signal. It REPORTS and never gates -- at ~9% incidence a required check would
+  fail one PR in eleven for a condition the author cannot fix at commit time, which is the shape
+  of check this portfolio has twice recorded as "ignored, then deleted". Enforcement is a separate
+  decision (devantler-tech/.github#142) that this report exists to make measurable.
+
+WHAT IT READS
+  GitHub's own `verification` object on each commit -- the same evidence a required
+  signature rule would consult -- so the report and any future gate cannot disagree.
+
+CLASSES  (git's %G? letters, so the report reads the same way `git log --format=%G?` does)
+  G  valid signature                          -> counted, never reported
+  N  NO signature (`reason: unsigned`)         -> reported; the "signing never attempted" case
+  B  BAD signature (invalid, malformed, bad cert) -> reported; the signature is broken
+  E  UNVERIFIABLE (bad_email, unknown_key, expired_key, no_user, ...) -> reported; a signature
+     exists but GitHub cannot bind it to the committer
+  N and B/E have different causes -- #3020's own evidence is `bad_email` (class E), which is not
+  the same failure as a commit that was never signed -- so they are never summed into one number.
+
+USAGE
+  unsigned-commit-report.sh --pr <n> --repo <owner/repo> [--head-ref <ref>]
+      CI mode: read the pull request's commits and report. Exit 0 whether or not anything is
+      unsigned -- findings are annotations and a summary line, never a failure. Author and head
+      repository provenance are always read from the PR API; --head-ref, when supplied, must match.
+      A head outside
+      every agent lane is SKIPPED (nothing classified, `skipped=non-agent-head` in the summary):
+      the report is scoped to agent branches and must not warn about branches it never covered.
+  unsigned-commit-report.sh --repo <owner/repo> --merged-since <YYYY-MM-DD> [--lanes a,b,c]
+      Measurement mode: sweep every PR merged since the date whose head branch is in one of the
+      lanes. Every examined PR gets a `T  <repo>#<n>  <branch>  commits=<k>  <sha…>` line so a clean
+      sweep still names what it examined.
+      A PR is lane work only when its author is the lane's exact writer identity AND its head lives in
+      this repository; a fork branch that merely LOOKS like `claude/x` is counted `foreign=`
+      and never examined. Repeating a lane in --lanes is a usage error (it would double every count).
+      lane namespaces (default: the consumer instance registry) and report incidence across them, so a fix
+      can be shown to have moved the number. Merged PRs are used rather than branches because
+      lane branches are deleted on merge and a branch sweep is blind to exactly the commits
+      that reached main.
+  unsigned-commit-report.sh --input <payload.json> [--head-ref <ref>]
+                            [--repo <owner/repo> --head-repo <owner/repo> --pr-author <login>]
+                            [--instances <trusted-registry.json>]
+      Payload mode -- what CI runs (a trusted step reads the endpoint with the token; the report then
+      runs from the BASE branch's copy of this script, without a token, on every pull request)
+      and the seam for the self-test: <payload.json> is a JSON array of commit objects in the
+      REST `pulls/<n>/commits` shape (`sha`, `commit.verification.{verified,reason}`), or `-`.
