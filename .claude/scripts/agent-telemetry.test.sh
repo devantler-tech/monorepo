@@ -10882,6 +10882,59 @@ else
   bad "escaped prose in double quotes is labelled prose; a substitution or code an escape does not cover still counts" \
       "got: $(grep -hE '^ +[0-9]+ ' <<<"$MK_OUT$MK_OUT2" | head -12)"
 fi
+# The last two shapes #3666 tracked. A full-line comment is prose wherever it stands,
+# and so is a heredoc body handed to a command that only posts or records it (a PR or
+# issue body, a commit message). Neither may hide a build: a comment that holds a
+# substitution keeps no label, an unquoted heredoc expands its body, and a body fed
+# to a shell or written to a file that could run later is code. Each session keeps
+# within the five rows the list shows.
+# shellcheck disable=SC2016 # literal command text: nothing in these fixtures is meant to expand
+MK_OUT=$({
+  mk_cmd k1 'gh pr checkout 25'
+  mk_cmd k2 '# make sure the fixture still builds'
+  mk_cmd k3 $'cd /tmp\n  # make the next step obvious\necho done'
+  mk_cmd k4 $'gh pr comment 25 --body-file - <<\'EOF\'\nWe make the change in two steps.\nThe alias and source words here are only text.\nEOF'
+  mk_cmd k5 $'git commit -q -F - <<"MSG"\nfix: make the report clearer\nMSG'
+  mk_cmd k6 'npm ci'
+} | mk_run makecomments)
+# shellcheck disable=SC2016
+MK_OUT2=$({
+  mk_cmd l1 'gh pr checkout 26'
+  mk_cmd l2 $'cat <<EOF | bash\n# x $(make test)\nEOF'
+  mk_cmd l3 $'gh pr comment 26 --body-file - <<EOF\nrun $(make lint) now\nEOF'
+  mk_cmd l4 $'cat <<\'EOF\' | bash\nmake build\nEOF'
+  mk_cmd l5 'npm ci'
+} | mk_run makeheredoccode)
+# shellcheck disable=SC2016
+MK_OUT3=$({
+  mk_cmd n1 'gh pr checkout 27'
+  mk_cmd n2 $'cat > run.sh <<\'EOF\'\nmake check\nEOF'
+  mk_cmd n3 $'gh pr comment 27 --body-file - <<\'EOF\' && make deploy\nmake package\nEOF'
+  mk_cmd n4 'npm ci'
+} | mk_run makeheredocstore)
+# shellcheck disable=SC2016
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qF '1 [prose?] # make sure the fixture still builds' <<<"$MK_OUT" \
+   && grep -qF '1 [prose?]   # make the next step obvious' <<<"$MK_OUT" \
+   && grep -qF '1 [prose?] We make the change in two steps.' <<<"$MK_OUT" \
+   && grep -qF '1 [prose?] fix: make the report clearer' <<<"$MK_OUT" \
+   && grep -qE '^ +1 npm ci$' <<<"$MK_OUT2" \
+   && grep -qF '1 # x $(make test)' <<<"$MK_OUT2" \
+   && grep -qF '1 run $(make lint) now' <<<"$MK_OUT2" \
+   && grep -qF '1 make build' <<<"$MK_OUT2" \
+   && grep -qE '^ +1 npm ci$' <<<"$MK_OUT3" \
+   && grep -qF '1 make check' <<<"$MK_OUT3" \
+   && grep -qF '1 make package' <<<"$MK_OUT3" \
+   && ! grep -qF '[prose?]' <<<"$MK_OUT2$MK_OUT3"; then
+  ok "full-line comments and posted heredoc bodies are labelled prose; expanded, piped or stored bodies still count"
+else
+  bad "full-line comments and posted heredoc bodies are labelled prose; expanded, piped or stored bodies still count" \
+      "got: $(grep -hE '^ +[0-9]+ ' <<<"$MK_OUT
+---
+$MK_OUT2
+---
+$MK_OUT3" | head -18)"
+fi
 # A tool call is its own shell parse, so quote state must not cross from one call
 # into the next: after a call that ends on an unmatched quote, the next call's
 # prose is still prose and its build is still a build (#3666). The boundary cannot
