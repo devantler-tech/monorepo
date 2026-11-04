@@ -46,6 +46,11 @@ func TestUnlistedWrappersAreReported(t *testing.T) {
 		{"mise exec", "mise exec -- python3 x.py"},
 		{"mise x", "mise x python@3.12 -- python x.py"},
 		{"asdf exec", "asdf exec python3 x.py"},
+		{"flock command string after the lock file", `flock /tmp/x -c 'python3 x.py'`},
+		{"entr bundled shell flag", `entr -rs 'python3 x.py'`},
+		{"runuser user named like a data command", "runuser -u git -- python3 x.py"},
+		{"lock file named like a data command", "flock /var/lock/ls python3 x.py"},
+		{"lock file named like a shell", "flock /tmp/sh python3 x.py"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -100,6 +105,9 @@ func TestUnlistedCommandSurfacesStayClean(t *testing.T) {
 		{"read into a variable", "read -r py"},
 		{"mise install", "mise install python@3.12"},
 		{"asdf plugin", "asdf plugin add python"},
+		{"child option after the lock file", `flock /tmp/l jq -c 'map(.x)' f`},
+		{"child option after runuser --", `runuser -u x -- curl -sc 'a(b' url`},
+		{"data command with its own -c after the lock file", "flock /tmp/x grep -c python3 log"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

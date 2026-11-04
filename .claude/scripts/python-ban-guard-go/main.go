@@ -632,9 +632,20 @@ var builtinRunners = map[string]bool{"exec": true, "eval": true, "command": true
 var programName = regexp.MustCompile("^[A-Za-z_.][A-Za-z0-9._+-]*$")
 var hasLowercase = regexp.MustCompile("[a-z]")
 
-// shellStringOptions are the short options that take a whole shell command line as their value;
-// each of these commands also spells it `--command`.
-var shellStringOptions = map[string]string{"script": "c", "su": "c", "runuser": "c", "flock": "c", "entr": "s"}
+// shellStringSpec describes a wrapper whose option takes a whole shell command line as its value.
+// letters are those options, values the other options that take a value, which is never a
+// command line. permute marks GNU getopt's reordering, where an option may follow an operand.
+type shellStringSpec struct {
+	letters, values string
+	permute         bool
+}
+
+var shellStringWrappers = map[string]shellStringSpec{
+	"script":  {letters: "c", values: "BEIOomT", permute: true},
+	"su":      {letters: "c", values: "gGsw", permute: true},
+	"runuser": {letters: "c", values: "ugGsw", permute: true},
+	"flock":   {letters: "c", values: "wE"},
+}
 
 // executingWord reports whether an operand starts a command the walker already has rules for.
 func executingWord(name string) bool {
@@ -643,6 +654,123 @@ func executingWord(name string) bool {
 	}
 	_, listed := commandWrappers[name]
 	return listed
+}
+
+// sourceGuess scans a word that this guard only infers is a command line. A word that does not
+// parse as shell is not one, so it is skipped rather than failing the whole guard; once it
+// parses, every error the scan meets still stops the guard.
+func (s *scanner) sourceGuess(command string, line, depth int) error {
+	if _, err := parse(command); err != nil {
+		return nil
+	}
+	return s.source(command, line, depth, false)
+}
+
+// shellStrings scans the command line a shellStringWrappers command takes as an option value,
+// and marks the words it read, or that are option values, as consumed. The scan stops at `--`
+// and at the child command, so a child's own options (`flock /tmp/l jq -c '…'`) are never read
+// as the wrapper's: flock takes its command after the lock file, and runuser with -u takes it
+// after the first operand. entr -s takes its first operand as the command line.
+func (s *scanner) shellStrings(name string, args []string, known, consumed []bool, line, depth int) error {
+	if name == "entr" {
+		shell := false
+		for j := 0; j < len(args) && known[j]; j++ {
+			if strings.HasPrefix(args[j], "-") && args[j] != "-" && args[j] != "--" {
+				shell = shell || strings.Contains(args[j][1:], "s")
+				continue
+			}
+			if args[j] == "--" {
+				continue
+			}
+			if !shell {
+				return nil
+			}
+			consumed[j] = true
+			return s.sourceGuess(args[j], line, depth)
+		}
+		return nil
+	}
+	spec, ok := shellStringWrappers[name]
+	if !ok {
+		return nil
+	}
+	user, operands := false, 0
+	take := func(j int, command string) error {
+		consumed[j] = true
+		return s.sourceGuess(command, line, depth)
+	}
+	for j := 0; j < len(args); j++ {
+		if !known[j] || args[j] == "--" {
+			return nil
+		}
+		arg := args[j]
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			operands++
+			if name == "flock" && operands == 1 && j+1 < len(args) && known[j+1] {
+				next := args[j+1]
+				if value, inline := strings.CutPrefix(next, "--command="); inline {
+					return take(j+1, value)
+				}
+				if (next == "-c" || next == "--command") && j+2 < len(args) && known[j+2] {
+					consumed[j+1] = true
+					return take(j+2, args[j+2])
+				}
+			}
+			if !spec.permute || (name == "runuser" && user) {
+				return nil
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "--") {
+			key, value, inline := strings.Cut(arg[2:], "=")
+			switch {
+			case key == "command" && inline:
+				if err := take(j, value); err != nil {
+					return err
+				}
+			case key == "command" && j+1 < len(args) && known[j+1]:
+				consumed[j] = true
+				if err := take(j+1, args[j+1]); err != nil {
+					return err
+				}
+				j++
+			case key == "user" || key == "group" || key == "supp-group" || key == "shell" ||
+				key == "whitelist-environment" || key == "timeout" || key == "wait" || key == "conflict-exit-code":
+				user = user || key == "user"
+				if !inline && j+1 < len(args) {
+					consumed[j+1] = true
+					j++
+				}
+			}
+			continue
+		}
+		for k := 1; k < len(arg); k++ {
+			option, rest := arg[k], arg[k+1:]
+			if strings.IndexByte(spec.letters, option) >= 0 {
+				consumed[j] = true
+				if rest != "" {
+					if err := s.sourceGuess(rest, line, depth); err != nil {
+						return err
+					}
+				} else if j+1 < len(args) && known[j+1] {
+					if err := take(j+1, args[j+1]); err != nil {
+						return err
+					}
+					j++
+				}
+				break
+			}
+			if strings.IndexByte(spec.values, option) >= 0 {
+				user = user || option == 'u'
+				if rest == "" && j+1 < len(args) {
+					consumed[j+1] = true
+					j++
+				}
+				break
+			}
+		}
+	}
+	return nil
 }
 
 // unlistedCommand judges a command the walker has no rule for. Before monorepo#3271 such a
@@ -672,35 +800,8 @@ func (s *scanner) unlistedCommand(name string, args []string, known []bool, line
 		args, known = args[1:], known[1:]
 	}
 	consumed := make([]bool, len(args))
-	if letters, ok := shellStringOptions[name]; ok {
-		for j := 0; j < len(args); j++ {
-			if !known[j] || consumed[j] {
-				continue
-			}
-			command, found := "", false
-			if value, inline := strings.CutPrefix(args[j], "--command="); inline {
-				command, found = value, true
-			} else if args[j] == "--command" || shortOptionTakes(args[j], letters) {
-				rest := args[j][strings.IndexAny(args[j], letters)+1:]
-				if args[j] == "--command" {
-					rest = ""
-				}
-				switch {
-				case rest != "":
-					command, found = rest, true
-				case j+1 < len(args) && known[j+1]:
-					command, found = args[j+1], true
-					consumed[j+1] = true
-				}
-			}
-			if !found {
-				continue
-			}
-			consumed[j] = true
-			if err := s.source(command, line, depth, false); err != nil {
-				return false, err
-			}
-		}
+	if err := s.shellStrings(name, args, known, consumed, line, depth); err != nil {
+		return false, err
 	}
 	if name == "parallel" {
 		// GNU parallel runs the words before its first `:::` or `::::` as a shell command line.
@@ -709,7 +810,7 @@ func (s *scanner) unlistedCommand(name string, args []string, known []bool, line
 				continue
 			}
 			consumed[j] = true
-			if err := s.source(args[j], line, depth, false); err != nil {
+			if err := s.sourceGuess(args[j], line, depth); err != nil {
 				return false, err
 			}
 		}
@@ -727,20 +828,20 @@ func (s *scanner) unlistedCommand(name string, args []string, known []bool, line
 			s.add(line, hit)
 			return false, nil
 		}
-		if dataOperandCommands[base] {
+		// Matched exactly: a path such as /var/lock/ls is a lock file here, not ls.
+		if dataOperandCommands[args[j]] {
 			return false, nil // The rest are that command's data.
 		}
 		if executingWord(base) {
-			return s.argv(args[j:], known[j:], line, depth)
+			before := len(s.hits)
+			stdin, err := s.argv(args[j:], known[j:], line, depth)
+			if err != nil || stdin || len(s.hits) > before {
+				return stdin, err
+			}
+			// A word such as /tmp/sh can be a file operand; keep reading the rest.
 		}
 	}
 	return false, nil
-}
-
-// shortOptionTakes reports whether a single-dash word holds one of these option letters, alone
-// or bundled after flags (`-qc`, `-lc`, `-c'cmd'`).
-func shortOptionTakes(word, letters string) bool {
-	return len(word) > 1 && word[0] == '-' && word[1] != '-' && strings.ContainsAny(word[1:], letters)
 }
 
 // envArgs preserves argv boundaries: env -S splits one operand, never shell code.
