@@ -1,0 +1,108 @@
+# Rule -> sensor inventory for merge-policy.md (monorepo#4284). Checked by
+# .claude/scripts/rule-sensor-inventory.sh (its header defines every column); run it with --report
+# for the prose-only share. One line per rule -> control pair. Ids are stable: never renumber or reuse
+# one; a rule that leaves the guide loses its rows, and a new rule takes the next unused number.
+# Kind none means only an agent reading the prose holds the rule. Narrative marks a sentence the
+# extraction finds that states no rule; it is reported apart.
+id	section	quote	kind	control	evidence
+MP-001	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	⚠️ **The `non-draft` scoping below bounds the merge COMMAND, never the SWEEP**	none	-	-
+MP-002	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	🔴 **`app/botantler-1` is NEVER `--auto`-eligible	none	-	-
+MP-003	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	Exit 0 waives the **review** requirement for that	none	-	-
+MP-004	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	Arming `--auto` on it lets an updater push during	narrative	-	-
+MP-005	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	State the matrix as this two-plus-one split and **never	none	-	-
+MP-006	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	For an unconditional author, use `gh pr merge <n>	none	-	-
+MP-007	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	`gh pr merge --help` defines `--match-head-commit`	narrative	-	-
+MP-008	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	**So the arming is never the completion.**	none	-	-
+MP-009	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	Record `<repo>#<n>` with the evaluated `headRefOid`	none	-	-
+MP-010	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	A later run resolves an outstanding entry by reading	none	-	-
+MP-011	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	Keying the check on `mergeCommit` therefore reports	narrative	-	-
+MP-012	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Park with one command, never two hand-made writes:**	computational	.claude/scripts/blocked-label-blocker-line-go/park.go	forgeWrite("POST", path+"/labels"
+MP-013	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	An existing record is edited in place, never joined	computational	.claude/scripts/blocked-label-blocker-line-go/park.go	record comments: retain one marker
+MP-014	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	It refuses a kind other than `upstream`, `authority`	computational	.claude/scripts/blocked-label-blocker-line-go/compose.go	the target cannot be its own blocker
+MP-014	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	It refuses a kind other than `upstream`, `authority`	computational	.claude/scripts/blocked-label-blocker-line-go/compose.go	--kind must be exactly upstream, authority or outcome
+MP-015	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**An authority park must enter the maintainer digest.**	computational	.claude/scripts/blocked-label-blocker-line-go/park.go	authority parking needs a linked digest ask
+MP-016	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Read replies first; never repeat an answered ask.	none	-	-
+MP-017	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The record is intake, never proof of bot notification.	none	-	-
+MP-018	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	On every later run, **re-verify the blocker against	computational	.claude/scripts/blocked-label-blocker-line-go/park.go	forgeWrite("PATCH"
+MP-019	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Never post a second record or a new comment restating	computational	.claude/scripts/blocked-label-blocker-line-go/park.go	record comments: retain one marker
+MP-020	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The record replaces the re-diagnosis, never the re-check.	none	-	-
+MP-021	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	`authority`: the PR waits on a decision, and the	none	-	-
+MP-022	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The label alone, a comment that says so, or an earlier	none	-	-
+MP-023	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**"Is someone actively working on it?" is decided	none	-	-
+MP-024	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Resolve it from your creation record plus the branch	none	-	-
+MP-025	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Never discount a `live:` just because it names your	none	-	-
+MP-026	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**`unknown:` is never "no live holder"**: report	computational	.claude/scripts/pr-worktree-holder.sh	unknown:
+MP-027	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Treat a reviewer that never responds as an unavailable	none	-	-
+MP-028	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	🔴 **What expires is the ACTIVITY signal, never	none	-	-
+MP-029	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	So an actionable requirement in a maintainer comment	none	-	-
+MP-030	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	You may now review, drive and merge an outside contribution,	none	-	-
+MP-031	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	A pipeline that only builds and lints observes nothing,	none	-	-
+MP-032	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**When a change HAS a reachable code path and no	none	-	-
+MP-033	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The three genuine-readiness conditions, the hygiene	none	-	-
+MP-034	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Merge-queue repos — root-cause a stall or kick-out	none	-	-
+MP-035	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	A PR enters the queue, runs the `merge_group` checks,	narrative	-	-
+MP-036	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Before re-queuing, **always pull the PR's `merge_group`	none	-	-
+MP-037	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Prefer the tested helper that implements exactly	computational	.claude/scripts/pr-unresolved-threads.sh	UNKNOWN
+MP-038	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	So `rate_limit` is never evidence that GraphQL is	computational	.claude/scripts/graphql-availability.sh	gh api graphql --hostname github.com
+MP-039	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	`REFUSING` is the named state: a state of the service	none	-	-
+MP-040	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**That must read `0` immediately before the merge	none	-	-
+MP-041	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	🔴 **A FAILED read must never satisfy this gate	computational	.claude/scripts/pr-unresolved-threads.sh	UNKNOWN
+MP-042	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Treat a non-zero exit as **UNKNOWN, never as zero**,	none	-	-
+MP-043	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	| 20 | **no** | **20** | 73 | **0 — over 53 threads	narrative	-	-
+MP-044	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	| 50 | **no** | **50** | 73 | **0 — over 23 threads	narrative	-	-
+MP-045	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Treat a shortfall exactly like a failed read: **UNKNOWN,	computational	.claude/scripts/pr-unresolved-threads.sh	totalCount
+MP-046	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The result must show `state:OPEN`, `isDraft:false`,	computational	.claude/scripts/local-review-verdict.sh	GREEN self@
+MP-047	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	*You own EVERY pull request in the portfolio* makes	none	-	-
+MP-048	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Build-and-lint-only CI never satisfies it**, and	none	-	-
+MP-049	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Verify against the API that the cited run **exists**,	none	-	-
+MP-050	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	`BLOCKED` with every check-run and status `success`/`skipped`	narrative	-	-
+MP-051	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	🔴 **Exception (a) also requires the head's REQUIRED	computational	.claude/scripts/required-gate-completeness.sh	required_status_checks
+MP-052	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	`statusCheckRollup` lists what ran, never what should	narrative	-	-
+MP-053	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	That gate is the blocker, and it is never stale.	none	-	-
+MP-054	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Exit `2` (`UNKNOWN`)** never reads as stale either.	none	-	-
+MP-055	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	That includes an active `code_quality` rule, which	narrative	-	-
+MP-056	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	It merges the base and never rewrites history.	narrative	-	-
+MP-057	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**That refusal text names no rule**: it is not evidence	none	-	-
+MP-058	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	`sha` is the endpoint's own head pin — it refuses	none	-	-
+MP-059	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The fall-through is **bounded to that pentad-clear	none	-	-
+MP-060	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**The `202` it returns is an accepted request, never	none	-	-
+MP-061	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	It carries a request id; read the result with **one**	none	-	-
+MP-062	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**A `pending` result is a request still running,	none	-	-
+MP-063	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Merging a stacked PR also merges every PR below	none	-	-
+MP-064	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Never record it as merged.	none	-	-
+MP-065	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Never transfer a field list between subcommands**	none	-	-
+MP-066	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	🔴 **Never discard both stderr and the exit status of a `gh` read	none	-	-
+MP-067	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Treat that exit as **UNKNOWN, never zero results**.	none	-	-
+MP-068	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	CodeRabbit posts re-review results as COMMENTED and	narrative	-	-
+MP-069	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**An agent-authored block AT the current head is	none	-	-
+MP-070	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**One human block anywhere on the PR defeats both	none	-	-
+MP-071	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**The dismissal itself is ALWAYS the maintainer's**	none	-	-
+MP-072	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	It is safe here only because it can move a review	narrative	-	-
+MP-073	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	A `devantler` review carrying **neither** marker	none	-	-
+MP-074	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The machine-local agents' **own** PRs are trusted-author	none	-	-
+MP-075	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Self-merge means the **normal** path only — never	none	-	-
+MP-076	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**External-contributor PRs are merged like any other**	none	-	-
+MP-077	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Scheduled/autonomous portfolio surveys remain limited	none	-	-
+MP-078	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The privacy guide permits targeted public read-only	none	-	-
+MP-079	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	`devantler` authorship never expands those boundaries.	none	-	-
+MP-080	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Never execute an external branch.	none	-	-
+MP-081	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Never merge outside `devantler-tech`** or administer	none	-	-
+MP-082	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Do not add unsolicited AI attribution; when the target	none	-	-
+MP-083	dependency-automation-and-programmed-bot-prs	A Dependency Dashboard is a live control surface	none	-	-
+MP-084	dependency-automation-and-programmed-bot-prs	A missing or failed join is `QUERY-UNKNOWN` for that	none	-	-
+MP-085	dependency-automation-and-programmed-bot-prs	A dependency PR is **unable to reach merge without	none	-	-
+MP-086	dependency-automation-and-programmed-bot-prs	Always convert the PR to draft before the first adaptation	computational	.claude/scripts/bot-pr-adaptation-push.sh	isDraft
+MP-086	dependency-automation-and-programmed-bot-prs	Always convert the PR to draft before the first adaptation	computational	.claude/scripts/bot-pr-adaptation-push.sh	autoMergeRequest
+MP-087	dependency-automation-and-programmed-bot-prs	Push the adaptation with `.claude/scripts/bot-pr-adaptation-push.sh`,	computational	.claude/scripts/bot-pr-adaptation-push.sh	autoMergeRequest
+MP-088	dependency-automation-and-programmed-bot-prs	🔴 **Never close a Dependabot PR to retrigger it	none	-	-
+MP-089	dependency-automation-and-programmed-bot-prs	Recreate discards every commit on the branch, so	narrative	-	-
+MP-090	dependency-automation-and-programmed-bot-prs	🔴 **An installed-skill root holds copies from	computational	.claude/scripts/skill-owner.sh	.metadata.github-repo | tag
+MP-091	dependency-automation-and-programmed-bot-prs	Every changed root must be listed for that repository,	computational	.claude/scripts/programmed-bot-review-exemption.sh	skill-ownership-allowlist
+MP-092	dependency-automation-and-programmed-bot-prs	The classifier's eighth argument — a JSON object	computational	.claude/scripts/programmed-bot-review-exemption.sh	matches_suite_owned_skills && updater_verdict 0
+MP-093	dependency-automation-and-programmed-bot-prs	Supplying it can only withdraw the carve-out, never	computational	.claude/scripts/programmed-bot-review-exemption.sh	matches_suite_owned_skills && updater_verdict 0
+MP-094	dependency-automation-and-programmed-bot-prs	It is **required on this arm** and omitting it returns	computational	.claude/scripts/programmed-bot-review-exemption.sh	matches_suite_owned_skills && updater_verdict 0
+MP-095	dependency-automation-and-programmed-bot-prs	The other arms take seven arguments and never consult	narrative	-	-
+MP-096	dependency-automation-and-programmed-bot-prs	Never infer it from the title alone.	none	-	-
+MP-097	dependency-automation-and-programmed-bot-prs	🔴 **The exemption proves provenance, never ripeness:	computational	.claude/scripts/release-cask-ripeness.sh	NOT-RIPE release
+MP-098	dependency-automation-and-programmed-bot-prs	On a 404, `gh api` still prints the error body on	none	-	-
+MP-099	dependency-automation-and-programmed-bot-prs	So a cask PR is the exception to "qualifying PRs	none	-	-
