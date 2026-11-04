@@ -115,6 +115,12 @@ fixture_fails() { # fixture_fails <api path> <stderr text>
   rm -f "${fake}/api/${key}.json"
   printf '%s\n' "$2" >"${fake}/api/${key}.status"
 }
+# manifest <file> <yaml>: a Crossplane manifest in devantler-tech/.github, served through the Contents API.
+manifest() {
+  local encoded
+  encoded=$(printf '%b\n' "$2" | base64 | tr -d '\n')
+  fixture "repos/devantler-tech/.github/contents/deploy/repositories/$1" "{\"content\":\"${encoded}\"}"
+}
 # A stray repository every check accepts: private, one commit by a trusted author, nothing else.
 scenario() { # scenario [name]
   local name=${1:-stray}
@@ -125,8 +131,10 @@ scenario() { # scenario [name]
   printf '{"author":{"login":"devantler"},"state":"OPEN","title":"Delete the stray repository devantler-tech/%s","body":"Created by mistake.","url":"https://github.com/devantler-tech/monorepo/issues/4289"}\n' \
     "$name" >"${fake}/issue.json"
   fixture "repos/devantler-tech/${name}" \
-    "{\"full_name\":\"devantler-tech/${name}\",\"archived\":false,\"private\":true,\"size\":1,\"created_at\":\"2026-10-17T18:14:58Z\",\"default_branch\":\"main\"}"
-  fixture "repos/devantler-tech/.github/contents/deploy/repositories" '[{"name":"ksail.yaml"},{"name":"client-orders.yaml"}]'
+    "{\"full_name\":\"devantler-tech/${name}\",\"has_wiki\":false,\"has_discussions\":false,\"archived\":false,\"private\":true,\"size\":1,\"created_at\":\"2026-10-17T18:14:58Z\",\"default_branch\":\"main\"}"
+  fixture "repos/devantler-tech/.github/contents/deploy/repositories" '[{"type":"file","name":"ksail.yaml"},{"type":"file","name":"client-orders.yaml"}]'
+  manifest ksail.yaml "metadata:\n  name: ksail\nspec:\n  forProvider:\n    name: ksail"
+  manifest client-orders.yaml "metadata:\n  name: client-orders"
   fixture "repos/devantler-tech/${name}/git/refs?per_page=100" \
     "[{\"ref\":\"refs/heads/main\",\"object\":{\"type\":\"commit\",\"sha\":\"${SHA_MAIN}\"}}]"
   fixture "repos/devantler-tech/${name}/commits?sha=${SHA_MAIN}&per_page=100" \
@@ -231,7 +239,7 @@ expect "unreadable request is UNKNOWN" 2 '^UNKNOWN cannot read devantler-tech/mo
 
 # --- The repository: archived, Crossplane-managed, missing or unreadable -----------------------
 scenario
-fixture "repos/devantler-tech/stray" '{"full_name":"devantler-tech/stray","archived":true,"private":true,"size":1,"created_at":"2026-10-17T18:14:58Z","default_branch":"main"}'
+fixture "repos/devantler-tech/stray" '{"full_name":"devantler-tech/stray","has_wiki":false,"has_discussions":false,"archived":true,"private":true,"size":1,"created_at":"2026-10-17T18:14:58Z","default_branch":"main"}'
 expect "archived repository refused" 1 '^REFUSE devantler-tech/stray is archived' --repo stray --issue 4289
 scenario client-orders
 printf '{"author":{"login":"devantler"},"state":"OPEN","title":"Delete devantler-tech/client-orders","body":"","url":"u"}\n' >"${fake}/issue.json"
@@ -248,6 +256,35 @@ expect "unreadable manifest list is UNKNOWN" 2 '^UNKNOWN cannot list the Crosspl
 scenario
 fixture "repos/devantler-tech/.github/contents/deploy/repositories" '[]'
 expect "empty manifest list is UNKNOWN, never 'not managed'" 2 '^UNKNOWN the Crossplane repository manifest list' --repo stray --issue 4289
+# A manifest's file name need not match the repository it manages (dot-github.yaml manages .github).
+for key in "metadata:\n  name: stray" "metadata:\n  annotations:\n    crossplane.io/external-name: \"stray\"" \
+  "spec:\n  forProvider:\n    name: 'stray' # adopted"; do
+  scenario
+  fixture "repos/devantler-tech/.github/contents/deploy/repositories" '[{"type":"file","name":"ksail.yaml"},{"type":"file","name":"stray-repo.yaml"}]'
+  manifest stray-repo.yaml "$key"
+  expect "a manifest under another file name that names the repository is refused ($(printf '%b' "$key" | tail -n 1 | tr -s ' '))" \
+    1 '^REFUSE devantler-tech/stray is managed by Crossplane in devantler-tech/.github \(stray-repo.yaml\)' --repo stray --issue 4289
+done
+scenario
+fixture "repos/devantler-tech/.github/contents/deploy/repositories" '[{"type":"file","name":"ksail.yaml"},{"type":"file","name":"stray-repo.yaml"}]'
+manifest stray-repo.yaml "metadata:\n  name: stray-repo\nspec:\n  forProvider:\n    name: stray-repo"
+expect "a manifest naming another repository is not a refusal" 0 '^WOULD-DELETE devantler-tech/stray ' --repo stray --issue 4289
+scenario
+fixture "repos/devantler-tech/.github/contents/deploy/repositories" '[{"type":"file","name":"ksail.yaml"},{"type":"dir","name":"extra"}]'
+expect "a manifest directory entry that is not a file is UNKNOWN" 2 '^UNKNOWN devantler-tech/.github deploy/repositories holds extra' --repo stray --issue 4289
+scenario
+fixture_fails "repos/devantler-tech/.github/contents/deploy/repositories/client-orders.yaml" 'gh: Server Error (HTTP 502)'
+expect "an unreadable manifest is UNKNOWN" 2 '^UNKNOWN cannot read the Crossplane manifest client-orders.yaml' --repo stray --issue 4289
+# Discussions and a wiki hold content the guard does not read, so either one switched on is refused.
+scenario
+fixture "repos/devantler-tech/stray" '{"full_name":"devantler-tech/stray","has_wiki":false,"has_discussions":true,"archived":false,"private":true,"size":1,"created_at":"2026-10-17T18:14:58Z","default_branch":"main"}'
+expect "a repository with Discussions on is refused" 1 '^REFUSE devantler-tech/stray has Discussions turned on' --repo stray --issue 4289
+scenario
+fixture "repos/devantler-tech/stray" '{"full_name":"devantler-tech/stray","has_wiki":true,"has_discussions":false,"archived":false,"private":true,"size":1,"created_at":"2026-10-17T18:14:58Z","default_branch":"main"}'
+expect "a repository with its wiki on is refused" 1 '^REFUSE devantler-tech/stray has its wiki turned on' --repo stray --issue 4289
+scenario
+fixture "repos/devantler-tech/stray" '{"full_name":"devantler-tech/stray","archived":false,"private":true,"size":1,"created_at":"2026-10-17T18:14:58Z","default_branch":"main"}'
+expect "an unreadable Discussions setting is UNKNOWN" 2 '^UNKNOWN cannot read whether devantler-tech/stray has Discussions' --repo stray --issue 4289
 
 # --- Who wrote it: anyone outside the trust gate's trusted authors is refused ------------------
 scenario
@@ -446,13 +483,13 @@ fixture "repos/devantler-tech/stray/commits?sha=${SHA_PULL}&per_page=100" '[{"sh
 expect "a ref pushed during the scan stops the delete" 2 '^UNKNOWN devantler-tech/stray changed while it was being examined' --repo stray --issue 4289 --apply
 # Every check the first pass makes is made again before the delete, not only the ones listed by name.
 scenario
-fixture_later "repos/devantler-tech/stray" '{"full_name":"devantler-tech/stray","archived":true,"private":true,"size":1,"created_at":"2026-10-17T18:14:58Z","default_branch":"main"}'
+fixture_later "repos/devantler-tech/stray" '{"full_name":"devantler-tech/stray","has_wiki":false,"has_discussions":false,"archived":true,"private":true,"size":1,"created_at":"2026-10-17T18:14:58Z","default_branch":"main"}'
 expect "a repository archived during the scan is refused" 1 '^REFUSE devantler-tech/stray is archived' --repo stray --issue 4289 --apply
 scenario
-fixture_later "repos/devantler-tech/.github/contents/deploy/repositories" '[{"name":"ksail.yaml"},{"name":"stray.yaml"}]'
+fixture_later "repos/devantler-tech/.github/contents/deploy/repositories" '[{"type":"file","name":"ksail.yaml"},{"type":"file","name":"stray.yaml"}]'
 expect "a Crossplane manifest added during the scan is refused" 1 '^REFUSE devantler-tech/stray is managed by Crossplane' --repo stray --issue 4289 --apply
 scenario
-fixture_later "repos/devantler-tech/stray" '{"full_name":"devantler-tech/stray","archived":false,"private":false,"size":1,"created_at":"2026-10-17T18:14:58Z","default_branch":"main"}'
+fixture_later "repos/devantler-tech/stray" '{"full_name":"devantler-tech/stray","has_wiki":false,"has_discussions":false,"archived":false,"private":false,"size":1,"created_at":"2026-10-17T18:14:58Z","default_branch":"main"}'
 expect "any other change to the repository during the scan stops the delete" 2 '^UNKNOWN devantler-tech/stray changed while it was being examined' --repo stray --issue 4289 --apply
 scenario
 fixture_later "repos/devantler-tech/stray/comments?per_page=100" '[{"id":7,"user":{"login":"devantler"}}]'

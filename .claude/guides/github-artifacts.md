@@ -26,7 +26,8 @@
   [`repo-delete-guard.sh`](../scripts/repo-delete-guard.sh) `--apply`, never a bare `gh repo delete`**
   (monorepo#4289). It takes the open monorepo issue that asks for the deletion, refuses one a
   trusted author did not open, and refuses a repository that issue does not name, one in the
-  Portfolio or Stack map, one Crossplane manages, an archived one, and one with a commit reachable
+  Portfolio or Stack map, one Crossplane manages (whatever its manifest file is called), an
+  archived one, one with Discussions or its wiki turned on, and one with a commit reachable
   from any ref, or an issue, pull request, review or comment, by anyone outside the trust gate's
   trusted authors, and history it cannot walk. A refusal is final for that run: never work around
   it. After deleting it reads the absence back and records the deletion and its 90-day restore

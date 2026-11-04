@@ -11,8 +11,11 @@
 #
 #   Before deleting, the guard refuses:
 #     - a repository named in the AGENTS.md Portfolio map or Stack map;
-#     - a repository Crossplane manages (`deploy/repositories/<name>.yaml` in devantler-tech/.github);
-#     - an archived repository;
+#     - a repository Crossplane manages: a manifest in `deploy/repositories` of devantler-tech/.github
+#       whose file name or any `name` value (`metadata.name`, `crossplane.io/external-name`,
+#       `forProvider.name`) is the repository;
+#     - an archived repository, and one with Discussions or its wiki turned on, which hold content
+#       this guard does not read;
 #     - one with a commit reachable from any ref (branch, tag, pull-request head or other), or an
 #       issue, pull request, review or comment, by anyone other than the trust gate's trusted
 #       authors (read from AGENTS.md, so the two lists cannot drift), and one with history it
@@ -240,7 +243,7 @@ api_read() {
   printf '%s\n' "$out"
 }
 
-meta=$(api_read "repos/${full}" '{full_name, archived, private, size, created_at, default_branch}')
+meta=$(api_read "repos/${full}" '{full_name, archived, private, size, created_at, default_branch, has_wiki, has_discussions}')
 case $? in
   0) ;;
   1) unknown "${full} was not found: nothing to delete" ;;
@@ -252,13 +255,56 @@ case "$(jq -r '.archived' <<<"$meta")" in
   true) refuse "${full} is archived: an archived repository is kept for its history" ;;
   *) unknown "cannot read whether ${full} is archived" ;;
 esac
+# Discussions and the wiki hold content this guard does not read: anyone can post in the
+# discussions of a public repository, and a wiki is a separate history the ref walk never
+# reaches. So a repository with either one switched on is refused, never judged.
+case "$(jq -r '.has_discussions' <<<"$meta")" in
+  false) ;;
+  true) refuse "${full} has Discussions turned on, which this guard cannot examine" ;;
+  *) unknown "cannot read whether ${full} has Discussions turned on" ;;
+esac
+case "$(jq -r '.has_wiki' <<<"$meta")" in
+  false) ;;
+  true) refuse "${full} has its wiki turned on, which is history this guard cannot examine" ;;
+  *) unknown "cannot read whether ${full} has a wiki" ;;
+esac
+check "no Discussions and no wiki"
 
-manifests=$(api_read "repos/${ORG}/.github/contents/deploy/repositories" '.[].name') ||
+# A manifest's file name need not be the repository's name (`dot-github.yaml` manages `.github`),
+# so every manifest is read, and the repository is refused when it is the file name or the value
+# of any `name` key (`metadata.name`, `crossplane.io/external-name`, `forProvider.name`).
+manifests=$(api_read "repos/${ORG}/.github/contents/deploy/repositories" '.[] | [.type, .name] | @tsv') ||
   unknown "cannot list the Crossplane repository manifests in ${ORG}/.github"
 [ -n "$manifests" ] || unknown "the Crossplane repository manifest list in ${ORG}/.github is empty"
-if grep -qxF -- "${name}.yaml" <<<"$manifests" || grep -qxF -- "${name}.yml" <<<"$manifests"; then
-  refuse "${full} is managed by Crossplane in ${ORG}/.github: change it through its manifest there"
-fi
+[ "$(grep -c . <<<"$manifests" || true)" -lt "$PAGE" ] ||
+  unknown "the Crossplane repository manifest list in ${ORG}/.github fills a page: rows past it would go unread"
+manifest_texts=""
+while IFS=$'\t' read -r mtype mfile; do
+  [ "$mtype" = file ] || unknown "${ORG}/.github deploy/repositories holds ${mfile}, which is not a file"
+  [[ "$mfile" =~ ^[A-Za-z0-9._-]+$ ]] || unknown "cannot read the manifest name '${mfile}'"
+  if [ "$mfile" = "${name}.yaml" ] || [ "$mfile" = "${name}.yml" ]; then
+    refuse "${full} is managed by Crossplane in ${ORG}/.github: change it through its manifest there"
+  fi
+  mtext=$(api_read "repos/${ORG}/.github/contents/deploy/repositories/${mfile}" '.content' | tr -d '\n' | base64 -d 2>/dev/null) ||
+    unknown "cannot read the Crossplane manifest ${mfile} in ${ORG}/.github"
+  [ -n "$mtext" ] || unknown "the Crossplane manifest ${mfile} in ${ORG}/.github is empty"
+  manages=$(awk -v want="$name" '
+    {
+      line = $0
+      sub(/#.*/, "", line)
+      if (match(line, /^[[:space:]]*(- )?[A-Za-z0-9._\/-]*name[[:space:]]*:/)) {
+        value = substr(line, RLENGTH + 1)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        gsub(/^["\x27]|["\x27]$/, "", value)
+        if (value == want) { found = 1 }
+      }
+    }
+    END { print found ? "yes" : "no" }
+  ' <<<"$mtext")
+  [ "$manages" = no ] ||
+    refuse "${full} is managed by Crossplane in ${ORG}/.github (${mfile}): change it through its manifest there"
+  manifest_texts+="${mfile}"$'\n'"${mtext}"$'\n'
+done <<<"$manifests"
 check "not managed by Crossplane"
 
 # --- 4. Who wrote what is in it ----------------------------------------------------------------
@@ -353,7 +399,7 @@ read_discussion() {
 read_discussion
 check "${item_count} issue(s) and pull request(s), and every comment and review, by trusted authors"
 
-snapshot=$(printf '%s\n' "$issue_json" "$meta" "$manifests" "$refs" "$commit_rows" "$items" "$discussion")
+snapshot=$(printf '%s\n' "$issue_json" "$meta" "$manifest_texts" "$refs" "$commit_rows" "$items" "$discussion")
 }
 examine
 
