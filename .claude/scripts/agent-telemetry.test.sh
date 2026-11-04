@@ -4480,6 +4480,9 @@ check "a failed store-wide listing selects the same sessions" "$OUT" "sessions i
 if grep -qF -- "$WP/$WP_WT2 -mindepth 1 -maxdepth 1" "$FIX/findlog.txt"; then
   ok "a failed store-wide listing restores the per-store check for every store"
 else bad "a failed store-wide listing restores the per-store check for every store" "out-of-window store was skipped without a listing"; fi
+if grep -qF -- "$WP/$WP_WT1 -mindepth 1 -maxdepth 1" "$FIX/findlog.txt"; then
+  ok "a failed store-wide listing still checks the in-window worktree store"
+else bad "a failed store-wide listing still checks the in-window worktree store" "in-window store was not checked after the listing failed"; fi
 
 # The admission of a store never admits a different project nested below it.
 # Observe the real find output, even when later readers would discard it.
