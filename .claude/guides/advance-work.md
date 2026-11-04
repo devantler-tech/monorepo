@@ -473,7 +473,9 @@ a diff.
   `talosctl` and any other client, through that tool's own config-file and context flags (a per-run
   talosconfig for `talosctl`): a shared `~/.kube/config` lets a parallel run's context switch send
   your writes to its cluster, and an exported `KUBECONFIG` alone does not prove every wrapper reads
-  it. Keep one cluster per run, and delete it before the run ends, confirming it is gone.
+  it. KSail's `--config` flag takes a `ksail.yaml`, not a kubeconfig, so give each run its own
+  `ksail.yaml` whose `spec.cluster.connection.kubeconfig` and `spec.cluster.connection.context` name
+  that run's kubeconfig file and context. Keep one cluster per run, and delete it before the run ends, confirming it is gone.
 - Reach for `kind`, `k3d`, `talosctl`, `kubectl` or `helm` directly only for a step KSail cannot do.
   Never block work on a KSail gap: work around it, and say so in the pull request body.
 - **File each gap and friction** on `devantler-tech/ksail`, one issue per distinct root cause: a
