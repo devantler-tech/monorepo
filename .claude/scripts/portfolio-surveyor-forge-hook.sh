@@ -97,7 +97,7 @@ verify_asset "scripts/json-stream.lib.sh"
 # surveyor's environment widen the read-only allowlist to a program of its
 # choosing, which is exactly the bypass the SCOPE and GUARD pins above close.
 #
-# Eleven programs are declared, and all are READS. pr-ownership-disclosure.sh
+# Twelve programs are declared, and all are READS. pr-ownership-disclosure.sh
 # classifies a `devantler` PR body as the maintainer's interactive work or the
 # routine's own output. Without a route for it the surveyor falls back to
 # hand-deriving that verdict, and that substitution has already misread live
@@ -123,6 +123,10 @@ verify_asset "scripts/json-stream.lib.sh"
 # one exact head. The contract names it (monorepo#3571); undeclared, the surveyor
 # kept judging review objects by eye, which is how empty reply containers were read
 # as reviews (monorepo#3572).
+# coderabbit-comment-verdict.sh judges ONE CodeRabbit reply comment on stdin against one exact
+# head, by its structure rather than a phrase list. The contract names it (monorepo#3008);
+# undeclared, the surveyor matched two reply wordings by eye and read every other finding-free
+# reply (`I reviewed <sha>`, among others) as no review, spending the metered lanes on green heads.
 # kata-measure-date.sh reads ONE Kata issue body on stdin and says whether its structured
 # `**Measure on:**` date has arrived. Undeclared, the surveyor read the date by eye and reported
 # both open Katas as past due from their createdAt (monorepo#2838). The same stdin object also
@@ -161,6 +165,7 @@ pr-unresolved-threads.sh
 coderabbit-summary-verdict.sh
 local-review-verdict.sh
 coderabbit-review-verdict.sh
+coderabbit-comment-verdict.sh
 kata-measure-date.sh
 pr-worktree-holder.sh
 maintainer-comment-candidates.sh
