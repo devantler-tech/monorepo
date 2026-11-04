@@ -1,0 +1,452 @@
+#!/usr/bin/env bash
+# repo-delete-guard.sh — the one path by which an agent deletes a devantler-tech repository
+# (monorepo#4289).
+#
+# WHY THIS EXISTS
+#   The shared agent token keeps the `delete_repo` scope by the maintainer's decision of
+#   2026-10-17, so agents can remove a stray repository (one created by mistake) without him.
+#   With the token no longer limiting deletion, this guard is the control: a bare
+#   `gh repo delete` is never used. Products are retired by archiving through Crossplane in
+#   devantler-tech/.github, and repositories that Crossplane manages are changed there.
+#
+#   Before deleting, the guard refuses:
+#     - a repository named in the AGENTS.md Portfolio map or Stack map;
+#     - a repository Crossplane manages: a manifest in `deploy/repositories` of devantler-tech/.github
+#       whose file name or any `name` value (`metadata.name`, `crossplane.io/external-name`,
+#       `forProvider.name`) is the repository;
+#     - an archived repository, and one with Discussions or its wiki turned on, which hold content
+#       this guard does not read;
+#     - one with a commit reachable from any ref (branch, tag, pull-request head or other), or an
+#       issue, pull request, review or comment, by anyone other than the trust gate's trusted
+#       authors (read from AGENTS.md, so the two lists cannot drift), and one with history it
+#       cannot walk;
+#     - one the open devantler-tech/monorepo issue given with --issue does not name, and any
+#       request whose issue was not opened by a trusted author (the monorepo is public, so anyone
+#       can open an issue there).
+#   After deleting it reads back that the repository is gone and records the deletion, and the
+#   90-day window in which an organization owner can restore it, on that issue.
+#
+# USAGE
+#   repo-delete-guard.sh --repo <name|devantler-tech/name> --issue <n> [--apply] [--actor engineer|improver]
+#
+#   --repo   the repository to delete; only devantler-tech repositories are accepted.
+#   --issue  number of the OPEN devantler-tech/monorepo issue that asks for this deletion, opened
+#            by a trusted author. Its title or body must name `devantler-tech/<name>` exactly.
+#   --apply  delete once every check passes, read the absence back and record it on the issue.
+#            Without it the guard only reports (dry run).
+#   --actor  `engineer` (default) or `improver`: whose disclosure line opens the record it posts.
+#
+# OUTPUT (stdout, one line each)
+#   CHECK <what>                    a check that passed
+#   REFUSE <reason>                 a check that failed; nothing is deleted
+#   UNKNOWN <reason>                a read failed or was incomplete; nothing is deleted
+#   WOULD-DELETE <repo> <summary>   dry run: every check passed
+#   DELETED <repo> <summary>        --apply: deleted, absence read back and recorded
+#
+# EXIT CODES
+#   0  every check passed (and, with --apply, the deletion was read back and recorded)
+#   1  refused, or --apply could not confirm the deletion or record it
+#   2  usage error or a read that could not be completed — nothing was deleted
+#
+# `-e` is left out of `set` on purpose, departing from the `set -euo pipefail` rule in
+# .claude/scripts/AGENTS.md: every read is a command substitution whose exit status the guard
+# inspects itself, as `case $?` after `api_read`, so that a failed read becomes UNKNOWN and a
+# failed check REFUSE. Under `-e` the first failing read would end the run before that mapping,
+# with no REFUSE or UNKNOWN line to tell the caller why nothing was deleted.
+set -uo pipefail
+
+ORG=devantler-tech
+# A stray repository is small. One full page (GitHub serves at most 100 rows a page) may mean more
+# rows exist, so a full page is refused rather than paged: more history than that is not a stray,
+# and a row left unread must never read as "no outsider".
+PAGE=100
+MAX_REFS=30
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+contract="${script_dir}/../../AGENTS.md"
+
+usage() {
+  sed -n '/^# USAGE/,/^# OUTPUT/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' >&2
+  exit 2
+}
+refuse() {
+  printf 'REFUSE %s\n' "$*"
+  exit 1
+}
+unknown() {
+  printf 'UNKNOWN %s\n' "$*"
+  exit 2
+}
+quiet=0
+check() { [ "$quiet" = 1 ] || printf 'CHECK %s\n' "$*"; }
+
+repo=""
+issue=""
+apply=0
+actor=engineer
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --repo)
+      [ "$#" -ge 2 ] || usage
+      repo=$2
+      shift 2
+      ;;
+    --issue)
+      [ "$#" -ge 2 ] || usage
+      issue=$2
+      shift 2
+      ;;
+    --apply)
+      apply=1
+      shift
+      ;;
+    --actor)
+      [ "$#" -ge 2 ] || usage
+      actor=$2
+      shift 2
+      ;;
+    -h | --help) usage ;;
+    *) usage ;;
+  esac
+done
+[ -n "$repo" ] && [ -n "$issue" ] || usage
+
+case "$repo" in
+  */*) owner=${repo%%/*} name=${repo#*/} ;;
+  *) owner=$ORG name=$repo ;;
+esac
+[ "$owner" = "$ORG" ] || {
+  echo "repo-delete-guard: only ${ORG} repositories are accepted (got '${repo}')" >&2
+  exit 2
+}
+# A GitHub repository name: letters, digits, '.', '_' and '-', and never '.' or '..'.
+if ! [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || [ "$name" = . ] || [ "$name" = .. ]; then
+  echo "repo-delete-guard: '${name}' is not a repository name" >&2
+  exit 2
+fi
+case "$actor" in
+  engineer) disclosure='> 🤖 Generated by the Agentic Engineer' ;;
+  improver) disclosure='> 🤖 Generated by the Agent Improver' ;;
+  *)
+    echo "repo-delete-guard: --actor must be engineer or improver (got '${actor}')" >&2
+    exit 2
+    ;;
+esac
+[[ "$issue" =~ ^[1-9][0-9]*$ ]] || {
+  echo "repo-delete-guard: --issue must be an issue number (got '${issue}')" >&2
+  exit 2
+}
+full="${ORG}/${name}"
+command -v gh >/dev/null 2>&1 || unknown "gh is not installed"
+command -v jq >/dev/null 2>&1 || unknown "jq is not installed"
+[ -r "$contract" ] || unknown "cannot read ${contract}"
+
+# --- 1. The contract: maps and trusted authors -------------------------------------------
+# A section runs from its heading to the next level-2 heading. A missing or empty section is
+# UNKNOWN, never "not listed".
+section() {
+  awk -v h="$1" '
+    $0 == h { ins = 1; seen = 1; next }
+    ins && /^## / { ins = 0 }
+    ins { print }
+    END { if (!seen) exit 3 }
+  ' "$contract"
+}
+for heading in '## Portfolio map' '## Stack map'; do
+  if ! text=$(section "$heading") || [ -z "${text//[[:space:]]/}" ]; then
+    unknown "AGENTS.md has no '${heading#\#\# }' section to check against"
+  fi
+  # A map names a repository as `devantler-tech/<name>` or, in a cell listing several, as a bare
+  # `<name>` in backticks. Both are literal matches, so no name can act as a pattern.
+  if grep -Fq -- "\`${full}\`" <<<"$text" || grep -Fq -- "\`${name}\`" <<<"$text"; then
+    refuse "${full} is named in the AGENTS.md ${heading#\#\# }: retire a product by archiving it through Crossplane in ${ORG}/.github"
+  fi
+done
+check "not named in the Portfolio map or the Stack map"
+
+# The trust gate's trusted authors, exact logins in backticks on its first bullet. Only that
+# bullet's own lines are read, up to its first sentence end: the next bullet names the untrusted
+# authors in the same backtick form, and they must never be read as trusted.
+trusted_line=$(awk '
+  /^- \*\*Trusted authors, exact login match only:\*\*/ { ins = 1; printf "%s ", $0; if ($0 ~ /\.( |$)/) exit; next }
+  ins && (/^[[:space:]]*$/ || /^[[:space:]]*- / || /^#/) { exit }
+  ins { printf "%s ", $0; if ($0 ~ /\.( |$)/) exit }
+' "$contract")
+trusted_line=${trusted_line#*only:\*\*}
+trusted_line=${trusted_line%%. *}
+# shellcheck disable=SC2016 # the backticks are literal Markdown, not a substitution
+trusted=$(grep -oE '`[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?`' <<<"$trusted_line" | tr -d '`' | sort -u)
+[ -n "$trusted" ] || unknown "cannot read the trusted authors from the AGENTS.md trust gate"
+is_trusted() { grep -qxF -- "$1" <<<"$trusted"; }
+
+# examine: sections 2 to 4 — every check that reads GitHub, as ONE pass. It ends by setting
+# $snapshot to everything those checks read. `--apply` runs the whole pass a second time right
+# before the delete and deletes only when the second snapshot equals the first. A check is never
+# re-run one by one, so a check added to this pass is re-run before the delete without a second
+# edit (monorepo#4816 review).
+examine() {
+# --- 2. The request: an open monorepo issue that names the repository ------------------------
+if ! issue_json=$(gh issue view "$issue" --repo "${ORG}/monorepo" --json state,title,body,url,author 2>/dev/null); then
+  unknown "cannot read ${ORG}/monorepo#${issue}"
+fi
+issue_state=$(jq -r '.state // empty' <<<"$issue_json") || unknown "cannot parse ${ORG}/monorepo#${issue}"
+[ "$issue_state" = OPEN ] || refuse "${ORG}/monorepo#${issue} is ${issue_state:-unreadable}, not an open request"
+# Only a trusted author may ask: the monorepo is public, so anyone can open an issue that names a
+# repository. gh reports a GitHub App as `app/<slug>`, which matches no trusted login and is refused.
+issue_author=$(jq -r '.author.login // empty' <<<"$issue_json") || unknown "cannot parse ${ORG}/monorepo#${issue}"
+[ -n "$issue_author" ] || refuse "${ORG}/monorepo#${issue} has no author GitHub can link, so it is not a trusted request"
+is_trusted "$issue_author" || refuse "${ORG}/monorepo#${issue} was opened by ${issue_author}, who is not a trusted author"
+issue_text=$(jq -r '(.title // "") + "\n" + (.body // "")' <<<"$issue_json") || unknown "cannot parse ${ORG}/monorepo#${issue}"
+# Named exactly: `devantler-tech/foo` must not be satisfied by `devantler-tech/foo-bar`.
+named=$(awk -v r="$full" '
+  {
+    line = $0
+    while ((i = index(line, r)) > 0) {
+      before = (i > 1) ? substr(line, i - 1, 1) : ""
+      after = substr(line, i + length(r), 1)
+      # A full stop that ends the sentence is not part of the name; one followed by more name
+      # characters is (`devantler-tech/foo.bar` does not name `devantler-tech/foo`).
+      if (after == ".") { after = substr(line, i + length(r) + 1, 1) }
+      if (before !~ /[A-Za-z0-9_.-]/ && after !~ /[A-Za-z0-9_.-]/) { found = 1 }
+      line = substr(line, i + length(r))
+    }
+  }
+  END { print found ? "yes" : "no" }
+' <<<"$issue_text")
+[ "$named" = yes ] || refuse "${ORG}/monorepo#${issue} does not name ${full} for deletion"
+check "requested by open ${ORG}/monorepo#${issue}, opened by trusted author ${issue_author}"
+
+# --- 3. The repository itself ----------------------------------------------------------------
+# api_read <path> [jq]: prints the result; exit 1 for a 404, 3 for a 409 (GitHub's answer for an
+# empty repository's git data), 2 for any other failure.
+api_read() {
+  local out err rc
+  err=$(mktemp) || return 2
+  if [ "$#" -ge 2 ]; then
+    out=$(gh api "$1" --jq "$2" 2>"$err")
+  else
+    out=$(gh api "$1" 2>"$err")
+  fi
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    if grep -q 'HTTP 404' "$err"; then
+      rc=1
+    elif grep -q 'HTTP 409' "$err"; then
+      rc=3
+    else
+      rc=2
+    fi
+    rm -f "$err"
+    return "$rc"
+  fi
+  rm -f "$err"
+  printf '%s\n' "$out"
+}
+
+meta=$(api_read "repos/${full}" '{full_name, archived, private, size, created_at, default_branch, has_wiki, has_discussions}')
+case $? in
+  0) ;;
+  1) unknown "${full} was not found: nothing to delete" ;;
+  *) unknown "cannot read ${full}" ;;
+esac
+[ "$(jq -r '.full_name' <<<"$meta")" = "$full" ] || unknown "${full} resolved to another repository"
+case "$(jq -r '.archived' <<<"$meta")" in
+  false) check "not archived" ;;
+  true) refuse "${full} is archived: an archived repository is kept for its history" ;;
+  *) unknown "cannot read whether ${full} is archived" ;;
+esac
+# Discussions and the wiki hold content this guard does not read: anyone can post in the
+# discussions of a public repository, and a wiki is a separate history the ref walk never
+# reaches. So a repository with either one switched on is refused, never judged.
+case "$(jq -r '.has_discussions' <<<"$meta")" in
+  false) ;;
+  true) refuse "${full} has Discussions turned on, which this guard cannot examine" ;;
+  *) unknown "cannot read whether ${full} has Discussions turned on" ;;
+esac
+case "$(jq -r '.has_wiki' <<<"$meta")" in
+  false) ;;
+  true) refuse "${full} has its wiki turned on, which is history this guard cannot examine" ;;
+  *) unknown "cannot read whether ${full} has a wiki" ;;
+esac
+check "no Discussions and no wiki"
+
+# A manifest's file name need not be the repository's name (`dot-github.yaml` manages `.github`),
+# so every manifest is read, and the repository is refused when it is the file name or the value
+# of any `name` key (`metadata.name`, `crossplane.io/external-name`, `forProvider.name`).
+manifests=$(api_read "repos/${ORG}/.github/contents/deploy/repositories" '.[] | [.type, .name] | @tsv') ||
+  unknown "cannot list the Crossplane repository manifests in ${ORG}/.github"
+[ -n "$manifests" ] || unknown "the Crossplane repository manifest list in ${ORG}/.github is empty"
+[ "$(grep -c . <<<"$manifests" || true)" -lt "$PAGE" ] ||
+  unknown "the Crossplane repository manifest list in ${ORG}/.github fills a page: rows past it would go unread"
+manifest_texts=""
+while IFS=$'\t' read -r mtype mfile; do
+  [ "$mtype" = file ] || unknown "${ORG}/.github deploy/repositories holds ${mfile}, which is not a file"
+  [[ "$mfile" =~ ^[A-Za-z0-9._-]+$ ]] || unknown "cannot read the manifest name '${mfile}'"
+  if [ "$mfile" = "${name}.yaml" ] || [ "$mfile" = "${name}.yml" ]; then
+    refuse "${full} is managed by Crossplane in ${ORG}/.github: change it through its manifest there"
+  fi
+  mtext=$(api_read "repos/${ORG}/.github/contents/deploy/repositories/${mfile}" '.content' | tr -d '\n' | base64 -d 2>/dev/null) ||
+    unknown "cannot read the Crossplane manifest ${mfile} in ${ORG}/.github"
+  [ -n "$mtext" ] || unknown "the Crossplane manifest ${mfile} in ${ORG}/.github is empty"
+  manages=$(awk -v want="$name" '
+    {
+      line = $0
+      sub(/#.*/, "", line)
+      if (match(line, /^[[:space:]]*(- )?[A-Za-z0-9._\/-]*name[[:space:]]*:/)) {
+        value = substr(line, RLENGTH + 1)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        gsub(/^["\x27]|["\x27]$/, "", value)
+        if (value == want) { found = 1 }
+      }
+    }
+    END { print found ? "yes" : "no" }
+  ' <<<"$mtext")
+  [ "$manages" = no ] ||
+    refuse "${full} is managed by Crossplane in ${ORG}/.github (${mfile}): change it through its manifest there"
+  manifest_texts+="${mfile}"$'\n'"${mtext}"$'\n'
+done <<<"$manifests"
+check "not managed by Crossplane"
+
+# --- 4. Who wrote what is in it ----------------------------------------------------------------
+# outsiders <label> <logins>: refuses on any login outside the trusted authors. An empty login is
+# an unlinked account, which is not a trusted author either.
+outsiders() {
+  local label=$1 logins=$2 login
+  while IFS= read -r login; do
+    [ -n "$login" ] || continue
+    [ "$login" != - ] || refuse "${full} has ${label} by an account GitHub cannot link to a login"
+    is_trusted "$login" || refuse "${full} has ${label} by ${login}, who is not a trusted author"
+  done <<<"$logins"
+}
+count_lines() { grep -c . <<<"$1" || true; }
+# one_page <label> <rows>: a full page may hide further rows, so it is refused, never judged.
+one_page() {
+  [ "$(count_lines "$2")" -lt "$PAGE" ] ||
+    refuse "${full} has at least ${PAGE} $1: that is not a stray repository"
+}
+
+# Every ref, not only branches: a commit can stay reachable only through a tag, a pull-request
+# head, a notes ref or any other namespace after its branch is gone, and history that was never
+# walked must never read as "no outsider" (monorepo#4289 review). An empty repository has no refs,
+# which GitHub reports as a 409.
+refs=$(api_read "repos/${full}/git/refs?per_page=${PAGE}" '.[] | [.ref, .object.type, .object.sha] | @tsv')
+case $? in
+  0) ;;
+  3) refs='' ;;
+  *) unknown "cannot list the refs of ${full}" ;;
+esac
+one_page "refs" "$refs"
+ref_count=$(count_lines "$refs")
+[ "$ref_count" -le "$MAX_REFS" ] ||
+  refuse "${full} has more than ${MAX_REFS} refs: that is not a stray repository"
+commit_shas=""
+commit_rows=""
+while IFS=$'\t' read -r ref type sha; do
+  [ -n "$ref" ] || continue
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || unknown "cannot read the object ${ref} points at"
+  # An annotated tag is peeled once to its commit; anything else it can point at (a tree, a blob,
+  # another tag) is history this guard cannot walk, so it is refused rather than skipped.
+  if [ "$type" = tag ]; then
+    peeled=$(api_read "repos/${full}/git/tags/${sha}" '[.object.type, .object.sha] | @tsv') ||
+      unknown "cannot read the annotated tag behind ${ref}"
+    IFS=$'\t' read -r type sha <<<"$peeled"
+    [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || unknown "cannot read the object the tag behind ${ref} points at"
+  fi
+  [ "$type" = commit ] || refuse "${full} has ${ref} pointing at a ${type:-unknown object}, which this guard cannot examine"
+  rows=$(api_read "repos/${full}/commits?sha=${sha}&per_page=${PAGE}" \
+    '.[] | [.sha, (.author.login // "-"), (.committer.login // "-")] | @tsv') ||
+    unknown "cannot list the commits of ${full} reachable from ${ref}"
+  one_page "commits reachable from ${ref}" "$rows"
+  outsiders "a commit" "$(cut -f2 <<<"$rows")"
+  # GitHub's own committer for web edits and merges is not an author; any other committer is.
+  outsiders "a commit committed" "$(cut -f3 <<<"$rows" | grep -vxF web-flow || true)"
+  commit_shas+="$(cut -f1 <<<"$rows")"$'\n'
+  commit_rows+="${ref}"$'\n'"${rows}"$'\n'
+done <<<"$refs"
+commit_count=$(sort -u <<<"$commit_shas" | grep -c . || true)
+check "${commit_count} commit(s) reachable from ${ref_count} ref(s), all by trusted authors"
+
+items=$(api_read "repos/${full}/issues?state=all&per_page=${PAGE}" \
+  '.[] | [.number, (.user.login // "-"), (if .pull_request then "pr" else "issue" end)] | @tsv') ||
+  unknown "cannot list the issues and pull requests of ${full}"
+one_page "issues and pull requests" "$items"
+item_count=$(count_lines "$items")
+outsiders "an issue or pull request" "$(cut -f2 <<<"$items")"
+# read_discussion: every issue and pull-request comment, inline review comment, comment on a commit
+# and pull-request review, as a "<kind>" line then its "<id>\t<login>" rows in $discussion, refusing
+# any outsider.
+read_discussion() {
+  local kind rows number
+  discussion=""
+  for kind in issues/comments pulls/comments comments; do
+    rows=$(api_read "repos/${full}/${kind}?per_page=${PAGE}" '.[] | [(.id // "-"), (.user.login // "-")] | @tsv') ||
+      unknown "cannot list the ${kind} of ${full}"
+    one_page "${kind}" "$rows"
+    outsiders "a comment" "$(cut -f2 <<<"$rows")"
+    discussion+="${kind}"$'\n'"${rows}"$'\n'
+  done
+  # A review's own body is on none of those lists: it lives on each pull request's reviews.
+  while IFS=$'\t' read -r number _ kind; do
+    [ "$kind" = pr ] || continue
+    [[ "$number" =~ ^[1-9][0-9]*$ ]] || unknown "cannot read a pull request number of ${full}"
+    rows=$(api_read "repos/${full}/pulls/${number}/reviews?per_page=${PAGE}" '.[] | [(.id // "-"), (.user.login // "-")] | @tsv') ||
+      unknown "cannot list the reviews of ${full}#${number}"
+    one_page "reviews on #${number}" "$rows"
+    outsiders "a pull-request review" "$(cut -f2 <<<"$rows")"
+    discussion+="reviews/${number}"$'\n'"${rows}"$'\n'
+  done <<<"$items"
+}
+read_discussion
+check "${item_count} issue(s) and pull request(s), and every comment and review, by trusted authors"
+
+snapshot=$(printf '%s\n' "$issue_json" "$meta" "$manifest_texts" "$refs" "$commit_rows" "$items" "$discussion")
+}
+examine
+
+summary="($(jq -r 'if .private then "private" else "public" end' <<<"$meta"), created $(jq -r '.created_at' <<<"$meta"), ${commit_count} commit(s), ${item_count} issue(s) and pull request(s))"
+
+if [ "$apply" -eq 0 ]; then
+  printf 'WOULD-DELETE %s %s\n' "$full" "$summary"
+  exit 0
+fi
+
+# --- 5. Delete, read back, record --------------------------------------------------------------
+# The scan above takes many reads, and anyone who can open an issue, push a ref, archive the
+# repository or add its Crossplane manifest can do so while it runs. So the whole pass runs again
+# immediately before the delete: any check that now fails refuses as it would have the first time,
+# and any other change to what it read stops the delete, so nothing changed during the scan is
+# deleted unexamined (monorepo#4816 review). A residual window of one API round-trip remains;
+# GitHub's 90-day restore covers it.
+first_snapshot=$snapshot
+quiet=1
+examine
+[ "$snapshot" = "$first_snapshot" ] ||
+  unknown "${full} changed while it was being examined: run the guard again"
+gh repo delete "$full" --yes >/dev/null 2>&1 || {
+  printf 'FAILED %s: gh repo delete did not succeed\n' "$full"
+  exit 1
+}
+api_read "repos/${full}" '.full_name' >/dev/null
+case $? in
+  1) ;;
+  0)
+    printf 'FAILED %s: it is still readable after the delete\n' "$full"
+    exit 1
+    ;;
+  *)
+    printf 'FAILED %s: its absence could not be read back\n' "$full"
+    exit 1
+    ;;
+esac
+deleted_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# The record is agent output on the maintainer's account, so it opens with the disclosure line:
+# without it, every later reader would take it for a maintainer instruction.
+record="${disclosure}
+
+Deleted \`${full}\` at ${deleted_at} through \`repo-delete-guard.sh\` ${summary}. GitHub now reports it as not found. An organization owner can restore it for 90 days from the organization's deleted-repositories settings."
+gh issue comment "$issue" --repo "${ORG}/monorepo" --body "$record" >/dev/null 2>&1 || {
+  printf 'FAILED %s: deleted and read back, but the record on %s/monorepo#%s could not be posted\n' "$full" "$ORG" "$issue"
+  exit 1
+}
+printf 'DELETED %s %s\n' "$full" "$summary"
+exit 0

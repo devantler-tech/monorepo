@@ -290,6 +290,7 @@ branch-cleanup.test.sh|
 ci-aggregate-contract.test.sh|
 flow-scorecard.test.sh|
 memory-backup.test.sh|
+repo-delete-guard.test.sh|
 memory-archive.test.sh|
 memory-rewrite.test.sh|
 platform-live-health.test.sh|
