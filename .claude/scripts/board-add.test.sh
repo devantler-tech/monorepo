@@ -44,6 +44,16 @@ check() { # check <name> <expected-exit> <actual-exit> [haystack] [needle]
   pass=$((pass + 1))
 }
 
+# board-add.sh launches the Go implementation in board-add-go/ (monorepo#2510). Its unit tests
+# run first; every fixture case below then drives it through the launcher and the stubbed `gh`,
+# exactly as these cases drove the Bash implementation before the port.
+if go -C "$here/board-add-go" test ./... >"$tmp/go-test.out" 2>&1; then
+  printf 'ok   Go unit tests pass\n'; pass=$((pass + 1))
+else
+  printf 'FAIL Go unit tests\n%s\n' "$(cat "$tmp/go-test.out")" >&2
+  fail=$((fail + 1))
+fi
+
 # ── the fake gh ────────────────────────────────────────────────────────────
 # Behaviour knobs (env): STUB_PRIVATE, STUB_READBACK, STUB_ADD_ID, STUB_EDIT_RC,
 #                        STUB_FAIL_ON, STUB_FAIL_STDERR, STUB_RATELIMIT_RC
@@ -613,6 +623,17 @@ check "non-issue URL rejected" 1 "$rc" "$out" "not an issue URL"
 
 run
 check "no args prints usage" 1 "$rc" "$out" "usage:"
+
+
+# A launcher that cannot build the Go program must report UNKNOWN (exit 2), never a pass, and
+# must not reach GitHub at all.
+mkdir -p "$tmp/nogo"
+printf '#!/usr/bin/env bash\nexit 3\n' >"$tmp/nogo/go"
+chmod +x "$tmp/nogo/go"
+: >"$tmp/log"
+set +e; out=$(STUB_LOG="$tmp/log" PATH="$tmp/nogo:$PATH" "$script" "$URL" 2>&1); rc=$?; set -e
+check "a Go build failure is UNKNOWN, never a pass" 2 "$rc" "$out" "could not build the Go helper"
+check "a Go build failure reaches no GitHub API" 0 "$(grep -c . "$tmp/log" || true)"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 completed=1

@@ -36,7 +36,6 @@ cat >"$tmp/cases.tsv" <<'CASES'
 2	sibling-lane-watch
 2	platform-live-health
 2	squash-closing-keywords
-2	board-add
 2	prod-kube-context
 2	flow-scorecard
 3	review-lane-health
@@ -65,7 +64,7 @@ cat >"$tmp/check.jq" <<'CHECK'
 def trim_names: del(.name) | .steps |= map(del(.name));
 def program($cases): "batch_status=0\n" + ($cases | map("bash .claude/scripts/" + .name + ".test.sh || batch_status=1\n") | join("")) + "exit \"$batch_status\"\n";
 . as $w | $cases[0] as $all | $filters[0] as $f |
-($w.jobs["test-board-add"].steps[0] | del(.name)) as $checkout |
+($w.jobs["test-prod-kube-context"].steps[0] | del(.name)) as $checkout |
 ($checkout.uses | type == "string" and test("^actions/checkout@[0-9a-f]{40}$")) and
 ($checkout | keys == ["uses","with"] and .with == {"persist-credentials":false}) and
 ([ $w.jobs | keys[] | select(startswith("test-macos-batch-")) ] == [range(1;5) | "test-macos-batch-\(.)"]) and
@@ -104,7 +103,7 @@ reject_mutation() {
   if check_workflow "$tmp/mutated.json"; then fail "$label was accepted"; fi
 }
 reject_mutation 'missing batch' 'del(.jobs["test-macos-batch-1"])'
-reject_mutation 'dropped Linux coverage' 'del(.jobs["test-board-add"])'
+reject_mutation 'dropped Linux coverage' 'del(.jobs["test-prod-kube-context"])'
 reject_mutation 'dropped aggregate need' '.jobs.status.needs -= ["test-macos-batch-1"]'
 reject_mutation 'dropped aggregate results' '.jobs.status.steps[0].with["job-results"] = ""'
 reject_mutation 'missing output' 'del(.jobs.changes.outputs["macos-batch-1"])'
@@ -112,9 +111,40 @@ reject_mutation 'wrong OS' '.jobs["test-macos-batch-1"]["runs-on"] = "ubuntu-lat
 reject_mutation 'write permission' '.jobs["test-macos-batch-1"].permissions.contents = "write"'
 reject_mutation 'swallowed failure' '.jobs["test-macos-batch-1"].steps[1].run |= sub("batch_status=1";"true")'
 reject_mutation 'omitted child' '.jobs["test-macos-batch-1"].steps[1].run |= (split("\n") | map(select(contains("worktree-lane-sweep.test.sh") | not)) | join("\n"))'
-reject_mutation 'duplicated test' '.jobs["test-macos-batch-1"].steps[1].run += "bash .claude/scripts/board-add.test.sh\n"'
+reject_mutation 'duplicated test' '.jobs["test-macos-batch-1"].steps[1].run += "bash .claude/scripts/prod-kube-context.test.sh\n"'
 jq '.["macos-batch-1"] |= .[1:]' "$tmp/filters.json" >"$tmp/mutated-filters.json"
 if check_workflow "$tmp/workflow.json" "$tmp/mutated-filters.json"; then fail 'incomplete union filter was accepted'; fi
+
+# board-add left batch 2 because its launcher builds Go, which the batches do not set up
+# (monorepo#2510). Its own job must keep the macOS leg the batch gave it, with Go, the GNU
+# timeout the shared build needs, and a filter that sees the Go module.
+cat >"$tmp/board-add.jq" <<'CHECK'
+.jobs["test-board-add"] as $j | $filters[0]["board-add"] as $f |
+($j.strategy.matrix.os == ["ubuntu-latest", "macos-latest"]) and
+($j["runs-on"] == "${{ matrix.os }}") and
+any($j.steps[]; ((.uses // "") | startswith("actions/setup-go@")) and
+  .with["go-version-file"] == ".claude/scripts/board-add-go/go.mod") and
+any($j.steps[]; .if == "runner.os == 'macOS'" and .run == "brew install coreutils") and
+any($j.steps[]; .run == "bash .claude/scripts/board-add.test.sh") and
+($f | type == "array" and index(".claude/scripts/board-add-go/**") != null and
+  index(".claude/scripts/go-helper-build.sh") != null)
+CHECK
+check_board_add() {
+  jq -e --slurpfile filters "$tmp/filters.json" -f "$tmp/board-add.jq" "$1" >/dev/null 2>&1
+}
+check_board_add "$tmp/workflow.json" || fail 'board-add lost its macOS leg, Go setup, GNU timeout or Go-module filter'
+reject_board_add_mutation() {
+  jq "$2" "$tmp/workflow.json" >"$tmp/mutated.json"
+  if check_board_add "$tmp/mutated.json"; then fail "board-add $1 was accepted"; fi
+}
+reject_board_add_mutation 'without macOS' '.jobs["test-board-add"].strategy.matrix.os = ["ubuntu-latest"]'
+reject_board_add_mutation 'without Go' '.jobs["test-board-add"].steps |= map(select(((.uses // "") | startswith("actions/setup-go@")) | not))'
+reject_board_add_mutation 'without GNU timeout' '.jobs["test-board-add"].steps |= map(select(.run != "brew install coreutils"))'
+reject_board_add_mutation 'without its test' '.jobs["test-board-add"].steps |= map(select(.run != "bash .claude/scripts/board-add.test.sh"))'
+jq '.["board-add"] -= [".claude/scripts/board-add-go/**"]' "$tmp/filters.json" >"$tmp/mutated-board-add-filters.json"
+if jq -e --slurpfile filters "$tmp/mutated-board-add-filters.json" -f "$tmp/board-add.jq" "$tmp/workflow.json" >/dev/null 2>&1; then
+  fail 'a board-add filter blind to its Go module was accepted'
+fi
 
 # Only the exact programs validated above are executed, in a private fixture tree.
 mkdir -p "$tmp/fixture/.claude/scripts"
@@ -157,5 +187,5 @@ for group in 1 2 3 4; do
     else diff -u "$tmp/expected" "$tmp/observed" || fail "$job omitted later cases after $mode"; fi
   done
 done
-echo 'ci-macos-batches: OK — 22 cases retain both OSes; four batches run every child and propagate all failures'
+echo 'ci-macos-batches: OK — 21 cases retain both OSes; four batches run every child and propagate all failures'
 finished=1
