@@ -128,10 +128,16 @@ verdict_text="$(printf '%s\n%s\n' "$status" "$recent")"
 
 # Findings are read BEFORE the did-not-run marker: a finding is positive evidence and survives an
 # incomplete run, so a body carrying both reports its findings (monorepo#2764).
-findings="$(sed -nE '/Actionable comments posted: [0-9]+/{s/.*Actionable comments posted: ([0-9]+).*/\1/p;q;}' <<<"$verdict_text")"
-if [ -n "$findings" ] && [ "$findings" -gt 0 ]; then
-  verdict "FINDINGS $findings"
-fi
+# Examine every count: a zero in either review block cannot clear a positive count in the other
+# (monorepo#4820). Match decimal digits without integer conversion so a large count cannot overflow.
+finding_counts="$(sed -nE 's/.*Actionable comments posted: ([0-9]+).*/\1/p' <<<"$verdict_text")"
+findings=""
+while IFS= read -r count; do
+  case "$count" in
+    *[1-9]*) verdict "FINDINGS $count" ;;
+    0*) findings=0 ;;
+  esac
+done <<<"$finding_counts"
 
 # A body saying the review did not run can never be GREEN, even with a range header naming the head
 # (the rate-limit shell carries one). The structural marker counts anywhere; the prose markers count
