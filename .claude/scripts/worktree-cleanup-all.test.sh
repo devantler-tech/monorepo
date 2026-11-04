@@ -1345,7 +1345,7 @@ t_claim_sweep_failure_is_visible_and_never_blocks() {
   again=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" WORKTREE_CLEANUP_CLAIM_SWEEP="$root/stub/sweep" \
     bash "$SUT" apply 24 2>&1); rc_again=$?
   if [ "$rc" -eq 2 ] && [ ! -e "$root/repo/.claude/worktrees/spent-root" ] \
-     && [ "$rc_again" -eq 0 ] && [ "$(wc -l <"$root/stub/calls" | tr -d ' ')" = "$calls" ] \
+     && [ "$rc_again" -eq 2 ] && [ "$(wc -l <"$root/stub/calls" | tr -d ' ')" = "$calls" ] \
      && grep -q '^claims skipped: the last apply attempt 0h ago did not finish cleanly; retrying after 3h$' <<<"$again" \
      && [ -s "$root/home/.claude/agent-claim-sweep-apply.attempt" ] \
      && grep -q '^UNKNOWN 2 issue read failed$' <<<"$out" \

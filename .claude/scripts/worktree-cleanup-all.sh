@@ -743,7 +743,8 @@ fi
 #     6-hourly scheduled sweep, about one issue read per tip. Only a run that read every repository
 #     and every tip cleanly restarts the clock. An incomplete one is retried, but not before
 #     WORKTREE_CLEANUP_CLAIM_SWEEP_RETRY_HOURS (default 3), so a tip that can never be judged costs
-#     one failing attempt every few hours, not every run's API reads. Git and gh never prompt.
+#     one attempt every few hours, not every run's API reads; the runs in between read nothing
+#     and still exit 2. Git and gh never prompt.
 #   - agent-claim-sweep.sh needs no clone: an empty repository whose `origin` names the GitHub
 #     repository is enough. dry-run here passes dry-run there; only apply deletes, and only tips
 #     whose issue reads closed, by compare-and-swap.
@@ -782,8 +783,9 @@ claim_sweep_portfolio() {
         fi ;;
     esac
   fi
-  # A failed attempt waits out its retry interval. Only an attempt that did not finish cleanly
-  # leaves this stamp, and a clean one removes it.
+  # A failed attempt waits out its retry interval, reading nothing and still failing, so the
+  # lane sweep keeps reporting it until a sweep is clean. Only an attempt that did not finish
+  # cleanly leaves this stamp, and a clean one removes it.
   if [ -f "$attempt" ]; then
     tried=$(cat "$attempt" 2>/dev/null) || tried=''
     case "$tried" in
@@ -792,7 +794,8 @@ claim_sweep_portfolio() {
         if [ $((now - tried)) -lt $((retry_hours * 3600)) ] && [ $((now - tried)) -ge 0 ]; then
           printf 'claims skipped: the last %s attempt %sh ago did not finish cleanly; retrying after %sh\n' \
             "$MODE" "$(((now - tried) / 3600))" "$retry_hours"
-          return 0
+          # Nothing is read, but the last result was not clean, and it still is not.
+          return 2
         fi ;;
     esac
   fi
