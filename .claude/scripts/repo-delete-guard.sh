@@ -343,6 +343,21 @@ if [ "$apply" -eq 0 ]; then
 fi
 
 # --- 5. Delete, read back, record --------------------------------------------------------------
+# The scan above takes many reads, and anyone who can open an issue or push a ref can do so while it
+# runs. Re-read both lists immediately before the delete and refuse when either moved, so a change
+# made during the scan is never deleted unexamined (monorepo#4816 review). A residual window of one
+# API round-trip remains; GitHub's 90-day restore covers it.
+recheck_refs=$(api_read "repos/${full}/git/refs?per_page=${PAGE}" '.[] | [.ref, .object.type, .object.sha] | @tsv')
+case $? in
+  0) ;;
+  3) recheck_refs='' ;;
+  *) unknown "cannot re-read the refs of ${full} before deleting it" ;;
+esac
+recheck_items=$(api_read "repos/${full}/issues?state=all&per_page=${PAGE}" \
+  '.[] | [.number, (.user.login // "-"), (if .pull_request then "pr" else "issue" end)] | @tsv') ||
+  unknown "cannot re-read the issues and pull requests of ${full} before deleting it"
+[ "$recheck_refs" = "$refs" ] && [ "$recheck_items" = "$items" ] ||
+  unknown "${full} changed while it was being examined: run the guard again"
 gh repo delete "$full" --yes >/dev/null 2>&1 || {
   printf 'FAILED %s: gh repo delete did not succeed\n' "$full"
   exit 1

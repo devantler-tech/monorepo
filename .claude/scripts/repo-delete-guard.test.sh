@@ -86,7 +86,13 @@ case "$1" in
       echo "fake gh: no fixture for $path" >&2
       exit 94
     }
-    if [ -n "$jqexpr" ]; then jq -r "$jqexpr" "$f.json"; else cat "$f.json"; fi
+    # <key>.later.json, when present, is served from the second read on: a change during the scan.
+    src="$f.json"
+    if [ -f "$f.later.json" ]; then
+      [ ! -f "$f.seen" ] || src="$f.later.json"
+      : >"$f.seen"
+    fi
+    if [ -n "$jqexpr" ]; then jq -r "$jqexpr" "$src"; else cat "$src"; fi
     ;;
   *) exit 93 ;;
 esac
@@ -421,6 +427,27 @@ if [ "${rc}" = 1 ] && grep -q '^FAILED devantler-tech/stray: deleted and read ba
   pass "a deletion whose record cannot be posted is reported, not hidden"
 else
   fail "record failure: rc=${rc} ${out}"
+fi
+fixture_later() { # fixture_later <api path> <json>: served from the second read of that path on
+  local key
+  key=$(printf '%s' "$1" | sed 's/[^A-Za-z0-9]/_/g')
+  printf '%s\n' "$2" >"${fake}/api/${key}.later.json"
+}
+scenario
+fixture_later "repos/devantler-tech/stray/issues?state=all&per_page=100" '[{"number":5,"user":{"login":"drive-by"}}]'
+expect "an issue opened during the scan stops the delete" 2 '^UNKNOWN devantler-tech/stray changed while it was being examined' --repo stray --issue 4289 --apply
+scenario
+fixture_later "repos/devantler-tech/stray/git/refs?per_page=100" \
+  "[{\"ref\":\"refs/heads/main\",\"object\":{\"type\":\"commit\",\"sha\":\"${SHA_MAIN}\"}},{\"ref\":\"refs/heads/new\",\"object\":{\"type\":\"commit\",\"sha\":\"${SHA_PULL}\"}}]"
+expect "a ref pushed during the scan stops the delete" 2 '^UNKNOWN devantler-tech/stray changed while it was being examined' --repo stray --issue 4289 --apply
+scenario
+run_guard --repo stray --issue 4289 --apply
+item_reads=$(grep -cF 'api repos/devantler-tech/stray/issues?state=all&per_page=100' "${tmp}/trace" || true)
+ref_reads=$(grep -cF 'api repos/devantler-tech/stray/git/refs?per_page=100' "${tmp}/trace" || true)
+if [ "${rc}" = 0 ] && grep -q '^DELETED devantler-tech/stray' <<<"${out}" && [ "${item_reads}" = 2 ] && [ "${ref_reads}" = 2 ]; then
+  pass "an unchanged recheck still deletes, and the recheck really re-read the list"
+else
+  fail "unchanged recheck: rc=${rc} ${out}"
 fi
 scenario
 fixture "repos/devantler-tech/stray/issues?state=all&per_page=100" '[{"number":2,"user":{"login":"drive-by"}}]'
