@@ -466,9 +466,13 @@ a diff.
   tools, `cipher decrypt` and every other write never target a production context; production
   changes only through GitOps delivery. The `kubectl` reads that `platform-security-surveyor` and the
   helper scripts make stay as they are.
-- **Give each local cluster a lifecycle.** Run `disk-preflight.sh` first. Name the cluster with your
-  writer namespace and run id so parallel runs never share one, keep one per run, and delete it
-  before the run ends, confirming it is gone.
+- **Give each local cluster a lifecycle and its own client state.** Run `disk-preflight.sh` first.
+  Name the cluster with your writer namespace and run id so parallel runs never share one. Write its
+  credentials to a kubeconfig file only this run uses, and pass that file and the cluster's context
+  explicitly to every KSail and `kubectl` command: a shared `~/.kube/config` lets a parallel run's
+  context switch send your writes to its cluster, and an exported `KUBECONFIG` alone does not prove
+  every wrapper reads it. Keep one cluster per run, and delete it before the run ends, confirming it
+  is gone.
 - Reach for `kind`, `k3d`, `talosctl`, `kubectl` or `helm` directly only for a step KSail cannot do.
   Never block work on a KSail gap: work around it, and say so in the pull request body.
 - **File each gap and friction** on `devantler-tech/ksail`, one issue per distinct root cause: a
