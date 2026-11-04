@@ -2387,22 +2387,20 @@ def usable_ts:
 # The same read counts interrupted tool calls (#4823): a second parse of every
 # transcript for that one flag was about 15% of the efficiency section. Pass a
 # file as $2 and the count is appended to it. The two results keep the meaning
-# they had as separate reads. A record the denied filter cannot use (a bare JSON
-# scalar has no .type) still ends the denied list there, as the separate read
-# stopped at its first error, but interrupts in later records are still
-# counted. The \001 markers cannot be a tool_use_id: the harness writes those.
+# they had as separate reads. jq skips only the record that raised an error and
+# reads on, and the interrupt branch runs first, so a record the denied filter
+# cannot use (a bare JSON scalar has no .type) loses nothing it did not lose
+# before. The \001 marker cannot be a tool_use_id: the harness writes those.
 denied_ids() {
   jq -Rr --arg re "$NEVER_RAN_RE" "$JQ_SHAPE_DEFS"'select(length>0)|(try fromjson catch empty)
           | (.. | objects | select(.interrupted? == true) | "\u0001I"),
-            (try (select(.type=="user") | content_blocks
-                  | select(.type=="tool_result" and .is_error==true)
-                  | select((block_text) | test($re))
-                  | .tool_use_id // empty)
-             catch "\u0001E")' "$1" 2>/dev/null \
+            (select(.type=="user") | content_blocks
+             | select(.type=="tool_result" and .is_error==true)
+             | select((block_text) | test($re))
+             | .tool_use_id // empty)' "$1" 2>/dev/null \
     | awk -v sink="${2:-}" '
         $0 == "\001I" { n++; next }
-        $0 == "\001E" { stop = 1; next }
-        !stop { print }
+        { print }
         END { if (sink != "") print n + 0 >> sink }' \
     | jq -Rs 'split("\n")|map(select(length>0))' 2>/dev/null
 }
