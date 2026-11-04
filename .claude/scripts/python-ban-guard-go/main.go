@@ -593,7 +593,253 @@ func (s *scanner) argv(args []string, known []bool, line, depth int) (bool, erro
 				}
 			}
 		default:
+			return s.unlistedCommand(name, args[i+1:], known[i+1:], line, depth+1)
+		}
+	}
+	return false, nil
+}
+
+// dataOperandCommands never run an operand as a program: they print it, look it up, match it,
+// move it around or install it. An interpreter name among their operands is data, and so is
+// every operand after one of them that an unlisted wrapper runs (monorepo#3271).
+var dataOperandCommands = map[string]bool{
+	"echo": true, "printf": true, "print": true, "type": true, "which": true, "whence": true,
+	"where": true, "whereis": true, "hash": true, "alias": true, "unalias": true, "test": true,
+	"read": true, "unset": true, "cd": true, "pushd": true, "popd": true,
+	"grep": true, "egrep": true, "fgrep": true, "rg": true,
+	"pgrep": true, "pkill": true, "killall": true, "pidof": true,
+	"cat": true, "head": true, "tail": true, "wc": true, "ls": true, "cp": true, "mv": true,
+	"rm": true, "ln": true, "mkdir": true, "touch": true, "chmod": true, "chown": true,
+	"git": true, "kubectl": true,
+	"apt": true, "apt-get": true, "apt-cache": true, "dpkg": true, "yum": true, "dnf": true,
+	"apk": true, "zypper": true, "pacman": true, "brew": true, "port": true, "pkg": true,
+}
+
+// subcommandRunners run their remaining operands only under these subcommands; every other
+// subcommand (install, plugin, list ...) treats them as data.
+var subcommandRunners = map[string]map[string]bool{
+	"mise": {"exec": true, "x": true, "run": true},
+	"asdf": {"exec": true},
+}
+
+// builtinRunners are the builtins `builtin` can reach that run their operands.
+var builtinRunners = map[string]bool{"exec": true, "eval": true, "command": true}
+
+// programName is the shape of a command an operating system can have installed. A literal word
+// such as `--`, `-v`, `1` or `${EMPTY}` reached in command position is not a wrapper anyone
+// installed (the command `timeout 5 -- python3` names is `--`), and neither is an all-capitals
+// word such as a Dockerfile's `RUN` or `CMD` written in another file, so their operands stay data.
+var programName = regexp.MustCompile("^[A-Za-z_.][A-Za-z0-9._+-]*$")
+var hasLowercase = regexp.MustCompile("[a-z]")
+
+// shellStringSpec describes a wrapper whose option takes a whole shell command line as its value.
+// letters are those options, values the other options that take a value, which is never a
+// command line. permute marks GNU getopt's reordering, where an option may follow an operand.
+type shellStringSpec struct {
+	letters, values string
+	permute         bool
+}
+
+var shellStringWrappers = map[string]shellStringSpec{
+	"script":  {letters: "c", values: "BEIOomT", permute: true},
+	"su":      {letters: "c", values: "gGsw", permute: true},
+	"runuser": {letters: "c", values: "ugGsw", permute: true},
+	"flock":   {letters: "c", values: "wE"},
+}
+
+// executingWord reports whether an operand starts a command the walker already has rules for.
+func executingWord(name string) bool {
+	if shellName(name) || name == "eval" || name == "env" || name == "find" || name == "nice" {
+		return true
+	}
+	_, listed := commandWrappers[name]
+	return listed
+}
+
+// sourceGuess scans a word that this guard only infers is a command line. A word that does not
+// parse as shell is not one, so it is skipped rather than failing the whole guard; once it
+// parses, every error the scan meets still stops the guard.
+func (s *scanner) sourceGuess(command string, line, depth int) error {
+	if _, err := parse(command); err != nil {
+		return nil
+	}
+	return s.source(command, line, depth, false)
+}
+
+// shellStrings scans the command line a shellStringWrappers command takes as an option value,
+// and marks the words it read, or that are option values, as consumed. The scan stops at `--`
+// and at the child command, so a child's own options (`flock /tmp/l jq -c '…'`) are never read
+// as the wrapper's: flock takes its command after the lock file, and runuser with -u takes it
+// after the first operand. entr -s takes its first operand as the command line.
+func (s *scanner) shellStrings(name string, args []string, known, consumed []bool, line, depth int) error {
+	if name == "entr" {
+		shell := false
+		for j := 0; j < len(args) && known[j]; j++ {
+			if strings.HasPrefix(args[j], "-") && args[j] != "-" && args[j] != "--" {
+				shell = shell || strings.Contains(args[j][1:], "s")
+				continue
+			}
+			if args[j] == "--" {
+				continue
+			}
+			if !shell {
+				return nil
+			}
+			consumed[j] = true
+			return s.sourceGuess(args[j], line, depth)
+		}
+		return nil
+	}
+	spec, ok := shellStringWrappers[name]
+	if !ok {
+		return nil
+	}
+	user, operands := false, 0
+	take := func(j int, command string) error {
+		consumed[j] = true
+		return s.sourceGuess(command, line, depth)
+	}
+	for j := 0; j < len(args); j++ {
+		if known[j] && args[j] == "--" {
+			return nil
+		}
+		arg := args[j]
+		// A dynamic word is an operand: it is counted, never read as an option or a command line.
+		if !known[j] || !strings.HasPrefix(arg, "-") || arg == "-" {
+			operands++
+			if name == "flock" && operands == 1 && j+1 < len(args) && known[j+1] {
+				next := args[j+1]
+				if value, inline := strings.CutPrefix(next, "--command="); inline {
+					return take(j+1, value)
+				}
+				if (next == "-c" || next == "--command") && j+2 < len(args) && known[j+2] {
+					consumed[j+1] = true
+					return take(j+2, args[j+2])
+				}
+			}
+			if !spec.permute || (name == "runuser" && user) {
+				return nil
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "--") {
+			key, value, inline := strings.Cut(arg[2:], "=")
+			switch {
+			case key == "command" && inline:
+				if err := take(j, value); err != nil {
+					return err
+				}
+			case key == "command" && j+1 < len(args) && known[j+1]:
+				consumed[j] = true
+				if err := take(j+1, args[j+1]); err != nil {
+					return err
+				}
+				j++
+			case key == "user" || key == "group" || key == "supp-group" || key == "shell" ||
+				key == "whitelist-environment" || key == "timeout" || key == "wait" || key == "conflict-exit-code":
+				user = user || key == "user"
+				if !inline && j+1 < len(args) {
+					consumed[j+1] = true
+					j++
+				}
+			}
+			continue
+		}
+		for k := 1; k < len(arg); k++ {
+			option, rest := arg[k], arg[k+1:]
+			if strings.IndexByte(spec.letters, option) >= 0 {
+				consumed[j] = true
+				if rest != "" {
+					if err := s.sourceGuess(rest, line, depth); err != nil {
+						return err
+					}
+				} else if j+1 < len(args) && known[j+1] {
+					if err := take(j+1, args[j+1]); err != nil {
+						return err
+					}
+					j++
+				}
+				break
+			}
+			if strings.IndexByte(spec.values, option) >= 0 {
+				user = user || option == 'u'
+				if rest == "" && j+1 < len(args) {
+					consumed[j+1] = true
+					j++
+				}
+				break
+			}
+		}
+	}
+	return nil
+}
+
+// unlistedCommand judges a command the walker has no rule for. Before monorepo#3271 such a
+// command made the rest of its line read clean, so every wrapper nobody had listed (flock,
+// runuser, parallel, chrt, taskset, unbuffer, script ...) hid the interpreter it runs. Now a
+// literal operand that names an interpreter is reported, and an operand that starts a nested
+// shell, eval or listed wrapper is walked, unless the command only treats its operands as data.
+// A dynamic command word never reaches here: it stays unresolved, the narrowing monorepo#3270
+// decided, so this reports nothing without an interpreter token.
+func (s *scanner) unlistedCommand(name string, args []string, known []bool, line, depth int) (bool, error) {
+	if depth > 32 {
+		return false, errors.New("nested command limit exceeded")
+	}
+	if dataOperandCommands[name] || !programName.MatchString(name) || !hasLowercase.MatchString(name) {
+		return false, nil
+	}
+	if name == "builtin" {
+		if len(args) > 0 && known[0] && builtinRunners[args[0]] {
+			return s.argv(args, known, line, depth)
+		}
+		return false, nil
+	}
+	if runners, ok := subcommandRunners[name]; ok {
+		if len(args) == 0 || !known[0] || !runners[args[0]] {
 			return false, nil
+		}
+		args, known = args[1:], known[1:]
+	}
+	consumed := make([]bool, len(args))
+	if err := s.shellStrings(name, args, known, consumed, line, depth); err != nil {
+		return false, err
+	}
+	if name == "parallel" {
+		// GNU parallel runs the words before its first `:::` or `::::` as a shell command line.
+		for j := 0; j < len(args) && !strings.HasPrefix(args[j], ":::"); j++ {
+			if !known[j] || strings.HasPrefix(args[j], "-") {
+				continue
+			}
+			consumed[j] = true
+			if err := s.sourceGuess(args[j], line, depth); err != nil {
+				return false, err
+			}
+		}
+	}
+	for j := 0; j < len(args); j++ {
+		if !known[j] || consumed[j] || strings.HasSuffix(args[j], "/") {
+			continue
+		}
+		base := filepath.Base(args[j])
+		if interpreter.MatchString(base) {
+			hit := args[j]
+			if j+1 < len(args) && known[j+1] && args[j+1] != "" {
+				hit += " " + args[j+1]
+			}
+			s.add(line, hit)
+			return false, nil
+		}
+		// Matched exactly: a path such as /var/lock/ls is a lock file here, not ls.
+		if dataOperandCommands[args[j]] {
+			return false, nil // The rest are that command's data.
+		}
+		if executingWord(base) {
+			before := len(s.hits)
+			stdin, err := s.argv(args[j:], known[j:], line, depth)
+			if err != nil || stdin || len(s.hits) > before {
+				return stdin, err
+			}
+			// A word such as /tmp/sh can be a file operand; keep reading the rest.
 		}
 	}
 	return false, nil
