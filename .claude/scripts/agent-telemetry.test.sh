@@ -5996,17 +5996,20 @@ else bad "a scalar last line still counts interrupts without an extraction failu
 
 # A transcript the read cannot open appends no count, so the interrupt count is
 # UNKNOWN and the report exits 2 instead of passing a short count as complete.
-mkdir -p "$FIX/effintfail"
-cp "$FIX/effint/b.jsonl" "$FIX/effintfail/a.jsonl"
-cp "$FIX/effint/b.jsonl" "$FIX/effintfail/b.jsonl"
-chmod 000 "$FIX/effintfail/b.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/effintfail" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-      bash "$TARGET" --since-days 3650 --section efficiency 2>&1); RC=$?
-chmod 600 "$FIX/effintfail/b.jsonl"
-if [ "$RC" -eq 2 ] && grep -qE 'interrupted tool calls \.+ UNKNOWN \(counted 1 of 2 transcripts\)' <<<"$OUT"; then
-  ok "an unreadable transcript makes the interrupt count UNKNOWN with exit 2"
-else bad "an unreadable transcript makes the interrupt count UNKNOWN with exit 2" \
-  "rc=$RC $(grep -E 'interrupted|UNKNOWN' <<<"$OUT" | head -3)"; fi
+# Root reads through any mode, so the case cannot be built as root.
+if [ "$(id -u)" -ne 0 ]; then
+  mkdir -p "$FIX/effintfail"
+  cp "$FIX/effint/b.jsonl" "$FIX/effintfail/a.jsonl"
+  cp "$FIX/effint/b.jsonl" "$FIX/effintfail/b.jsonl"
+  chmod 000 "$FIX/effintfail/b.jsonl"
+  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/effintfail" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        bash "$TARGET" --since-days 3650 --section efficiency 2>&1); RC=$?
+  chmod 600 "$FIX/effintfail/b.jsonl"
+  if [ "$RC" -eq 2 ] && grep -qE 'interrupted tool calls \.+ UNKNOWN \(counted 1 of 2 transcripts\)' <<<"$OUT"; then
+    ok "an unreadable transcript makes the interrupt count UNKNOWN with exit 2"
+  else bad "an unreadable transcript makes the interrupt count UNKNOWN with exit 2" \
+    "rc=$RC $(grep -E 'interrupted|UNKNOWN' <<<"$OUT" | head -3)"; fi
+fi
 
 # The description list is streamed per line, never slurped, so a multi-GB
 # transcript is not held in memory (#4793). Trace the description program's jq

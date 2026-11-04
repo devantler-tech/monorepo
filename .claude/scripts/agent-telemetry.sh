@@ -4818,7 +4818,11 @@ if want efficiency; then
     # means a read never reported: say so instead of printing a short count.
     INT_FILES=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -cv '^$' || true)
     if [ "$(grep -c . "$XFINT" || true)" -eq "${INT_FILES:-0}" ]; then
-      INTERRUPT=$(awk '{ n += $1 } END { print n + 0 }' "$XFINT")
+      # A count file that cannot be read here is UNKNOWN, never an empty count.
+      INTERRUPT=$(awk '{ n += $1 } END { print n + 0 }' "$XFINT") || {
+        INTERRUPT="UNKNOWN (the count file could not be read)"
+        main_rc=2
+      }
     else
       INTERRUPT="UNKNOWN (counted $(grep -c . "$XFINT" || true) of ${INT_FILES:-0} transcripts)"
       main_rc=2
