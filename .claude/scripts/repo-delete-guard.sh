@@ -317,22 +317,33 @@ items=$(api_read "repos/${full}/issues?state=all&per_page=${PAGE}" \
 one_page "issues and pull requests" "$items"
 item_count=$(count_lines "$items")
 outsiders "an issue or pull request" "$(cut -f2 <<<"$items")"
-# Issue and pull-request comments, inline review comments, and comments on commits.
-for kind in issues/comments pulls/comments comments; do
-  logins=$(api_read "repos/${full}/${kind}?per_page=${PAGE}" '.[] | (.user.login // "-")') ||
-    unknown "cannot list the ${kind} of ${full}"
-  one_page "${kind}" "$logins"
-  outsiders "a comment" "$logins"
-done
-# A review's own body is on none of those lists: it lives on each pull request's reviews.
-while IFS=$'\t' read -r number _ kind; do
-  [ "$kind" = pr ] || continue
-  [[ "$number" =~ ^[1-9][0-9]*$ ]] || unknown "cannot read a pull request number of ${full}"
-  logins=$(api_read "repos/${full}/pulls/${number}/reviews?per_page=${PAGE}" '.[] | (.user.login // "-")') ||
-    unknown "cannot list the reviews of ${full}#${number}"
-  one_page "reviews on #${number}" "$logins"
-  outsiders "a pull-request review" "$logins"
-done <<<"$items"
+# read_discussion: every issue and pull-request comment, inline review comment, comment on a commit
+# and pull-request review, as a "<kind>" line then its "<id>\t<login>" rows in $discussion, refusing
+# any outsider. It runs again right before the delete, so a comment or review posted after its first
+# read is never deleted unexamined (monorepo#4816 review).
+read_discussion() {
+  local kind rows number
+  discussion=""
+  for kind in issues/comments pulls/comments comments; do
+    rows=$(api_read "repos/${full}/${kind}?per_page=${PAGE}" '.[] | [(.id // "-"), (.user.login // "-")] | @tsv') ||
+      unknown "cannot list the ${kind} of ${full}"
+    one_page "${kind}" "$rows"
+    outsiders "a comment" "$(cut -f2 <<<"$rows")"
+    discussion+="${kind}"$'\n'"${rows}"$'\n'
+  done
+  # A review's own body is on none of those lists: it lives on each pull request's reviews.
+  while IFS=$'\t' read -r number _ kind; do
+    [ "$kind" = pr ] || continue
+    [[ "$number" =~ ^[1-9][0-9]*$ ]] || unknown "cannot read a pull request number of ${full}"
+    rows=$(api_read "repos/${full}/pulls/${number}/reviews?per_page=${PAGE}" '.[] | [(.id // "-"), (.user.login // "-")] | @tsv') ||
+      unknown "cannot list the reviews of ${full}#${number}"
+    one_page "reviews on #${number}" "$rows"
+    outsiders "a pull-request review" "$(cut -f2 <<<"$rows")"
+    discussion+="reviews/${number}"$'\n'"${rows}"$'\n'
+  done <<<"$items"
+}
+read_discussion
+scanned_discussion=$discussion
 check "${item_count} issue(s) and pull request(s), and every comment and review, by trusted authors"
 
 summary="($(jq -r 'if .private then "private" else "public" end' <<<"$meta"), created $(jq -r '.created_at' <<<"$meta"), ${commit_count} commit(s), ${item_count} issue(s) and pull request(s))"
@@ -344,7 +355,8 @@ fi
 
 # --- 5. Delete, read back, record --------------------------------------------------------------
 # The scan above takes many reads, and anyone who can open an issue or push a ref can do so while it
-# runs. Re-read both lists immediately before the delete and refuse when either moved, so a change
+# runs. Re-read the refs, the issue list, and every comment and review immediately before the
+# delete, and refuse when any of them moved, so a change
 # made during the scan is never deleted unexamined (monorepo#4816 review). A residual window of one
 # API round-trip remains; GitHub's 90-day restore covers it.
 recheck_refs=$(api_read "repos/${full}/git/refs?per_page=${PAGE}" '.[] | [.ref, .object.type, .object.sha] | @tsv')
@@ -357,6 +369,9 @@ recheck_items=$(api_read "repos/${full}/issues?state=all&per_page=${PAGE}" \
   '.[] | [.number, (.user.login // "-"), (if .pull_request then "pr" else "issue" end)] | @tsv') ||
   unknown "cannot re-read the issues and pull requests of ${full} before deleting it"
 [ "$recheck_refs" = "$refs" ] && [ "$recheck_items" = "$items" ] ||
+  unknown "${full} changed while it was being examined: run the guard again"
+read_discussion
+[ "$discussion" = "$scanned_discussion" ] ||
   unknown "${full} changed while it was being examined: run the guard again"
 gh repo delete "$full" --yes >/dev/null 2>&1 || {
   printf 'FAILED %s: gh repo delete did not succeed\n' "$full"

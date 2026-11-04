@@ -441,10 +441,26 @@ fixture_later "repos/devantler-tech/stray/git/refs?per_page=100" \
   "[{\"ref\":\"refs/heads/main\",\"object\":{\"type\":\"commit\",\"sha\":\"${SHA_MAIN}\"}},{\"ref\":\"refs/heads/new\",\"object\":{\"type\":\"commit\",\"sha\":\"${SHA_PULL}\"}}]"
 expect "a ref pushed during the scan stops the delete" 2 '^UNKNOWN devantler-tech/stray changed while it was being examined' --repo stray --issue 4289 --apply
 scenario
+fixture_later "repos/devantler-tech/stray/comments?per_page=100" '[{"id":7,"user":{"login":"devantler"}}]'
+expect "a commit comment posted during the scan stops the delete" 2 '^UNKNOWN devantler-tech/stray changed while it was being examined' --repo stray --issue 4289 --apply
+scenario
+fixture_later "repos/devantler-tech/stray/issues/comments?per_page=100" '[{"id":8,"user":{"login":"drive-by"}}]'
+expect "an outsider's comment posted during the scan stops the delete" 1 '^REFUSE devantler-tech/stray has a comment by drive-by' --repo stray --issue 4289 --apply
+scenario
+fixture "repos/devantler-tech/stray/issues?state=all&per_page=100" '[{"number":3,"user":{"login":"devantler"},"pull_request":{}}]'
+fixture "repos/devantler-tech/stray/pulls/3/reviews?per_page=100" '[{"id":1,"user":{"login":"devantler"}}]'
+fixture_later "repos/devantler-tech/stray/pulls/3/reviews?per_page=100" '[{"id":1,"user":{"login":"devantler"}},{"id":2,"user":{"login":"devantler"}}]'
+expect "a review submitted during the scan stops the delete" 2 '^UNKNOWN devantler-tech/stray changed while it was being examined' --repo stray --issue 4289 --apply
+if [ -f "${fake}/deleted" ]; then fail "a moved discussion still deleted the repository"; else
+  pass "a moved discussion leaves the repository undeleted"
+fi
+scenario
 run_guard --repo stray --issue 4289 --apply
 item_reads=$(grep -cF 'api repos/devantler-tech/stray/issues?state=all&per_page=100' "${tmp}/trace" || true)
 ref_reads=$(grep -cF 'api repos/devantler-tech/stray/git/refs?per_page=100' "${tmp}/trace" || true)
-if [ "${rc}" = 0 ] && grep -q '^DELETED devantler-tech/stray' <<<"${out}" && [ "${item_reads}" = 2 ] && [ "${ref_reads}" = 2 ]; then
+comment_reads=$(grep -cF 'api repos/devantler-tech/stray/comments?per_page=100' "${tmp}/trace" || true)
+if [ "${rc}" = 0 ] && grep -q '^DELETED devantler-tech/stray' <<<"${out}" && [ "${item_reads}" = 2 ] && [ "${ref_reads}" = 2 ] &&
+  [ "${comment_reads}" = 2 ]; then
   pass "an unchanged recheck still deletes, and the recheck really re-read the list"
 else
   fail "unchanged recheck: rc=${rc} ${out}"
