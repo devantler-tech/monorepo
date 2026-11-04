@@ -5,8 +5,8 @@
 # Kind none means only an agent reading the prose holds the rule. Narrative marks a sentence the
 # extraction finds that states no rule; it is reported apart.
 id	section	quote	kind	control	evidence
-MP-001	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	Sweep the actionable set **first**, every run, across	none	-	-
-MP-002	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	Eligibility there is a property of the **author**,	none	-	-
+MP-001	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	⚠️ **The `non-draft` scoping below bounds the merge COMMAND, never the SWEEP**	none	-	-
+MP-002	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	🔴 **`app/botantler-1` is NEVER `--auto`-eligible	none	-	-
 MP-003	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	Exit 0 waives the **review** requirement for that	none	-	-
 MP-004	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	Arming `--auto` on it lets an updater push during	narrative	-	-
 MP-005	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	State the matrix as this two-plus-one split and **never	none	-	-
@@ -16,14 +16,14 @@ MP-008	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	**So the arm
 MP-009	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	Record `<repo>#<n>` with the evaluated `headRefOid`	none	-	-
 MP-010	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	A later run resolves an outstanding entry by reading	none	-	-
 MP-011	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	Keying the check on `mergeCommit` therefore reports	narrative	-	-
-MP-012	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Park with one command, never two hand-made writes:**	computational	.claude/scripts/blocked-label-blocker-line-go/park.go	park --org <owner> --target
+MP-012	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Park with one command, never two hand-made writes:**	computational	.claude/scripts/blocked-label-blocker-line-go/park.go	forgeWrite("POST", path+"/labels"
 MP-013	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	An existing record is edited in place, never joined	computational	.claude/scripts/blocked-label-blocker-line-go/park.go	record comments: retain one marker
 MP-014	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	It refuses a kind other than `upstream`, `authority`	computational	.claude/scripts/blocked-label-blocker-line-go/compose.go	the target cannot be its own blocker
 MP-014	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	It refuses a kind other than `upstream`, `authority`	computational	.claude/scripts/blocked-label-blocker-line-go/compose.go	--kind must be exactly upstream, authority or outcome
 MP-015	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**An authority park must enter the maintainer digest.**	computational	.claude/scripts/blocked-label-blocker-line-go/park.go	authority parking needs a linked digest ask
 MP-016	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Read replies first; never repeat an answered ask.	none	-	-
 MP-017	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The record is intake, never proof of bot notification.	none	-	-
-MP-018	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	On every later run, **re-verify the blocker against	computational	.claude/scripts/blocked-label-blocker-line-go/park.go	it edits the same comment
+MP-018	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	On every later run, **re-verify the blocker against	computational	.claude/scripts/blocked-label-blocker-line-go/park.go	forgeWrite("PATCH"
 MP-019	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Never post a second record or a new comment restating	computational	.claude/scripts/blocked-label-blocker-line-go/park.go	record comments: retain one marker
 MP-020	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The record replaces the re-diagnosis, never the re-check.	none	-	-
 MP-021	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	`authority`: the PR waits on a decision, and the	none	-	-
@@ -43,11 +43,11 @@ MP-034	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Merge-
 MP-035	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	A PR enters the queue, runs the `merge_group` checks,	narrative	-	-
 MP-036	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Before re-queuing, **always pull the PR's `merge_group`	none	-	-
 MP-037	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Prefer the tested helper that implements exactly	computational	.claude/scripts/pr-unresolved-threads.sh	UNKNOWN
-MP-038	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	So `rate_limit` is never evidence that GraphQL is	computational	.claude/scripts/graphql-availability.sh	rate_limit
-MP-039	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	`REFUSING` is the named state: a state of the service	computational	.claude/scripts/graphql-availability.sh	REFUSING
+MP-038	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	So `rate_limit` is never evidence that GraphQL is	computational	.claude/scripts/graphql-availability.sh	gh api graphql --hostname github.com
+MP-039	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	`REFUSING` is the named state: a state of the service	none	-	-
 MP-040	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**That must read `0` immediately before the merge	none	-	-
 MP-041	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	🔴 **A FAILED read must never satisfy this gate	computational	.claude/scripts/pr-unresolved-threads.sh	UNKNOWN
-MP-042	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Treat a non-zero exit as **UNKNOWN, never as zero**,	computational	.claude/scripts/pr-unresolved-threads.sh	UNKNOWN
+MP-042	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Treat a non-zero exit as **UNKNOWN, never as zero**,	none	-	-
 MP-043	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	| 20 | **no** | **20** | 73 | **0 — over 53 threads	narrative	-	-
 MP-044	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	| 50 | **no** | **50** | 73 | **0 — over 23 threads	narrative	-	-
 MP-045	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Treat a shortfall exactly like a failed read: **UNKNOWN,	computational	.claude/scripts/pr-unresolved-threads.sh	totalCount
@@ -56,7 +56,7 @@ MP-047	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	*You own
 MP-048	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Build-and-lint-only CI never satisfies it**, and	none	-	-
 MP-049	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Verify against the API that the cited run **exists**,	none	-	-
 MP-050	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	`BLOCKED` with every check-run and status `success`/`skipped`	narrative	-	-
-MP-051	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	🔴 **Exception (a) also requires the head's REQUIRED	computational	.claude/scripts/required-gate-completeness.sh	REQUIRED gate set
+MP-051	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	🔴 **Exception (a) also requires the head's REQUIRED	computational	.claude/scripts/required-gate-completeness.sh	required_status_checks
 MP-052	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	`statusCheckRollup` lists what ran, never what should	narrative	-	-
 MP-053	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	That gate is the blocker, and it is never stale.	none	-	-
 MP-054	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Exit `2` (`UNKNOWN`)** never reads as stale either.	none	-	-
@@ -71,7 +71,7 @@ MP-062	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**A `pen
 MP-063	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Merging a stacked PR also merges every PR below	none	-	-
 MP-064	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Never record it as merged.	none	-	-
 MP-065	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Never transfer a field list between subcommands**	none	-	-
-MP-066	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Reuse an exact command that already succeeded in	none	-	-
+MP-066	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	🔴 **Never discard both stderr and the exit status of a `gh` read	none	-	-
 MP-067	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Treat that exit as **UNKNOWN, never zero results**.	none	-	-
 MP-068	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	CodeRabbit posts re-review results as COMMENTED and	narrative	-	-
 MP-069	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**An agent-authored block AT the current head is	none	-	-
@@ -96,13 +96,13 @@ MP-086	dependency-automation-and-programmed-bot-prs	Always convert the PR to dra
 MP-087	dependency-automation-and-programmed-bot-prs	Push the adaptation with `.claude/scripts/bot-pr-adaptation-push.sh`,	computational	.claude/scripts/bot-pr-adaptation-push.sh	autoMergeRequest
 MP-088	dependency-automation-and-programmed-bot-prs	🔴 **Never close a Dependabot PR to retrigger it	none	-	-
 MP-089	dependency-automation-and-programmed-bot-prs	Recreate discards every commit on the branch, so	narrative	-	-
-MP-090	dependency-automation-and-programmed-bot-prs	🔴 **An installed-skill root holds copies from	computational	.claude/scripts/skill-owner.sh	metadata.github-repo
+MP-090	dependency-automation-and-programmed-bot-prs	🔴 **An installed-skill root holds copies from	computational	.claude/scripts/skill-owner.sh	.metadata.github-repo | tag
 MP-091	dependency-automation-and-programmed-bot-prs	Every changed root must be listed for that repository,	computational	.claude/scripts/programmed-bot-review-exemption.sh	skill-ownership-allowlist
-MP-092	dependency-automation-and-programmed-bot-prs	The classifier's eighth argument — a JSON object	computational	.claude/scripts/programmed-bot-review-exemption.sh	metadata.github-repo
-MP-093	dependency-automation-and-programmed-bot-prs	Supplying it can only withdraw the carve-out, never	computational	.claude/scripts/programmed-bot-review-exemption.sh	metadata.github-repo
-MP-094	dependency-automation-and-programmed-bot-prs	It is **required on this arm** and omitting it returns	computational	.claude/scripts/programmed-bot-review-exemption.sh	unproven ownership (exit 3)
+MP-092	dependency-automation-and-programmed-bot-prs	The classifier's eighth argument — a JSON object	computational	.claude/scripts/programmed-bot-review-exemption.sh	matches_suite_owned_skills && updater_verdict 0
+MP-093	dependency-automation-and-programmed-bot-prs	Supplying it can only withdraw the carve-out, never	computational	.claude/scripts/programmed-bot-review-exemption.sh	matches_suite_owned_skills && updater_verdict 0
+MP-094	dependency-automation-and-programmed-bot-prs	It is **required on this arm** and omitting it returns	computational	.claude/scripts/programmed-bot-review-exemption.sh	matches_suite_owned_skills && updater_verdict 0
 MP-095	dependency-automation-and-programmed-bot-prs	The other arms take seven arguments and never consult	narrative	-	-
 MP-096	dependency-automation-and-programmed-bot-prs	Never infer it from the title alone.	none	-	-
-MP-097	dependency-automation-and-programmed-bot-prs	🔴 **The exemption proves provenance, never ripeness:	computational	.claude/scripts/release-cask-ripeness.sh	RIPE
-MP-098	dependency-automation-and-programmed-bot-prs	On a 404, `gh api` still prints the error body on	computational	.claude/scripts/release-cask-ripeness.sh	404
+MP-097	dependency-automation-and-programmed-bot-prs	🔴 **The exemption proves provenance, never ripeness:	computational	.claude/scripts/release-cask-ripeness.sh	NOT-RIPE release
+MP-098	dependency-automation-and-programmed-bot-prs	On a 404, `gh api` still prints the error body on	none	-	-
 MP-099	dependency-automation-and-programmed-bot-prs	So a cask PR is the exception to "qualifying PRs	none	-	-
