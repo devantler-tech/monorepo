@@ -475,7 +475,12 @@ a diff.
   your writes to its cluster, and an exported `KUBECONFIG` alone does not prove every wrapper reads
   it. KSail's `--config` flag takes a `ksail.yaml`, not a kubeconfig, so give each run its own
   `ksail.yaml` whose `spec.cluster.connection.kubeconfig` and `spec.cluster.connection.context` name
-  that run's kubeconfig file and context. Keep one cluster per run, and delete it before the run ends, confirming it is gone.
+  that run's kubeconfig file and context. With the `Kubernetes` provider, which nests a cluster
+  inside a host cluster, that connection selects only the nested cluster: the host comes from
+  `spec.provider.kubernetes.kubeconfig` and `spec.provider.kubernetes.context`, and KSail falls back
+  to `~/.kube/config` and its current context when they are unset. Set both explicitly to a
+  non-production host, so a fallback can never place the nested cluster on production. Keep one
+  cluster per run, and delete it before the run ends, confirming it is gone.
 - Reach for `kind`, `k3d`, `talosctl`, `kubectl` or `helm` directly only for a step KSail cannot do.
   Never block work on a KSail gap: work around it, and say so in the pull request body.
 - **File each gap and friction** on `devantler-tech/ksail`, one issue per distinct root cause: a
