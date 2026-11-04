@@ -814,7 +814,7 @@ claim_sweep_portfolio() {
       esac
     done
     # A nonzero exit the summary does not explain is still not a clean sweep.
-    if [ "$rc" -ne 0 ] && ! printf '%s\n' "$summary" | grep -Eq ' (raced|failed|unknown)=[1-9]'; then
+    if [ "$rc" -ne 0 ] && ! grep -Eq ' (raced|failed|unknown)=[1-9]' <<<"$summary"; then
       unknown=$((unknown + 1))
     fi
   done <<< "$PORTFOLIO_REPOS"

@@ -151,7 +151,7 @@ done
 # actual entrypoint must enumerate all groups without executing the fixtures.
 orchestrator="$here/worktree-cleanup-all.test.sh"
 "$BASH" "$orchestrator" --list-cases >"$tmp/orchestrator-cases" || fail 'orchestrator registry failed'
-if [ "$(wc -l <"$tmp/orchestrator-cases" | tr -d ' ')" -ne 42 ] ||
+if [ "$(wc -l <"$tmp/orchestrator-cases" | tr -d ' ')" -ne 45 ] ||
   grep -Ev '^t_[a-zA-Z0-9_]+$' "$tmp/orchestrator-cases" >/dev/null; then
   fail 'orchestrator registry executed fixtures or lost case groups'
 fi

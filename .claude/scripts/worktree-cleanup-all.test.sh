@@ -1444,7 +1444,7 @@ registry="$(printf '%s\n' "$invocations" | awk '!seen[$1]++ {print $1}')"
 listed="$(printf '%s\n' "$registry" | LC_ALL=C sort)"
 declared="$(declare -F | awk '{print $NF}' | sed -n '/^t_[a-zA-Z0-9_]*$/p' | LC_ALL=C sort)"
 registry_failure() { echo 'worktree-cleanup-all.test: case invocation registry differs from complete declared cases and variants' >&2; exit 2; }
-# Forty-five groups cover the original fifty invocations. Together with
+# Forty-five groups cover fifty invocations. Together with
 # unique calls and the exact allowed arguments below, the census also proves
 # that no parameter variant was silently dropped, repeated or substituted.
 [ "$(printf '%s\n' "$invocations" | wc -l | tr -d ' ')" -eq 50 ] || registry_failure
