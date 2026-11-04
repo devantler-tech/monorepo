@@ -18,6 +18,8 @@ case "$1:$#" in
   --list-cases:1|--run-cases:3) ;;
   *) echo 'worktree-cleanup-all.test: expected --list-cases or --run-cases MANIFEST RECEIPT' >&2; exit 2 ;;
 esac
+# The claim-tip sweep (#3590) reads GitHub; every case runs without it unless it names a stub.
+export WORKTREE_CLEANUP_CLAIM_SWEEP=off
 orchestrator_test_finished=0
 on_orchestrator_exit() {
   local rc=$?
@@ -1263,6 +1265,134 @@ t_unknown_submodule_eligibility_fails_closed() {
   done
 }
 
+# claim_sweep_stub <dir> <exit-for-ksail> — a stand-in for agent-claim-sweep.sh that records each
+# call (its arguments and the origin of the empty repository it was handed) and prints the same
+# summary shape. Every repository reads one kept and one removed tip; ksail can be made to fail.
+claim_sweep_stub() {
+  local dir=$1 ksail_rc=$2
+  mkdir -p "$dir"
+  cat >"$dir/sweep" <<STUB
+#!/usr/bin/env bash
+repo='' repo_dir='' apply=no
+while [ "\$#" -gt 0 ]; do
+  case "\$1" in
+    --repo) repo=\$2; shift 2 ;;
+    --repo-dir) repo_dir=\$2; shift 2 ;;
+    --apply) apply=yes; shift ;;
+    *) echo "unexpected \$1" >&2; exit 2 ;;
+  esac
+done
+printf '%s %s %s %s\n' "\$repo" "\$apply" "\$(git -C "\$repo_dir" remote get-url origin 2>&1)" \
+  "\$(git -C "\$repo_dir" rev-parse --verify -q HEAD >/dev/null && echo has-commits || echo empty)" \
+  >>"$dir/calls"
+echo "KEEP 1 open"
+if [ "\$repo" = devantler-tech/ksail ] && [ "$ksail_rc" != 0 ]; then
+  echo "UNKNOWN 2 issue read failed"
+  echo "agent-claim-sweep: repo=\$repo mode=apply kept=1 removed=0 raced=0 failed=0 unknown=1"
+  exit $ksail_rc
+fi
+echo "REMOVE 3 closed 0123456789012345678901234567890123456789"
+echo "agent-claim-sweep: repo=\$repo mode=apply kept=1 removed=1 raced=0 failed=0 unknown=0"
+STUB
+  chmod +x "$dir/sweep"
+}
+
+t_claim_sweep_runs_for_every_portfolio_repository() {
+  # #3590: leaked agent-claim/* tips piled up because nothing ran the sweep. The claude lane runs
+  # it after the worktree sweep, once per Portfolio-map repository, against an empty repository
+  # whose origin names it, then waits out its minimum interval.
+  local name="the claude lane sweeps claim tips in every portfolio repository, then waits a day"
+  local root; root=$(make_root)
+  claim_sweep_stub "$root/stub" 0
+  local out rc again calls repos
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" WORKTREE_CLEANUP_CLAIM_SWEEP="$root/stub/sweep" \
+    bash "$SUT" apply 24 2>&1); rc=$?
+  again=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" WORKTREE_CLEANUP_CLAIM_SWEEP="$root/stub/sweep" \
+    bash "$SUT" apply 24 2>&1)
+  calls=$(wc -l <"$root/stub/calls" 2>/dev/null | tr -d ' ')
+  repos=$(sed -n 's/^claims mode=apply repos=\([0-9]*\) .*/\1/p' <<<"$out")
+  if [ "$rc" -eq 0 ] && [ -n "$repos" ] && [ "$repos" -gt 1 ] && [ "$calls" = "$repos" ] \
+     && grep -qx "devantler-tech/monorepo yes https://github.com/devantler-tech/monorepo.git empty" "$root/stub/calls" \
+     && grep -qx "devantler-tech/ksail yes https://github.com/devantler-tech/ksail.git empty" "$root/stub/calls" \
+     && [ "$(grep -c ' yes ' "$root/stub/calls")" = "$calls" ] \
+     && grep -qx "claims mode=apply repos=$repos kept=$repos removed=$repos raced=0 failed=0 unknown=0" <<<"$out" \
+     && grep -q '^REMOVE 3 closed' <<<"$out" && ! grep -q '^KEEP 1 open' <<<"$out" \
+     && [ -s "$root/home/.claude/agent-claim-sweep-apply.last" ] \
+     && [ ! -e "$root/home/.claude/agent-claim-sweep-apply.attempt" ] \
+     && grep -q '^claims skipped: last complete apply sweep 0h ago (minimum 20h)$' <<<"$again" \
+     && [ "$(wc -l <"$root/stub/calls" | tr -d ' ')" = "$calls" ]; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc repos=$repos calls=$calls
+$out
+--- second run
+$again"
+  fi
+  rm -rf "$root"
+}
+
+t_claim_sweep_failure_is_visible_and_never_blocks() {
+  # A failed or UNKNOWN claim sweep must not stop the worktree sweep it runs beside, and must not
+  # read as a clean run: its lines are printed, the script exits 2, and the clock is not restarted.
+  local name="a failed claim sweep is reported, exits 2, leaves the worktree sweep done, then backs off"
+  local root; root=$(make_root)
+  claim_sweep_stub "$root/stub" 2
+  local out rc again rc_again calls
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" WORKTREE_CLEANUP_CLAIM_SWEEP="$root/stub/sweep" \
+    bash "$SUT" apply 24 2>&1); rc=$?
+  calls=$(wc -l <"$root/stub/calls" 2>/dev/null | tr -d ' ')
+  # The next run inside the retry interval reads nothing and says why.
+  again=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" WORKTREE_CLEANUP_CLAIM_SWEEP="$root/stub/sweep" \
+    bash "$SUT" apply 24 2>&1); rc_again=$?
+  if [ "$rc" -eq 2 ] && [ ! -e "$root/repo/.claude/worktrees/spent-root" ] \
+     && [ "$rc_again" -eq 2 ] && [ "$(wc -l <"$root/stub/calls" | tr -d ' ')" = "$calls" ] \
+     && grep -q '^claims skipped: the last apply attempt 0h ago did not finish cleanly; retrying after 3h$' <<<"$again" \
+     && [ -s "$root/home/.claude/agent-claim-sweep-apply.attempt" ] \
+     && grep -q '^UNKNOWN 2 issue read failed$' <<<"$out" \
+     && grep -q '^claims mode=apply repos=[0-9]* kept=[0-9]* removed=[0-9]* raced=0 failed=0 unknown=1$' <<<"$out" \
+     && grep -q 'the claim-tip sweep did not finish cleanly' <<<"$out" \
+     && grep -q '^=== done' <<<"$out" \
+     && [ ! -e "$root/home/.claude/agent-claim-sweep-apply.last" ]; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc spent-root=$([ -e "$root/repo/.claude/worktrees/spent-root" ] && echo present || echo gone)
+$out"
+  fi
+  rm -rf "$root"
+}
+
+t_claim_sweep_dry_run_and_codex_lane() {
+  # dry-run must never pass --apply, the codex lane never runs the sweep (the claude lane owns it),
+  # and an executable that is not there is UNKNOWN rather than a silent skip.
+  local name="dry-run sweeps without --apply; codex never sweeps claims; a missing sweep is UNKNOWN"
+  local root; root=$(make_root)
+  claim_sweep_stub "$root/stub" 0
+  local dry codex missing rc_missing
+  dry=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" WORKTREE_CLEANUP_CLAIM_SWEEP="$root/stub/sweep" \
+    bash "$SUT" dry-run 24 2>&1)
+  codex=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" WORKTREE_CLEANUP_CLAIM_SWEEP="$root/stub/sweep" \
+    bash "$SUT" dry-run 24 --lane codex 2>&1)
+  missing=$(HOME="$root/home2" WORKTREE_CLEANUP_ROOT="$root/repo" WORKTREE_CLEANUP_CLAIM_SWEEP="$root/stub/absent" \
+    bash "$SUT" dry-run 24 2>&1); rc_missing=$?
+  if [ -s "$root/stub/calls" ] && ! grep -q ' yes ' "$root/stub/calls" \
+     && grep -q '^claims mode=dry-run repos=' <<<"$dry" \
+     && grep -q '^(dry-run: removed counts tips that WOULD be removed)$' <<<"$dry" \
+     && [ -s "$root/home/.claude/agent-claim-sweep-dry-run.last" ] \
+     && [ ! -e "$root/home/.claude/agent-claim-sweep-apply.last" ] \
+     && ! grep -q 'claim tips' <<<"$codex" \
+     && [ "$rc_missing" -eq 2 ] && grep -q '^claims UNKNOWN: the claim sweep .* is not executable$' <<<"$missing"; then
+    ok "$name"
+  else
+    bad "$name" "rc_missing=$rc_missing
+$dry
+--- codex
+$codex
+--- missing
+$missing"
+  fi
+  rm -rf "$root"
+}
+
 case_invocations() {
   cat <<'ORCHESTRATOR_CALLS'
 t_excluded_submodule_is_never_probed
@@ -1312,6 +1442,9 @@ t_codex_lane_sweeps_worktrees_nested_in_its_sessions
 t_codex_nested_pass_leaves_a_live_session_alone
 t_nested_passes_never_cross_lanes
 t_rejects_a_bad_lane_or_extra_argument
+t_claim_sweep_runs_for_every_portfolio_repository
+t_claim_sweep_failure_is_visible_and_never_blocks
+t_claim_sweep_dry_run_and_codex_lane
 ORCHESTRATOR_CALLS
 }
 invocations="$(case_invocations)"
@@ -1319,10 +1452,10 @@ registry="$(printf '%s\n' "$invocations" | awk '!seen[$1]++ {print $1}')"
 listed="$(printf '%s\n' "$registry" | LC_ALL=C sort)"
 declared="$(declare -F | awk '{print $NF}' | sed -n '/^t_[a-zA-Z0-9_]*$/p' | LC_ALL=C sort)"
 registry_failure() { echo 'worktree-cleanup-all.test: case invocation registry differs from complete declared cases and variants' >&2; exit 2; }
-# Forty-two groups cover the original forty-seven invocations. Together with
+# Forty-five groups cover fifty invocations. Together with
 # unique calls and the exact allowed arguments below, the census also proves
 # that no parameter variant was silently dropped, repeated or substituted.
-[ "$(printf '%s\n' "$invocations" | wc -l | tr -d ' ')" -eq 47 ] || registry_failure
+[ "$(printf '%s\n' "$invocations" | wc -l | tr -d ' ')" -eq 50 ] || registry_failure
 [ "$invocations" = "$(printf '%s\n' "$invocations" | awk '{print $1 (NF > 1 ? " " $2 : "")}')" ] || registry_failure
 [ -z "$(printf '%s\n' "$invocations" | LC_ALL=C sort | uniq -d)" ] || registry_failure
 [ "$listed" = "$declared" ] || registry_failure
