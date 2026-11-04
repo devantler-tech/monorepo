@@ -623,11 +623,14 @@ func appendStepSummary(path string, s *state, summary, findings, reason string, 
 	if err != nil {
 		return die("could not write the step summary")
 	}
-	if _, err := file.WriteString(b.String()); err != nil {
-		file.Close()
+	// A write or a close that fails means the summary may be incomplete, so both are reported
+	// rather than dropped.
+	_, writeErr := file.WriteString(b.String())
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
 		return die("could not write the step summary")
 	}
-	return file.Close()
+	return nil
 }
 
 // awkFields is awk's default field split, padded to n.

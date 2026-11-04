@@ -152,6 +152,11 @@ func TestRegistryIsTheAuthority(t *testing.T) {
 		strings.Replace(testRegistry, `"search":"app/build-worker"`, `"search":""`, 1),
 		strings.Replace(testRegistry, `"definitionAdapter":"local-runtime",`, ``, 1),
 		strings.Replace(testRegistry, `"roles":["agentic-engineer"]}`, `"roles":[]}`, 1),
+		// jq reads exact key spellings, a numeric version and one value per instance key.
+		strings.Replace(testRegistry, `"version":1`, `"version":"1"`, 1),
+		strings.Replace(testRegistry, `"namespace":"worker","authors"`, `"namespace":"worker","Authors"`, 1),
+		strings.Replace(testRegistry, `"build-worker":{"namespace":"worker"`, `"build-worker":{"NameSpace":"worker"`, 1),
+		strings.Replace(testRegistry, `"build-worker":{`, `"claude-local":{`, 1),
 	}
 	for _, text := range broken {
 		if _, ok := loadRegistry([]byte(text)); ok {

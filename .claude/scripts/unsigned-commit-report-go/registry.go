@@ -39,8 +39,13 @@ func loadRegistry(data []byte) (registry, bool) {
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
 		return reg, false
 	}
+	// The version must be the JSON number 1, never a string that merely parses as one.
+	versionText := bytes.TrimSpace(top["version"])
+	if len(versionText) == 0 || versionText[0] == '"' {
+		return reg, false
+	}
 	var version json.Number
-	if json.Unmarshal(top["version"], &version) != nil {
+	if json.Unmarshal(versionText, &version) != nil {
 		return reg, false
 	}
 	if v, err := strconv.ParseFloat(version.String(), 64); err != nil || v != 1 {
@@ -49,6 +54,15 @@ func loadRegistry(data []byte) (registry, bool) {
 	keys, values, ok := orderedObject(top["instances"])
 	if !ok || len(keys) == 0 {
 		return reg, false
+	}
+	// A repeated instance key would leave two readings of one registration; refuse it rather
+	// than pick one.
+	instanceKeys := map[string]bool{}
+	for _, key := range keys {
+		if instanceKeys[key] {
+			return reg, false
+		}
+		instanceKeys[key] = true
 	}
 	var publisher string
 	if json.Unmarshal(top["policyPublisher"], &publisher) != nil || publisher == "" {
@@ -60,40 +74,42 @@ func loadRegistry(data []byte) (registry, bool) {
 		if key == publisher {
 			found = true
 		}
-		var raw struct {
-			Namespace         *string           `json:"namespace"`
-			Authors           map[string]any    `json:"authors"`
-			DefinitionAdapter any               `json:"definitionAdapter"`
-			Roles             []json.RawMessage `json:"roles"`
-		}
-		if json.Unmarshal(values[i], &raw) != nil || raw.Namespace == nil || raw.Authors == nil {
+		// Keys are read by their exact spelling, as jq reads them: struct decoding would also
+		// accept "Namespace" or "AUTHORS".
+		var raw map[string]any
+		if json.Unmarshal(values[i], &raw) != nil || raw == nil {
 			return reg, false
 		}
-		if !namespaceShape.MatchString(*raw.Namespace) || seen[*raw.Namespace] {
+		namespace, isString := raw["namespace"].(string)
+		if !isString || !namespaceShape.MatchString(namespace) || seen[namespace] {
 			return reg, false
 		}
-		seen[*raw.Namespace] = true
+		seen[namespace] = true
+		authorObject, isObject := raw["authors"].(map[string]any)
+		if !isObject {
+			return reg, false
+		}
 		authors := map[string]string{}
 		for _, surface := range []string{"cli", "rest", "graphql", "search"} {
-			spelling, isString := raw.Authors[surface].(string)
+			spelling, isString := authorObject[surface].(string)
 			if !isString || spelling == "" {
 				return reg, false
 			}
 			authors[surface] = spelling
 		}
-		if adapter, isString := raw.DefinitionAdapter.(string); !isString || adapter == "" {
+		if adapter, isString := raw["definitionAdapter"].(string); !isString || adapter == "" {
 			return reg, false
 		}
-		if len(raw.Roles) == 0 {
+		roles, isArray := raw["roles"].([]any)
+		if !isArray || len(roles) == 0 {
 			return reg, false
 		}
-		for _, role := range raw.Roles {
-			var name string
-			if json.Unmarshal(role, &name) != nil || name == "" {
+		for _, role := range roles {
+			if name, isString := role.(string); !isString || name == "" {
 				return reg, false
 			}
 		}
-		reg.instances = append(reg.instances, instance{namespace: *raw.Namespace, authors: authors})
+		reg.instances = append(reg.instances, instance{namespace: namespace, authors: authors})
 	}
 	if !found {
 		return reg, false
