@@ -454,18 +454,33 @@ at least two repositories proves a product-neutral contract worth inheriting —
 ## Dogfood KSail
 
 KSail is the portfolio's own Kubernetes tool, and using it on our own work is how we learn what to
-improve. Whenever a task needs a Kubernetes cluster or operates one, **do it with KSail first**: its
-CLI, or its MCP server through the `ksail` plugin. That covers a throwaway cluster to test a
-manifest, chart or policy; validating workloads; a template's smoke test; and the platform's own
-clusters, which KSail already provisions.
+improve (maintainer direction, interactive session 2026-11-04). Whenever a task needs a cluster of
+its own, **create and operate it with KSail first**: the `ksail` CLI in every lane, or its MCP server
+where the runtime loads the `ksail` plugin. That covers a throwaway cluster to try a manifest, chart
+or policy, a template's smoke test, and reproducing a KSail bug. A product card that requires static
+validation still wins: the platform's repository work, for example, never spins up a cluster to test
+a diff.
 
+- **Production stays read-only.** Inspect the live platform only through the context
+  `prod-kube-context.sh` selects, with the read-only reads the guides already allow. KSail's write
+  tools, `cipher decrypt` and every other write never target a production context; production
+  changes only through GitOps delivery. The `kubectl` reads that `platform-security-surveyor` and the
+  helper scripts make stay as they are.
+- **Give each local cluster a lifecycle.** Run `disk-preflight.sh` first. Name the cluster with your
+  writer namespace and run id so parallel runs never share one, keep one per run, and delete it
+  before the run ends, confirming it is gone.
 - Reach for `kind`, `k3d`, `talosctl`, `kubectl` or `helm` directly only for a step KSail cannot do.
   Never block work on a KSail gap: work around it, and say so in the pull request body.
-- **File every gap and every friction** on `devantler-tech/ksail`: a missing capability, a
-  confusing error, a slow step, a missing flag or a misleading doc. Search for an existing issue
-  first and add your evidence there. Give the command you ran, what KSail did, what you expected,
-  and the workaround you used. Set the issue's Type and add it to the board, as for any issue.
+- **File each gap and friction** on `devantler-tech/ksail`, one issue per distinct root cause: a
+  missing capability, a confusing error, a slow step, a missing flag or a misleading doc. Search for
+  an existing issue first and add your evidence there. Give the command, what KSail did, what you
+  expected and the workaround, sanitised per
+  [*Sensitive information stays private*](egress-and-privacy.md#sensitive-information-stays-private--never-publish-it):
+  describe a failure on a platform cluster generically and keep raw output in private memory. A
+  security weakness goes to a [private security advisory](#security-advisories--private-vulnerability-reports),
+  never a public issue. Set the issue's Type and add it to the board, as for any issue.
 - Filing issues is exempt from the draft caps; fixing KSail is ordinary KSail work, chosen through
   the work-selection ladder.
-- Local clusters are cheap and need no special approval. A real cloud-cluster trial keeps the
-  cadence limit and the cost rules in *Cadence & focus*.
+- A local cluster needs no special approval. A real-cluster trial keeps the once-a-day limit in
+  *Cadence & focus* and the cost rules in
+  [*Temporary engineering costs*](spend-and-inference.md#temporary-engineering-costs).

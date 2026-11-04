@@ -15,6 +15,14 @@
     "GH_TELEMETRY": "0",
     "GIT_NO_LAZY_FETCH": "1"
   },
+  "permissions": {
+    "ask": [
+      "mcp__plugin_ksail_ksail__cluster_write",
+      "mcp__plugin_ksail_ksail__project_write",
+      "mcp__plugin_ksail_ksail__tenant_write",
+      "mcp__plugin_ksail_ksail__workload_write"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {

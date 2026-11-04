@@ -1116,6 +1116,20 @@ jq -e '
   .enabledPlugins == {"agentic-engineering@devantler-plugins": true, "ksail@devantler-plugins": true}
 ' "${settings}" > /dev/null ||
   fail "runtime settings do not enable exactly the reviewed agentic-engineering and ksail plugins"
+# KSail's MCP write tools can create, change and delete clusters and decrypt secrets in any context
+# on the host, so each one waits for an approval; an unattended run cannot give one.
+jq -e '
+  (.permissions.ask // []) as $ask
+  | all("cluster_write", "project_write", "tenant_write", "workload_write";
+      "mcp__plugin_ksail_ksail__\(.)" as $tool | $ask | index($tool) != null)
+' "${settings}" > /dev/null ||
+  fail "runtime settings do not require approval for every KSail MCP write tool"
+# The enabled plugin must exist in the reviewed marketplace at this checkout's gitlink.
+ksail_marketplace="${repo_root}/libraries/agent-plugins/.claude-plugin/marketplace.json"
+[ -f "${ksail_marketplace}" ] ||
+  fail "initialise the reviewed plugin with .claude/scripts/submodule-init.sh libraries/agent-plugins"
+jq -e '[.plugins[] | select(.name == "ksail")] | length == 1' "${ksail_marketplace}" > /dev/null ||
+  fail "the reviewed marketplace at the gitlink does not offer the enabled ksail plugin"
 
 # The plugin can ship a tool-neutral guard and Claude's JSON adapter, but only the
 # consumer can attach a hook to this deployment's surveyor. Verify the native agent
