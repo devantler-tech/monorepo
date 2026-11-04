@@ -50,6 +50,7 @@
 #       installed npx tools, logs, credentials and dependency trees are never candidates.
 #   4. Go's orphaned work dirs (go-build<digits>, go-link-<digits>) directly under the
 #      per-user temp dir and under the temp root (a lane may run with TMPDIR set to either),
+#      and under GOTMPDIR when the go command has one,
 #      older than a threshold counted in HOURS.
 #   4b. Abandoned browser test profiles (rod/user-data/<16 hex digits>) under that same
 #      temp dir, older than a threshold counted in HOURS (2026-10-06: 30 GB, monorepo#3883).
@@ -122,6 +123,7 @@
 #   * A Codex app worktree is KEPT, and so is everything below a task dir that is a checkout. One
 #     whose git registration is gone is reported, never removed (2b).
 #   * A Go work dir is KEPT while a Go toolchain process that could own it is running.
+#     A go command accounted for by the work dir it runs a binary from owns no other dir.
 #   * A browser test profile is KEPT while any process names it on its command line.
 #   * The golangci-lint cache is KEPT while golangci-lint runs, and is emptied only when
 #     it carries golangci-lint's own README marker.
@@ -2242,14 +2244,19 @@ fi
 # gap would read as older than a process that in fact predates it. The comparison runs in
 # whole minutes with a margin of two, and every unknown keeps the tree.
 go_toolchain_could_own() {
-  local tree=$1 now age_s hit
-  [ "$GO_TOOLCHAIN_OLDEST" != unknown ] || return 0
-  [ "$GO_TOOLCHAIN_OLDEST" -ge 0 ] || return 1
+  local tree=$1 now age_s hit oldest=$GO_TOOLCHAIN_OLDEST epoch=$PS_EPOCH
+  # The table with process ids, when it was read cleanly, also knows which go commands
+  # are accounted for by a work dir of their own (below); it then decides instead.
+  if [ "$GO_FREE_OK" -eq 1 ]; then
+    oldest=$GO_FREE_OLDEST epoch=$GO_FREE_EPOCH
+  fi
+  [ "$oldest" != unknown ] || return 0
+  [ "$oldest" -ge 0 ] || return 1
   now=$(date +%s 2>/dev/null) || return 0
   case "$now" in
     '' | *[!0-9]*) return 0 ;;
   esac
-  age_s=$((GO_TOOLCHAIN_OLDEST + now - PS_EPOCH))
+  age_s=$((oldest + now - epoch))
   hit=$(find "$tree" -maxdepth 0 -mmin "-$((age_s / 60 + 2))" 2>/dev/null) || return 0
   [ -n "$hit" ]
 }
@@ -2264,6 +2271,119 @@ run_tmp_canon=$(cd -- "$TMPDIR_ROOT" 2>/dev/null && pwd -P) || run_tmp_canon=''
 if [ -n "$run_tmp_canon" ] && [ "$run_tmp_canon" != "$go_tmp_canon" ]; then
   go_work_roots+=("$TMPDIR_ROOT")
 fi
+# The go command puts its work dirs under GOTMPDIR when that is set (monorepo#3698). It can
+# come from the environment or from `go env -w`, which a scheduled run's environment does not
+# show, so the go command itself is asked when the environment says nothing. The test seam
+# BUILD_CACHE_RECLAIM_GOTMPDIR, when set (even empty), replaces both. GOTMPDIR is not this
+# user's private dir, so it takes the shared temp root's stricter rule below. It is skipped
+# when it names a root already swept.
+if [ -n "${BUILD_CACHE_RECLAIM_GOTMPDIR+set}" ]; then
+  go_gotmpdir=$BUILD_CACHE_RECLAIM_GOTMPDIR
+else
+  go_gotmpdir=${GOTMPDIR:-}
+  if [ -z "$go_gotmpdir" ] && command -v go >/dev/null 2>&1; then
+    # From / with the local toolchain, so a go.mod where this runs cannot make go fetch another.
+    go_gotmpdir=$(cd / && GOTOOLCHAIN=local go env GOTMPDIR 2>/dev/null) || go_gotmpdir=''
+  fi
+fi
+if [ -n "$go_gotmpdir" ]; then
+  if go_gotmp_canon=$(cd -- "$go_gotmpdir" 2>/dev/null && pwd -P); then
+    if [ "$go_gotmp_canon" != "$go_tmp_canon" ] && [ "$go_gotmp_canon" != "$run_tmp_canon" ]; then
+      go_work_roots+=("$go_gotmpdir")
+    fi
+  else
+    unknown=$((unknown + 1))
+    log "UNKNOWN (GOTMPDIR is not a readable directory) $go_gotmpdir: Go work dirs there not examined"
+  fi
+fi
+
+# One long-lived go command -- a `go run` dev server started days ago -- used to keep every
+# orphan younger than itself (monorepo#3698). A go command whose own work dir can be named is
+# accounted for: `go run` and `go test` run the binary they built from inside their work dir,
+# so that binary's argv[0] is a path under `<root>/go-build<digits>/`, and its parent is the go
+# command. One go command makes one work dir, so an accounted go command owns no other; it drops
+# out of the age rule, and the dir it runs from stays held open by its binary, which the
+# open-file check keeps. A repeat `go run` of unchanged code runs its binary from the build
+# cache (`<cache>/<xx>/<hash>-d/<name>`, measured with go1.27); its own work dir stays EMPTY, so
+# it too owns nothing that removal could cost. Every other toolchain process still counts.
+# Residual, accepted: a process of this same user can name itself with such a path. That user
+# can already delete these dirs directly, so it gains nothing it did not have.
+#
+# Two reads, taken together after the up-front table: pid/ppid/args to account go commands, and
+# pid/etime/comm to age the rest by the same `comm` rule as the up-front table (argv[0] can be
+# anything, so it never decides what is a toolchain process). GO_FREE_OK stays 0 -- the old rule
+# alone -- unless both reads succeed and every line parses. GO_FREE_OLDEST is the longest-running
+# unaccounted toolchain process (-1 when none), and GO_FREE_WHO names it for the KEEP output.
+GO_FREE_OK=0 GO_FREE_OLDEST=unknown GO_FREE_EPOCH='' GO_FREE_WHO=''
+go_free_read() {
+  local args_table pid_table roots root canon accounted out
+  # The up-front table failing means nothing can be ruled out; a later read never overrules it.
+  [ "$PS_OK" -eq 1 ] || return 1
+  GO_FREE_EPOCH=$(date +%s 2>/dev/null) || return 1
+  case "$GO_FREE_EPOCH" in '' | *[!0-9]*) return 1 ;; esac
+  args_table=$(ps -A -ww -o pid= -o ppid= -o args= 2>/dev/null) || return 1
+  pid_table=$(ps -A -ww -o pid= -o etime= -o comm= 2>/dev/null) || return 1
+  [ -n "$args_table" ] && [ -n "$pid_table" ] || return 1
+  roots=''
+  for root in "${go_work_roots[@]}"; do
+    roots="$roots${root%/}"$'\n'
+    canon=$(cd -- "$root" 2>/dev/null && pwd -P) && roots="$roots${canon%/}"$'\n'
+  done
+  # "<ppid>" for each process run from a work dir under a swept root; exit 1 on a line that
+  # does not parse, so a table this cannot read accounts for nothing.
+  accounted=$(printf '%s\n' "$args_table" | GO_FREE_ROOTS="$roots" awk '
+    BEGIN { n = split(ENVIRON["GO_FREE_ROOTS"], r, "\n") }
+    {
+      if ($1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ || NF < 3) { bad = 1; next }
+      exe = $3
+      # A repeat `go run` of unchanged code runs the binary it cached under
+      # GOCACHE/<xx>/<hash>-d/, and its own work dir stays empty: it owns no work dir.
+      if (exe ~ /\/[0-9a-f][0-9a-f]\/[0-9a-f]+-d\/[^\/]+$/) { print $2; next }
+      if (!match(exe, /\/go-build[0-9]+\/b[0-9]+\//)) next
+      under = substr(exe, 1, RSTART - 1)
+      for (i = 1; i <= n; i++) if (r[i] != "" && under == r[i]) { print $2; break }
+    }
+    END { if (bad) exit 1 }') || return 1
+  # The longest-running toolchain process not accounted for: "<secs> <pid> <name>", or -1.
+  out=$(printf '%s\n' "$pid_table" | GO_FREE_ACCOUNTED="$accounted" awk -v names="${GO_TOOLCHAIN_NAMES[*]}" '
+    BEGIN {
+      n = split(names, w, " "); for (i = 1; i <= n; i++) want[w[i]] = 1
+      m = split(ENVIRON["GO_FREE_ACCOUNTED"], a, "\n"); for (i = 1; i <= m; i++) if (a[i] != "") skip[a[i]] = 1
+      max = -1
+    }
+    {
+      pid = $1; t = $2; name = $0
+      sub(/^[ \t]*[^ \t]+[ \t]+[^ \t]+[ \t]*/, "", name); sub(/[ \t]+$/, "", name); sub(/.*\//, "", name)
+      if (pid !~ /^[0-9]+$/ || name == "") { bad = 1; next }
+      if (!(name in want) || (name == "go" && (pid in skip))) next
+      d = 0
+      if (t ~ /^[0-9]+-/) { d = substr(t, 1, index(t, "-") - 1); t = substr(t, index(t, "-") + 1) }
+      secs = -1
+      if (t ~ /^[0-9]+:[0-9]+:[0-9]+$/) { split(t, f, ":"); secs = d * 86400 + f[1] * 3600 + f[2] * 60 + f[3] }
+      else if (t ~ /^[0-9]+:[0-9]+$/) { split(t, f, ":"); secs = d * 86400 + f[1] * 60 + f[2] }
+      if (secs < 0) { bad = 1; next }
+      if (secs > max) { max = secs; who = name " (pid " pid ")" }
+    }
+    END { if (bad) exit 1; print max, who }') || return 1
+  GO_FREE_OLDEST=${out%% *}
+  case "$GO_FREE_OLDEST" in -1) ;; '' | *[!0-9]*) return 1 ;; esac
+  GO_FREE_WHO=${out#* }
+  [ "$GO_FREE_OLDEST" = -1 ] && GO_FREE_WHO=''
+  GO_FREE_OK=1
+}
+go_free_read || GO_FREE_OK=0
+# go_blocker_said: the KEEP lines below say once which process holds the sweep back, and for
+# how long, so a run can tell a live build from a forgotten `go run`.
+go_blocker_said=0
+say_go_blocker() {
+  [ "$go_blocker_said" -eq 0 ] || return 0
+  go_blocker_said=1
+  if [ "$GO_FREE_OK" -eq 1 ] && [ -n "$GO_FREE_WHO" ]; then
+    log "      Go work dirs younger than ${GO_FREE_WHO}, running $((GO_FREE_OLDEST / 3600))h, are kept while it runs"
+  else
+    log "      Go work dirs younger than the longest-running toolchain process are kept while it runs (its pid could not be read)"
+  fi
+}
 
 # The temp root is shared with every user and every tool on the host, which the per-user
 # temp dir is not. So work dirs are taken only when this user owns them, and under either
@@ -2308,6 +2428,7 @@ for go_work_root in "${go_work_roots[@]}"; do
     esac
     if go_toolchain_could_own "$tree"; then
       kept=$((kept + 1))
+      say_go_blocker
       log "KEEP  (go running)    $tree"
       continue
     fi
