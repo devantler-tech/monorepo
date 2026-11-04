@@ -10,14 +10,16 @@
 #   head-oid          full 40-hex head SHA
 #   files-json        JSON array of changed paths
 #   commits-json      JSON array, oldest first, ending at head-oid; each commit has exactly these ten string keys
-#                     plus an optional boolean `verified` (logins are null for unlinked accounts, so coalesce
-#                     them). Without `verified`, an App-signed updater commit cannot be recognised (exit 1):
+#                     plus an optional boolean `verified` and an optional `parents` array of full SHAs (logins
+#                     are null for unlinked accounts, so coalesce them). Without `verified`, an App-signed
+#                     updater commit cannot be recognised (exit 1); without `parents`, neither can the
+#                     updater's base-refresh merge (monorepo#4597):
 #     gh api --paginate --slurp repos/devantler-tech/<repo>/pulls/<n>/commits | jq -c 'add | map({sha,
 #       author_login: (.author.login // ""), author_name: .commit.author.name, author_email: .commit.author.email,
 #       author_date: .commit.author.date, committer_login: (.committer.login // ""),
 #       committer_name: .commit.committer.name, committer_email: .commit.committer.email,
 #       committer_date: .commit.committer.date, message: .commit.message,
-#       verified: (.commit.verification.verified == true)})'
+#       verified: (.commit.verification.verified == true), parents: [.parents[].sha]})'
 #   skill-owners-json optional JSON object: changed `.agents/skills/<name>` root -> its `metadata.github-repo` or null
 #
 # Exit 0: no-review exemption; 1: untrusted/non-matching; 2: invalid input or environment, with the reason
@@ -112,7 +114,7 @@ suite_skill_owner="https://github.com/devantler-tech/agent-plugins"
 
 commit_schema='type == "array" and length > 0 and all(.[];
   type == "object" and
-  ((keys - ["verified"]) == [
+  ((keys - ["verified", "parents"]) == [
     "author_date",
     "author_email",
     "author_login",
@@ -124,8 +126,9 @@ commit_schema='type == "array" and length > 0 and all(.[];
     "message",
     "sha"
   ]) and
-  (del(.verified) | all(.[]; type == "string")) and
+  (del(.verified, .parents) | all(.[]; type == "string")) and
   ((has("verified") | not) or (.verified | type == "boolean")) and
+  ((has("parents") | not) or (.parents | type == "array" and all(.[]; type == "string" and test("^[0-9a-f]{40}$")))) and
   (.sha | test("^[0-9a-f]{40}$")) and
   (.author_date | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
   (.committer_date | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
@@ -146,9 +149,11 @@ if ! jq -e "${commit_schema}" <<<"${commits_json}" >/dev/null 2>&1; then
         | if ($c | type) != "object" then "commit[\($i)] is \($c | type), not an object"
           else
             ($keys[] | select(. as $k | $c | has($k) | not) | "commit[\($i)] is missing key \(.)"),
-            ($c | keys[] | select(IN($keys[], "verified") | not) | "commit[\($i)] has unexpected key \(.)"),
+            ($c | keys[] | select(IN($keys[], "verified", "parents") | not) | "commit[\($i)] has unexpected key \(.)"),
             (select($c | has("verified") and (.verified | type) != "boolean")
               | "commit[\($i)].verified is \($c.verified | type), not a boolean"),
+            (select($c | has("parents") and (.parents | type != "array" or any(.[]; type != "string" or (test("^[0-9a-f]{40}$") | not))))
+              | "commit[\($i)].parents is not an array of 40-character lowercase hex SHAs"),
             ($keys[] | select(($c[.] | type) != "string") | "commit[\($i)].\(.) is \($c[.] | type), not a string"),
             (select($c.sha | test("^[0-9a-f]{40}$") | not) | "commit[\($i)].sha is not a 40-character lowercase hex SHA"),
             ("author_date", "committer_date"
@@ -406,6 +411,65 @@ matches_agent_plugins_review_provenance() {
   ' <<<"${commits_json}" >/dev/null
 }
 
+# When `main` moves, the repository's recheck workflow refreshes every open PR through GitHub's
+# update-branch API (agent-plugins `recheck-open-prs.yaml`). GitHub computes that merge itself and
+# signs it, authored by the App whose token asked for it and committed by `web-flow`. Before
+# monorepo#4597 that one trailing commit turned a genuine updater PR into exit 1, so merging one
+# updater PR made its open sibling "untrusted".
+#
+# strip_base_refresh_merges <app-login> <app-id> rewrites commits_json without its trailing
+# base-refresh merges, so the arms below judge the programmed head the refresh sat on. A commit
+# is a base-refresh merge only when every one of these holds:
+#   - GitHub's own signature verdict is `verified: true`, the author is exactly this repository's
+#     updater App and the committer is exactly `web-flow`, as on the signed sync commit;
+#   - its message is exactly `Merge branch 'main' into <head-ref>` for this PR's head ref;
+#   - it has exactly two parents, the first being the commit before it in the list;
+#   - its second parent is not one of the PR's own commits. The list is every commit reachable
+#     from the head and not from the base, and it is complete (it ends at head-oid), so a second
+#     parent outside it is already on the base branch.
+# Anything else stays in the list, where no arm accepts a merge commit, so it still reads exit 1.
+# The changed-files list is the PR's own diff against the refreshed base, so a merge that also
+# brings a file the updater never writes still fails the file arms. The residual: a change inside
+# the allowed skill paths made in the merge itself is indistinguishable here from the sync commit's
+# own content. Only a token of that same App can author a GitHub-signed commit as the App, which is
+# the trust the signed sync commit already rests on.
+strip_base_refresh_merges() {
+  local app_login="$1" app_id="$2" stripped before
+  [[ -n "${app_login}" && -n "${app_id}" ]] || return 0
+  stripped="$(jq -c --arg login "${app_login}" --arg id "${app_id}" --arg ref "${branch}" '
+    def refresh_merge($prev; $shas):
+      .verified == true and
+      .author_login == $login and
+      .author_name == $login and
+      .author_email == "\($id)+\($login)@users.noreply.github.com" and
+      .committer_login == "web-flow" and
+      .committer_name == "GitHub" and
+      .committer_email == "noreply@github.com" and
+      .message == "Merge branch '\''main'\'' into \($ref)" and
+      (.parents | type) == "array" and
+      (.parents | length) == 2 and
+      .parents[0] == $prev.sha and
+      (.parents[1] as $base | $shas | index($base) == null);
+    (map(.sha)) as $shas
+    | until(length < 2 or ((.[-2]) as $prev | .[-1] | refresh_merge($prev; $shas) | not); .[:-1])
+  ' <<<"${commits_json}")" || die2 "could not read base-refresh merges from commits-json"
+  before="$(jq 'length' <<<"${commits_json}")"
+  if [[ "$(jq 'length' <<<"${stripped}")" != "${before}" ]]; then
+    printf 'programmed-bot-review-exemption: %s updater PR judged below %s trailing base-refresh merge(s) from main\n' \
+      "${repo}" "$((before - $(jq 'length' <<<"${stripped}")))" >&2
+    commits_json="${stripped}"
+  fi
+}
+
+# updater_app <repo> prints the login and numeric user ID of the App that writes this repository's
+# signed updater commits, or nothing for a repository with none.
+updater_app() {
+  case "$1" in
+  agent-plugins | platform) printf '%s %s\n' "botantler-1[bot]" "185060876" ;;
+  ksail) printf '%s %s\n' "ksail-bot[bot]" "262010955" ;;
+  esac
+}
+
 is_semver() {
   [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]
 }
@@ -501,7 +565,7 @@ matches_war_cask_provenance() {
     --arg version "${version}" \
     'length == 1 and
      (.[0].author_date == .[0].committer_date) and
-     (map(del(.author_date, .committer_date, .verified)) == [{
+     (map(del(.author_date, .committer_date, .verified, .parents)) == [{
       sha: $head,
       author_login: "devantler",
       author_name: "Nikolai Emil Damm",
@@ -526,6 +590,8 @@ if [[ "${branch}" == "deps/agent-skills-update" &&
   esac
 
   if [[ -n "${expected_author}" && "${author}" == "${expected_author}" ]]; then
+    read -r app_login app_id <<<"$(updater_app "${repo}")" || true
+    strip_base_refresh_merges "${app_login-}" "${app_id-}"
     if [[ "${repo}" == "agent-plugins" ]] &&
       matches_agent_plugins_review_files &&
       matches_agent_plugins_review_provenance "chore(deps): update agent skills" &&
@@ -562,6 +628,8 @@ if [[ "${repo}" == "agent-plugins" &&
     skill_slug="${skill_path#plugins/}"
     skill_slug="${skill_slug//\//-}"
     if [[ "${branch}" == "deps/agent-skills-update-${skill_slug}" ]]; then
+      read -r app_login app_id <<<"$(updater_app "${repo}")" || true
+      strip_base_refresh_merges "${app_login-}" "${app_id-}"
       if matches_agent_plugins_review_files "${skill_path}" &&
         matches_agent_plugins_review_provenance "${title}" &&
         matches_changelog_bump &&
