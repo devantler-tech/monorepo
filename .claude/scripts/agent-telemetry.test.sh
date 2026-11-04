@@ -5959,6 +5959,25 @@ if grep -qE 'bash timeouts \.+ 1 ' <<<"$OUT"; then
 else bad "an escaped is_error timeout is counted" "$(grep 'timeouts' <<<"$OUT")"; fi
 check "escaped tool_use type keeps its timed-out description" "$OUT" "escaped key wait"
 
+# Interrupts are counted in the same read as the denied calls (#4823). A record
+# that stops the denied list (a bare JSON scalar has no .type) must not stop the
+# interrupt count, and every file's interrupts are summed.
+mkdir -p "$FIX/effint"
+cat > "$FIX/effint/a.jsonl" <<'EOF'
+5
+not json at all
+{"type":"user","toolUseResult":{"interrupted":true},"message":{"content":[{"type":"text","text":"x"}]}}
+EOF
+cat > "$FIX/effint/b.jsonl" <<'EOF'
+{"type":"user","toolUseResult":{"interrupted":true},"message":{"content":[{"type":"tool_result","tool_use_id":"ti1","is_error":true,"content":"x","nested":{"interrupted":true}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/effint" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if grep -qE 'interrupted tool calls \.+ 3$' <<<"$OUT"; then
+  ok "interrupts after a record the denied read cannot use are still counted, across files"
+else bad "interrupts after a record the denied read cannot use are still counted, across files" \
+  "$(grep 'interrupted' <<<"$OUT")"; fi
+
 # The description list is streamed per line, never slurped, so a multi-GB
 # transcript is not held in memory (#4793). Trace the description program's jq
 # calls and prove none of them slurps its file.
