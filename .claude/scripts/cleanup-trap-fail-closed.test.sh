@@ -274,6 +274,7 @@ comment-disclosure-drift.sh|--input -
 python-ban-guard.sh|$repo_root
 board-archive.sh|
 blocked-label-blocker-line.sh|
+unsigned-commit-report.sh|
 board-add.sh|
 pr-body-contract.sh|check --repo devantler-tech/monorepo --body-file $tmp/converted/memory.md
 plugin-definition-refresh.sh|--cli /usr/bin/true --repo-root $tmp/converted --gitlink 0000000000000000000000000000000000000000 --plugins-root $tmp/converted/plugins

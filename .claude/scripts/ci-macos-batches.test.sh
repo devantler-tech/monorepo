@@ -29,7 +29,6 @@ unknown() {
 # This inventory is deliberately independent of the workflow's batch commands.
 cat >"$tmp/cases.tsv" <<'CASES'
 1	worktree-lane-sweep
-1	unsigned-commit-report
 1	shared-checkout-freshness
 1	security-advisory-sweep
 1	gh-json-read
@@ -116,6 +115,37 @@ reject_mutation 'duplicated test' '.jobs["test-macos-batch-1"].steps[1].run += "
 jq '.["macos-batch-1"] |= .[1:]' "$tmp/filters.json" >"$tmp/mutated-filters.json"
 if check_workflow "$tmp/workflow.json" "$tmp/mutated-filters.json"; then fail 'incomplete union filter was accepted'; fi
 
+# unsigned-commit-report left batch 1 because its launcher builds Go, which the batches do not
+# set up (monorepo#3224). Its own job must keep the macOS leg the batch gave it, with Go, the GNU
+# timeout the shared build needs, and a filter that sees the Go module and the build helper.
+cat >"$tmp/unsigned-commit-report.jq" <<'CHECK'
+.jobs["test-unsigned-commit-report"] as $j | $filters[0]["unsigned-commit-report"] as $f |
+($j.strategy.matrix.os == ["ubuntu-latest", "macos-latest"]) and
+($j["runs-on"] == "${{ matrix.os }}") and
+any($j.steps[]; ((.uses // "") | startswith("actions/setup-go@")) and
+  .with["go-version-file"] == ".claude/scripts/unsigned-commit-report-go/go.mod") and
+any($j.steps[]; .if == "runner.os == 'macOS'" and .run == "brew install coreutils") and
+any($j.steps[]; .run == "bash .claude/scripts/unsigned-commit-report.test.sh") and
+($f | type == "array" and index(".claude/scripts/unsigned-commit-report-go/**") != null and
+  index(".claude/scripts/go-helper-build.sh") != null)
+CHECK
+check_ucr() {
+  jq -e --slurpfile filters "${2:-$tmp/filters.json}" -f "$tmp/unsigned-commit-report.jq" "$1" >/dev/null 2>&1
+}
+check_ucr "$tmp/workflow.json" || fail 'unsigned-commit-report lost its macOS leg, Go setup, GNU timeout or Go-module filter'
+for mutation in \
+  '.jobs["test-unsigned-commit-report"].strategy.matrix.os = ["ubuntu-latest"]' \
+  '.jobs["test-unsigned-commit-report"].steps |= map(select(((.uses // "") | startswith("actions/setup-go@")) | not))' \
+  '.jobs["test-unsigned-commit-report"].steps |= map(select(.run != "brew install coreutils"))' \
+  '.jobs["test-unsigned-commit-report"].steps |= map(select(.run != "bash .claude/scripts/unsigned-commit-report.test.sh"))'; do
+  jq "$mutation" "$tmp/workflow.json" >"$tmp/mutated.json"
+  if check_ucr "$tmp/mutated.json"; then fail "unsigned-commit-report mutation was accepted: $mutation"; fi
+done
+for entry in '.claude/scripts/unsigned-commit-report-go/**' '.claude/scripts/go-helper-build.sh'; do
+  jq --arg entry "$entry" '.["unsigned-commit-report"] -= [$entry]' "$tmp/filters.json" >"$tmp/mutated-ucr-filters.json"
+  if check_ucr "$tmp/workflow.json" "$tmp/mutated-ucr-filters.json"; then fail "an unsigned-commit-report filter without $entry was accepted"; fi
+done
+
 # Only the exact programs validated above are executed, in a private fixture tree.
 mkdir -p "$tmp/fixture/.claude/scripts"
 while IFS=$'\t' read -r group name; do
@@ -157,5 +187,5 @@ for group in 1 2 3 4; do
     else diff -u "$tmp/expected" "$tmp/observed" || fail "$job omitted later cases after $mode"; fi
   done
 done
-echo 'ci-macos-batches: OK — 22 cases retain both OSes; four batches run every child and propagate all failures'
+echo 'ci-macos-batches: OK — 21 cases retain both OSes; four batches run every child and propagate all failures'
 finished=1

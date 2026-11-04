@@ -32,6 +32,13 @@ JSON
 pass=0; fail=0
 ok() { pass=$((pass + 1)); printf 'ok   %s\n' "$1"; }
 bad() { fail=$((fail + 1)); printf 'FAIL %s\n     %s\n' "$1" "${2:-}"; }
+# unsigned-commit-report.sh launches the Go implementation in unsigned-commit-report-go/
+# (monorepo#3224). Its unit tests run first; every case below then drives it through the launcher.
+if go -C "$HERE/unsigned-commit-report-go" test ./... >"$TMP/go-test.out" 2>&1; then
+  ok "Go unit tests pass"
+else
+  bad "Go unit tests pass" "$(cat "$TMP/go-test.out")"
+fi
 run() { OUT="$(env -u GITHUB_ACTIONS -u GITHUB_STEP_SUMMARY "$CHECK" --instances "$INSTANCES" "$@" 2>&1)"; RC=$?; }
 expect_rc() { # name rc args...
   local name="$1" want="$2"; shift 2; run "$@"
@@ -342,6 +349,11 @@ SH
     # Its default registry path does not exist there, so successful reporting
     # also proves the workflow forwards --instances explicitly.
     cp "$CHECK" "$CI_FIX/real-reporter.sh"
+    # The reporter is a launcher over the Go implementation (monorepo#3224): it builds from the
+    # module and the shared build helper beside it, which the workflow's trusted sparse checkout
+    # must therefore carry too.
+    cp "$HERE/go-helper-build.sh" "$CI_FIX/go-helper-build.sh"
+    cp -R "$HERE/unsigned-commit-report-go" "$CI_FIX/unsigned-commit-report-go"
     cat >"$CI_FIX/trusted-base/.claude/scripts/unsigned-commit-report.sh" <<'SH'
 #!/usr/bin/env bash
 printf 'TRUSTED_REPORTER_EXECUTED\n' >"$CI_EXEC_MARKER"
