@@ -746,12 +746,15 @@ case "$common" in
 esac
 # Capture only this sweep's executable dependencies and reviewed portfolio map.
 # Keep their relative layout, so no later helper read reaches back into the source.
+# The cleanup's claim-tip sweep (monorepo#3590) runs agent-claim-sweep.sh, which runs
+# agent-claim.sh, so both travel with it.
 capture="$dir/runtime-$lane-$new_id"
 mkdir -m 700 -- "$capture" || unknown "cannot reserve the sweep's runtime directory"
 runtime_dir=$capture
 runtime_cleanup=1
 mkdir -p -- "$capture/.claude/scripts" || unknown "cannot create the runtime scripts directory"
-for helper in worktree-lane-sweep.sh worktree-cleanup-all.sh worktree-cleanup.sh worktree-claim-lib.sh; do
+for helper in worktree-lane-sweep.sh worktree-cleanup-all.sh worktree-cleanup.sh worktree-claim-lib.sh \
+  agent-claim-sweep.sh agent-claim.sh; do
   source_file="$script_dir/$helper"
   target_file="$capture/.claude/scripts/$helper"
   if [ ! -f "$source_file" ] || [ -L "$source_file" ] \

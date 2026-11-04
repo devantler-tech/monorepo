@@ -1318,6 +1318,7 @@ t_claim_sweep_runs_for_every_portfolio_repository() {
      && grep -qx "claims mode=apply repos=$repos kept=$repos removed=$repos raced=0 failed=0 unknown=0" <<<"$out" \
      && grep -q '^REMOVE 3 closed' <<<"$out" && ! grep -q '^KEEP 1 open' <<<"$out" \
      && [ -s "$root/home/.claude/agent-claim-sweep-apply.last" ] \
+     && [ ! -e "$root/home/.claude/agent-claim-sweep-apply.attempt" ] \
      && grep -q '^claims skipped: last complete apply sweep 0h ago (minimum 20h)$' <<<"$again" \
      && [ "$(wc -l <"$root/stub/calls" | tr -d ' ')" = "$calls" ]; then
     ok "$name"
@@ -1333,13 +1334,20 @@ $again"
 t_claim_sweep_failure_is_visible_and_never_blocks() {
   # A failed or UNKNOWN claim sweep must not stop the worktree sweep it runs beside, and must not
   # read as a clean run: its lines are printed, the script exits 2, and the clock is not restarted.
-  local name="a failed claim sweep is reported, exits 2, and leaves the worktree sweep done"
+  local name="a failed claim sweep is reported, exits 2, leaves the worktree sweep done, then backs off"
   local root; root=$(make_root)
   claim_sweep_stub "$root/stub" 2
-  local out rc
+  local out rc again rc_again calls
   out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" WORKTREE_CLEANUP_CLAIM_SWEEP="$root/stub/sweep" \
     bash "$SUT" apply 24 2>&1); rc=$?
+  calls=$(wc -l <"$root/stub/calls" 2>/dev/null | tr -d ' ')
+  # The next run inside the retry interval reads nothing and says why.
+  again=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" WORKTREE_CLEANUP_CLAIM_SWEEP="$root/stub/sweep" \
+    bash "$SUT" apply 24 2>&1); rc_again=$?
   if [ "$rc" -eq 2 ] && [ ! -e "$root/repo/.claude/worktrees/spent-root" ] \
+     && [ "$rc_again" -eq 0 ] && [ "$(wc -l <"$root/stub/calls" | tr -d ' ')" = "$calls" ] \
+     && grep -q '^claims skipped: the last apply attempt 0h ago did not finish cleanly; retrying after 3h$' <<<"$again" \
+     && [ -s "$root/home/.claude/agent-claim-sweep-apply.attempt" ] \
      && grep -q '^UNKNOWN 2 issue read failed$' <<<"$out" \
      && grep -q '^claims mode=apply repos=[0-9]* kept=[0-9]* removed=[0-9]* raced=0 failed=0 unknown=1$' <<<"$out" \
      && grep -q 'the claim-tip sweep did not finish cleanly' <<<"$out" \

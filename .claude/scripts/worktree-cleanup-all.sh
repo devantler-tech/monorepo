@@ -741,7 +741,9 @@ fi
 #   - Each run's pre-flight also calls this script, so it runs at most once every
 #     WORKTREE_CLEANUP_CLAIM_SWEEP_MIN_HOURS (default 20) per mode. That keeps it daily under the
 #     6-hourly scheduled sweep, about one issue read per tip. Only a run that read every repository
-#     and every tip cleanly restarts the clock, so an incomplete run is retried next time.
+#     and every tip cleanly restarts the clock. An incomplete one is retried, but not before
+#     WORKTREE_CLEANUP_CLAIM_SWEEP_RETRY_HOURS (default 3), so a tip that can never be judged costs
+#     one failing attempt every few hours, not every run's API reads. Git and gh never prompt.
 #   - agent-claim-sweep.sh needs no clone: an empty repository whose `origin` names the GitHub
 #     repository is enough. dry-run here passes dry-run there; only apply deletes, and only tips
 #     whose issue reads closed, by compare-and-swap.
@@ -751,16 +753,18 @@ CLAIM_SWEEP_FAILED=0
 claim_sweep_portfolio() {
   local sweep=${WORKTREE_CLEANUP_CLAIM_SWEEP:-$SCRIPT_DIR/agent-claim-sweep.sh}
   local min_hours=${WORKTREE_CLEANUP_CLAIM_SWEEP_MIN_HOURS:-20}
+  local retry_hours=${WORKTREE_CLEANUP_CLAIM_SWEEP_RETRY_HOURS:-3}
   local stamp="$HOME/.claude/agent-claim-sweep-$MODE.last" now last repo dir out rc summary
+  local attempt="$HOME/.claude/agent-claim-sweep-$MODE.attempt" tried
   local repos=0 kept=0 removed=0 raced=0 failed=0 unknown=0 field value
   printf '\n### claim tips (agent-claim/*) across the Portfolio map\n'
   if [ "$sweep" = off ]; then
     printf 'claims skipped: WORKTREE_CLEANUP_CLAIM_SWEEP=off\n'
     return 0
   fi
-  case "$min_hours" in
-    '' | *[!0-9]*)
-      printf 'claims UNKNOWN: WORKTREE_CLEANUP_CLAIM_SWEEP_MIN_HOURS is not a whole number: %s\n' "$min_hours"
+  case "$min_hours:$retry_hours" in
+    *[!0-9:]* | :* | *:)
+      printf 'claims UNKNOWN: the claim-sweep intervals are not whole numbers of hours: %s\n' "$min_hours:$retry_hours"
       return 2 ;;
   esac
   [ -x "$sweep" ] || { printf 'claims UNKNOWN: the claim sweep %s is not executable\n' "$sweep"; return 2; }
@@ -778,6 +782,22 @@ claim_sweep_portfolio() {
         fi ;;
     esac
   fi
+  # A failed attempt waits out its retry interval. Only an attempt that did not finish cleanly
+  # leaves this stamp, and a clean one removes it.
+  if [ -f "$attempt" ]; then
+    tried=$(cat "$attempt" 2>/dev/null) || tried=''
+    case "$tried" in
+      '' | *[!0-9]*) ;;
+      *)
+        if [ $((now - tried)) -lt $((retry_hours * 3600)) ] && [ $((now - tried)) -ge 0 ]; then
+          printf 'claims skipped: the last %s attempt %sh ago did not finish cleanly; retrying after %sh\n' \
+            "$MODE" "$(((now - tried) / 3600))" "$retry_hours"
+          return 0
+        fi ;;
+    esac
+  fi
+  mkdir -p "$HOME/.claude" 2>/dev/null && printf '%s\n' "$now" > "$attempt" 2>/dev/null ||
+    printf 'claims: could not record the attempt time in %s\n' "$attempt"
   while IFS= read -r repo; do
     [ -n "$repo" ] || continue
     repos=$((repos + 1))
@@ -788,10 +808,14 @@ claim_sweep_portfolio() {
       [ -z "${dir:-}" ] || rm -rf "$dir"
       continue
     fi
+    # A scheduled sweep has no terminal: git and gh must fail rather than wait for input, and a
+    # transfer stalled below 1 KB/s for a minute is abandoned.
     if [ "$MODE" = apply ]; then
-      out=$("$sweep" --repo "devantler-tech/$repo" --repo-dir "$dir" --apply 2>&1); rc=$?
+      out=$(GIT_TERMINAL_PROMPT=0 GH_PROMPT_DISABLED=1 GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=60 \
+        "$sweep" --repo "devantler-tech/$repo" --repo-dir "$dir" --apply 2>&1); rc=$?
     else
-      out=$("$sweep" --repo "devantler-tech/$repo" --repo-dir "$dir" 2>&1); rc=$?
+      out=$(GIT_TERMINAL_PROMPT=0 GH_PROMPT_DISABLED=1 GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=60 \
+        "$sweep" --repo "devantler-tech/$repo" --repo-dir "$dir" 2>&1); rc=$?
     fi
     rm -rf "$dir"
     # Every tip that moves or cannot be judged is printed; tips kept on open issues are counted.
@@ -826,6 +850,7 @@ claim_sweep_portfolio() {
   fi
   mkdir -p "$HOME/.claude" 2>/dev/null && printf '%s\n' "$now" > "$stamp" 2>/dev/null ||
     printf 'claims: could not record the sweep time in %s; the next run sweeps again\n' "$stamp"
+  rm -f "$attempt"
   return 0
 }
 if [ "$LANE" = claude ]; then

@@ -87,6 +87,11 @@ while [ ! -e "$fx/release" ]; do sleep 0.1; done
 exit 0
 EOF
 chmod +x "$fx/source/.claude/scripts/worktree-cleanup-all.sh" "$fx/source/.claude/scripts/worktree-cleanup.sh"
+# The claim-tip sweep's helpers travel with the cleanup (monorepo#3590); inert here.
+for claim_helper in agent-claim-sweep.sh agent-claim.sh; do
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$fx/source/.claude/scripts/$claim_helper"
+  chmod +x "$fx/source/.claude/scripts/$claim_helper"
+done
 mode() { printf '%s\n' "$1" >"$fx/mode"; }
 
 run() { # [args...] -> sets out, rc
@@ -1308,6 +1313,9 @@ for lifetime_case in success failure interrupted aliased-home; do
   cp "$impl" "$life/source/.claude/scripts/worktree-lane-sweep.sh"
   printf 'fixture portfolio contract\n' >"$life/source/AGENTS.md"
   printf 'CLAIM_FIXTURE_LOADED=1\n' >"$life/source/.claude/scripts/worktree-claim-lib.sh"
+  for claim_helper in agent-claim-sweep.sh agent-claim.sh; do
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$life/source/.claude/scripts/$claim_helper"
+  done
   cat >"$life/source/.claude/scripts/worktree-cleanup-all.sh" <<EOF
 #!/usr/bin/env bash
 touch "$life/ready"
@@ -1397,6 +1405,22 @@ if grep -qF '`worktree-lane-sweep.sh start --lane <your lane>`' "$skill" \
    && ! grep -qF 'Start `worktree-cleanup-all.sh apply 24' "$skill"; then
   ok "the run procedure starts the sweep and names every non-clean status"
 else bad "the run procedure starts the sweep and names every non-clean status" "$skill"; fi
+
+# The sweep runs from its capture, so every helper the real cleanup runs must be captured, or
+# that helper is missing on the real path while tests that stub it pass (monorepo#3590): each
+# "$SCRIPT_DIR/<helper>.sh" worktree-cleanup-all.sh names, and agent-claim.sh, which
+# agent-claim-sweep.sh runs.
+captured=$(awk '/^for helper in /{f=1} f{print} f && /; do$/{exit}' "$impl" | tr -d '\' | tr -s ' \n' ' ')
+needed=$(grep -o '\$SCRIPT_DIR/[A-Za-z0-9_.-]*\.sh' "$script_dir/worktree-cleanup-all.sh" | sed 's|.*/||' | sort -u)
+needed=$(printf '%s\n%s\n' "$needed" \
+  "$(grep -o '\$script_dir/[A-Za-z0-9_.-]*\.sh' "$script_dir/agent-claim-sweep.sh" | sed 's|.*/||' | sort -u)")
+missing=''
+for need in $needed; do
+  case " $captured " in *" $need "* | *" $need; do "*) ;; *) missing="$missing $need" ;; esac
+done
+if [ -n "$needed" ] && [ -z "$missing" ] && grep -q 'agent-claim-sweep.sh' <<<"$needed"; then
+  ok "the sweep captures every helper the cleanup and its claim sweep run"
+else bad "the sweep captures every helper the cleanup and its claim sweep run" "missing:$missing; captured: $captured"; fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$failures"
 sweep_test_finished=1
