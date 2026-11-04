@@ -1279,7 +1279,7 @@ cp "${repo_root}/.claude/plugin-consumption/agentic-engineering.desired-state.js
   "${session_main}/.claude/plugin-consumption/"
 for session_classifier_name in pr-ownership-disclosure.sh programmed-bot-review-exemption.sh \
   pr-unresolved-threads.sh coderabbit-summary-verdict.sh local-review-verdict.sh \
-  coderabbit-review-verdict.sh kata-measure-date.sh pr-worktree-holder.sh \
+  coderabbit-review-verdict.sh coderabbit-comment-verdict.sh kata-measure-date.sh pr-worktree-holder.sh \
   maintainer-comment-candidates.sh required-gate-completeness.sh managed-run-streak.sh; do
   cp "${repo_root}/.claude/scripts/${session_classifier_name}" "${session_main}/.claude/scripts/"
   cp "${repo_root}/.claude/scripts/${session_classifier_name}" "${session_other}/.claude/scripts/"
@@ -1517,6 +1517,33 @@ object_sites="$(grep -o '[^[:space:]"`'"'"']*coderabbit-review-verdict\.sh[^[:sp
   grep -vxF '<repo-root>/.claude/scripts/coderabbit-review-verdict.sh' || true)"
 [ -z "${object_sites}" ] ||
   fail "surveyor overlay calls coderabbit-review-verdict.sh by a form the guard refuses: ${object_sites}"
+
+# The CodeRabbit reply-comment classifier likewise (monorepo#3008): matched against two wordings by
+# eye, the surveyor read every other finding-free reply as no review. Run the overlay's OWN pipeline
+# through the hook, and prove a relative-path call is refused.
+# shellcheck disable=SC2016 # backticks are literal Markdown in the pattern, not a substitution
+reply_command="$(grep -o '`gh api [^`]*coderabbit-comment-verdict\.sh --input -`' "${surveyor_agent}" |
+  tr -d '`' || true)"
+[ "$(printf '%s\n' "${reply_command}" | grep -c .)" = 1 ] ||
+  fail "surveyor overlay must prescribe exactly one guarded coderabbit-comment-verdict.sh pipeline (monorepo#3008)"
+reply_command="${reply_command//<repo-root>/${repo_root}}"
+reply_command="${reply_command//<repo>/platform}"
+reply_command="${reply_command//<comment-id>/3218812096}"
+reply_command="${reply_command//<headRefOid>/ed7bb238485ce8f395a54841d80ec5db70558617}"
+reply_payload="$(jq -nc --arg cmd "${reply_command}" '{tool_input: {command: $cmd}}')"
+run_surveyor_hook "${reply_payload}" >/dev/null ||
+  fail "consumer surveyor hook refused the overlay's CodeRabbit reply-comment pipeline (monorepo#3008)"
+relative_reply_command="${reply_command//${repo_root}\/.claude\/scripts\//.claude/scripts/}"
+[ "${relative_reply_command}" != "${reply_command}" ] ||
+  fail "negative control did not rewrite the reply-comment helper path (monorepo#3008)"
+relative_reply_payload="$(jq -nc --arg cmd "${relative_reply_command}" '{tool_input: {command: $cmd}}')"
+if run_surveyor_hook "${relative_reply_payload}" >/dev/null 2>&1; then
+  fail "consumer surveyor hook admitted a RELATIVE coderabbit-comment-verdict.sh call (monorepo#3008)"
+fi
+reply_sites="$(grep -o '[^[:space:]"`'"'"']*coderabbit-comment-verdict\.sh[^[:space:]`]*' "${surveyor_agent}" |
+  grep -vxF '<repo-root>/.claude/scripts/coderabbit-comment-verdict.sh' || true)"
+[ -z "${reply_sites}" ] ||
+  fail "surveyor overlay calls coderabbit-comment-verdict.sh by a form the guard refuses: ${reply_sites}"
 
 # The Kata measurement-date classifier likewise (monorepo#2838): read by eye, the survey reported
 # Katas as past due from their createdAt. Run the overlay's OWN pipeline through the hook, and

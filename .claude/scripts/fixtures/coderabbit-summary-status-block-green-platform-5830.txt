@@ -1,0 +1,363 @@
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- This is an auto-generated comment: summarize by coderabbit.ai -->
+<!-- review_stack_entry_start -->
+
+<a href="https://app.coderabbit.ai/change-stack/devantler-tech/platform/pull/5830?scope=REDACTED&amp;cs_source=review_comment"><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-stack-in-coderabbit-ui-dark.svg?v=3"><source media="(prefers-color-scheme: light)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-stack-in-coderabbit-ui.svg?v=3"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-stack-in-coderabbit-ui.svg?v=3" alt="Review in Change Stack →" height="32"></picture></a>
+
+<!-- review_stack_entry_end -->
+<!-- recent_review_status_start -->
+
+No actionable comments were generated in the recent review.
+
+<!-- recent_review_status_end -->
+<!-- walkthrough_start -->
+
+<details>
+<summary><strong>Walkthrough</strong></summary>
+<dl>
+<dd>
+
+The business-site tenant manifest and canonical binding now reference the v3 source digest and publisher revision. The binding records the previous publication and observation. Test fixtures now derive publisher identity and revision from the binding, and approval fixtures explicitly remove existing business-site rows before adding pins. The approved-surface digest for the Tenant also changed.
+
+**Possibly related PRs**
+- [devantler-tech/platform#5261](https://github.com/devantler-tech/platform/pull/5261): Defines the Tenant digest and publisher revision pair that this change applies to business-site.
+- [devantler-tech/platform#5748](https://github.com/devantler-tech/platform/pull/5748): Adds business-site publisher-transition behavior and prior-observation preservation, which this change applies to the v3 publication.
+
+</dd>
+</dl>
+</details>
+
+<!-- walkthrough_end -->
+<!-- change_assessment_start -->
+<!-- change_assessment_commit:"d5c7692eb5d2f816d14ee8b41d8a5afedf212365" -->
+<!-- change_assessment_priority:{"version":1,"urgency":"p3","manual":false} -->
+
+<!-- change_assessment_end -->
+<details>
+<summary><strong>Merge Risk:</strong> <strong><picture><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/risk-unassessed-16.svg" width="16" height="16" align="absmiddle" alt=""></picture> Minimal</strong> · up to <code>d5c76</code></summary>
+<dl>
+<dd>
+
+<!-- final_review_risk_start -->
+<!-- final_review_risk_label
+**Merge Risk:** **⚪ Minimal** · up to `d5c76`
+-->
+<!-- final_review_risk_coverage:{"sourceCommitId":"d5c7692eb5d2f816d14ee8b41d8a5afedf212365","coveredCommitId":"d5c7692eb5d2f816d14ee8b41d8a5afedf212365","kind":"reviewed"} -->
+
+The change records the v3 source without enabling the application. No actionable merge-blocking risk was identified.
+<!-- final_review_risk_end -->
+
+</dd>
+</dl>
+</details>
+<!-- pre_merge_checks_walkthrough_start -->
+
+<details>
+<summary><strong>Pre-merge checks: <sup><picture><img src="https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-counter-passed-14-v2.svg" width="14" height="14" align="middle" alt="Passed" title="Passed"></picture></sup> 5</strong></summary>
+<dl>
+<dd>
+
+|         Check name         |                                             Status                                             | Explanation                                                                                                                                                                                               |
+| :------------------------ | :--------------------------------------------------------------------------------------------: | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|         Title check        | ![Passed](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-passed.svg) | The title names the main change: moving business-site staging to the verified v3 runtime. The PR objectives describe the same goal, and the file changes update the tenant digest and revision, the cano… |
+|      Description check     | ![Passed](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-passed.svg) | The description states the purpose (business-site staging still tracks an older release) and the change (move the verified source to the current release with publication approval and a recorded safe t… |
+|     Docstring Coverage     | ![Passed](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-passed.svg) | No eligible functions found in the changed files. Skipping docstring coverage check. Docstring coverage is scoped to functions touched by this diff with cyclomatic complexity of at least 2. Documentat… |
+|     Linked Issues check    | ![Passed](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-passed.svg) | Check skipped because no linked issues were found for this pull request.                                                                                                                                  |
+| Out of Scope Changes check | ![Passed](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-passed.svg) | Check skipped because no linked issues were found for this pull request.                                                                                                                                  |
+
+<details>
+<summary><strong>Full details: Title check</strong></summary>
+<dl>
+<dd>
+
+**Explanation**
+
+The title names the main change: moving business-site staging to the verified v3 runtime. The PR objectives describe the same goal, and the file changes update the tenant digest and revision, the canonical binding to v3.0.0, and the approval fixtures. The title is specific and concise, so it passes.
+
+</dd>
+</dl>
+</details>
+
+<details>
+<summary><strong>Full details: Description check</strong></summary>
+<dl>
+<dd>
+
+**Explanation**
+
+The description states the purpose (business-site staging still tracks an older release) and the change (move the verified source to the current release with publication approval and a recorded safe transition). It also notes that application access stays disabled. These points match the changeset, which updates the tenant manifest, canonical bindings, approval fixtures, and approved surface digest. The description passes this lenient check.
+
+</dd>
+</dl>
+</details>
+
+<details>
+<summary><strong>Full details: Docstring Coverage</strong></summary>
+<dl>
+<dd>
+
+**Explanation**
+
+No eligible functions found in the changed files. Skipping docstring coverage check. Docstring coverage is scoped to functions touched by this diff with cyclomatic complexity of at least 2. Documentation-only edits and deletions within surviving functions are included; unchanged diff context and fully deleted functions are excluded. Analyzed 0 functions across 3 files. (3 skipped: 3 unsupported.)
+
+</dd>
+</dl>
+</details>
+
+</dd>
+</dl>
+</details>
+
+<!-- pre_merge_checks_walkthrough_end -->
+<!-- tips_start -->
+
+
+
+Thanks for using [CodeRabbit](https://coderabbit.ai?utm_source=oss&utm_medium=github&utm_campaign=devantler-tech/platform&utm_content=5830)! It's free for OSS, and your support helps us grow. If you like it, consider giving us a shout-out.
+
+<details>
+<summary><strong>Share</strong></summary>
+<dl>
+<dd>
+
+- [X](https://twitter.com/intent/tweet?text=I%20just%20used%20%40coderabbitai%20for%20my%20code%20review%2C%20and%20it%27s%20fantastic%21%20It%27s%20free%20for%20OSS%20and%20offers%20a%20free%20trial%20for%20the%20proprietary%20code.%20Check%20it%20out%3A&url=https%3A//coderabbit.ai)
+- [Mastodon](https://mastodon.social/share?text=I%20just%20used%20%40coderabbitai%20for%20my%20code%20review%2C%20and%20it%27s%20fantastic%21%20It%27s%20free%20for%20OSS%20and%20offers%20a%20free%20trial%20for%20the%20proprietary%20code.%20Check%20it%20out%3A%20https%3A%2F%2Fcoderabbit.ai)
+- [Reddit](https://www.reddit.com/submit?title=Great%20tool%20for%20code%20review%20-%20CodeRabbit&text=I%20just%20used%20CodeRabbit%20for%20my%20code%20review%2C%20and%20it%27s%20fantastic%21%20It%27s%20free%20for%20OSS%20and%20offers%20a%20free%20trial%20for%20proprietary%20code.%20Check%20it%20out%3A%20https%3A//coderabbit.ai)
+- [LinkedIn](https://www.linkedin.com/sharing/share-offsite/?url=https%3A%2F%2Fcoderabbit.ai&mini=true&title=Great%20tool%20for%20code%20review%20-%20CodeRabbit&summary=I%20just%20used%20CodeRabbit%20for%20my%20code%20review%2C%20and%20it%27s%20fantastic%21%20It%27s%20free%20for%20OSS%20and%20offers%20a%20free%20trial%20for%20proprietary%20code)
+
+</dd>
+</dl>
+</details>
+
+<!-- tips_end -->
+<!-- verify_invitation_start -->
+### CodeRabbit Verify
+
+- [ ] <!-- {"checkboxId":"run-qa-agent"} --> Run CodeRabbit Verify to test the changes in this pull request.
+<!-- verify_invitation_end -->
+<!-- recent_review_start -->
+
+<h6>
+<details>
+<summary><strong><picture><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/info.svg" width="12" height="12" align="absmiddle" alt=""></picture> Recent review info</strong></summary>
+<dl>
+<dd>
+
+<!-- review_info_content -->
+<details>
+<summary><strong><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/cog-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/cog.svg" width="16" height="16" align="absmiddle" alt=""></picture> Run configuration</strong></summary>
+<dl>
+<dd>
+
+- **Source mode**: Auto
+- **Repository**: [devantler-tech/platform](<https://github.com/devantler-tech/platform>)
+- **Branch**: [codex/business-runtime-source-5247-01a1a120](<https://github.com/devantler-tech/platform/tree/codex%2Fbusiness-runtime-source-5247-01a1a120>)
+- **File**: [.coderabbit.yaml](<https://github.com/devantler-tech/platform/blob/d5c7692eb5d2f816d14ee8b41d8a5afedf212365/.coderabbit.yaml>)
+- **Commit**: [d5c7692](<https://github.com/devantler-tech/platform/commit/d5c7692eb5d2f816d14ee8b41d8a5afedf212365>)
+- **Layers**: Repository YAML (base), Organization UI (inherited)
+- **Review profile**: ASSERTIVE
+- **Plan**: Advanced
+- **Run ID**: `1a0b52ce-04d8-4b13-a6f4-6286a3ee72de`
+
+</dd>
+</dl>
+</details>
+
+<details>
+<summary><strong><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/git-commit-horizontal-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/git-commit-horizontal.svg" width="16" height="16" align="absmiddle" alt=""></picture> Commits</strong></summary>
+<dl>
+<dd>
+
+Reviewing files that changed from the base of the PR and between bcb59909aa5922828a3a93d67437414f39ab1b83 and d5c7692eb5d2f816d14ee8b41d8a5afedf212365.
+
+</dd>
+</dl>
+</details>
+
+<details>
+<summary><strong><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/file-minus-corner-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/file-minus-corner.svg" width="16" height="16" align="absmiddle" alt=""></picture> Files ignored due to path filters: 2</strong></summary>
+<dl>
+<dd>
+
+* `scripts/publish-workflow-canonical-approvals.tsv` is excluded by `!**/*.tsv`
+* `scripts/rgd-template-static-scan-baseline.tsv` is excluded by `!**/*.tsv`
+
+</dd>
+</dl>
+</details>
+
+<details>
+<summary><strong><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/file-plus-corner-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/file-plus-corner.svg" width="16" height="16" align="absmiddle" alt=""></picture> Files selected for processing: 6</strong></summary>
+<dl>
+<dd>
+
+* `k8s/providers/hetzner/apps/business-site/tenant.yaml`
+* `scripts/canonical-tenant-source-bindings.json`
+* `scripts/tests/test-bootstrap-tenant-source.sh`
+* `scripts/tests/test-canonical-generator-output.sh`
+* `scripts/tests/test-canonical-source-upgrade.sh`
+* `scripts/validate-eks-ci-role-policy/approved-surface.txt`
+
+</dd>
+</dl>
+</details>
+
+**Included review availability:** This review used your included allowance. Your plan provides up to 1 included review per hour; 0 remain after this review.
+
+</dd>
+</dl>
+</details>
+
+
+<!-- review_details_start -->
+
+<details>
+<summary><strong><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/review-details-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/review-details.svg" width="12" height="12" align="absmiddle" alt=""></picture> Recent review details</strong></summary>
+<dl>
+<dd>
+
+<details>
+<summary><strong><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/clock-alert-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/clock-alert.svg" width="16" height="16" align="absmiddle" alt=""></picture> Context from checks skipped due to timeout: 1</strong></summary>
+<dl>
+<dd>
+
+* GitHub Check: CodeRabbit
+
+</dd>
+</dl>
+</details>
+
+<details>
+<summary><strong><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/layers-plus-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/layers-plus.svg" width="16" height="16" align="absmiddle" alt=""></picture> Additional context used</strong></summary>
+<dl>
+<dd>
+
+<details>
+<summary><strong><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/book-open-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/book-open.svg" width="16" height="16" align="absmiddle" alt=""></picture> Code guidelines: 1</strong></summary>
+<dl>
+<dd>
+
+```
+AGENTS.md — auto-discovered
+```
+
+</dd>
+</dl>
+</details><details>
+<summary><strong><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/route-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/route.svg" width="16" height="16" align="absmiddle" alt=""></picture> Path-based instructions: 1</strong></summary>
+<dl>
+<dd>
+
+<details>
+<summary><strong>Source excerpt: **Put a change in the layer that matches its scope** — edit `k8s/bases/` when it should hold for **every consumer of that resource**; add an overlay `patches/` fragment only for a genuine per-consumer difference.</strong></summary>
+<dl>
+<dd>
+
+
+**CodeRabbit inference engine (AGENTS.md)**
+
+**Files:**
+- `k8s/providers/hetzner/apps/business-site/tenant.yaml`
+
+</dd>
+</dl>
+</details>
+
+</dd>
+</dl>
+</details><details>
+<summary><strong><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/learnings-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/learnings.svg" width="16" height="16" align="absmiddle" alt=""></picture> Learnings: 1</strong></summary>
+<dl>
+<dd>
+
+<details>
+<summary><strong><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/individual-learning-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/individual-learning.svg" width="16" height="16" align="absmiddle" alt=""></picture> Learning: 2026-08-10T13:01:12.782Z</strong></summary>
+<dl>
+<dd>
+
+```
+Learnt from: devantler
+Repo: devantler-tech/platform PR: 3057
+File: .github/workflows/ci.yaml:622-659
+Timestamp: 2026-08-10T13:01:12.782Z
+Learning: Repository shell tests and scripts must remain compatible with macOS Bash 3.2. Do not use Bash 4+ features such as `mapfile`; use portable constructs, such as a `while IFS= read -r` loop, instead.
+```
+
+**Applied to files:**
+- `scripts/tests/test-bootstrap-tenant-source.sh`
+
+</dd>
+</dl>
+</details>
+
+</dd>
+</dl>
+</details>
+
+</dd>
+</dl>
+</details>
+
+<details>
+<summary><strong><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/message-square-off-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/message-square-off.svg" width="16" height="16" align="absmiddle" alt=""></picture> Additional comments: 3</strong></summary>
+<dl>
+<dd>
+
+<details>
+<summary><strong>scripts/tests/test-canonical-generator-output.sh: 1</strong></summary>
+<dl>
+<dd>
+
+`17-18`: LGTM!
+
+
+
+Also applies to: 40-40
+
+<!-- cr-comment:v1:b57caa9fb7b728ad43d31c9d -->
+
+</dd>
+</dl>
+</details>
+<details>
+<summary><strong>scripts/tests/test-canonical-source-upgrade.sh: 1</strong></summary>
+<dl>
+<dd>
+
+`21-26`: LGTM!
+
+
+
+Also applies to: 32-33
+
+<!-- cr-comment:v1:2736c072d6f53d1c0c6e4693 -->
+
+</dd>
+</dl>
+</details>
+<details>
+<summary><strong>scripts/tests/test-bootstrap-tenant-source.sh: 1</strong></summary>
+<dl>
+<dd>
+
+`332-333`: LGTM!
+
+<!-- cr-comment:v1:28da5dbb8cf144c5acd26afa -->
+
+</dd>
+</dl>
+</details>
+
+</dd>
+</dl>
+</details>
+
+</dd>
+</dl>
+</details>
+
+<!-- review_details_end -->
+</h6>
+
+<!-- recent_review_end -->

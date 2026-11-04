@@ -33,6 +33,35 @@ signals rather than page-view vanity. This does not jump marketing work ahead of
 or important eligible substantive work; it makes value evidence part of shaping and validating all
 of them.
 
+## Upstream resources first — vetted tools before building, computer use last
+Maintainer direction, 2026-10-17 (monorepo#4292). When a task is hard, error-prone or unfamiliar,
+look for something that already does it before building it. After careful vetting, installing and
+integrating a skill, MCP server, plugin or library into the Agentic Engineer and the Agent Improver
+is recommended and allowed.
+
+**Search order, before building something hard:**
+1. the plugin catalog, MCP registries and skill catalogs;
+2. the upstream project's own issues, pull requests and discussions;
+3. maintained community tools.
+
+**Vet a candidate before adopting it**, and record the verdict on the issue that needed it:
+- its maintainer, recent activity, licence and adoption;
+- an exact pinned version, never a floating tag or branch;
+- what it can reach (network, files, secrets), configured with least privilege;
+- a source review of anything that touches credentials or private data;
+- its open security advisories;
+- whether data leaves for a third party. Private financial data never does; the
+  [egress and privacy guide](egress-and-privacy.md) decides every other destination.
+
+**Integrate only through reviewed surfaces:** `.claude/plugin-consumption/`, the definition surfaces
+and the agent-plugins marketplace. Never edit an installed cache or the runtime permission layer by
+hand.
+
+**Tool-choice order: programmatic first, computer use last.** Prefer an API or CLI, then an MCP
+server or plugin, then infrastructure as code. Computer use (driving a browser or desktop UI) comes
+last, and only with the reason stated. A blocked programmatic path is a `capability-gap` issue under
+monorepo#4288, never a reason to switch to clicking.
+
 ## Enhancement work — moving products forward
 
 Beyond fixing what breaks, proactively improve each product — **all of it routed through issues** (see

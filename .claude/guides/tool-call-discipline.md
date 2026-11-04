@@ -15,6 +15,12 @@ lines). **Don't re-read what's already in context** (this contract, via the `CLA
 **duplicate live GitHub state into memory**. This is the *native-to-Claude* design principle
 (subagents, memory) applied to cost: same work and same guardrails, fewer tokens.
 
+**Programmatic first, computer use last.** Choose the tool in this order: an API or CLI, then an MCP
+server or plugin, then infrastructure as code, and computer use (driving a browser or desktop UI)
+only last, with the reason stated. A blocked programmatic path is a `capability-gap` issue, never a
+reason to switch to clicking. The search order and vetting checklist for adopting a new tool are in
+[*Upstream resources first*](advance-work.md#upstream-resources-first--vetted-tools-before-building-computer-use-last).
+
 
 🔴 **A SUBAGENT'S DEFINITION LOAD IS THE LARGEST RECURRING COST HERE, AND NOTHING WAS MEASURING IT.**
 Measured 2026-08-19 over the 7-day session corpus (182 sidechains extracted, 0 extraction failures):

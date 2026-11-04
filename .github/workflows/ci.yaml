@@ -51,6 +51,7 @@ jobs:
       one-verb-per-bash-call-contract: ${{ steps.filter.outputs.one-verb-per-bash-call-contract }}
       pr-sweep-enumeration-contract: ${{ steps.filter.outputs.pr-sweep-enumeration-contract }}
       security-advisory-contract: ${{ steps.filter.outputs.security-advisory-contract }}
+      upstream-first-contract: ${{ steps.filter.outputs.upstream-first-contract }}
       retired-rule-survivors-contract: ${{ steps.filter.outputs.retired-rule-survivors-contract }}
       bash-call-timeout-budget-contract: ${{ steps.filter.outputs.bash-call-timeout-budget-contract }}
       codex-dispatch-supersession-contract: ${{ steps.filter.outputs.codex-dispatch-supersession-contract }}
@@ -638,6 +639,11 @@ jobs:
               - 'AGENTS.md'
               - '.claude/guides/**'
               - '.claude/scripts/security-advisory-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            upstream-first-contract:
+              - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/upstream-first-contract.test.sh'
               - '.github/workflows/ci.yaml'
             retired-rule-survivors-contract:
               - 'AGENTS.md'
@@ -2381,6 +2387,21 @@ jobs:
       - name: Verify the security advisory contract
         run: bash .claude/scripts/security-advisory-contract.test.sh
 
+  test-upstream-first-contract:
+    name: Test upstream first contract
+    needs: changes
+    if: needs.changes.outputs.upstream-first-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the upstream first contract
+        run: bash .claude/scripts/upstream-first-contract.test.sh
+
   test-retired-rule-survivors-contract:
     name: Test retired rule survivors contract
     needs: changes
@@ -3492,6 +3513,7 @@ jobs:
       - test-one-verb-per-bash-call-contract
       - test-pr-sweep-enumeration-contract
       - test-security-advisory-contract
+      - test-upstream-first-contract
       - test-retired-rule-survivors-contract
       - test-bash-call-timeout-budget-contract
       - test-codex-dispatch-supersession-contract
@@ -3597,6 +3619,7 @@ jobs:
             ${{ needs.test-one-verb-per-bash-call-contract.result }}
             ${{ needs.test-pr-sweep-enumeration-contract.result }}
             ${{ needs.test-security-advisory-contract.result }}
+            ${{ needs.test-upstream-first-contract.result }}
             ${{ needs.test-retired-rule-survivors-contract.result }}
             ${{ needs.test-bash-call-timeout-budget-contract.result }}
             ${{ needs.test-codex-dispatch-supersession-contract.result }}
