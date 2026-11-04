@@ -318,6 +318,47 @@ assert_prose 're-check it on every run before using (b) to skip' \
 # shellcheck disable=SC2016
 assert_prose '`**Blocker:** <identifier> | <blocker-kind> | last-verified <YYYY-MM-DD>: <result>`' \
   "${constitution_flat}" "structured blocker line does not limit issue data to identity and status"
+# How the source is chosen, and what makes it cover the blocker (monorepo#2859). A per-project
+# destination table goes stale, and a source that never names the identifier proves nothing, so a
+# run that cannot establish coverage must read the blocker as unverified rather than skip on it.
+assert_prose "Choose the source by the identifier's **class**, never from a table of per-project destinations" \
+  "${constitution_flat}" "contract does not say how a verification source is selected for a blocker identifier class"
+# Choosing a source by class must not reopen identifier egress: the query stays built from
+# independently confirmed terms and the identifier is only matched locally.
+assert_prose 'The query is still built only from independently confirmed public-safe terms, as above, and the identifier is matched locally in what comes back' \
+  "${constitution_flat}" "source selection by class lets the issue-supplied identifier become external query data"
+assert_prose 'A source **covers** the blocker only when it shows that exact identifier' \
+  "${constitution_flat}" "contract does not define what makes a source cover the blocker reference"
+assert_prose 'together with a state that settles it' \
+  "${constitution_flat}" "contract lets a source that names the identifier without a settling state count as coverage"
+assert_prose 'a snippet without the identifier, a release that does not mention it, or silence covers nothing' \
+  "${constitution_flat}" "contract lets a general page, an unrelated release or silence count as coverage"
+assert_prose '**Unable to establish coverage means unverified, and an unverified blocker is not a skip**' \
+  "${constitution_flat}" "contract lets a blocker with no covering source be skipped"
+# shellcheck disable=SC2016
+assert_prose 'record `not verified: no covering source` as the `last-verified` result, keep the issue selectable' \
+  "${constitution_flat}" "contract does not say how an unverified blocker is recorded and kept selectable"
+assert_prose 'The chosen source is never written into the blocker line' \
+  "${constitution_flat}" "contract lets the chosen verification source be written into the blocker line"
+# Negative: no blocker-line template anywhere in the contract may carry a destination. A `via`,
+# source, channel or URL field, or a future check date, coming back into the line fails here
+# (monorepo#2553, monorepo#2859).
+# shellcheck disable=SC2016
+blocker_templates="$(grep -o '`\*\*Blocker:\*\*[^`]*`' "${constitution}" || true)"
+[ -n "${blocker_templates}" ] || fail "cannot find a blocker-line template in the contract"
+while IFS= read -r template; do
+  case "${template}" in
+    *' via '* | *'http'* | *'<source'* | *'<channel'* | *'<url'* | *'<destination'* | *'next-check'* | *'| verify'*)
+      fail "a blocker-line template carries a destination or a future check: ${template}" ;;
+  esac
+done <<<"${blocker_templates}"
+# The scan above must be able to fire: the retired destination form is caught by the same patterns.
+# shellcheck disable=SC2016
+retired_template='`**Blocker:** opencost/opencost#3710 | upstream | verify via <non-repo channel> | next-check 2026-09-01`'
+case "${retired_template}" in
+  *' via '* | *'next-check'*) ;;
+  *) fail "the blocker-template destination scan cannot catch the retired destination form" ;;
+esac
 # Delivered work that waits on an event had no recorded state, so every run re-derived it as the
 # oldest actionable item of its type (monorepo#3426). Pin the third kind, the skip clause that names
 # it, and the two limits that stop it becoming a way to set work aside.
