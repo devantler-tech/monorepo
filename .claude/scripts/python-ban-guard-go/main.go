@@ -593,74 +593,154 @@ func (s *scanner) argv(args []string, known []bool, line, depth int) (bool, erro
 				}
 			}
 		default:
-			return false, s.unlistedCommand(name, args[i+1:], known[i+1:], line, depth+1)
+			return s.unlistedCommand(name, args[i+1:], known[i+1:], line, depth+1)
 		}
 	}
 	return false, nil
 }
 
-// dataOperandCommands never run an operand as a program: they print it, look it up, match it
-// or install it. An interpreter name among their operands is data (monorepo#3271).
+// dataOperandCommands never run an operand as a program: they print it, look it up, match it,
+// move it around or install it. An interpreter name among their operands is data, and so is
+// every operand after one of them that an unlisted wrapper runs (monorepo#3271).
 var dataOperandCommands = map[string]bool{
-	"echo": true, "printf": true, "print": true, "builtin": true, "type": true, "which": true,
-	"whence": true, "where": true, "whereis": true, "hash": true, "alias": true, "unalias": true,
-	"test": true, "grep": true, "egrep": true, "fgrep": true, "rg": true,
+	"echo": true, "printf": true, "print": true, "type": true, "which": true, "whence": true,
+	"where": true, "whereis": true, "hash": true, "alias": true, "unalias": true, "test": true,
+	"read": true, "unset": true, "cd": true, "pushd": true, "popd": true,
+	"grep": true, "egrep": true, "fgrep": true, "rg": true,
 	"pgrep": true, "pkill": true, "killall": true, "pidof": true,
+	"cat": true, "head": true, "tail": true, "wc": true, "ls": true, "cp": true, "mv": true,
+	"rm": true, "ln": true, "mkdir": true, "touch": true, "chmod": true, "chown": true,
+	"git": true, "kubectl": true,
 	"apt": true, "apt-get": true, "apt-cache": true, "dpkg": true, "yum": true, "dnf": true,
 	"apk": true, "zypper": true, "pacman": true, "brew": true, "port": true, "pkg": true,
-	"mise": true, "asdf": true,
 }
+
+// subcommandRunners run their remaining operands only under these subcommands; every other
+// subcommand (install, plugin, list ...) treats them as data.
+var subcommandRunners = map[string]map[string]bool{
+	"mise": {"exec": true, "x": true, "run": true},
+	"asdf": {"exec": true},
+}
+
+// builtinRunners are the builtins `builtin` can reach that run their operands.
+var builtinRunners = map[string]bool{"exec": true, "eval": true, "command": true}
 
 // programName is the shape of a command an operating system can have installed. A literal word
 // such as `--`, `-v`, `1` or `${EMPTY}` reached in command position is not a wrapper anyone
-// installed (the command `timeout 5 -- python3` names is `--`), so its operands stay data.
+// installed (the command `timeout 5 -- python3` names is `--`), and neither is an all-capitals
+// word such as a Dockerfile's `RUN` or `CMD` written in another file, so their operands stay data.
 var programName = regexp.MustCompile("^[A-Za-z_.][A-Za-z0-9._+-]*$")
+var hasLowercase = regexp.MustCompile("[a-z]")
 
-// shellStringWrappers take a whole shell command line as the value of -c or --command.
-var shellStringWrappers = map[string]bool{"script": true, "su": true, "runuser": true}
+// shellStringOptions are the short options that take a whole shell command line as their value;
+// each of these commands also spells it `--command`.
+var shellStringOptions = map[string]string{"script": "c", "su": "c", "runuser": "c", "flock": "c", "entr": "s"}
+
+// executingWord reports whether an operand starts a command the walker already has rules for.
+func executingWord(name string) bool {
+	if shellName(name) || name == "eval" || name == "env" || name == "find" || name == "nice" {
+		return true
+	}
+	_, listed := commandWrappers[name]
+	return listed
+}
 
 // unlistedCommand judges a command the walker has no rule for. Before monorepo#3271 such a
 // command made the rest of its line read clean, so every wrapper nobody had listed (flock,
 // runuser, parallel, chrt, taskset, unbuffer, script ...) hid the interpreter it runs. Now a
-// literal operand that names an interpreter is reported, unless the command is one that only
-// treats its operands as data. A dynamic command word never reaches here: it stays unresolved,
-// the narrowing monorepo#3270 decided, so this reports nothing without an interpreter token.
-func (s *scanner) unlistedCommand(name string, args []string, known []bool, line, depth int) error {
+// literal operand that names an interpreter is reported, and an operand that starts a nested
+// shell, eval or listed wrapper is walked, unless the command only treats its operands as data.
+// A dynamic command word never reaches here: it stays unresolved, the narrowing monorepo#3270
+// decided, so this reports nothing without an interpreter token.
+func (s *scanner) unlistedCommand(name string, args []string, known []bool, line, depth int) (bool, error) {
 	if depth > 32 {
-		return errors.New("nested command limit exceeded")
+		return false, errors.New("nested command limit exceeded")
 	}
-	if dataOperandCommands[name] || !programName.MatchString(name) {
-		return nil
+	if dataOperandCommands[name] || !programName.MatchString(name) || !hasLowercase.MatchString(name) {
+		return false, nil
 	}
-	if shellStringWrappers[name] {
+	if name == "builtin" {
+		if len(args) > 0 && known[0] && builtinRunners[args[0]] {
+			return s.argv(args, known, line, depth)
+		}
+		return false, nil
+	}
+	if runners, ok := subcommandRunners[name]; ok {
+		if len(args) == 0 || !known[0] || !runners[args[0]] {
+			return false, nil
+		}
+		args, known = args[1:], known[1:]
+	}
+	consumed := make([]bool, len(args))
+	if letters, ok := shellStringOptions[name]; ok {
 		for j := 0; j < len(args); j++ {
-			if !known[j] {
+			if !known[j] || consumed[j] {
 				continue
 			}
-			command, inline := strings.CutPrefix(args[j], "--command=")
-			if !inline {
-				if args[j] != "-c" && args[j] != "--command" || j+1 >= len(args) || !known[j+1] {
-					continue
+			command, found := "", false
+			if value, inline := strings.CutPrefix(args[j], "--command="); inline {
+				command, found = value, true
+			} else if args[j] == "--command" || shortOptionTakes(args[j], letters) {
+				rest := args[j][strings.IndexAny(args[j], letters)+1:]
+				if args[j] == "--command" {
+					rest = ""
 				}
-				command = args[j+1]
+				switch {
+				case rest != "":
+					command, found = rest, true
+				case j+1 < len(args) && known[j+1]:
+					command, found = args[j+1], true
+					consumed[j+1] = true
+				}
 			}
+			if !found {
+				continue
+			}
+			consumed[j] = true
 			if err := s.source(command, line, depth, false); err != nil {
-				return err
+				return false, err
+			}
+		}
+	}
+	if name == "parallel" {
+		// GNU parallel runs the words before its first `:::` or `::::` as a shell command line.
+		for j := 0; j < len(args) && !strings.HasPrefix(args[j], ":::"); j++ {
+			if !known[j] || strings.HasPrefix(args[j], "-") {
+				continue
+			}
+			consumed[j] = true
+			if err := s.source(args[j], line, depth, false); err != nil {
+				return false, err
 			}
 		}
 	}
 	for j := 0; j < len(args); j++ {
-		if !known[j] || !interpreter.MatchString(filepath.Base(args[j])) {
+		if !known[j] || consumed[j] || strings.HasSuffix(args[j], "/") {
 			continue
 		}
-		hit := args[j]
-		if j+1 < len(args) && known[j+1] && args[j+1] != "" {
-			hit += " " + args[j+1]
+		base := filepath.Base(args[j])
+		if interpreter.MatchString(base) {
+			hit := args[j]
+			if j+1 < len(args) && known[j+1] && args[j+1] != "" {
+				hit += " " + args[j+1]
+			}
+			s.add(line, hit)
+			return false, nil
 		}
-		s.add(line, hit)
-		return nil
+		if dataOperandCommands[base] {
+			return false, nil // The rest are that command's data.
+		}
+		if executingWord(base) {
+			return s.argv(args[j:], known[j:], line, depth)
+		}
 	}
-	return nil
+	return false, nil
+}
+
+// shortOptionTakes reports whether a single-dash word holds one of these option letters, alone
+// or bundled after flags (`-qc`, `-lc`, `-c'cmd'`).
+func shortOptionTakes(word, letters string) bool {
+	return len(word) > 1 && word[0] == '-' && word[1] != '-' && strings.ContainsAny(word[1:], letters)
 }
 
 // envArgs preserves argv boundaries: env -S splits one operand, never shell code.

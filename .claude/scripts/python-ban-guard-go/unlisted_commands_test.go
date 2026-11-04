@@ -27,6 +27,25 @@ func TestUnlistedWrappersAreReported(t *testing.T) {
 		{"unlisted wrapper inside sh -c", `sh -c 'flock /tmp/x python3 x.py'`},
 		{"unlisted wrapper after a listed one", "timeout 5 flock /tmp/x python3 x.py"},
 		{"unlisted wrapper in a pipeline", "printf x | flock /tmp/x python3 x.py"},
+		{"unlisted wrapper then a nested shell", `flock /tmp/x sh -c 'python3 x.py'`},
+		{"unlisted wrapper then eval", `chrt -f 10 eval 'python3 x.py'`},
+		{"unlisted wrapper then env -S", `flock /tmp/x env -S 'python3 x.py'`},
+		{"unlisted wrapper then a listed wrapper", "taskset -c 0 timeout 5 python3 x.py"},
+		{"unlisted wrapper then another unlisted one", "chrt -f 10 flock /tmp/x python3 x.py"},
+		{"flock command string", `flock -c 'python3 x.py' /tmp/x`},
+		{"flock long command string", `flock --command 'python3 x.py' /tmp/x`},
+		{"entr shell string", `entr -s 'python3 x.py'`},
+		{"parallel command template", `parallel 'python3 {}' ::: a`},
+		{"parallel after an option", `parallel -j4 'python3 {}' ::: a`},
+		{"script bundled command option", `script -qc 'python3 x.py' /dev/null`},
+		{"script bundled flags before the command option", `script -qfc "python3 x.py" /dev/null`},
+		{"su bundled login and command", `su -lc 'python3 x.py' nobody`},
+		{"su attached command string", `su -c'python3 x.py' nobody`},
+		{"builtin exec", "builtin exec python3 x.py"},
+		{"builtin eval", `builtin eval 'python3 x.py'`},
+		{"mise exec", "mise exec -- python3 x.py"},
+		{"mise x", "mise x python@3.12 -- python x.py"},
+		{"asdf exec", "asdf exec python3 x.py"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -71,6 +90,16 @@ func TestUnlistedCommandSurfacesStayClean(t *testing.T) {
 		{"literal double dash in command position", "timeout 5 -- python3"},
 		{"option word in command position", "command -- -v python3"},
 		{"number in command position", "xargs --max-lines 1 python3"},
+		{"all-capitals word in command position", "CMD python3 app.py"},
+		{"data command under an unlisted wrapper", "chrt -f 10 grep python3 f"},
+		{"directory operand", "flock /tmp/x ls python/"},
+		{"directory named like an interpreter", "chrt -f 10 cp -r src/ py/"},
+		{"cd into a directory", "cd python"},
+		{"git path", "git rm -r python/"},
+		{"remove an installed interpreter", "rm -f /usr/local/bin/pip"},
+		{"read into a variable", "read -r py"},
+		{"mise install", "mise install python@3.12"},
+		{"asdf plugin", "asdf plugin add python"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -82,5 +111,17 @@ func TestUnlistedCommandSurfacesStayClean(t *testing.T) {
 				t.Fatalf("clean command surface reported: %s", strings.Join(s.hits, "\n"))
 			}
 		})
+	}
+}
+
+// TestShellStringOperandIsReportedOnce pins that an operand the -c branch already scanned is not
+// reported a second time by the operand scan.
+func TestShellStringOperandIsReportedOnce(t *testing.T) {
+	s := scanner{path: "check.sh", seen: map[string]bool{}}
+	if err := s.source("script -c python3 /dev/null", 1, 0, false); err != nil {
+		t.Fatalf("scan error: %v", err)
+	}
+	if len(s.hits) != 1 {
+		t.Fatalf("want exactly one finding, got %d: %s", len(s.hits), strings.Join(s.hits, "\n"))
 	}
 }
