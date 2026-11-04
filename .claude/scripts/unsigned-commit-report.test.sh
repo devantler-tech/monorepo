@@ -371,9 +371,10 @@ SH
         .claude/scripts/*) rel="${entry#.claude/scripts/}"; rel="${rel%/}"; cp -R "$HERE/$rel" "$CI_FIX/$rel" ;;
       esac
     done <<<"$CI_SPARSE"
+    CI_GO_FILES="$(grep -E 'go-version-file:' <<<"$CI_JOB" || true)"
     if grep -qF -- "if: hashFiles('trusted-base/.claude/scripts/unsigned-commit-report-go/go.mod') != ''" <<<"$CI_JOB" &&
        grep -qF -- 'go-version-file: trusted-base/.claude/scripts/unsigned-commit-report-go/go.mod' <<<"$CI_JOB" &&
-       ! grep -E 'go-version-file:' <<<"$CI_JOB" | grep -vqF 'trusted-base/'; then
+       ! grep -vqF 'trusted-base/' <<<"$CI_GO_FILES"; then
       ok "CI trusted job sets Go up only from the trusted copy, and only when it carries the port"
     else
       bad "CI trusted job sets Go up only from the trusted copy, and only when it carries the port" "$CI_JOB"
