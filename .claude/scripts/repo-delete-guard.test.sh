@@ -116,7 +116,7 @@ scenario() { # scenario [name]
   mkdir -p "${fake}/api"
   : >"${tmp}/trace"
   FAKE_REPO=$name
-  printf '{"state":"OPEN","title":"Delete the stray repository devantler-tech/%s","body":"Created by mistake.","url":"https://github.com/devantler-tech/monorepo/issues/4289"}\n' \
+  printf '{"author":{"login":"devantler"},"state":"OPEN","title":"Delete the stray repository devantler-tech/%s","body":"Created by mistake.","url":"https://github.com/devantler-tech/monorepo/issues/4289"}\n' \
     "$name" >"${fake}/issue.json"
   fixture "repos/devantler-tech/${name}" \
     "{\"full_name\":\"devantler-tech/${name}\",\"archived\":false,\"private\":true,\"size\":1,\"created_at\":\"2026-10-17T18:14:58Z\",\"default_branch\":\"main\"}"
@@ -189,22 +189,36 @@ expect "a prefix of a listed name is not refused by the maps" 0 '^WOULD-DELETE d
 
 # --- The request: an open monorepo issue that names the repository exactly ---------------------
 scenario
-printf '{"state":"CLOSED","title":"Delete devantler-tech/stray","body":"","url":"u"}\n' >"${fake}/issue.json"
+printf '{"author":{"login":"devantler"},"state":"CLOSED","title":"Delete devantler-tech/stray","body":"","url":"u"}\n' >"${fake}/issue.json"
 expect "closed request refused" 1 '^REFUSE devantler-tech/monorepo#4289 is CLOSED, not an open request' --repo stray --issue 4289
 scenario
-printf '{"state":"OPEN","title":"Tidy up stray repositories","body":"Remove the old ones.","url":"u"}\n' >"${fake}/issue.json"
+printf '{"author":{"login":"devantler"},"state":"OPEN","title":"Tidy up stray repositories","body":"Remove the old ones.","url":"u"}\n' >"${fake}/issue.json"
 expect "request that names no repository refused" 1 '^REFUSE devantler-tech/monorepo#4289 does not name devantler-tech/stray' --repo stray --issue 4289
 scenario
-printf '{"state":"OPEN","title":"Delete devantler-tech/stray-two","body":"Not devantler-tech/strayer either.","url":"u"}\n' >"${fake}/issue.json"
+printf '{"author":{"login":"devantler"},"state":"OPEN","title":"Delete devantler-tech/stray-two","body":"Not devantler-tech/strayer either.","url":"u"}\n' >"${fake}/issue.json"
 expect "request naming only a longer name refused" 1 '^REFUSE devantler-tech/monorepo#4289 does not name devantler-tech/stray' --repo stray --issue 4289
 scenario
-printf '{"state":"OPEN","title":"Cleanup","body":"See https://github.com/devantler-tech/stray, created by mistake.","url":"u"}\n' >"${fake}/issue.json"
+printf '{"author":{"login":"devantler"},"state":"OPEN","title":"Cleanup","body":"See https://github.com/devantler-tech/stray, created by mistake.","url":"u"}\n' >"${fake}/issue.json"
 expect "request naming the repository in its body accepted" 0 '^WOULD-DELETE devantler-tech/stray ' --repo stray --issue 4289
 scenario
-printf '{"state":"OPEN","title":"Cleanup","body":"Please delete devantler-tech/stray.","url":"u"}\n' >"${fake}/issue.json"
+printf '{"author":{"login":"devantler"},"state":"OPEN","title":"Cleanup","body":"Please delete devantler-tech/stray.","url":"u"}\n' >"${fake}/issue.json"
 expect "a name that ends its sentence is still named" 0 '^WOULD-DELETE devantler-tech/stray ' --repo stray --issue 4289
-printf '{"state":"OPEN","title":"Cleanup","body":"Please delete devantler-tech/stray.old instead.","url":"u"}\n' >"${fake}/issue.json"
+printf '{"author":{"login":"devantler"},"state":"OPEN","title":"Cleanup","body":"Please delete devantler-tech/stray.old instead.","url":"u"}\n' >"${fake}/issue.json"
 expect "a dotted longer name is not this name" 1 '^REFUSE devantler-tech/monorepo#4289 does not name devantler-tech/stray' --repo stray --issue 4289
+# The monorepo is public: a request is only a request when a trusted author opened it. The happy
+# path above is the same issue opened by `devantler`, so the author is what each of these refuses.
+scenario
+printf '{"author":{"login":"drive-by"},"state":"OPEN","title":"Delete the stray repository devantler-tech/stray","body":"Created by mistake.","url":"u"}\n' >"${fake}/issue.json"
+expect "request opened by an untrusted author refused" 1 '^REFUSE devantler-tech/monorepo#4289 was opened by drive-by, who is not a trusted author' --repo stray --issue 4289
+if grep -q '^api ' "${tmp}/trace"; then fail "an untrusted request still read the repository"; else pass "an untrusted request reads nothing of the repository"; fi
+scenario
+printf '{"author":{"login":"app/copilot-swe-agent"},"state":"OPEN","title":"Delete devantler-tech/stray","body":"","url":"u"}\n' >"${fake}/issue.json"
+expect "request opened by a GitHub App refused" 1 '^REFUSE devantler-tech/monorepo#4289 was opened by app/copilot-swe-agent, who is not a trusted author' --repo stray --issue 4289
+scenario
+printf '{"author":null,"state":"OPEN","title":"Delete devantler-tech/stray","body":"","url":"u"}\n' >"${fake}/issue.json"
+expect "request with no linkable author refused" 1 '^REFUSE devantler-tech/monorepo#4289 has no author GitHub can link' --repo stray --issue 4289
+scenario
+expect "request by a trusted author names its author" 0 '^CHECK requested by open devantler-tech/monorepo#4289, opened by trusted author devantler$' --repo stray --issue 4289
 scenario
 rm "${fake}/issue.json"
 expect "unreadable request is UNKNOWN" 2 '^UNKNOWN cannot read devantler-tech/monorepo#4289' --repo stray --issue 4289
@@ -214,7 +228,7 @@ scenario
 fixture "repos/devantler-tech/stray" '{"full_name":"devantler-tech/stray","archived":true,"private":true,"size":1,"created_at":"2026-10-17T18:14:58Z","default_branch":"main"}'
 expect "archived repository refused" 1 '^REFUSE devantler-tech/stray is archived' --repo stray --issue 4289
 scenario client-orders
-printf '{"state":"OPEN","title":"Delete devantler-tech/client-orders","body":"","url":"u"}\n' >"${fake}/issue.json"
+printf '{"author":{"login":"devantler"},"state":"OPEN","title":"Delete devantler-tech/client-orders","body":"","url":"u"}\n' >"${fake}/issue.json"
 expect "Crossplane-managed repository refused" 1 '^REFUSE devantler-tech/client-orders is managed by Crossplane' --repo client-orders --issue 4289
 scenario
 fixture_fails "repos/devantler-tech/stray" 'gh: Not Found (HTTP 404)'
@@ -320,13 +334,26 @@ expect "empty repository accepted" 0 '^WOULD-DELETE devantler-tech/stray \(priva
 # --- The contract the guard reads must be intact, or nothing is judged ---------------------------
 for broken in 'stack-map-heading' 'trusted-authors'; do
   scenario
+  # Each break must be refused for its own reason, before any gh call: a bare '^UNKNOWN ' would
+  # also pass on a missing tool or an unreadable contract file.
   case "${broken}" in
-    stack-map-heading) sed 's/^## Stack map$/## Stack list/' "${tree}/AGENTS.md" >"${tmp}/agents.md" ;;
-    trusted-authors) sed 's/Trusted authors, exact login match only/Trusted authors/' "${tree}/AGENTS.md" >"${tmp}/agents.md" ;;
+    stack-map-heading)
+      sed 's/^## Stack map$/## Stack list/' "${tree}/AGENTS.md" >"${tmp}/agents.md"
+      want="^UNKNOWN AGENTS.md has no 'Stack map' section to check against$"
+      ;;
+    trusted-authors)
+      sed 's/Trusted authors, exact login match only/Trusted authors/' "${tree}/AGENTS.md" >"${tmp}/agents.md"
+      want='^UNKNOWN cannot read the trusted authors from the AGENTS.md trust gate$'
+      ;;
   esac
   cp "${tree}/AGENTS.md" "${tmp}/agents.saved"
   cp "${tmp}/agents.md" "${tree}/AGENTS.md"
-  expect "a contract without its ${broken} is UNKNOWN" 2 '^UNKNOWN ' --repo stray --issue 4289
+  expect "a contract without its ${broken} is UNKNOWN" 2 "${want}" --repo stray --issue 4289
+  if [ -s "${tmp}/trace" ]; then
+    fail "a contract without its ${broken}: gh was called before the contract was judged"
+  else
+    pass "a contract without its ${broken} makes no gh call"
+  fi
   cp "${tmp}/agents.saved" "${tree}/AGENTS.md"
 done
 

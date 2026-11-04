@@ -17,7 +17,9 @@
 #       issue, pull request, review or comment, by anyone other than the trust gate's trusted
 #       authors (read from AGENTS.md, so the two lists cannot drift), and one with history it
 #       cannot walk;
-#     - one the open devantler-tech/monorepo issue given with --issue does not name.
+#     - one the open devantler-tech/monorepo issue given with --issue does not name, and any
+#       request whose issue was not opened by a trusted author (the monorepo is public, so anyone
+#       can open an issue there).
 #   After deleting it reads back that the repository is gone and records the deletion, and the
 #   90-day window in which an organization owner can restore it, on that issue.
 #
@@ -25,8 +27,8 @@
 #   repo-delete-guard.sh --repo <name|devantler-tech/name> --issue <n> [--apply] [--actor engineer|improver]
 #
 #   --repo   the repository to delete; only devantler-tech repositories are accepted.
-#   --issue  number of the OPEN devantler-tech/monorepo issue that asks for this deletion. Its
-#            title or body must name `devantler-tech/<name>` exactly.
+#   --issue  number of the OPEN devantler-tech/monorepo issue that asks for this deletion, opened
+#            by a trusted author. Its title or body must name `devantler-tech/<name>` exactly.
 #   --apply  delete once every check passes, read the absence back and record it on the issue.
 #            Without it the guard only reports (dry run).
 #   --actor  `engineer` (default) or `improver`: whose disclosure line opens the record it posts.
@@ -42,6 +44,12 @@
 #   0  every check passed (and, with --apply, the deletion was read back and recorded)
 #   1  refused, or --apply could not confirm the deletion or record it
 #   2  usage error or a read that could not be completed — nothing was deleted
+#
+# `-e` is left out of `set` on purpose, departing from the `set -euo pipefail` rule in
+# .claude/scripts/AGENTS.md: every read is a command substitution whose exit status the guard
+# inspects itself, as `case $?` after `api_read`, so that a failed read becomes UNKNOWN and a
+# failed check REFUSE. Under `-e` the first failing read would end the run before that mapping,
+# with no REFUSE or UNKNOWN line to tell the caller why nothing was deleted.
 set -uo pipefail
 
 ORG=devantler-tech
@@ -168,11 +176,16 @@ trusted=$(grep -oE '`[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?`' <<<"$trusted_line" | t
 is_trusted() { grep -qxF -- "$1" <<<"$trusted"; }
 
 # --- 2. The request: an open monorepo issue that names the repository ------------------------
-if ! issue_json=$(gh issue view "$issue" --repo "${ORG}/monorepo" --json state,title,body,url 2>/dev/null); then
+if ! issue_json=$(gh issue view "$issue" --repo "${ORG}/monorepo" --json state,title,body,url,author 2>/dev/null); then
   unknown "cannot read ${ORG}/monorepo#${issue}"
 fi
 issue_state=$(jq -r '.state // empty' <<<"$issue_json") || unknown "cannot parse ${ORG}/monorepo#${issue}"
 [ "$issue_state" = OPEN ] || refuse "${ORG}/monorepo#${issue} is ${issue_state:-unreadable}, not an open request"
+# Only a trusted author may ask: the monorepo is public, so anyone can open an issue that names a
+# repository. gh reports a GitHub App as `app/<slug>`, which matches no trusted login and is refused.
+issue_author=$(jq -r '.author.login // empty' <<<"$issue_json") || unknown "cannot parse ${ORG}/monorepo#${issue}"
+[ -n "$issue_author" ] || refuse "${ORG}/monorepo#${issue} has no author GitHub can link, so it is not a trusted request"
+is_trusted "$issue_author" || refuse "${ORG}/monorepo#${issue} was opened by ${issue_author}, who is not a trusted author"
 issue_text=$(jq -r '(.title // "") + "\n" + (.body // "")' <<<"$issue_json") || unknown "cannot parse ${ORG}/monorepo#${issue}"
 # Named exactly: `devantler-tech/foo` must not be satisfied by `devantler-tech/foo-bar`.
 named=$(awk -v r="$full" '
@@ -191,7 +204,7 @@ named=$(awk -v r="$full" '
   END { print found ? "yes" : "no" }
 ' <<<"$issue_text")
 [ "$named" = yes ] || refuse "${ORG}/monorepo#${issue} does not name ${full} for deletion"
-check "requested by open ${ORG}/monorepo#${issue}"
+check "requested by open ${ORG}/monorepo#${issue}, opened by trusted author ${issue_author}"
 
 # --- 3. The repository itself ----------------------------------------------------------------
 # api_read <path> [jq]: prints the result; exit 1 for a 404, 3 for a 409 (GitHub's answer for an
