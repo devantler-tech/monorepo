@@ -1279,6 +1279,95 @@ run_iso "$aged_root" "$aged_stub" apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
 [ -e "$aged_dir" ] ||
   fail 'a Go work dir was reaped because the process table was not aged to the present'
 
+# 15c2. monorepo#3698: one long-lived go command used to keep every orphan younger than
+# itself. A go command accounted for by its own work dir -- `go run` runs the binary it built
+# from <work>/b001/exe/ -- owns no other dir, so an old orphan is reaped beside it, while the
+# dir it runs from stays held by its binary. A go command that cannot be accounted keeps the
+# old rule, and the KEEP output names it and its age.
+# make_ps_stub3 <dir> <etime-table> <pid-table> <args-table> answers each read the script makes
+# with the table of its own shape.
+make_ps_stub3() {
+  mkdir -p "$1" || return 1
+  cat > "$1/ps" <<STUB
+#!/bin/sh
+case "\$*" in
+  *args=*) exec cat "$4" ;;
+  *pid=*) exec cat "$3" ;;
+  *) exec cat "$2" ;;
+esac
+STUB
+  chmod +x "$1/ps"
+}
+acc_root="${go_tmp_root}/proc-accounted"
+mkdir -p "$acc_root" || fail 'fixture: accounted-go root'
+acc_orphan=$(make_go_dir "$acc_root" go-build616161 240) || fail 'fixture: accounted-go orphan'
+acc_served=$(make_go_dir "$acc_root" go-build626262 240) || fail 'fixture: accounted-go served dir'
+mkdir -p "${acc_served}/b001/exe" || fail 'fixture: accounted-go exe dir'
+# The served binary is live: a process works inside its exe dir, as the running binary would.
+( cd "${acc_served}/b001/exe" && exec sleep 60 ) &
+acc_holder=$!
+sleep 1
+kill -0 "$acc_holder" 2>/dev/null || fail 'fixture: accounted-go holder did not stay alive'
+printf '%s\n' '11-00:00:00 /usr/local/go/bin/go' '00:05 /bin/sh' > "${fixture_root}/ps-acc.txt"
+printf '%s\n' '4100 11-00:00:00 /usr/local/go/bin/go' '4200 11-00:00:00 server' \
+  '4300 00:05 /bin/sh' > "${fixture_root}/ps-acc-pid.txt"
+printf '%s\n' '4100 1 go run ./cmd/server' "4200 4100 ${acc_served}/b001/exe/server --port 8080" \
+  '4300 1 /bin/sh' > "${fixture_root}/ps-acc-args.txt"
+make_ps_stub3 "${fixture_root}/ps-acc" "${fixture_root}/ps-acc.txt" \
+  "${fixture_root}/ps-acc-pid.txt" "${fixture_root}/ps-acc-args.txt" || fail 'fixture: accounted-go ps stub'
+acc_out=$(run_iso "$acc_root" "${fixture_root}/ps-acc" apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$acc_orphan" ] &&
+  fail "an old Go work dir was kept for a go command that runs from another work dir: $acc_orphan"
+[ -e "$acc_served" ] || fail "the work dir a live go run serves from was reaped: $acc_served"
+said "$acc_out" "$acc_served" 'KEEP  (in use)' ||
+  fail "the work dir a live go run serves from was not kept as in use: $acc_served"
+kill "$acc_holder" 2>/dev/null
+wait "$acc_holder" 2>/dev/null
+# ABLATION PARTNER: the same old go command, its binary NOT run from a work dir, so nothing
+# accounts for it. It could own the orphan, so the orphan is kept, and the output says who.
+un_root="${go_tmp_root}/proc-unaccounted"
+mkdir -p "$un_root" || fail 'fixture: unaccounted-go root'
+un_orphan=$(make_go_dir "$un_root" go-build636363 240) || fail 'fixture: unaccounted-go orphan'
+printf '%s\n' '4100 1 go run ./cmd/server' '4200 4100 /usr/local/bin/server --port 8080' \
+  '4300 1 /bin/sh' > "${fixture_root}/ps-un-args.txt"
+make_ps_stub3 "${fixture_root}/ps-un" "${fixture_root}/ps-acc.txt" \
+  "${fixture_root}/ps-acc-pid.txt" "${fixture_root}/ps-un-args.txt" || fail 'fixture: unaccounted-go ps stub'
+un_out=$(run_iso "$un_root" "${fixture_root}/ps-un" dry-run 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$un_orphan" ] || fail 'dry-run deleted a Go work dir'
+said "$un_out" "$un_orphan" 'KEEP  (go running)' ||
+  fail "an orphan a running go command could own was not kept: $un_orphan"
+grep -qF 'Go work dirs younger than go (pid 4100), running 264h, are kept while it runs' <<<"$un_out" ||
+  fail "the KEEP output did not name the go command holding the sweep back and its age: $un_out"
+# A pid table that does not parse accounts for nothing: the old rule keeps the orphan.
+printf '%s\n' 'x 11-00:00:00 /usr/local/go/bin/go' > "${fixture_root}/ps-bad-pid.txt"
+make_ps_stub3 "${fixture_root}/ps-badpid" "${fixture_root}/ps-acc.txt" \
+  "${fixture_root}/ps-bad-pid.txt" "${fixture_root}/ps-acc-args.txt" || fail 'fixture: bad-pid ps stub'
+bad_pid_root="${go_tmp_root}/proc-badpid"
+mkdir -p "$bad_pid_root" || fail 'fixture: bad-pid root'
+bad_pid_orphan=$(make_go_dir "$bad_pid_root" go-build646464 240) || fail 'fixture: bad-pid orphan'
+run_iso "$bad_pid_root" "${fixture_root}/ps-badpid" apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$bad_pid_orphan" ] ||
+  fail 'a Go work dir was reaped although the process table with pids did not parse'
+
+# 15c3. GOTMPDIR, when set, is swept as well, under the shared temp root's stricter rule.
+gotmp_root="${fixture_root}/gotmpdir"
+mkdir -p "$gotmp_root" || fail 'fixture: GOTMPDIR root'
+gotmp_orphan=$(make_go_dir "$gotmp_root" go-build656565 240) || fail 'fixture: GOTMPDIR orphan'
+gotmp_off_root="${go_tmp_root}/gotmp-off"
+mkdir -p "$gotmp_off_root" || fail 'fixture: GOTMPDIR-off root'
+BUILD_CACHE_RECLAIM_GOTMPDIR='' run_iso "$gotmp_off_root" "$quiet_ps" apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$gotmp_orphan" ] || fail 'a dir outside every swept root was reaped while GOTMPDIR was unset'
+gotmp_out=$(BUILD_CACHE_RECLAIM_GOTMPDIR="$gotmp_root" \
+  run_iso "$gotmp_off_root" "$quiet_ps" apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$gotmp_orphan" ] && fail "an orphaned Go work dir under GOTMPDIR was not reaped: $gotmp_orphan $gotmp_out"
+gotmp_kept=$(make_go_dir "$gotmp_root" go-build666666 240) || fail 'fixture: GOTMPDIR kept dir'
+printf '%s\n' '00:05 /usr/local/go/pkg/tool/linux_amd64/compile' > "${fixture_root}/ps-gotmp-tool.txt"
+make_ps_stub "${fixture_root}/ps-gotmp-tool" "${fixture_root}/ps-gotmp-tool.txt" || fail 'fixture: GOTMPDIR tool stub'
+BUILD_CACHE_RECLAIM_GOTMPDIR="$gotmp_root" \
+  run_iso "$gotmp_off_root" "${fixture_root}/ps-gotmp-tool" apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$gotmp_kept" ] ||
+  fail 'a GOTMPDIR work dir was reaped while a compile process ran (the shared-root rule)'
+
 # 15d. bad settings fail closed, before anything is deleted.
 bad_root="${go_tmp_root}/bad-settings"
 bad_dir=$(make_go_dir "$bad_root" go-build515151 240) || fail 'fixture: bad-settings dir'
