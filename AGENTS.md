@@ -317,8 +317,6 @@ The full definition of each rung, finishing-stage order, board fields, WIP ceili
   push unsigned commits or to a protected branch.
 - **Fix at the root cause.** Never skip, disable or silence a check, and never hand-edit generated files.
 - **Scripting is bash or Go, never Python.**
-- **Dogfood KSail.** Do cluster work with KSail first, and file each gap or friction on
-  `devantler-tech/ksail`; see the [advance work guide](.claude/guides/advance-work.md#dogfood-ksail--use-our-own-cluster-tool).
 - **Conventions.** Conventional-Commit PR titles; open work as drafts; a scheduled role begins every
   `devantler-tech` PR, issue and comment with its disclosure line (interactive: Claude Code marker);
   third-party artifacts follow target attribution policy. Validate every PR; issue first for non-trivial work.

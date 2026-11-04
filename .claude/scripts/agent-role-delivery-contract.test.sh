@@ -1109,10 +1109,13 @@ grep -Fq 'drive the reviewed head to merge' "${finops_skill}" ||
 [ ! -e "${repo_root}/.claude/agents/finops-engineer.md" ] ||
   fail "standalone FinOps agent still exists; spend is merged into the primary engineer"
 
+# Exactly two plugins: the reviewed role, which bundles the agents' toolbox, and KSail's product
+# plugin, which the agents dogfood (advance-work guide, "Dogfood KSail"; maintainer direction
+# 2026-11-04). Any other plugin, a stale role name or a missing role still fails.
 jq -e '
-  .enabledPlugins == {"agentic-engineering@devantler-plugins": true}
+  .enabledPlugins == {"agentic-engineering@devantler-plugins": true, "ksail@devantler-plugins": true}
 ' "${settings}" > /dev/null ||
-  fail "runtime settings do not enable only the reviewed agentic-engineering plugin"
+  fail "runtime settings do not enable exactly the reviewed agentic-engineering and ksail plugins"
 
 # The plugin can ship a tool-neutral guard and Claude's JSON adapter, but only the
 # consumer can attach a hook to this deployment's surveyor. Verify the native agent

@@ -422,7 +422,7 @@ product remains owned by that product. Move it into a shared library only after 
 at least two repositories proves a product-neutral contract worth inheriting — keep shared components
 **industry-standard and tool-neutral** (the portability principle).
 
-## Dogfood KSail — use our own cluster tool
+## Dogfood KSail
 
 KSail is the portfolio's own Kubernetes tool, and using it on our own work is how we learn what to
 improve. Whenever a task needs a Kubernetes cluster or operates one, **do it with KSail first**: its
