@@ -13,6 +13,10 @@ green_head="47702cc36a99d2a28b81793199cbae1c68819a60"
 limited_fixture="${fixtures}/coderabbit-summary-rate-limited-platform-4041.txt"
 limited_head="e1b1f5e8dbb367c0e6378fa040c1512921acb00c"
 walkthrough_fixture="${fixtures}/coderabbit-summary-walkthrough-only-monorepo-2714.txt"
+# The 2026-11 layout (monorepo#4803): the verdict line moved into a `recent_review_status` block
+# near the top, while `recent_review` keeps the range header. Sanitised from platform#5830.
+status_fixture="${fixtures}/coderabbit-summary-status-block-green-platform-5830.txt"
+status_head="d5c7692eb5d2f816d14ee8b41d8a5afedf212365"
 other_head="0123456789abcdef0123456789abcdef01234567"
 
 tmp="$(mktemp -d)"
@@ -46,7 +50,7 @@ expect() { # expect <name> <want-rc> <want-line> <head> <input-file>
   fi
 }
 
-for f in "${green_fixture}" "${limited_fixture}" "${walkthrough_fixture}"; do
+for f in "${green_fixture}" "${limited_fixture}" "${walkthrough_fixture}" "${status_fixture}"; do
   [ -s "${f}" ] || { echo "FAIL fixture missing or empty: ${f}" >&2; exit 1; }
 done
 
@@ -118,6 +122,52 @@ sed 's/No actionable comments were generated in the recent review. 🎉/**Action
 { cat "${tmp}/zero-findings.txt"; printf '\n> ## Review limit reached\n'; } >"${tmp}/zero-plus-limit.txt"
 expect "zero findings + did-not-run marker" 1 "NONE did-not-run" "${green_head}" "${tmp}/zero-plus-limit.txt"
 
+# The 2026-11 layout (monorepo#4803): the verdict sits in `recent_review_status`, the range header
+# stays in `recent_review`. RED before the fix: the real finding-free summary read `NONE no-verdict`.
+verdict_line='No actionable comments were generated in the recent review.'
+expect "status-block layout: real green summary at its head" 0 "GREEN" "${status_head}" "${status_fixture}"
+expect "status-block layout: real green summary at another head" 1 "NONE range-other-head" "${other_head}" "${status_fixture}"
+# The did-not-run markers still win over a status-block verdict, structural and prose alike.
+{ printf '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n'; cat "${status_fixture}"; } >"${tmp}/status-plus-structural-limit.txt"
+expect "status-block layout + structural rate-limit marker" 1 "NONE did-not-run" "${status_head}" "${tmp}/status-plus-structural-limit.txt"
+{ cat "${status_fixture}"; printf '\n> ## Review limit reached\n'; } >"${tmp}/status-plus-limit.txt"
+expect "status-block layout + prose did-not-run marker" 1 "NONE did-not-run" "${status_head}" "${tmp}/status-plus-limit.txt"
+# Findings in the status block are reported, never read as green, and survive a did-not-run marker.
+sed "s/^${verdict_line}\$/**Actionable comments posted: 3**/" "${status_fixture}" >"${tmp}/status-findings.txt"
+checks=$((checks + 1))
+if grep -Fq '**Actionable comments posted: 3**' "${tmp}/status-findings.txt"; then echo "ok   status-block findings fixture built"; else
+  echo "FAIL status-block findings fixture: the verdict line was not replaced" >&2
+  failures=$((failures + 1))
+fi
+expect "status-block layout with findings" 1 "FINDINGS 3" "${status_head}" "${tmp}/status-findings.txt"
+{ cat "${tmp}/status-findings.txt"; printf '\n> ## Review limit reached\n'; } >"${tmp}/status-findings-plus-limit.txt"
+expect "status-block findings + did-not-run marker" 1 "FINDINGS 3" "${status_head}" "${tmp}/status-findings-plus-limit.txt"
+sed "s/^${verdict_line}\$/**Actionable comments posted: 0**/" "${status_fixture}" >"${tmp}/status-zero.txt"
+{ cat "${tmp}/status-zero.txt"; printf '\n> ## Review limit reached\n'; } >"${tmp}/status-zero-plus-limit.txt"
+expect "status-block zero findings + did-not-run marker" 1 "NONE did-not-run" "${status_head}" "${tmp}/status-zero-plus-limit.txt"
+# Ablation: deleting ONLY the status-block verdict line is what flips the real summary.
+grep -vxF "${verdict_line}" "${status_fixture}" >"${tmp}/status-no-verdict.txt"
+expect "status-block layout minus verdict line" 1 "NONE no-verdict" "${status_head}" "${tmp}/status-no-verdict.txt"
+# The verdict counts only inside the two review blocks: moved into the walkthrough, it is no verdict.
+awk -v v="${verdict_line}" '
+  /<!-- recent_review_status_start -->/ { st = 1 }
+  /<!-- recent_review_status_end -->/   { st = 0 }
+  st && $0 == v { next }
+  { print }
+  /<!-- walkthrough_start -->/ { print v }
+' "${status_fixture}" >"${tmp}/status-verdict-in-walkthrough.txt"
+expect "status-block verdict moved into the walkthrough" 1 "NONE no-verdict" "${status_head}" "${tmp}/status-verdict-in-walkthrough.txt"
+# The range header is still read from `recent_review` only: a status-only summary has no range.
+awk '/<!-- recent_review_start -->/ { skip = 1 } !skip { print } /<!-- recent_review_end -->/ { skip = 0 }' \
+  "${status_fixture}" >"${tmp}/status-only.txt"
+expect "status block without a recent_review block" 1 "NONE no-recent-review" "${status_head}" "${tmp}/status-only.txt"
+awk -v h="${status_head}" '
+  /Reviewing files that changed/ { next }
+  { print }
+  /<!-- recent_review_status_start -->/ { print "Reviewing files that changed from the base of the PR and between " h " and " h "." }
+' "${status_fixture}" >"${tmp}/status-range-in-status.txt"
+expect "status-block layout with the range header only in the status block" 1 "NONE no-range" "${status_head}" "${tmp}/status-range-in-status.txt"
+
 # A body larger than a pipe buffer must be judged the same way. Piping it into an early-exiting
 # `grep -q` under pipefail reports a match as a miss, which turned both of these into
 # `not-a-summary`; for the did-not-run check that same miss would read a refusal as a green.
@@ -154,8 +204,8 @@ json_verdict() { # json_verdict <json-file> → prints "rc<TAB>output"
   set -e
   printf '%s\t%s\n' "${rc}" "${got}"
 }
-for f in "${green_fixture}" "${limited_fixture}" "${walkthrough_fixture}" "${tmp}/plain.txt"; do
-  for h in "${green_head}" "${limited_head}" "${other_head}"; do
+for f in "${green_fixture}" "${limited_fixture}" "${walkthrough_fixture}" "${status_fixture}" "${tmp}/plain.txt"; do
+  for h in "${green_head}" "${limited_head}" "${status_head}" "${other_head}"; do
     checks=$((checks + 1))
     jq -n --arg h "${h}" --rawfile b "${f}" '{head: $h, body: $b}' >"${tmp}/pair.json"
     set +e

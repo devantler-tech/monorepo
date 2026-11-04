@@ -35,7 +35,10 @@
 #   replaces it whatever that run's event (monorepo#4527: a dispatch cancelled the push run it
 #   re-ran, and the stale cancel kept weekly pacing off). The latest MEANINGFUL run decides: runs
 #   without a verdict (pending, skipped, neutral) and replaced cancellations are dropped before the
-#   latest run is chosen, so they never hide an earlier failure (monorepo#4529). Without breakage, UNKNOWN reasons are: read-failed <what>, malformed <what>,
+#   latest run is chosen, so they never hide an earlier failure (monorepo#4529). A cancelled
+#   `merge_group` run is dropped too (monorepo#4814): the queue landed the head, so its required checks
+#   had passed, and no merge group re-runs at that SHA; failed (not cancelled) jobs in its suite still
+#   count. Without breakage, UNKNOWN reasons are: read-failed <what>, malformed <what>,
 #   truncated <what>, no-check-runs and no-workflow-runs. An unfinished run is not a failure; the
 #   next run re-reads it.
 #
@@ -167,6 +170,10 @@ probe() {
   # fields cannot be grouped, and grouping it with others could hide a failure, so it is malformed.
   bad="$(jq -n -r --argjson f "${failed}" \
     --slurpfile c <(printf '%s\n' "${check_pages}") --slurpfile r <(printf '%s\n' "${run_pages}") '
+    # A cancelled merge-queue run at the head has no verdict and nothing can replace it (#4814): the
+    # queue only lands a commit whose required checks passed, and a merge group never runs again at
+    # that SHA. The failed jobs in its suite still count on their own; its cancelled jobs do not.
+    def merge_group_cancel: .event == "merge_group" and .conclusion == "cancelled";
     [$r[].workflow_runs[]] as $runs
     | if all($runs[]; (.workflow_id | type) == "number" and (.event | type) == "string"
         and (.run_number | type) == "number") then . else error("shape") end
@@ -177,13 +184,14 @@ probe() {
     | [ ($c[].check_runs[] | select(.conclusion as $x | $f | index($x)) | . as $chk
         | (if ($chk.check_suite.id | type) == "number"
            then [$runs[] | select(.check_suite_id == $chk.check_suite.id)][0] else null end) as $own
-        | select($own == null or ((($own.conclusion as $x | ["success"] + $f | index($x)) | not)
+        | select(if $own != null and ($own | merge_group_cancel) then $chk.conclusion != "cancelled"
+            else $own == null or ((($own.conclusion as $x | ["success"] + $f | index($x)) | not)
             and ([$runs[] | select(.workflow_id == $own.workflow_id and .event == $own.event
-                and .run_number > $own.run_number and .conclusion == "success")] | length) == 0))
+                and .run_number > $own.run_number and .conclusion == "success")] | length) == 0) end)
         | "check:\(.name)=\(.conclusion)"),
         # Filter BEFORE choosing the latest run (monorepo#4529): choosing first let a cancellation, a
         # pending run or a non-deciding conclusion discard an earlier genuine failure.
-        ($runs | group_by([.workflow_id, .event]) | .[]
+        ($runs | map(select(merge_group_cancel | not)) | group_by([.workflow_id, .event]) | .[]
           | map(select(.conclusion as $x | ["success"] + $f | index($x)))
           | map(select(. as $c | $c.conclusion != "cancelled" or ([$runs[] | select(.workflow_id == $c.workflow_id
               and .run_number > $c.run_number and .conclusion == "success")]

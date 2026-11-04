@@ -816,7 +816,7 @@ public and private — no per-repo loop needed to enumerate):
      after the authenticated request **for which
      `gh api repos/devantler-tech/<repo>/issues/comments/<comment-id> --jq '{head:"<headRefOid>",body:.body}' | <repo-root>/.claude/scripts/coderabbit-summary-verdict.sh --input -`
      prints `GREEN`** (the guard admits a declared helper only as this absolute, forge-first `--input -` call, so the head travels in the JSON; monorepo#3529) (verdict `No actionable comments were generated in the recent review` in the
-     `recent_review` block, its range header ending at the head, no did-not-run marker — a walkthrough
+     `recent_review_status` or `recent_review` block, the latter's range header ending at the head, no did-not-run marker — a walkthrough
      or a rate-limit shell naming the head is `none`; monorepo#2653), and its **command-invocation reply comment
      carrying a verdict** as three alternative substantive artifacts; the review object does **not**
      require a `Review completed` status conjunct. The verdict reply must state

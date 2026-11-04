@@ -9,8 +9,9 @@
 #     - doggy-countdown#1 was promoted on a summary with no verdict line and no sha at all;
 #     - a rate-limit shell REFRESHES the summary and carries a range header naming the FULL
 #       current head (platform#4041, 2026-09-22) while stating that no review ran.
-#   Only the `recent_review` block's verdict line plus its range header ending at the head is a
-#   review result. This helper applies exactly that test so no lane re-derives it by eye.
+#   Only the verdict line in the `recent_review_status` or `recent_review` block (monorepo#4803),
+#   plus the `recent_review` range header ending at the head, is a review result. This helper
+#   applies exactly that test so no lane re-derives it by eye.
 #
 # USAGE
 #   coderabbit-summary-verdict.sh --head <40-hex-sha> [--input <file>|-]
@@ -40,7 +41,7 @@
 set -euo pipefail
 
 usage() {
-  sed -n '15,38p' "$0" >&2
+  sed -n '16,39p' "$0" >&2
   exit 2
 }
 
@@ -110,16 +111,24 @@ grep -Fq '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->
 
 # Every test below reads a here-string, never `printf | grep -q`: under pipefail an early-exiting
 # grep makes printf die of SIGPIPE on a large body, so a match reads as a miss.
-# Judge only the recent_review block: the walkthrough and pre-merge tables are not a verdict.
-recent="$(printf '%s\n' "$body" | awk '
-  /<!-- recent_review_start -->/ { inside = 1; next }
-  /<!-- recent_review_end -->/   { inside = 0 }
-  inside { print }
-')"
+# Judge only the review blocks: the walkthrough and pre-merge tables are not a verdict. Since the
+# 2026-11 layout the verdict line sits in its own `recent_review_status` block near the top, while
+# `recent_review` keeps the range header (monorepo#4803). The verdict and the findings count are read
+# from either block; the range header is read from `recent_review` alone.
+block() { # block <name>: the lines between <!-- <name>_start --> and <!-- <name>_end -->
+  printf '%s\n' "$body" | awk -v s="<!-- $1_start -->" -v e="<!-- $1_end -->" '
+    index($0, s) { inside = 1; next }
+    index($0, e) { inside = 0 }
+    inside { print }
+  '
+}
+recent="$(block recent_review)"
+status="$(block recent_review_status)"
+verdict_text="$(printf '%s\n%s\n' "$status" "$recent")"
 
 # Findings are read BEFORE the did-not-run marker: a finding is positive evidence and survives an
 # incomplete run, so a body carrying both reports its findings (monorepo#2764).
-findings="$(sed -nE '/Actionable comments posted: [0-9]+/{s/.*Actionable comments posted: ([0-9]+).*/\1/p;q;}' <<<"$recent")"
+findings="$(sed -nE '/Actionable comments posted: [0-9]+/{s/.*Actionable comments posted: ([0-9]+).*/\1/p;q;}' <<<"$verdict_text")"
 if [ -n "$findings" ] && [ "$findings" -gt 0 ]; then
   verdict "FINDINGS $findings"
 fi
@@ -139,7 +148,7 @@ if grep -Fq 'rate limited by coderabbit.ai -->' <<<"$body" ||
 fi
 
 [ -n "$recent" ] || verdict "NONE no-recent-review"
-grep -Fq 'No actionable comments were generated in the recent review' <<<"$recent" ||
+grep -Fq 'No actionable comments were generated in the recent review' <<<"$verdict_text" ||
   { [ "$findings" = "0" ] || verdict "NONE no-verdict"; }
 
 # The END sha of the range is the commit that was reviewed. Any sha elsewhere in the comment is
