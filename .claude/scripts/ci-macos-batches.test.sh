@@ -36,7 +36,6 @@ cat >"$tmp/cases.tsv" <<'CASES'
 2	sibling-lane-watch
 2	platform-live-health
 2	squash-closing-keywords
-2	board-add
 2	prod-kube-context
 2	flow-scorecard
 3	review-lane-health
@@ -65,7 +64,7 @@ cat >"$tmp/check.jq" <<'CHECK'
 def trim_names: del(.name) | .steps |= map(del(.name));
 def program($cases): "batch_status=0\n" + ($cases | map("bash .claude/scripts/" + .name + ".test.sh || batch_status=1\n") | join("")) + "exit \"$batch_status\"\n";
 . as $w | $cases[0] as $all | $filters[0] as $f |
-($w.jobs["test-board-add"].steps[0] | del(.name)) as $checkout |
+($w.jobs["test-prod-kube-context"].steps[0] | del(.name)) as $checkout |
 ($checkout.uses | type == "string" and test("^actions/checkout@[0-9a-f]{40}$")) and
 ($checkout | keys == ["uses","with"] and .with == {"persist-credentials":false}) and
 ([ $w.jobs | keys[] | select(startswith("test-macos-batch-")) ] == [range(1;5) | "test-macos-batch-\(.)"]) and
@@ -104,7 +103,7 @@ reject_mutation() {
   if check_workflow "$tmp/mutated.json"; then fail "$label was accepted"; fi
 }
 reject_mutation 'missing batch' 'del(.jobs["test-macos-batch-1"])'
-reject_mutation 'dropped Linux coverage' 'del(.jobs["test-board-add"])'
+reject_mutation 'dropped Linux coverage' 'del(.jobs["test-prod-kube-context"])'
 reject_mutation 'dropped aggregate need' '.jobs.status.needs -= ["test-macos-batch-1"]'
 reject_mutation 'dropped aggregate results' '.jobs.status.steps[0].with["job-results"] = ""'
 reject_mutation 'missing output' 'del(.jobs.changes.outputs["macos-batch-1"])'
@@ -112,7 +111,7 @@ reject_mutation 'wrong OS' '.jobs["test-macos-batch-1"]["runs-on"] = "ubuntu-lat
 reject_mutation 'write permission' '.jobs["test-macos-batch-1"].permissions.contents = "write"'
 reject_mutation 'swallowed failure' '.jobs["test-macos-batch-1"].steps[1].run |= sub("batch_status=1";"true")'
 reject_mutation 'omitted child' '.jobs["test-macos-batch-1"].steps[1].run |= (split("\n") | map(select(contains("worktree-lane-sweep.test.sh") | not)) | join("\n"))'
-reject_mutation 'duplicated test' '.jobs["test-macos-batch-1"].steps[1].run += "bash .claude/scripts/board-add.test.sh\n"'
+reject_mutation 'duplicated test' '.jobs["test-macos-batch-1"].steps[1].run += "bash .claude/scripts/prod-kube-context.test.sh\n"'
 jq '.["macos-batch-1"] |= .[1:]' "$tmp/filters.json" >"$tmp/mutated-filters.json"
 if check_workflow "$tmp/workflow.json" "$tmp/mutated-filters.json"; then fail 'incomplete union filter was accepted'; fi
 
@@ -157,5 +156,5 @@ for group in 1 2 3 4; do
     else diff -u "$tmp/expected" "$tmp/observed" || fail "$job omitted later cases after $mode"; fi
   done
 done
-echo 'ci-macos-batches: OK — 22 cases retain both OSes; four batches run every child and propagate all failures'
+echo 'ci-macos-batches: OK — 21 cases retain both OSes; four batches run every child and propagate all failures'
 finished=1

@@ -142,8 +142,6 @@ jobs:
               - '.claude/guides/**'
               - '.claude/guides/issues-and-board.md'
               - '.claude/plugin-consumption/agent-instances.json'
-              - '.claude/scripts/board-add.sh'
-              - '.claude/scripts/board-add.test.sh'
               - '.claude/scripts/claude-lane-liveness.sh'
               - '.claude/scripts/codex-lane-liveness.sh'
               - '.claude/scripts/finops-snapshot.sh'
@@ -236,12 +234,16 @@ jobs:
               # The sweep hands every discovered issue to board-add.sh, so a change
               # to that helper's interface can break this one without touching it.
               - '.claude/scripts/board-add.sh'
+              - '.claude/scripts/board-add-go/**'
               # Self-gate on the workflow too, so a change that breaks this job's
               # own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
             board-add:
               - '.claude/scripts/board-add.sh'
               - '.claude/scripts/board-add.test.sh'
+              # board-add.sh launches the Go implementation through the shared bounded build.
+              - '.claude/scripts/board-add-go/**'
+              - '.claude/scripts/go-helper-build.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -1193,7 +1195,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -1202,9 +1204,19 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Fixture-only run behind a stubbed `gh` on PATH — no network, no token,
-      # no live board touched. Both OSes because the daily runs happen on macOS
-      # while CI defaults to Linux, and bash/jq portability is what this pins.
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/board-add-go/go.mod
+          cache: false
+      - name: Install GNU build deadline utility
+        if: runner.os == 'macOS'
+        run: brew install coreutils
+      # Go unit tests, then every fixture case through the launcher behind a
+      # stubbed `gh` on PATH — no network, no token, no live board touched.
+      # Both OSes because the scheduled runs happen on macOS while CI defaults
+      # to Linux. This job has its own macOS leg rather than a macOS batch
+      # slot: the launcher builds Go, which the batches do not set up.
       - name: Self-test board-add
         run: bash .claude/scripts/board-add.test.sh
 
@@ -3380,7 +3392,6 @@ jobs:
           bash .claude/scripts/sibling-lane-watch.test.sh || batch_status=1
           bash .claude/scripts/platform-live-health.test.sh || batch_status=1
           bash .claude/scripts/squash-closing-keywords.test.sh || batch_status=1
-          bash .claude/scripts/board-add.test.sh || batch_status=1
           bash .claude/scripts/prod-kube-context.test.sh || batch_status=1
           bash .claude/scripts/flow-scorecard.test.sh || batch_status=1
           exit "$batch_status"
