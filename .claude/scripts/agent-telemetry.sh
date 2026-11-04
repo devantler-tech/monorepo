@@ -2387,17 +2387,21 @@ def usable_ts:
 # The same read counts interrupted tool calls (#4823): a second parse of every
 # transcript for that one flag was about 15% of the efficiency section. Pass a
 # file as $2 and the count is appended to it. The two results keep the meaning
-# they had as separate reads. jq skips only the record that raised an error and
-# reads on, and the interrupt branch runs first, so a record the denied filter
-# cannot use (a bare JSON scalar has no .type) loses nothing it did not lose
-# before. The \001 marker cannot be a tool_use_id: the harness writes those.
+# they had as separate reads. The interrupt branch runs first, and the denied filter
+# skips any record that is not an object, so a bare JSON scalar raises no
+# error, even as the last line, where jq would report it as a failed read.
+# The \001 marker cannot be a tool_use_id: the harness writes those.
+# A read that fails appends no count and returns its status, so the count
+# check reports UNKNOWN instead of accepting a short or zero count.
 denied_ids() {
-  jq -Rr --arg re "$NEVER_RAN_RE" "$JQ_SHAPE_DEFS"'select(length>0)|(try fromjson catch empty)
+  local ids
+  ids=$(jq -Rr --arg re "$NEVER_RAN_RE" "$JQ_SHAPE_DEFS"'select(length>0)|(try fromjson catch empty)
           | (.. | objects | select(.interrupted? == true) | "\u0001I"),
-            (select(.type=="user") | content_blocks
+            (objects | select(.type=="user") | content_blocks
              | select(.type=="tool_result" and .is_error==true)
              | select((block_text) | test($re))
-             | .tool_use_id // empty)' "$1" 2>/dev/null \
+             | .tool_use_id // empty)' "$1" 2>/dev/null) || return
+  printf '%s\n' "$ids" \
     | awk -v sink="${2:-}" '
         $0 == "\001I" { n++; next }
         { print }
@@ -2412,8 +2416,9 @@ denied_ids() {
 # real shell command line starts with one, which keeps untrusted command text
 # from forging a tag and moving itself between classes.
 tagged_commands_in() {
-  local f="$1" errs
-  errs=$(denied_ids "$f" "$XFINT"); [ -n "$errs" ] || errs='[]'
+  local f="$1" errs drc=0
+  errs=$(denied_ids "$f" "$XFINT") || drc=$?
+  [ -n "$errs" ] || errs='[]'
   jq -r --argjson errs "$errs" '
     .. | objects
     | (
@@ -2452,7 +2457,10 @@ tagged_commands_in() {
          | map("\u0001CX" + (if .key==0 then "*" else "" end) + "\u0002" + .value)
          | .[])
       )
-  ' "$f" 2>/dev/null
+  ' "$f" 2>/dev/null || return
+  # A failed denied read still lets the commands be read, but it is reported
+  # through the canary rather than passing as a complete read.
+  return "$drc"
 }
 
 commands_in() {
@@ -4813,6 +4821,7 @@ if want efficiency; then
       INTERRUPT=$(awk '{ n += $1 } END { print n + 0 }' "$XFINT")
     else
       INTERRUPT="UNKNOWN (counted $(grep -c . "$XFINT" || true) of ${INT_FILES:-0} transcripts)"
+      main_rc=2
     fi
     # Each LINE of a command carries its class tag, so multi-line commands keep
     # their structure and their order within a class — which the separator-
