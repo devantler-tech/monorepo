@@ -10935,6 +10935,45 @@ $MK_OUT2
 ---
 $MK_OUT3" | head -18)"
 fi
+# Any doubt about where a heredoc starts or ends leaves its lines counting as code: a
+# continued opening line, a substitution spanning body lines, a delimiter word that runs on
+# (`EOF-BODY` is not `EOF`), a quoted `<<` before the real one, a `<<` inside a comment, a
+# body fed to a shell through a process substitution, and a `#` that does not start a word.
+# shellcheck disable=SC2016
+MK_OUT=$({
+  mk_cmd p1 'gh pr checkout 28'
+  mk_cmd p2 $'gh pr comment 28 -F - <<\'EOF\' \\\n&& make build\nEOF'
+  mk_cmd p3 $'gh pr comment 28 --body-file - <<EOF\nstart $(printf x\nmake lint\n)\nEOF'
+  mk_cmd p4 $'gh pr comment 28 --body-file - <<EOF-BODY\nhello\nEOF-BODY\nmake check'
+  mk_cmd p5 $'git commit -m "fix <<EOF" -F - <<\'MSG\'\nbody\nMSG\nmake package'
+  mk_cmd p6 'npm ci'
+} | mk_run makeheredocedges)
+# shellcheck disable=SC2016
+MK_OUT2=$({
+  mk_cmd q1 'gh pr checkout 29'
+  mk_cmd q2 $'gh pr comment 29 --body ok # see <<EOF\nmake deploy'
+  mk_cmd q3 $'gh pr comment 29 --body-file <(bash <<\'EOF\'\nmake release\nEOF\n)'
+  mk_cmd q4 "cd /;''# ; make build"
+  mk_cmd q5 'npm ci'
+} | mk_run makeheredocedges2)
+# shellcheck disable=SC2016
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qF '1 && make build' <<<"$MK_OUT" \
+   && grep -qF '1 make lint' <<<"$MK_OUT" \
+   && grep -qF '1 make check' <<<"$MK_OUT" \
+   && grep -qF '1 make package' <<<"$MK_OUT" \
+   && grep -qE '^ +1 npm ci$' <<<"$MK_OUT2" \
+   && grep -qF '1 make deploy' <<<"$MK_OUT2" \
+   && grep -qF '1 make release' <<<"$MK_OUT2" \
+   && grep -qF "1 cd /;''# ; make build" <<<"$MK_OUT2" \
+   && ! grep -qF '[prose?]' <<<"$MK_OUT$MK_OUT2"; then
+  ok "a heredoc whose start or end is in doubt, and a # inside a word, leave their lines counting as code"
+else
+  bad "a heredoc whose start or end is in doubt, and a # inside a word, leave their lines counting as code" \
+      "got: $(grep -hE '^ +[0-9]+ ' <<<"$MK_OUT
+---
+$MK_OUT2" | head -12)"
+fi
 # A tool call is its own shell parse, so quote state must not cross from one call
 # into the next: after a call that ends on an unmatched quote, the next call's
 # prose is still prose and its build is still a build (#3666). The boundary cannot

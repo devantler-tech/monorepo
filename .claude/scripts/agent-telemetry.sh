@@ -6352,18 +6352,27 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
               # the line is one posting command with no pipe, list or substitution, so
               # the body is only text (hdposted). A line whose quote is still open at its
               # end, or that holds a here-string, is not read.
-              function heredoc_open(i,   word, count, tmp) {
+              # Any doubt leaves the body unread, so its lines keep counting as code: a
+              # line continued onto the next one, a `#` on it (the `<<` may be inside a
+              # comment), a `<<` that is not exactly one on the raw line (one may be quoted),
+              # or a delimiter word that runs on into other characters.
+              function heredoc_open(i,   word, count, tmp, after_word) {
                 tmp = res[i]
                 count = gsub(/<</, "<<", tmp)
-                if (st != 0 || count != 1 || res[i] ~ /<<</) return
+                if (st != 0 || trail || count != 1 || res[i] ~ /<<</ || index(res[i], "#") > 0) return
+                tmp = line[i]
+                if (gsub(/<</, "<<", tmp) != 1) return
                 if (!match(line[i], hdword)) return
+                after_word = substr(line[i], RSTART + RLENGTH, 1)
+                if (after_word != "" && after_word !~ /[[:space:];&|<>()]/) return
                 word = substr(line[i], RSTART, RLENGTH)
+                hdn++
                 hdtab = (word ~ /^<<-/)
                 sub(/^<<-?[[:space:]]*/, "", word)
                 hdquoted = (substr(word, 1, 1) == sq || substr(word, 1, 1) == "\"" || substr(word, 1, 1) == "\\")
                 gsub(sq, "", word); gsub(/"/, "", word); gsub(/\\/, "", word)
                 hd = word
-                hdposted = (res[i] ~ posted && res[i] !~ /[|;&`]|[$][(]/)
+                hdposted = (res[i] ~ posted && res[i] !~ /[|;&`]|[$<>][(]/)
               }
               # unquoted(line) reads one line left to right with the quote state
               # (st, buf) CARRIED from the previous line of the same tool call,
@@ -6384,6 +6393,9 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
                     if (c == sq) st = 1
                     else if (c == "\"") { st = 2; buf = "" }
                     else if (c == "\\") { out = out " "; trail = (i == n); i++ }
+                    # A `#` starts a comment only at the start of a word. After a quote,
+                    # as in `""#`, it is an ordinary character, so it is kept as one.
+                    else if (c == "#" && i > 1 && substr(line, i - 1, 1) !~ /[[:space:];&|()<>]/) out = out "w"
                     else out = out c
                   } else if (st == 1) {
                     if (c == sq) { st = 0; out = out " " }
@@ -6436,19 +6448,24 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
                   # when a posting command took it and nothing in it is expanded: the
                   # delimiter was quoted, or the line holds no substitution (#3666).
                   body[n] = 1; res[n] = ""; escaped[n] = 0; joined = 0
-                  bodytext[n] = hdposted && (hdquoted || $0 !~ /[$][(]|`/)
+                  hid[n] = hdn; bodytext[n] = hdposted
+                  # An unquoted body is expanded as a whole, and a substitution can span
+                  # lines, so one on any of its lines makes the whole body code.
+                  if (!hdquoted && $0 ~ /[$][(]|`/) bodycode[hdn] = 1
                 } else {
                   if (hd != "") hd = ""
                   res[n] = unquoted($0); escaped[n] = esc; joined = trail
                   heredoc_open(n)
                 }
-                # Text a posting command only records changes nothing, so a word such
-                # as "source" in a PR body is not a way to change what a name runs.
-                if (!bodytext[n] && ($0 ~ /(^|[^A-Za-z0-9_-])(alias|eval|source|enable|shopt|function|trap|builtin|BASH_ENV|BASH_FUNC[A-Za-z0-9_%]*|PROMPT_COMMAND|command_not_found_handle)([^A-Za-z0-9_-]|$)/ \
-                    || $0 ~ /[(][[:space:]]*[)]/ || $0 ~ /(^|[^A-Za-z0-9_.\/-])[.][[:space:]]/)) {
+                if ($0 ~ /(^|[^A-Za-z0-9_-])(alias|eval|source|enable|shopt|function|trap|builtin|BASH_ENV|BASH_FUNC[A-Za-z0-9_%]*|PROMPT_COMMAND|command_not_found_handle)([^A-Za-z0-9_-]|$)/ \
+                    || $0 ~ /[(][[:space:]]*[)]/ || $0 ~ /(^|[^A-Za-z0-9_.\/-])[.][[:space:]]/) {
                   mention[n] = 1
                 }
               }
+              # posted_text(i): a heredoc body line that is only text a posting command
+              # records. Such text changes nothing, so a word such as "source" in a PR body
+              # is not a way to change what a name runs (#3666).
+              function posted_text(i) { return body[i] && bodytext[i] && !bodycode[hid[i]] }
               # An escape inside "…" is prose only where this line is all one
               # shell reads: a tool call of a single line whose text is exact.
               # In a call of several lines the line can be a heredoc body, the
@@ -6465,7 +6482,7 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
               # rule as well.
               function layered(i) { return inexact[of[i]] || lines[of[i]] > 1 || index(line[i], "$" sq) > 0 }
               # A heredoc body line is prose only when it is posted text (bodytext).
-              function prose(i) { return body[i] ? bodytext[i] : !after[i] && !(escaped[i] && layered(i)) && text_only(res[i]) }
+              function prose(i) { return body[i] ? posted_text(i) : !after[i] && !(escaped[i] && layered(i)) && text_only(res[i]) }
               # A mention of a name-changing word changes nothing when it is
               # only text that one inert command prints or posts, such as a
               # printf of the words "alias echo=x" (#3666): the line is a single
@@ -6480,6 +6497,7 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
                 return lines[of[i]] == 1 && !inexact[of[i]] && prose(i) && res[i] !~ /[;&]/ && res[i] ~ /[^[:space:]]/ && index(line[i], "$" sq) == 0
               }
               END {
+                for (i = 1; i <= n; i++) if (mention[i] && posted_text(i)) mention[i] = 0
                 for (i = 1; i <= n; i++) if (mention[i] && !quoted_mention(i)) { redefined = 1; renames[i] = 1 }
                 for (i = 1; i <= n; i++) {
                   if (line[i] ~ /(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest)/ \
