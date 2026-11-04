@@ -5960,8 +5960,9 @@ else bad "an escaped is_error timeout is counted" "$(grep 'timeouts' <<<"$OUT")"
 check "escaped tool_use type keeps its timed-out description" "$OUT" "escaped key wait"
 
 # Interrupts are counted in the same read as the denied calls (#4823). A record
-# that stops the denied list (a bare JSON scalar has no .type) must not stop the
-# interrupt count, and every file's interrupts are summed.
+# the denied filter cannot use (a bare JSON scalar has no .type) or a line that
+# is not JSON must not stop the interrupt count, and every file's interrupts
+# are summed.
 mkdir -p "$FIX/effint"
 cat > "$FIX/effint/a.jsonl" <<'EOF'
 5
