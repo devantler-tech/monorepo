@@ -74,7 +74,8 @@ unknown() {
   printf 'UNKNOWN %s\n' "$*"
   exit 2
 }
-check() { printf 'CHECK %s\n' "$*"; }
+quiet=0
+check() { [ "$quiet" = 1 ] || printf 'CHECK %s\n' "$*"; }
 
 repo=""
 issue=""
@@ -175,6 +176,12 @@ trusted=$(grep -oE '`[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?`' <<<"$trusted_line" | t
 [ -n "$trusted" ] || unknown "cannot read the trusted authors from the AGENTS.md trust gate"
 is_trusted() { grep -qxF -- "$1" <<<"$trusted"; }
 
+# examine: sections 2 to 4 — every check that reads GitHub, as ONE pass. It ends by setting
+# $snapshot to everything those checks read. `--apply` runs the whole pass a second time right
+# before the delete and deletes only when the second snapshot equals the first. A check is never
+# re-run one by one, so a check added to this pass is re-run before the delete without a second
+# edit (monorepo#4816 review).
+examine() {
 # --- 2. The request: an open monorepo issue that names the repository ------------------------
 if ! issue_json=$(gh issue view "$issue" --repo "${ORG}/monorepo" --json state,title,body,url,author 2>/dev/null); then
   unknown "cannot read ${ORG}/monorepo#${issue}"
@@ -287,6 +294,7 @@ ref_count=$(count_lines "$refs")
 [ "$ref_count" -le "$MAX_REFS" ] ||
   refuse "${full} has more than ${MAX_REFS} refs: that is not a stray repository"
 commit_shas=""
+commit_rows=""
 while IFS=$'\t' read -r ref type sha; do
   [ -n "$ref" ] || continue
   [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || unknown "cannot read the object ${ref} points at"
@@ -307,6 +315,7 @@ while IFS=$'\t' read -r ref type sha; do
   # GitHub's own committer for web edits and merges is not an author; any other committer is.
   outsiders "a commit committed" "$(cut -f3 <<<"$rows" | grep -vxF web-flow || true)"
   commit_shas+="$(cut -f1 <<<"$rows")"$'\n'
+  commit_rows+="${ref}"$'\n'"${rows}"$'\n'
 done <<<"$refs"
 commit_count=$(sort -u <<<"$commit_shas" | grep -c . || true)
 check "${commit_count} commit(s) reachable from ${ref_count} ref(s), all by trusted authors"
@@ -319,8 +328,7 @@ item_count=$(count_lines "$items")
 outsiders "an issue or pull request" "$(cut -f2 <<<"$items")"
 # read_discussion: every issue and pull-request comment, inline review comment, comment on a commit
 # and pull-request review, as a "<kind>" line then its "<id>\t<login>" rows in $discussion, refusing
-# any outsider. It runs again right before the delete, so a comment or review posted after its first
-# read is never deleted unexamined (monorepo#4816 review).
+# any outsider.
 read_discussion() {
   local kind rows number
   discussion=""
@@ -343,8 +351,11 @@ read_discussion() {
   done <<<"$items"
 }
 read_discussion
-scanned_discussion=$discussion
 check "${item_count} issue(s) and pull request(s), and every comment and review, by trusted authors"
+
+snapshot=$(printf '%s\n' "$issue_json" "$meta" "$manifests" "$refs" "$commit_rows" "$items" "$discussion")
+}
+examine
 
 summary="($(jq -r 'if .private then "private" else "public" end' <<<"$meta"), created $(jq -r '.created_at' <<<"$meta"), ${commit_count} commit(s), ${item_count} issue(s) and pull request(s))"
 
@@ -354,24 +365,16 @@ if [ "$apply" -eq 0 ]; then
 fi
 
 # --- 5. Delete, read back, record --------------------------------------------------------------
-# The scan above takes many reads, and anyone who can open an issue or push a ref can do so while it
-# runs. Re-read the refs, the issue list, and every comment and review immediately before the
-# delete, and refuse when any of them moved, so a change
-# made during the scan is never deleted unexamined (monorepo#4816 review). A residual window of one
-# API round-trip remains; GitHub's 90-day restore covers it.
-recheck_refs=$(api_read "repos/${full}/git/refs?per_page=${PAGE}" '.[] | [.ref, .object.type, .object.sha] | @tsv')
-case $? in
-  0) ;;
-  3) recheck_refs='' ;;
-  *) unknown "cannot re-read the refs of ${full} before deleting it" ;;
-esac
-recheck_items=$(api_read "repos/${full}/issues?state=all&per_page=${PAGE}" \
-  '.[] | [.number, (.user.login // "-"), (if .pull_request then "pr" else "issue" end)] | @tsv') ||
-  unknown "cannot re-read the issues and pull requests of ${full} before deleting it"
-[ "$recheck_refs" = "$refs" ] && [ "$recheck_items" = "$items" ] ||
-  unknown "${full} changed while it was being examined: run the guard again"
-read_discussion
-[ "$discussion" = "$scanned_discussion" ] ||
+# The scan above takes many reads, and anyone who can open an issue, push a ref, archive the
+# repository or add its Crossplane manifest can do so while it runs. So the whole pass runs again
+# immediately before the delete: any check that now fails refuses as it would have the first time,
+# and any other change to what it read stops the delete, so nothing changed during the scan is
+# deleted unexamined (monorepo#4816 review). A residual window of one API round-trip remains;
+# GitHub's 90-day restore covers it.
+first_snapshot=$snapshot
+quiet=1
+examine
+[ "$snapshot" = "$first_snapshot" ] ||
   unknown "${full} changed while it was being examined: run the guard again"
 gh repo delete "$full" --yes >/dev/null 2>&1 || {
   printf 'FAILED %s: gh repo delete did not succeed\n' "$full"

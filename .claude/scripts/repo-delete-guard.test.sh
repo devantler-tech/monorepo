@@ -434,12 +434,26 @@ fixture_later() { # fixture_later <api path> <json>: served from the second read
   printf '%s\n' "$2" >"${fake}/api/${key}.later.json"
 }
 scenario
-fixture_later "repos/devantler-tech/stray/issues?state=all&per_page=100" '[{"number":5,"user":{"login":"drive-by"}}]'
+fixture_later "repos/devantler-tech/stray/issues?state=all&per_page=100" '[{"number":5,"user":{"login":"devantler"}}]'
 expect "an issue opened during the scan stops the delete" 2 '^UNKNOWN devantler-tech/stray changed while it was being examined' --repo stray --issue 4289 --apply
+scenario
+fixture_later "repos/devantler-tech/stray/issues?state=all&per_page=100" '[{"number":5,"user":{"login":"drive-by"}}]'
+expect "an outsider's issue opened during the scan is refused" 1 '^REFUSE devantler-tech/stray has an issue or pull request by drive-by' --repo stray --issue 4289 --apply
 scenario
 fixture_later "repos/devantler-tech/stray/git/refs?per_page=100" \
   "[{\"ref\":\"refs/heads/main\",\"object\":{\"type\":\"commit\",\"sha\":\"${SHA_MAIN}\"}},{\"ref\":\"refs/heads/new\",\"object\":{\"type\":\"commit\",\"sha\":\"${SHA_PULL}\"}}]"
+fixture "repos/devantler-tech/stray/commits?sha=${SHA_PULL}&per_page=100" '[{"sha":"bbbb","author":{"login":"devantler"},"committer":{"login":"web-flow"}}]'
 expect "a ref pushed during the scan stops the delete" 2 '^UNKNOWN devantler-tech/stray changed while it was being examined' --repo stray --issue 4289 --apply
+# Every check the first pass makes is made again before the delete, not only the ones listed by name.
+scenario
+fixture_later "repos/devantler-tech/stray" '{"full_name":"devantler-tech/stray","archived":true,"private":true,"size":1,"created_at":"2026-10-17T18:14:58Z","default_branch":"main"}'
+expect "a repository archived during the scan is refused" 1 '^REFUSE devantler-tech/stray is archived' --repo stray --issue 4289 --apply
+scenario
+fixture_later "repos/devantler-tech/.github/contents/deploy/repositories" '[{"name":"ksail.yaml"},{"name":"stray.yaml"}]'
+expect "a Crossplane manifest added during the scan is refused" 1 '^REFUSE devantler-tech/stray is managed by Crossplane' --repo stray --issue 4289 --apply
+scenario
+fixture_later "repos/devantler-tech/stray" '{"full_name":"devantler-tech/stray","archived":false,"private":false,"size":1,"created_at":"2026-10-17T18:14:58Z","default_branch":"main"}'
+expect "any other change to the repository during the scan stops the delete" 2 '^UNKNOWN devantler-tech/stray changed while it was being examined' --repo stray --issue 4289 --apply
 scenario
 fixture_later "repos/devantler-tech/stray/comments?per_page=100" '[{"id":7,"user":{"login":"devantler"}}]'
 expect "a commit comment posted during the scan stops the delete" 2 '^UNKNOWN devantler-tech/stray changed while it was being examined' --repo stray --issue 4289 --apply
