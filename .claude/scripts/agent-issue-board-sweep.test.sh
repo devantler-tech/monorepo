@@ -644,11 +644,16 @@ run_sweep "$sweep" --dry-run
 report "dry-run reports what the bulk read proved and what it would board, with no helper call" \
   "$([ "$rc" -eq 0 ] && [ ! -s "$BOARD_LOG" ] && grep -qF "already on the board ${U1}" <<<"$out" && grep -qF "DRY-RUN would board ${U2}" <<<"$out" && grep -qF "DRY-RUN would board ${U3}" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
-# 9g. The board the bulk read matches on must be the board board-add.sh writes to.
-for constant in PROJECT_NUMBER PROJECT_OWNER; do
-  sweep_value="$(sed -n "s/^readonly ${constant}=//p" "$sweep")"
-  helper_value="$(sed -n "s/^readonly ${constant}=//p" "$here/board-add.sh")"
-  report "the sweep and board-add.sh agree on ${constant}" \
+# 9g. The board the bulk read matches on must be the board board-add.sh writes to. board-add.sh
+# launches the Go implementation (monorepo#2510), which declares the same two constants. Quotes
+# are dropped on both sides, so `PROJECT_OWNER="x"` and `projectOwner = "x"` compare equal, and
+# exactly one declaration must exist in each file.
+for constant in PROJECT_NUMBER:projectNumber PROJECT_OWNER:projectOwner; do
+  sweep_name="${constant%%:*}"
+  helper_name="${constant#*:}"
+  sweep_value="$(sed -n "s/^readonly ${sweep_name}=//p" "$sweep" | tr -d '"')"
+  helper_value="$(sed -n "s/^[[:space:]]*${helper_name}[[:space:]]*=[[:space:]]*//p" "$here/board-add-go/main.go" | tr -d '"')"
+  report "the sweep and board-add.sh agree on ${sweep_name}" \
     "$([ -n "$sweep_value" ] && [ "$sweep_value" = "$helper_value" ] && echo yes || echo no)" "sweep=[$sweep_value] helper=[$helper_value]"
 done
 
