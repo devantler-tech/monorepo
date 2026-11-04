@@ -115,6 +115,37 @@ reject_mutation 'duplicated test' '.jobs["test-macos-batch-1"].steps[1].run += "
 jq '.["macos-batch-1"] |= .[1:]' "$tmp/filters.json" >"$tmp/mutated-filters.json"
 if check_workflow "$tmp/workflow.json" "$tmp/mutated-filters.json"; then fail 'incomplete union filter was accepted'; fi
 
+# board-add left batch 2 because its launcher builds Go, which the batches do not set up
+# (monorepo#2510). Its own job must keep the macOS leg the batch gave it, with Go, the GNU
+# timeout the shared build needs, and a filter that sees the Go module.
+cat >"$tmp/board-add.jq" <<'CHECK'
+.jobs["test-board-add"] as $j | $filters[0]["board-add"] as $f |
+($j.strategy.matrix.os == ["ubuntu-latest", "macos-latest"]) and
+($j["runs-on"] == "${{ matrix.os }}") and
+any($j.steps[]; ((.uses // "") | startswith("actions/setup-go@")) and
+  .with["go-version-file"] == ".claude/scripts/board-add-go/go.mod") and
+any($j.steps[]; .if == "runner.os == 'macOS'" and .run == "brew install coreutils") and
+any($j.steps[]; .run == "bash .claude/scripts/board-add.test.sh") and
+($f | type == "array" and index(".claude/scripts/board-add-go/**") != null and
+  index(".claude/scripts/go-helper-build.sh") != null)
+CHECK
+check_board_add() {
+  jq -e --slurpfile filters "$tmp/filters.json" -f "$tmp/board-add.jq" "$1" >/dev/null 2>&1
+}
+check_board_add "$tmp/workflow.json" || fail 'board-add lost its macOS leg, Go setup, GNU timeout or Go-module filter'
+reject_board_add_mutation() {
+  jq "$2" "$tmp/workflow.json" >"$tmp/mutated.json"
+  if check_board_add "$tmp/mutated.json"; then fail "board-add $1 was accepted"; fi
+}
+reject_board_add_mutation 'without macOS' '.jobs["test-board-add"].strategy.matrix.os = ["ubuntu-latest"]'
+reject_board_add_mutation 'without Go' '.jobs["test-board-add"].steps |= map(select(((.uses // "") | startswith("actions/setup-go@")) | not))'
+reject_board_add_mutation 'without GNU timeout' '.jobs["test-board-add"].steps |= map(select(.run != "brew install coreutils"))'
+reject_board_add_mutation 'without its test' '.jobs["test-board-add"].steps |= map(select(.run != "bash .claude/scripts/board-add.test.sh"))'
+jq '.["board-add"] -= [".claude/scripts/board-add-go/**"]' "$tmp/filters.json" >"$tmp/mutated-board-add-filters.json"
+if jq -e --slurpfile filters "$tmp/mutated-board-add-filters.json" -f "$tmp/board-add.jq" "$tmp/workflow.json" >/dev/null 2>&1; then
+  fail 'a board-add filter blind to its Go module was accepted'
+fi
+
 # Only the exact programs validated above are executed, in a private fixture tree.
 mkdir -p "$tmp/fixture/.claude/scripts"
 while IFS=$'\t' read -r group name; do

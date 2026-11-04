@@ -317,3 +317,84 @@ func TestMembershipPageValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestOptionListIsExaminedWholeBeforeAnyWrite(t *testing.T) {
+	cases := map[string]string{
+		"a non-option after the match": `{"data":{"organization":{"projectV2":{"id":"PVT_test","field":{"id":"PVTSSF_test","options":[` +
+			`{"id":"opt_backlog","name":"📥 Backlog"},5]}}}}}`,
+		"two options with the requested name": `{"data":{"organization":{"projectV2":{"id":"PVT_test","field":{"id":"PVTSSF_test","options":[` +
+			`{"id":"a","name":"📥 Backlog"},{"id":"b","name":"📥 Backlog"}]}}}}}`,
+	}
+	for name, metadata := range cases {
+		t.Run(name, func(t *testing.T) {
+			board := &fakeBoard{metadata: metadata, readBack: "📥 Backlog"}
+			code, out := runBoard(t, board, testURL)
+			if code != 2 || board.count("project item-") != 0 {
+				t.Fatalf("code=%d out=%q calls=%q", code, out, board.calls)
+			}
+		})
+	}
+	board := &fakeBoard{metadata: cases["two options with the requested name"]}
+	if _, out := runBoard(t, board, testURL); !strings.Contains(out, "defines 2 options named") {
+		t.Fatalf("duplicate options are not named as such: %q", out)
+	}
+}
+
+func TestAddedStatusValidation(t *testing.T) {
+	valid := map[string]string{
+		`{"data":{"node":{"id":"PVTI_test","fieldValueByName":null}}}`:               "",
+		`{"data":{"node":{"id":"PVTI_test","fieldValueByName":{"name":"🫴 Ready"}}}}`: "🫴 Ready",
+	}
+	for text, want := range valid {
+		if got, ok := addedStatusValue(text, "PVTI_test"); !ok || got != want {
+			t.Errorf("%q: got %q %v, want %q", text, got, ok, want)
+		}
+	}
+	invalid := []string{
+		`{"errors":[{"message":"x"}],"data":{"node":{"id":"PVTI_test","fieldValueByName":null}}}`,
+		`{"data":{"node":{"id":"PVTI_other","fieldValueByName":null}}}`,
+		`{"data":{"node":{"fieldValueByName":null}}}`,
+		`{"data":{"node":{"id":"PVTI_test"}}}`,
+		`{"data":{"node":{"id":"PVTI_test","fieldValueByName":"🫴 Ready"}}}`,
+		`{"data":{"node":{"id":"PVTI_test","fieldValueByName":{"name":""}}}}`,
+		`{"data":{"node":null}}`,
+		`{"data":{"node":{"id":"PVTI_test","fieldValueByName":{"name":"x"}}}} {"data":{"node":{"id":"PVTI_test","fieldValueByName":null}}}`,
+	}
+	for _, text := range invalid {
+		if got, ok := addedStatusValue(text, "PVTI_test"); ok {
+			t.Errorf("accepted invalid added-status answer %q as %q", text, got)
+		}
+	}
+	// An invalid answer refuses the write; it is never read as "already present".
+	board := &fakeBoard{}
+	board.addedStatus = ""
+	wrongNode := &wrongAddedNode{fakeBoard: board}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{testURL}, wrongNode.gh, found, &stdout, &stderr); code != 2 || board.count("project item-edit") != 0 {
+		t.Fatalf("an added-status answer for another node: code=%d out=%q calls=%q", code, stderr.String(), board.calls)
+	}
+}
+
+// wrongAddedNode answers the post-add Status read for a different item.
+type wrongAddedNode struct{ *fakeBoard }
+
+func (w *wrongAddedNode) gh(args ...string) (string, string, error) {
+	if strings.Contains(strings.Join(args, " "), "query AddedStatus") {
+		w.calls = append(w.calls, strings.Join(args, " "))
+		return `{"data":{"node":{"id":"PVTI_other","fieldValueByName":{"name":"🫴 Ready"}}}}`, "", nil
+	}
+	return w.fakeBoard.gh(args...)
+}
+
+func TestRepeatedMembershipCursorRefusesBeforeAnyWrite(t *testing.T) {
+	page := `{"data":{"repository":{"issue":{"projectItems":{"nodes":[{"id":"x","project":{"id":"OTHER"},"fieldValueByName":null}],` +
+		`"pageInfo":{"hasNextPage":true,"endCursor":"c1"}}}}}}`
+	board := &fakeBoard{membership: page}
+	code, out := runBoard(t, board, testURL)
+	if code != 2 || !strings.Contains(out, "invalid project membership cursor") || board.count("project item-") != 0 {
+		t.Fatalf("code=%d out=%q calls=%q", code, out, board.calls)
+	}
+	if board.count("projectItems") != 2 {
+		t.Fatalf("expected exactly two membership reads before the repeat was refused: %q", board.calls)
+	}
+}

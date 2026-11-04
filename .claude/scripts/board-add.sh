@@ -30,7 +30,8 @@
 #     requests/minute. Never fan this out concurrently.
 set -euo pipefail
 HERE="$(cd -- "$(dirname -- "$0")" && pwd -P)"
-BINARY="$(mktemp "${TMPDIR:-/tmp}/board-add.XXXXXX")" || exit 2
+# /tmp, not TMPDIR, as go_helper_run does: TMPDIR can point at a volume that is not mounted.
+BINARY="$(mktemp /tmp/board-add.XXXXXX)" || exit 2
 # Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0, and the trap's own successful
 # cleanup then becomes the script's status. Completion is recorded explicitly, so reaching a
 # verdict is the only way a zero status leaves this script; an abort reports UNKNOWN (monorepo#3414).

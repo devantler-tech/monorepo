@@ -308,7 +308,10 @@ func (a *adder) main(args []string, lookPath func(string) (string, error)) error
 		return die("could not resolve the Status field on project " + projectNumber)
 	}
 
-	optionID := ""
+	// Every option is examined before any write: an option list holding something that is not
+	// an option, or two options answering to the requested name, is refused rather than
+	// resolved by position. Neither case echoes an option name.
+	optionID, matches := "", 0
 	for _, option := range iterate(fieldObj["options"]) {
 		o, isObject := option.(map[string]any)
 		if !isObject {
@@ -318,10 +321,15 @@ func (a *adder) main(args []string, lookPath func(string) (string, error)) error
 			return die("could not resolve the Status field on project " + projectNumber)
 		}
 		if name, isString := o["name"].(string); isString && name == statusName {
-			if optionID = rawOrEmpty(o["id"]); optionID != "" {
-				break
+			if id := rawOrEmpty(o["id"]); id != "" {
+				optionID = id
+				matches++
 			}
 		}
+	}
+	if matches > 1 {
+		return die(fmt.Sprintf("project %s defines %d options named \"%s\"; refusing to choose one before any board write"+ind+
+			"(reconcile the duplicate in the UI)", projectNumber, matches, statusName))
 	}
 	if optionID == "" {
 		// Report the CANONICAL ladder, never the live option names: those come from the board
