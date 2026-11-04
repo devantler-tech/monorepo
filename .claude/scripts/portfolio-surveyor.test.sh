@@ -1894,6 +1894,14 @@ done
 expect_review_gated "refresh merge that brings a file the updater never writes" \
   "${refreshed_args[@]}" "$(jq -c '. + ["scripts/unrelated.sh"]' <<<"${signed_metadata_files}")" \
   "${refreshed_metadata_commits}"
+# The note rests on the verdict it explains, so an untrusted result never carries it.
+untrusted_refresh_stderr="$("${classifier}" "${refreshed_args[@]}" \
+  "$(jq -c '. + ["scripts/unrelated.sh"]' <<<"${signed_metadata_files}")" \
+  "${refreshed_metadata_commits}" 2>&1 >/dev/null)" || true
+[[ "${untrusted_refresh_stderr}" == "programmed-bot-review-exemption: agent-plugins per-skill updater PR with unexpected files or commit provenance; treated as untrusted" ]] ||
+  fail "an untrusted refreshed PR prints more than its untrusted note: ${untrusted_refresh_stderr}"
+# main can move in the minute between the sync commit and its follow-up, leaving the merge in the
+# middle. Only trailing merges are judged below, so that history fails closed.
 expect_review_gated "refresh merge followed by another commit" \
   agent-plugins app/botantler-1 "${per_skill_branch}" "${per_skill_title}" "${per_skill_head}" \
   "${signed_metadata_files}" \

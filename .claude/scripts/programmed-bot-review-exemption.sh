@@ -455,10 +455,18 @@ strip_base_refresh_merges() {
   ' <<<"${commits_json}")" || die2 "could not read base-refresh merges from commits-json"
   before="$(jq 'length' <<<"${commits_json}")"
   if [[ "$(jq 'length' <<<"${stripped}")" != "${before}" ]]; then
-    printf 'programmed-bot-review-exemption: %s updater PR judged below %s trailing base-refresh merge(s) from main\n' \
-      "${repo}" "$((before - $(jq 'length' <<<"${stripped}")))" >&2
+    refresh_note="$(printf 'programmed-bot-review-exemption: %s updater PR judged below %s trailing base-refresh merge(s) from main' \
+      "${repo}" "$((before - $(jq 'length' <<<"${stripped}")))")"
     commits_json="${stripped}"
   fi
+}
+
+# updater_verdict <0|3> exits with a trusted updater verdict. The note that the PR was judged below
+# its refresh is said only here, beside a verdict that rests on it, never next to an exit 1.
+refresh_note=""
+updater_verdict() {
+  [[ -z "${refresh_note}" ]] || printf '%s\n' "${refresh_note}" >&2
+  exit "$1"
 }
 
 # updater_app <repo> prints the login and numeric user ID of the App that writes this repository's
@@ -597,13 +605,13 @@ if [[ "${branch}" == "deps/agent-skills-update" &&
       matches_agent_plugins_review_provenance "chore(deps): update agent skills" &&
       matches_changelog_bump &&
       matches_digest_refresh; then
-      exit 3
+      updater_verdict 3
     fi
     if [[ "${repo}" != "agent-plugins" ]] &&
       matches_agent_skills_files &&
       matches_agent_skills_provenance; then
-      matches_suite_owned_skills && exit 0
-      exit 3
+      matches_suite_owned_skills && updater_verdict 0
+      updater_verdict 3
     fi
     # The branch, title and App all name the updater, yet its files or commits do not match any
     # known shape. That stays exit 1 (untrusted, review-gated), but it is said on stderr so it is
@@ -634,7 +642,7 @@ if [[ "${repo}" == "agent-plugins" &&
         matches_agent_plugins_review_provenance "${title}" &&
         matches_changelog_bump &&
         matches_digest_refresh; then
-        exit 3
+        updater_verdict 3
       fi
       printf 'programmed-bot-review-exemption: %s per-skill updater PR with unexpected files or commit provenance; treated as untrusted\n' \
         "${repo}" >&2
