@@ -6353,13 +6353,14 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
               # the body is only text (hdposted). A line whose quote is still open at its
               # end, or that holds a here-string, is not read.
               # Any doubt leaves the body unread, so its lines keep counting as code: a
-              # line continued onto the next one, a `#` on it (the `<<` may be inside a
+              # line continued onto the next one or from the one before (`bash -s \` then the posting
+              # command makes bash read the body), a `#` on it (the `<<` may be inside a
               # comment), a `<<` that is not exactly one on the raw line (one may be quoted),
               # or a delimiter word that runs on into other characters.
               function heredoc_open(i,   word, count, tmp, after_word) {
                 tmp = res[i]
                 count = gsub(/<</, "<<", tmp)
-                if (st != 0 || trail || count != 1 || res[i] ~ /<<</ || index(res[i], "#") > 0) return
+                if (st != 0 || trail || after[i] || count != 1 || res[i] ~ /<<</ || index(res[i], "#") > 0) return
                 tmp = line[i]
                 if (gsub(/<</, "<<", tmp) != 1) return
                 if (!match(line[i], hdword)) return

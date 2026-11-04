@@ -10956,8 +10956,20 @@ MK_OUT2=$({
   mk_cmd q4 "cd /;''# ; make build"
   mk_cmd q5 'npm ci'
 } | mk_run makeheredocedges2)
+# A posting command on a line continued from the one before is an argument of that command:
+# `bash -s \` then `gh pr comment … <<'EOF'` makes bash read the body.
 # shellcheck disable=SC2016
-if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+MK_OUT3=$({
+  mk_cmd r1 'gh pr checkout 30'
+  mk_cmd r2 $'bash -s \\\ngh pr comment 30 -F - <<\'EOF\'\nmake build\nEOF'
+  mk_cmd r3 $'sh \\\ngit commit -F - <<\'EOF\'\nmake check\nEOF'
+  mk_cmd r4 'npm ci'
+} | mk_run makeheredocedges3)
+# shellcheck disable=SC2016
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT3" \
+   && grep -qF '1 make build' <<<"$MK_OUT3" \
+   && grep -qF '1 make check' <<<"$MK_OUT3" \
+   && grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
    && grep -qF '1 && make build' <<<"$MK_OUT" \
    && grep -qF '1 make lint' <<<"$MK_OUT" \
    && grep -qF '1 make check' <<<"$MK_OUT" \
@@ -10966,13 +10978,15 @@ if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
    && grep -qF '1 make deploy' <<<"$MK_OUT2" \
    && grep -qF '1 make release' <<<"$MK_OUT2" \
    && grep -qF "1 cd /;''# ; make build" <<<"$MK_OUT2" \
-   && ! grep -qF '[prose?]' <<<"$MK_OUT$MK_OUT2"; then
+   && ! grep -qF '[prose?]' <<<"$MK_OUT$MK_OUT2$MK_OUT3"; then
   ok "a heredoc whose start or end is in doubt, and a # inside a word, leave their lines counting as code"
 else
   bad "a heredoc whose start or end is in doubt, and a # inside a word, leave their lines counting as code" \
       "got: $(grep -hE '^ +[0-9]+ ' <<<"$MK_OUT
 ---
-$MK_OUT2" | head -12)"
+$MK_OUT2
+---
+$MK_OUT3" | head -16)"
 fi
 # A tool call is its own shell parse, so quote state must not cross from one call
 # into the next: after a call that ends on an unmatched quote, the next call's
