@@ -469,10 +469,11 @@ a diff.
 - **Give each local cluster a lifecycle and its own client state.** Run `disk-preflight.sh` first.
   Name the cluster with your writer namespace and run id so parallel runs never share one. Write its
   credentials to a kubeconfig file only this run uses, and pass that file and the cluster's context
-  explicitly to every KSail and `kubectl` command: a shared `~/.kube/config` lets a parallel run's
-  context switch send your writes to its cluster, and an exported `KUBECONFIG` alone does not prove
-  every wrapper reads it. Keep one cluster per run, and delete it before the run ends, confirming it
-  is gone.
+  explicitly to **every command that talks to the cluster** — KSail, `kubectl`, `helm`, `flux`,
+  `talosctl` and any other client, through that tool's own config-file and context flags (a per-run
+  talosconfig for `talosctl`): a shared `~/.kube/config` lets a parallel run's context switch send
+  your writes to its cluster, and an exported `KUBECONFIG` alone does not prove every wrapper reads
+  it. Keep one cluster per run, and delete it before the run ends, confirming it is gone.
 - Reach for `kind`, `k3d`, `talosctl`, `kubectl` or `helm` directly only for a step KSail cannot do.
   Never block work on a KSail gap: work around it, and say so in the pull request body.
 - **File each gap and friction** on `devantler-tech/ksail`, one issue per distinct root cause: a
