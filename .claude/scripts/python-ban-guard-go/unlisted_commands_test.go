@@ -51,6 +51,10 @@ func TestUnlistedWrappersAreReported(t *testing.T) {
 		{"runuser user named like a data command", "runuser -u git -- python3 x.py"},
 		{"lock file named like a data command", "flock /var/lock/ls python3 x.py"},
 		{"lock file named like a shell", "flock /tmp/sh python3 x.py"},
+		{"flock dynamic lock file then a command string", `flock "$1" -c 'python3 x.py'`},
+		{"su dynamic user then a command string", `su "$1" -c 'python3 x.py'`},
+		{"runuser dynamic user then a command string", `runuser "$1" -c 'python3 x.py'`},
+		{"script dynamic file then a command string", `script -q "$1" -c 'python3 x.py'`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -700,11 +700,12 @@ func (s *scanner) shellStrings(name string, args []string, known, consumed []boo
 		return s.sourceGuess(command, line, depth)
 	}
 	for j := 0; j < len(args); j++ {
-		if !known[j] || args[j] == "--" {
+		if known[j] && args[j] == "--" {
 			return nil
 		}
 		arg := args[j]
-		if !strings.HasPrefix(arg, "-") || arg == "-" {
+		// A dynamic word is an operand: it is counted, never read as an option or a command line.
+		if !known[j] || !strings.HasPrefix(arg, "-") || arg == "-" {
 			operands++
 			if name == "flock" && operands == 1 && j+1 < len(args) && known[j+1] {
 				next := args[j+1]
