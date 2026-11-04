@@ -1809,6 +1809,137 @@ not_updater_stderr="$("${classifier}" \
 [[ -z "${not_updater_stderr}" ]] ||
   fail "a PR that is not the updater must not be reported as an unexpected updater: ${not_updater_stderr}"
 
+# monorepo#4597: when `main` moves, the repository's recheck workflow refreshes every open updater PR
+# through GitHub's update-branch API. That adds one GitHub-signed merge, authored by the updater App
+# and committed by `web-flow` (agent-plugins#612 at a67a045a, whose first parent 336601bd read exit 3).
+# A refreshed PR keeps the classification of the programmed head below the refresh; every lookalike
+# of the merge keeps exit 1. The fixtures carry `parents`, which the survey's commit read now supplies.
+refresh_head="a67a045ada3b6c9f1e2d4c5b6a7980f1e2d3c4b5"
+refresh_base="7bf550685c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f"
+# refresh_merge <sha> <first-parent> <head-ref> [jq edit] — the merge GitHub writes for update-branch.
+refresh_merge() {
+  jq -cn --arg sha "$1" --arg prev "$2" --arg base "${refresh_base}" \
+    --arg m "Merge branch 'main' into $3" '{
+    sha: $sha,
+    author_login: "botantler-1[bot]",
+    author_name: "botantler-1[bot]",
+    author_email: "185060876+botantler-1[bot]@users.noreply.github.com",
+    committer_login: "web-flow",
+    committer_name: "GitHub",
+    committer_email: "noreply@github.com",
+    message: $m,
+    verified: true,
+    parents: [$prev, $base]
+  } | '"${4:-.}"
+}
+# refreshed <commits-json> <merge-json>… — the list with the merges appended, dated like the rest.
+refreshed() {
+  local list="$1"
+  shift
+  printf '%s\n' "$@" | jq -s -c --argjson list "${list}" '$list + .' | with_commit_dates
+}
+refreshed_args=(agent-plugins app/botantler-1 "${per_skill_branch}" "${per_skill_title}" "${refresh_head}")
+per_skill_refresh() { refresh_merge "${refresh_head}" "${per_skill_head}" "${per_skill_branch}" "${1:-.}"; }
+refreshed_metadata_commits="$(refreshed "${signed_metadata_commits}" "$(per_skill_refresh)")"
+
+# RED before #4597: this exact shape read exit 1 ("unexpected files or commit provenance").
+expect_review_required "per-skill updater PR refreshed from main keeps its review path" \
+  "${refreshed_args[@]}" "${signed_metadata_files}" "${refreshed_metadata_commits}"
+refresh_note="$("${classifier}" "${refreshed_args[@]}" "${signed_metadata_files}" \
+  "${refreshed_metadata_commits}" 2>&1 >/dev/null)" || true
+[[ "${refresh_note}" == "programmed-bot-review-exemption: agent-plugins updater PR judged below 1 trailing base-refresh merge(s) from main" ]] ||
+  fail "a refreshed updater PR does not say it was judged below its refresh: ${refresh_note}"
+second_refresh_head="b67a045ada3b6c9f1e2d4c5b6a7980f1e2d3c4b5"
+expect_review_required "per-skill updater PR refreshed twice keeps its review path" \
+  agent-plugins app/botantler-1 "${per_skill_branch}" "${per_skill_title}" "${second_refresh_head}" \
+  "${signed_metadata_files}" \
+  "$(refreshed "${signed_metadata_commits}" "$(per_skill_refresh)" \
+    "$(refresh_merge "${second_refresh_head}" "${refresh_head}" "${per_skill_branch}" \
+      '.parents[1] = "8bf550685c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f"')")"
+
+# Negative controls: each differs from the accepted refresh by one property and stays untrusted.
+expect_review_gated "refresh merge whose signature GitHub did not verify" \
+  "${refreshed_args[@]}" "${signed_metadata_files}" \
+  "$(refreshed "${signed_metadata_commits}" "$(per_skill_refresh '.verified = false')")"
+expect_review_gated "refresh merge without a reported signature verdict" \
+  "${refreshed_args[@]}" "${signed_metadata_files}" \
+  "$(refreshed "${signed_metadata_commits}" "$(per_skill_refresh 'del(.verified)')")"
+expect_review_gated "refresh merge without reported parents" \
+  "${refreshed_args[@]}" "${signed_metadata_files}" \
+  "$(refreshed "${signed_metadata_commits}" "$(per_skill_refresh 'del(.parents)')")"
+expect_review_gated "refresh merge whose second parent is the PR's own commit, not main" \
+  "${refreshed_args[@]}" "${signed_metadata_files}" \
+  "$(refreshed "${signed_metadata_commits}" \
+    "$(per_skill_refresh '.parents[1] = "98c87eba2e84c1b96da4fd22e922c7bace4ecd7c"')")"
+expect_review_gated "refresh merge whose first parent is not the commit before it" \
+  "${refreshed_args[@]}" "${signed_metadata_files}" \
+  "$(refreshed "${signed_metadata_commits}" \
+    "$(per_skill_refresh '.parents[0] = "98c87eba2e84c1b96da4fd22e922c7bace4ecd7c"')")"
+expect_review_gated "octopus merge with a third parent" \
+  "${refreshed_args[@]}" "${signed_metadata_files}" \
+  "$(refreshed "${signed_metadata_commits}" \
+    "$(per_skill_refresh '.parents += ["9bf550685c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f"]')")"
+expect_review_gated "refresh merge from a branch other than main" \
+  "${refreshed_args[@]}" "${signed_metadata_files}" \
+  "$(refreshed "${signed_metadata_commits}" \
+    "$(per_skill_refresh ".message = \"Merge branch 'feature' into ${per_skill_branch}\"")")"
+expect_review_gated "refresh merge into another head ref" \
+  "${refreshed_args[@]}" "${signed_metadata_files}" \
+  "$(refreshed "${signed_metadata_commits}" "$(per_skill_refresh '.message = "Merge branch '\''main'\'' into deps/other"')")"
+for field in author_login author_name author_email committer_login committer_name committer_email; do
+  expect_review_gated "refresh merge with incorrect ${field}" \
+    "${refreshed_args[@]}" "${signed_metadata_files}" \
+    "$(refreshed "${signed_metadata_commits}" "$(per_skill_refresh ".${field} = \"other\"")")"
+done
+expect_review_gated "refresh merge that brings a file the updater never writes" \
+  "${refreshed_args[@]}" "$(jq -c '. + ["scripts/unrelated.sh"]' <<<"${signed_metadata_files}")" \
+  "${refreshed_metadata_commits}"
+# The note rests on the verdict it explains, so an untrusted result never carries it.
+untrusted_refresh_stderr="$("${classifier}" "${refreshed_args[@]}" \
+  "$(jq -c '. + ["scripts/unrelated.sh"]' <<<"${signed_metadata_files}")" \
+  "${refreshed_metadata_commits}" 2>&1 >/dev/null)" || true
+[[ "${untrusted_refresh_stderr}" == "programmed-bot-review-exemption: agent-plugins per-skill updater PR with unexpected files or commit provenance; treated as untrusted" ]] ||
+  fail "an untrusted refreshed PR prints more than its untrusted note: ${untrusted_refresh_stderr}"
+# main can move in the minute between the sync commit and its follow-up, leaving the merge in the
+# middle. Only trailing merges are judged below, so that history fails closed.
+expect_review_gated "refresh merge followed by another commit" \
+  agent-plugins app/botantler-1 "${per_skill_branch}" "${per_skill_title}" "${per_skill_head}" \
+  "${signed_metadata_files}" \
+  "$(refreshed "$(jq -c '.[:1]' <<<"${signed_metadata_commits}")" \
+    "$(refresh_merge "${refresh_head}" "98c87eba2e84c1b96da4fd22e922c7bace4ecd7c" "${per_skill_branch}")" \
+    "$(jq -c '.[1]' <<<"${signed_metadata_commits}")")"
+expect_review_gated "a refresh merge alone" \
+  "${refreshed_args[@]}" "${signed_metadata_files}" "$(refreshed '[]' "$(per_skill_refresh)")"
+
+# The single-commit consumer arms: platform keeps its exemption (0) and ksail rejects a merge that
+# the wrong App wrote.
+expect_exempt "platform updater PR refreshed from main keeps its exemption" \
+  "platform" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${refresh_head}" "${allowed_skills_files}" \
+  "$(refreshed "${platform_signed_commits}" \
+    "$(refresh_merge "${refresh_head}" "${platform_skills_head}" "deps/agent-skills-update")")" \
+  "${allowed_skills_owners}"
+expect_review_required "ksail updater PR refreshed by its own App keeps its review path" \
+  "ksail" "app/ksail-bot" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${refresh_head}" "${ksail_skills_files}" \
+  "$(refreshed "${ksail_signed_commits}" \
+    "$(refresh_merge "${refresh_head}" "${ksail_skills_head}" "deps/agent-skills-update" \
+      '.author_login = "ksail-bot[bot]" | .author_name = "ksail-bot[bot]"
+       | .author_email = "262010955+ksail-bot[bot]@users.noreply.github.com"')")" \
+  "${ksail_skills_owners}"
+expect_review_gated "ksail updater PR refreshed by another App" \
+  "ksail" "app/ksail-bot" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${refresh_head}" "${ksail_skills_files}" \
+  "$(refreshed "${ksail_signed_commits}" \
+    "$(refresh_merge "${refresh_head}" "${ksail_skills_head}" "deps/agent-skills-update")")" \
+  "${ksail_skills_owners}"
+expect_error_reason "parents not an array" \
+  "commit[0].parents is not an array of 40-character lowercase hex SHAs" "" "${updater_args[@]}" \
+  "$(jq -c '.[0].parents = "x"' <<<"${platform_signed_commits}")"
+expect_error_reason "short parent" \
+  "commit[0].parents is not an array of 40-character lowercase hex SHAs" "" "${updater_args[@]}" \
+  "$(jq -c '.[0].parents = ["abc"]' <<<"${platform_signed_commits}")"
+
 # The corroborator is what catches an upstream handover on a root we still allowlist, so a caller
 # that omits it must NOT be handed the carve-out — a tripwire the caller may skip never fires.
 expect_review_required \
@@ -2028,6 +2159,16 @@ expect_exempt \
   "${war_cask_head}" \
   '["Casks/world-at-ruin.rb"]' \
   "$(jq -c 'map(. + {verified: true})' <<<"${war_cask_commits}")"
+# The survey's commit read also reports `parents` (monorepo#4597); the exact comparison ignores them.
+expect_exempt \
+  "World at Ruin CD cask with the verified and parents fields" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/world-at-ruin" \
+  "chore(cask): update world-at-ruin to v0.36.0" \
+  "${war_cask_head}" \
+  '["Casks/world-at-ruin.rb"]' \
+  "$(jq -c 'map(. + {verified: false, parents: ["7bf550685c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f"]})' <<<"${war_cask_commits}")"
 
 # An exempt tap cask verdict says, on stderr, what it does not prove: exit 0 names who made the PR,
 # never whether its release is published (monorepo#4104, homebrew-tap#1936). Stdout stays empty and
