@@ -30,7 +30,7 @@ MP-021	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	`authori
 MP-022	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The label alone, a comment that says so, or an earlier	none	-	-
 MP-023	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**"Is someone actively working on it?" is decided	none	-	-
 MP-024	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Resolve it from your creation record plus the branch	none	-	-
-MP-025	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Never discount a `live:` just because it names your	computational	.claude/scripts/pr-worktree-holder.sh	live:
+MP-025	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Never discount a `live:` just because it names your	none	-	-
 MP-026	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**`unknown:` is never "no live holder"**: report	computational	.claude/scripts/pr-worktree-holder.sh	unknown:
 MP-027	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Treat a reviewer that never responds as an unavailable	none	-	-
 MP-028	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	🔴 **What expires is the ACTIVITY signal, never	none	-	-
@@ -51,7 +51,7 @@ MP-042	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Treat a 
 MP-043	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	| 20 | **no** | **20** | 73 | **0 — over 53 threads	narrative	-	-
 MP-044	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	| 50 | **no** | **50** | 73 | **0 — over 23 threads	narrative	-	-
 MP-045	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Treat a shortfall exactly like a failed read: **UNKNOWN,	computational	.claude/scripts/pr-unresolved-threads.sh	totalCount
-MP-046	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The result must show `state:OPEN`, `isDraft:false`,	inferential	.claude/scripts/local-review-verdict.sh	GREEN self@
+MP-046	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The result must show `state:OPEN`, `isDraft:false`,	computational	.claude/scripts/local-review-verdict.sh	GREEN self@
 MP-047	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	*You own EVERY pull request in the portfolio* makes	none	-	-
 MP-048	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Build-and-lint-only CI never satisfies it**, and	none	-	-
 MP-049	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Verify against the API that the cited run **exists**,	none	-	-

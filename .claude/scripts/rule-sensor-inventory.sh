@@ -16,9 +16,9 @@
 #   line wrapping joined, and each unit into sentences at ". ", "! " or "? " followed by a capital
 #   letter, a backtick, an asterisk, a bracket, an opening parenthesis or a marker emoji (🔴 ⚠️ 🔑 ✅).
 #   A sentence belongs to the section of the nearest heading above it, named by its GitHub anchor.
-#   A code fence closes only on a fence of the same character at least as long; a fence still open at
-#   the end of the guide makes the extraction unreadable (exit 2), since it would hide every rule
-#   after it.
+#   A code fence closes only on a fence of the same character at least as long; a backtick run with
+#   another backtick after it on the line is inline code, not a fence; a fence still open at the end
+#   of the guide makes the extraction unreadable (exit 2), since it would hide every rule after it.
 #
 # THE INVENTORY  .claude/guides/<guide>.sensors.tsv
 #   Lines starting with "#" and blank lines are skipped; the first other line is the header
@@ -34,11 +34,12 @@
 #               review round) | runtime (a hook, guard or permission rule) | none (prose only) |
 #               narrative (the sentence uses one of the words but states no rule: a description,
 #               a measurement or an explanation; it is reported apart and never counted as a rule).
-#     control   a repository file under .claude/ or .github/ that exists and is code, not prose: never
-#               a *.md file, anything under .claude/guides/ or an inventory. "-" for none/narrative.
-#     evidence  a non-empty literal that must occur in the control file, so a row cannot cite an
-#               unrelated file; "-" for none/narrative. An id marked none or narrative has no other
-#               row.
+#     control   a repository file under .claude/ or .github/ that exists, is not a symlink and is
+#               code, not prose: never a *.md file, anything under .claude/guides/ or an inventory
+#               (compared case-insensitively). "-" for none/narrative.
+#     evidence  a literal of at least 4 non-space characters that must occur in the control file, so
+#               a row cannot cite an unrelated file; "-" for none/narrative. An id marked none or
+#               narrative has no other row.
 #   Only a control that itself detects or refuses the violation counts; a contract test that only
 #   pins the guide's wording keeps the prose from vanishing but enforces nothing, so it is not one.
 #   Every sentence the extraction finds must be covered: it contains the quote of at least one row.
@@ -69,7 +70,7 @@ while [ $# -gt 0 ]; do
     --root)
       [ $# -ge 2 ] || { echo "rule-sensor-inventory: --root needs a value" >&2; exit 2; }
       root="$2"; shift 2 ;;
-    -h|--help) sed -n '2,55p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,56p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "usage: rule-sensor-inventory.sh [--root <repo-root>] [--check | --report | --extract <guide.md>]" >&2; exit 2 ;;
   esac
 done
@@ -111,17 +112,22 @@ sentences() {
       unit = ""
     }
     BEGIN { section = "-"; infence = 0; unit = "" }
-    match($0, /^[ \t]*(```+|~~~+)/) {
-      marker = substr($0, RSTART, RLENGTH); sub(/^[ \t]*/, "", marker)
-      if (!infence) {
-        flush(); infence = 1; fence_char = substr(marker, 1, 1); fence_len = length(marker); fence_line = NR
-        next
+    {
+      fence = 0
+      if (match($0, /^[ \t]*(```+|~~~+)/)) {
+        marker = substr($0, RSTART, RLENGTH); sub(/^[ \t]*/, "", marker)
+        tail = substr($0, RSTART + RLENGTH)
+        if (infence) {
+          fence = 1
+          if (substr(marker, 1, 1) == fence_char && length(marker) >= fence_len && tail ~ /^[ \t]*$/) infence = 0
+        } else if (!(substr(marker, 1, 1) == "`" && index(tail, "`") > 0)) {
+          # A backtick run followed by another backtick on the line is inline code, not a fence.
+          fence = 1; flush(); infence = 1
+          fence_char = substr(marker, 1, 1); fence_len = length(marker); fence_line = NR
+        }
       }
-      tail = substr($0, RSTART + RLENGTH)
-      if (substr(marker, 1, 1) == fence_char && length(marker) >= fence_len && tail ~ /^[ \t]*$/) infence = 0
-      next
     }
-    infence { next }
+    fence || infence { next }
     /^[ \t]*$/ { flush(); next }
     /^#+[ \t]/ {
       flush(); section = slug($0)
@@ -228,9 +234,10 @@ for inv in "${inventories[@]}"; do
         rnone[id] = kind
       } else {
         rctl[id] = 1
-        if (ctl == "" || ctl == "-" || ev == "" || ev == "-") bad("line " FNR ": " id ": kind " kind " needs a control path and a non-empty evidence literal")
+        lctl = tolower(ctl); bare = ev; gsub(/[ \t]/, "", bare)
+        if (ctl == "" || ctl == "-" || ev == "-" || length(bare) < 4) bad("line " FNR ": " id ": kind " kind " needs a control path and an evidence literal of at least 4 non-space characters")
         else if (ctl !~ /^\.(claude|github)\// || ctl ~ /(^|\/)\.\.?(\/|$)/) bad("line " FNR ": " id ": control must be a path under .claude/ or .github/: " ctl)
-        else if (ctl ~ /\.md$/ || ctl ~ /^\.claude\/guides\// || ctl ~ /\.sensors\.tsv$/) bad("line " FNR ": " id ": control must be code, not prose or an inventory: " ctl)
+        else if (lctl ~ /\.md$/ || lctl ~ /^\.claude\/guides\// || lctl ~ /\.sensors\.tsv$/) bad("line " FNR ": " id ": control must be code, not prose or an inventory: " ctl)
         else print "C\t" FNR "\t" id "\t" ctl "\t" ev
       }
     }
@@ -250,7 +257,10 @@ for inv in "${inventories[@]}"; do
 
   while IFS=$'\t' read -r tag line id ctl ev; do
     [ "$tag" = C ] || continue
-    if [ ! -f "$root/$ctl" ]; then
+    if [ -L "$root/$ctl" ]; then
+      echo "rule-sensor-inventory: $rel: line $line: $id: control $ctl is a symlink; cite the file it points to" >&2
+      fail
+    elif [ ! -f "$root/$ctl" ]; then
       echo "rule-sensor-inventory: $rel: line $line: $id: control $ctl does not exist" >&2
       fail
     elif ! EVIDENCE="$ev" awk 'index($0, ENVIRON["EVIDENCE"]) { found = 1; exit } END { exit !found }' "$root/$ctl"; then

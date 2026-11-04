@@ -167,7 +167,11 @@ expect "a second id quoting the same text is refused" 1 "as DG-004; one rule, on
 mutate '{ print } $1 == "DG-001" { print "DG-008", $2, "the helper before merging.", "none", "-", "-" }'
 expect "a second id quoting another part of one sentence is refused" 1 "as DG-001; one rule, one id" --root "$fx" --check
 mutate '$1 == "DG-001" { $6 = "" } { print }'
-expect "empty evidence is refused" 1 "non-empty evidence" --root "$fx" --check
+expect "empty evidence is refused" 1 "at least 4 non-space characters" --root "$fx" --check
+mutate '$1 == "DG-001" { $6 = "  " } { print }'
+expect "whitespace evidence is refused" 1 "at least 4 non-space characters" --root "$fx" --check
+mutate '$1 == "DG-001" { $6 = "ref" } { print }'
+expect "evidence too short to identify a control is refused" 1 "at least 4 non-space characters" --root "$fx" --check
 mutate '$1 == "DG-001" { $4 = "computational"; $5 = "-" } { print }'
 expect "control kind without a path is refused" 1 "needs a control path" --root "$fx" --check
 mutate '$1 == "DG-001" { $5 = "scripts/demo-guard.sh" } { print }'
@@ -181,6 +185,15 @@ expect "the inventory itself is not a control" 1 "must be code, not prose" --roo
 printf 'refuses main\n' > "$fx/.claude/scripts/notes.md"
 mutate '$1 == "DG-001" { $5 = ".claude/scripts/notes.md" } { print }'
 expect "a markdown file is not a control" 1 "must be code, not prose" --root "$fx" --check
+printf 'refuses main\n' > "$fx/.claude/scripts/NOTES.MD"
+mutate '$1 == "DG-001" { $5 = ".claude/scripts/NOTES.MD" } { print }'
+expect "the prose refusal ignores case" 1 "must be code, not prose" --root "$fx" --check
+ln -s ../guides/demo.md "$fx/.claude/scripts/guide-link.sh"
+printf 'refuses main\n' >> "$fx/.claude/guides/demo.md"
+mutate '$1 == "DG-001" { $5 = ".claude/scripts/guide-link.sh" } { print }'
+expect "a symlinked control is refused" 1 "is a symlink" --root "$fx" --check
+rm "$fx/.claude/scripts/guide-link.sh"
+awk 'NR == 1 || !/^refuses main$/' "$fx/.claude/guides/demo.md" > "$work/demo.md.tmp" && mv "$work/demo.md.tmp" "$fx/.claude/guides/demo.md"
 mutate '$1 == "DG-001" { $6 = "refuses\\main" } { print }'
 expect "evidence with a backslash is matched literally" 0 - --root "$fx" --check
 mutate '$1 == "DG-001" { $6 = "tab\\there" } { print }'
@@ -204,6 +217,14 @@ cp "$fx/.claude/guides/demo.md" "$work/demo.md.bak"
 printf '%s\n' '# Demo guide' '' 'Nothing here is binding.' > "$fx/.claude/guides/demo.md"
 expect "guide with no rule exits 2" 2 "empty extraction" --root "$fx" --check
 expect "extract of a guide with no rule exits 2" 2 "empty extraction" --extract "$fx/.claude/guides/demo.md"
+printf '%s\n' '# Demo guide' '' '```x``` is inline code, not a fence.' '' 'You must never merge on red.' '' \
+  '```sh' 'never a rule' '```' '' 'Always sign commits.' > "$fx/.claude/guides/demo.md"
+expect "inline triple-backtick code is not a fence" 0 - --extract "$fx/.claude/guides/demo.md"
+if [ "$(awk -F'\t' '{ print $3 }' "$work/out")" = "$(printf '%s\n' 'You must never merge on red.' 'Always sign commits.')" ]; then
+  pass "rules after inline triple-backtick code are still extracted"
+else
+  fail "inline backticks hid a rule: $(cat "$work/out")"
+fi
 printf '%s\n' '# Demo guide' '' 'You must run it.' '' '```sh' 'never closed' > "$fx/.claude/guides/demo.md"
 expect "an unclosed fence exits 2" 2 "is never closed" --root "$fx" --check
 expect "extract of an unclosed fence exits 2" 2 "is never closed" --extract "$fx/.claude/guides/demo.md"
