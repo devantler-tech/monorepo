@@ -1349,6 +1349,32 @@ run_iso "$bad_pid_root" "${fixture_root}/ps-badpid" apply 3 "$NEVER_CLEAN_BUDGET
 [ -e "$bad_pid_orphan" ] ||
   fail 'a Go work dir was reaped although the process table with pids did not parse'
 
+# A repeat `go run` of unchanged code runs its binary from the build cache, and its own work
+# dir stays empty, so it is accounted too: the old orphan beside it is reaped.
+cached_root="${go_tmp_root}/proc-cached"
+mkdir -p "$cached_root" || fail 'fixture: cached-go root'
+cached_orphan=$(make_go_dir "$cached_root" go-build676767 240) || fail 'fixture: cached-go orphan'
+cached_exe="${GO_BUILD_FIXTURE}/5d/5d5a7479fd27435e7ef20f9ccb5b2f46fa018967e58bb9697703194d46a6de2c-d/server"
+printf '%s\n' '4100 1 go run ./cmd/server' "4200 4100 ${cached_exe} --port 8080" \
+  '4300 1 /bin/sh' > "${fixture_root}/ps-cached-args.txt"
+make_ps_stub3 "${fixture_root}/ps-cached" "${fixture_root}/ps-acc.txt" \
+  "${fixture_root}/ps-acc-pid.txt" "${fixture_root}/ps-cached-args.txt" || fail 'fixture: cached-go ps stub'
+run_iso "$cached_root" "${fixture_root}/ps-cached" apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$cached_orphan" ] &&
+  fail "an old Go work dir was kept for a go run that runs its binary from the build cache: $cached_orphan"
+# The up-front table failing means nothing can be ruled out, whatever the later reads say:
+# here they show no toolchain process at all, which alone would let the orphan go.
+psfail_root="${go_tmp_root}/proc-psfail"
+mkdir -p "$psfail_root" || fail 'fixture: failed-table root'
+psfail_orphan=$(make_go_dir "$psfail_root" go-build686868 240) || fail 'fixture: failed-table orphan'
+printf '%s\n' '4300 00:05 /bin/sh' > "${fixture_root}/ps-quiet-pid.txt"
+printf '%s\n' '4300 1 /bin/sh' > "${fixture_root}/ps-quiet-args.txt"
+make_ps_stub3 "${fixture_root}/ps-psfail" "${fixture_root}/ps-absent.txt" \
+  "${fixture_root}/ps-quiet-pid.txt" "${fixture_root}/ps-quiet-args.txt" || fail 'fixture: failed-table ps stub'
+run_iso "$psfail_root" "${fixture_root}/ps-psfail" apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$psfail_orphan" ] ||
+  fail 'a Go work dir was reaped although the up-front process table could not be read'
+
 # 15c3. GOTMPDIR, when set, is swept as well, under the shared temp root's stricter rule.
 gotmp_root="${fixture_root}/gotmpdir"
 mkdir -p "$gotmp_root" || fail 'fixture: GOTMPDIR root'

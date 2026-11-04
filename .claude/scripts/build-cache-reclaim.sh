@@ -2282,7 +2282,8 @@ if [ -n "${BUILD_CACHE_RECLAIM_GOTMPDIR+set}" ]; then
 else
   go_gotmpdir=${GOTMPDIR:-}
   if [ -z "$go_gotmpdir" ] && command -v go >/dev/null 2>&1; then
-    go_gotmpdir=$(go env GOTMPDIR 2>/dev/null) || go_gotmpdir=''
+    # From / with the local toolchain, so a go.mod where this runs cannot make go fetch another.
+    go_gotmpdir=$(cd / && GOTOOLCHAIN=local go env GOTMPDIR 2>/dev/null) || go_gotmpdir=''
   fi
 fi
 if [ -n "$go_gotmpdir" ]; then
@@ -2302,7 +2303,11 @@ fi
 # so that binary's argv[0] is a path under `<root>/go-build<digits>/`, and its parent is the go
 # command. One go command makes one work dir, so an accounted go command owns no other; it drops
 # out of the age rule, and the dir it runs from stays held open by its binary, which the
-# open-file check keeps. Every other toolchain process still counts.
+# open-file check keeps. A repeat `go run` of unchanged code runs its binary from the build
+# cache (`<cache>/<xx>/<hash>-d/<name>`, measured with go1.27); its own work dir stays EMPTY, so
+# it too owns nothing that removal could cost. Every other toolchain process still counts.
+# Residual, accepted: a process of this same user can name itself with such a path. That user
+# can already delete these dirs directly, so it gains nothing it did not have.
 #
 # Two reads, taken together after the up-front table: pid/ppid/args to account go commands, and
 # pid/etime/comm to age the rest by the same `comm` rule as the up-front table (argv[0] can be
@@ -2312,6 +2317,8 @@ fi
 GO_FREE_OK=0 GO_FREE_OLDEST=unknown GO_FREE_EPOCH='' GO_FREE_WHO=''
 go_free_read() {
   local args_table pid_table roots root canon accounted out
+  # The up-front table failing means nothing can be ruled out; a later read never overrules it.
+  [ "$PS_OK" -eq 1 ] || return 1
   GO_FREE_EPOCH=$(date +%s 2>/dev/null) || return 1
   case "$GO_FREE_EPOCH" in '' | *[!0-9]*) return 1 ;; esac
   args_table=$(ps -A -ww -o pid= -o ppid= -o args= 2>/dev/null) || return 1
@@ -2329,6 +2336,9 @@ go_free_read() {
     {
       if ($1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ || NF < 3) { bad = 1; next }
       exe = $3
+      # A repeat `go run` of unchanged code runs the binary it cached under
+      # GOCACHE/<xx>/<hash>-d/, and its own work dir stays empty: it owns no work dir.
+      if (exe ~ /\/[0-9a-f][0-9a-f]\/[0-9a-f]+-d\/[^\/]+$/) { print $2; next }
       if (!match(exe, /\/go-build[0-9]+\/b[0-9]+\//)) next
       under = substr(exe, 1, RSTART - 1)
       for (i = 1; i <= n; i++) if (r[i] != "" && under == r[i]) { print $2; break }
