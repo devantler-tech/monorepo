@@ -25,6 +25,9 @@
 # submodules of that root's session worktrees (<session>/<sub>/.claude/worktrees/*), with salvage
 # off (#3673). That is where the per-run worktree helper puts a run's worktree for a submodule,
 # whichever lane the session belongs to (#3713).
+#
+# The claude lane then sweeps leaked `agent-claim/<issue>` tips whose issue is closed, in every
+# Portfolio-map repository, at most once a day (#3590; see claim_sweep_portfolio below).
 set -uo pipefail
 
 # Resolve each target from its own metadata, never the launching shell's Git state.
@@ -726,8 +729,115 @@ if [ -n "$submodules" ]; then
   done <<< "$submodules"
 fi
 
+# ---------------------------------------------------------------------------
+# Leaked claim tips (monorepo#3590). The claim protocol retires an `agent-claim/<issue>` tip when
+# its draft PR opens, but a run that dies first leaves the tip behind, and nothing removed those
+# but a person running agent-claim-sweep.sh by hand (88 across the portfolio on 2026-09-25). So the
+# claude lane runs that sweep here, after every worktree root above was swept, for each repository
+# in the Portfolio map.
+#
+#   - It runs last, so a failed or UNKNOWN claim sweep can never stop a worktree sweep. It is
+#     still visible: its lines are printed, and it makes this script exit 2 once it has finished.
+#   - Each run's pre-flight also calls this script, so it runs at most once every
+#     WORKTREE_CLEANUP_CLAIM_SWEEP_MIN_HOURS (default 20) per mode. That keeps it daily under the
+#     6-hourly scheduled sweep, about one issue read per tip. Only a run that read every repository
+#     and every tip cleanly restarts the clock, so an incomplete run is retried next time.
+#   - agent-claim-sweep.sh needs no clone: an empty repository whose `origin` names the GitHub
+#     repository is enough. dry-run here passes dry-run there; only apply deletes, and only tips
+#     whose issue reads closed, by compare-and-swap.
+#   - WORKTREE_CLEANUP_CLAIM_SWEEP=off skips it; any other value names the per-repository sweep to
+#     run instead of agent-claim-sweep.sh, which is how the tests run it without the network.
+CLAIM_SWEEP_FAILED=0
+claim_sweep_portfolio() {
+  local sweep=${WORKTREE_CLEANUP_CLAIM_SWEEP:-$SCRIPT_DIR/agent-claim-sweep.sh}
+  local min_hours=${WORKTREE_CLEANUP_CLAIM_SWEEP_MIN_HOURS:-20}
+  local stamp="$HOME/.claude/agent-claim-sweep-$MODE.last" now last repo dir out rc summary
+  local repos=0 kept=0 removed=0 raced=0 failed=0 unknown=0 field value
+  printf '\n### claim tips (agent-claim/*) across the Portfolio map\n'
+  if [ "$sweep" = off ]; then
+    printf 'claims skipped: WORKTREE_CLEANUP_CLAIM_SWEEP=off\n'
+    return 0
+  fi
+  case "$min_hours" in
+    '' | *[!0-9]*)
+      printf 'claims UNKNOWN: WORKTREE_CLEANUP_CLAIM_SWEEP_MIN_HOURS is not a whole number: %s\n' "$min_hours"
+      return 2 ;;
+  esac
+  [ -x "$sweep" ] || { printf 'claims UNKNOWN: the claim sweep %s is not executable\n' "$sweep"; return 2; }
+  now=$(date +%s 2>/dev/null) || now=''
+  case "$now" in '' | *[!0-9]*) printf 'claims UNKNOWN: cannot read the clock\n'; return 2 ;; esac
+  if [ -f "$stamp" ]; then
+    last=$(cat "$stamp" 2>/dev/null) || last=''
+    case "$last" in
+      '' | *[!0-9]*) ;; # An unreadable stamp sweeps again; it never skips.
+      *)
+        if [ $((now - last)) -lt $((min_hours * 3600)) ] && [ $((now - last)) -ge 0 ]; then
+          printf 'claims skipped: last complete %s sweep %sh ago (minimum %sh)\n' \
+            "$MODE" "$(((now - last) / 3600))" "$min_hours"
+          return 0
+        fi ;;
+    esac
+  fi
+  while IFS= read -r repo; do
+    [ -n "$repo" ] || continue
+    repos=$((repos + 1))
+    if ! dir=$(mktemp -d 2>/dev/null) || ! git init -q "$dir" 2>/dev/null ||
+      ! git -C "$dir" remote add origin "https://github.com/devantler-tech/$repo.git" 2>/dev/null; then
+      printf 'UNKNOWN devantler-tech/%s could not prepare an empty repository\n' "$repo"
+      unknown=$((unknown + 1))
+      [ -z "${dir:-}" ] || rm -rf "$dir"
+      continue
+    fi
+    if [ "$MODE" = apply ]; then
+      out=$("$sweep" --repo "devantler-tech/$repo" --repo-dir "$dir" --apply 2>&1); rc=$?
+    else
+      out=$("$sweep" --repo "devantler-tech/$repo" --repo-dir "$dir" 2>&1); rc=$?
+    fi
+    rm -rf "$dir"
+    # Every tip that moves or cannot be judged is printed; tips kept on open issues are counted.
+    [ -z "$out" ] || printf '%s\n' "$out" | grep -v '^KEEP ' || true
+    summary=$(printf '%s\n' "$out" | grep '^agent-claim-sweep: repo=' | tail -n 1)
+    if [ -z "$summary" ]; then
+      printf 'UNKNOWN devantler-tech/%s the sweep printed no summary (exit %s)\n' "$repo" "$rc"
+      unknown=$((unknown + 1))
+      continue
+    fi
+    for field in kept removed raced failed unknown; do
+      value=$(printf '%s\n' "$summary" | sed -n "s/.* $field=\([0-9][0-9]*\).*/\1/p")
+      case "$value" in '' | *[!0-9]*) value=1; field=unknown ;; esac
+      case "$field" in
+        kept) kept=$((kept + value)) ;;
+        removed) removed=$((removed + value)) ;;
+        raced) raced=$((raced + value)) ;;
+        failed) failed=$((failed + value)) ;;
+        unknown) unknown=$((unknown + value)) ;;
+      esac
+    done
+    # A nonzero exit the summary does not explain is still not a clean sweep.
+    if [ "$rc" -ne 0 ] && ! printf '%s\n' "$summary" | grep -Eq ' (raced|failed|unknown)=[1-9]'; then
+      unknown=$((unknown + 1))
+    fi
+  done <<< "$PORTFOLIO_REPOS"
+  [ "$MODE" = apply ] || printf '(dry-run: removed counts tips that WOULD be removed)\n'
+  printf 'claims mode=%s repos=%s kept=%s removed=%s raced=%s failed=%s unknown=%s\n' \
+    "$MODE" "$repos" "$kept" "$removed" "$raced" "$failed" "$unknown"
+  if [ "$unknown" -ne 0 ] || [ "$failed" -ne 0 ] || [ "$raced" -ne 0 ] || [ "$repos" -eq 0 ]; then
+    return 2
+  fi
+  mkdir -p "$HOME/.claude" 2>/dev/null && printf '%s\n' "$now" > "$stamp" 2>/dev/null ||
+    printf 'claims: could not record the sweep time in %s; the next run sweeps again\n' "$stamp"
+  return 0
+}
+if [ "$LANE" = claude ]; then
+  claim_sweep_portfolio || CLAIM_SWEEP_FAILED=2
+fi
+
 printf '\n=== done (manifests in %s) ===\n' "$MANIFEST_DIR"
+if [ "$CLAIM_SWEEP_FAILED" -ne 0 ]; then
+  printf 'worktree-cleanup-all: the claim-tip sweep did not finish cleanly — see the claims lines above\n' >&2
+fi
 if [ "$NESTED_FAILED" -ne 0 ]; then
   printf 'worktree-cleanup-all: a nested submodule sweep failed — see above\n' >&2
   exit "$NESTED_FAILED"
 fi
+[ "$CLAIM_SWEEP_FAILED" -eq 0 ] || exit "$CLAIM_SWEEP_FAILED"
