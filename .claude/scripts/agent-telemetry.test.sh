@@ -4444,7 +4444,7 @@ cat > "$FIX/findlog-bin/find" <<'FINDSHIM'
 set -o pipefail
 printf '%s\n' "$*" >> "$WP_FINDLOG"
 case " $* " in
-  *" -mindepth 1 "*)
+  *" -mindepth 1 -type d -prune "*)
     if [ -n "${WP_FAIL_LISTING:-}" ]; then "$WP_REAL_FIND" "$@"; exit 1; fi ;;
 esac
 "$WP_REAL_FIND" "$@" | tee -a "$WP_RESULTLOG"
@@ -4462,22 +4462,22 @@ OUT=$(wp_run)
 # The root session and the nested delegated transcript are in the window; the
 # store holding only an old transcript is not.
 check "prefilter keeps the in-window sessions, including a nested delegated one" "$OUT" "sessions in window: 2 "
-if [ "$(grep -cF -- " -mindepth 1 " "$FIX/findlog.txt")" = 1 ]; then
+if [ "$(grep -cF -- " -mindepth 1 -type d -prune " "$FIX/findlog.txt")" = 1 ]; then
   ok "exactly one direct-record listing runs"
-else bad "exactly one direct-record listing runs" "$(grep -cF -- " -mindepth 1 " "$FIX/findlog.txt") listings in the shim log"; fi
+else bad "exactly one direct-record listing runs" "$(grep -cF -- " -mindepth 1 -type d -prune " "$FIX/findlog.txt") listings in the shim log"; fi
 if grep -qF -- "employer-secret-service" "$FIX/findlog.txt" \
    || grep -qF -- "$WP -mindepth" "$FIX/findlog.txt"; then
   bad "the listing never names an out-of-scope project's store" "an excluded store reached find"
 else ok "the listing never names an out-of-scope project's store"; fi
-if grep -qF -- "$WP/$WP_WT2 -type d" "$FIX/findlog.txt"; then
+if grep -qF -- "$WP/$WP_WT2 -mindepth 1 -maxdepth 1" "$FIX/findlog.txt"; then
   bad "a store with no in-window transcript skips its per-store finds" "per-store find ran for the out-of-window store"
 else ok "a store with no in-window transcript skips its per-store finds"; fi
-if grep -qF -- "$WP/$WP_WT1 -type d" "$FIX/findlog.txt"; then
+if grep -qF -- "$WP/$WP_WT1 -mindepth 1 -maxdepth 1" "$FIX/findlog.txt"; then
   ok "a store kept by the listing still takes the exact per-store check"
 else bad "a store kept by the listing still takes the exact per-store check" "no per-store find for the kept store"; fi
 OUT=$(WP_FAIL_LISTING=1 wp_run)
 check "a failed store-wide listing selects the same sessions" "$OUT" "sessions in window: 2 "
-if grep -qF -- "$WP/$WP_WT2 -type d" "$FIX/findlog.txt"; then
+if grep -qF -- "$WP/$WP_WT2 -mindepth 1 -maxdepth 1" "$FIX/findlog.txt"; then
   ok "a failed store-wide listing restores the per-store check for every store"
 else bad "a failed store-wide listing restores the per-store check for every store" "out-of-window store was skipped without a listing"; fi
 
