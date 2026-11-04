@@ -184,7 +184,9 @@ for inv in "${inventories[@]}"; do
       if (id in rquote) {
         if (rquote[id] != q || rsec[id] != sec) bad("line " NR ": " id " repeats with a different section or quote")
       } else {
-        rquote[id] = q; rsec[id] = sec; order[++ids] = id
+        if (q in qid) bad("line " NR ": " id " quotes the same text as " qid[q] "; one rule, one id")
+        qid[q] = id
+        rquote[id] = q; rsec[id] = sec
         hits = 0; where = 0
         for (i = 1; i <= n; i++) if (index(stext[i], q) > 0) { hits++; where = i }
         if (hits == 0) bad("line " NR ": " id ": quote not found in the guide (dangling anchor): " q)
@@ -224,7 +226,7 @@ for inv in "${inventories[@]}"; do
     if [ ! -f "$root/$ctl" ]; then
       echo "rule-sensor-inventory: $rel: line $line: $id: control $ctl does not exist" >&2
       [ "$status" -eq 2 ] || status=1
-    elif ! awk -v ev="$ev" 'index($0, ev) { found = 1; exit } END { exit !found }' "$root/$ctl"; then
+    elif ! EVIDENCE="$ev" awk 'index($0, ENVIRON["EVIDENCE"]) { found = 1; exit } END { exit !found }' "$root/$ctl"; then
       echo "rule-sensor-inventory: $rel: line $line: $id: control $ctl does not contain its evidence: $ev" >&2
       [ "$status" -eq 2 ] || status=1
     fi

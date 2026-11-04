@@ -128,6 +128,15 @@ mutate '{ print } $1 == "DG-002" { print "DG-002", $2, $3, "computational", ".cl
 expect "kind none plus a control row is refused" 1 "and also given a control" --root "$fx" --check
 mutate '{ print } $1 == "DG-001" { print "DG-001", $2, "Never push to main directly", $4, $5, $6 }'
 expect "an id repeated with another quote is refused" 1 "repeats with a different" --root "$fx" --check
+mutate '{ print } $1 == "DG-004" { print "DG-006", $2, $3, $4, $5, $6 }'
+expect "a second id quoting the same text is refused" 1 "quotes the same text as DG-004" --root "$fx" --check
+printf '%s\n' 'echo "refuses\main"' 'echo "tab\there"' >> "$fx/.claude/scripts/demo-guard.sh"
+mutate '$1 == "DG-001" { $6 = "refuses\\main" } { print }'
+expect "evidence with a backslash is matched literally" 0 - --root "$fx" --check
+mutate '$1 == "DG-001" { $6 = "tab\\there" } { print }'
+expect "evidence is not unescaped before matching" 0 - --root "$fx" --check
+mutate '$1 == "DG-001" { $6 = "refuses\\tmain" } { print }'
+expect "a backslash evidence that is absent is still refused" 1 "does not contain its evidence" --root "$fx" --check
 mutate '$1 == "DG-001" { $5 = "scripts/demo-guard.sh" } { print }'
 expect "control outside .claude/ or .github/ is refused" 1 "control must be a path under" --root "$fx" --check
 mutate '$1 == "DG-001" { $5 = ".claude/../.claude/scripts/demo-guard.sh" } { print }'
