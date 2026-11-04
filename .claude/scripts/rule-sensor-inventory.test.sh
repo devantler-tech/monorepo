@@ -191,8 +191,13 @@ expect "the prose refusal ignores case" 1 "must be code, not prose" --root "$fx"
 ln -s ../guides/demo.md "$fx/.claude/scripts/guide-link.sh"
 printf 'refuses main\n' >> "$fx/.claude/guides/demo.md"
 mutate '$1 == "DG-001" { $5 = ".claude/scripts/guide-link.sh" } { print }'
-expect "a symlinked control is refused" 1 "is a symlink" --root "$fx" --check
+expect "a symlinked control is refused" 1 "passes through the symlink .claude/scripts/guide-link.sh" --root "$fx" --check
 rm "$fx/.claude/scripts/guide-link.sh"
+ln -s ../guides "$fx/.claude/scripts/gdir"
+mutate '$1 == "DG-001" { $5 = ".claude/scripts/gdir/demo.md.txt" } { print }'
+cp "$fx/.claude/guides/demo.md" "$fx/.claude/guides/demo.md.txt"
+expect "a control under a symlinked directory is refused" 1 "passes through the symlink .claude/scripts/gdir" --root "$fx" --check
+rm "$fx/.claude/scripts/gdir" "$fx/.claude/guides/demo.md.txt"
 awk 'NR == 1 || !/^refuses main$/' "$fx/.claude/guides/demo.md" > "$work/demo.md.tmp" && mv "$work/demo.md.tmp" "$fx/.claude/guides/demo.md"
 mutate '$1 == "DG-001" { $6 = "refuses\\main" } { print }'
 expect "evidence with a backslash is matched literally" 0 - --root "$fx" --check

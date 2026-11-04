@@ -34,9 +34,9 @@
 #               review round) | runtime (a hook, guard or permission rule) | none (prose only) |
 #               narrative (the sentence uses one of the words but states no rule: a description,
 #               a measurement or an explanation; it is reported apart and never counted as a rule).
-#     control   a repository file under .claude/ or .github/ that exists, is not a symlink and is
-#               code, not prose: never a *.md file, anything under .claude/guides/ or an inventory
-#               (compared case-insensitively). "-" for none/narrative.
+#     control   a repository file under .claude/ or .github/ that exists, has no symlink anywhere
+#               along its path, and is code, not prose: never a *.md file, anything under
+#               .claude/guides/ or an inventory (compared case-insensitively). "-" for none/narrative.
 #     evidence  a literal of at least 4 non-space characters that must occur in the control file, so
 #               a row cannot cite an unrelated file; "-" for none/narrative. An id marked none or
 #               narrative has no other row.
@@ -257,8 +257,16 @@ for inv in "${inventories[@]}"; do
 
   while IFS=$'\t' read -r tag line id ctl ev; do
     [ "$tag" = C ] || continue
-    if [ -L "$root/$ctl" ]; then
-      echo "rule-sensor-inventory: $rel: line $line: $id: control $ctl is a symlink; cite the file it points to" >&2
+    # A symlink anywhere along the path could lead to a guide or out of the repository.
+    linked="" walk="$root" rest="$ctl"
+    while [ -n "$rest" ]; do
+      part="${rest%%/*}"
+      if [ "$part" = "$rest" ]; then rest=""; else rest="${rest#*/}"; fi
+      walk="$walk/$part"
+      if [ -L "$walk" ]; then linked="${walk#"$root"/}"; break; fi
+    done
+    if [ -n "$linked" ]; then
+      echo "rule-sensor-inventory: $rel: line $line: $id: control $ctl passes through the symlink $linked; cite the real file" >&2
       fail
     elif [ ! -f "$root/$ctl" ]; then
       echo "rule-sensor-inventory: $rel: line $line: $id: control $ctl does not exist" >&2
