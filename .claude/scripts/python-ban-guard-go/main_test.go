@@ -86,7 +86,8 @@ func TestKnownShellExecutionBoundaries(t *testing.T) {
 		{"trap ignore", `trap '' EXIT`, false},
 		{"trap missing signal", `trap 'python3 --version'`, false},
 		{"trap unknown handler", `trap "$HANDLER" EXIT`, false},
-		{"unknown wrapper stays unchanged", `custom-wrapper python3 --version`, false},
+		// Reversed by monorepo#3271: an unlisted wrapper with a literal interpreter operand is reported.
+		{"unknown wrapper with a literal interpreter is reported", `custom-wrapper python3 --version`, true},
 		{"unknown command stays unchanged", `"$TOOL" python3 --version`, false},
 	}
 	for _, test := range tests {

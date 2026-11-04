@@ -33,6 +33,10 @@
 #        Unquoted escapes before executable-name/path characters retain their executable identity.
 #        Shell sources, workflow command fields, other YAML command/run/shell operands,
 #        package scripts, Make recipes and Dockerfile operands use the Go parser.
+#        On those surfaces a command the parser has no rule for (`flock`, `runuser`, `parallel` …)
+#        is reported when a literal operand names an interpreter, unless it only treats operands as
+#        data (`echo`, `which`, `grep`, a package install …); a dynamic command word stays unresolved
+#        (monorepo#3271).
 #        YAML argv sequences preserve complete scalar boundaries. Go generate directives
 #        and aliases are parsed before the remaining Go text reaches the compatibility route.
 #        Make resolves literal local definitions only; functions, referenced values, includes,

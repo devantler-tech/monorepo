@@ -593,10 +593,74 @@ func (s *scanner) argv(args []string, known []bool, line, depth int) (bool, erro
 				}
 			}
 		default:
-			return false, nil
+			return false, s.unlistedCommand(name, args[i+1:], known[i+1:], line, depth+1)
 		}
 	}
 	return false, nil
+}
+
+// dataOperandCommands never run an operand as a program: they print it, look it up, match it
+// or install it. An interpreter name among their operands is data (monorepo#3271).
+var dataOperandCommands = map[string]bool{
+	"echo": true, "printf": true, "print": true, "builtin": true, "type": true, "which": true,
+	"whence": true, "where": true, "whereis": true, "hash": true, "alias": true, "unalias": true,
+	"test": true, "grep": true, "egrep": true, "fgrep": true, "rg": true,
+	"pgrep": true, "pkill": true, "killall": true, "pidof": true,
+	"apt": true, "apt-get": true, "apt-cache": true, "dpkg": true, "yum": true, "dnf": true,
+	"apk": true, "zypper": true, "pacman": true, "brew": true, "port": true, "pkg": true,
+	"mise": true, "asdf": true,
+}
+
+// programName is the shape of a command an operating system can have installed. A literal word
+// such as `--`, `-v`, `1` or `${EMPTY}` reached in command position is not a wrapper anyone
+// installed (the command `timeout 5 -- python3` names is `--`), so its operands stay data.
+var programName = regexp.MustCompile("^[A-Za-z_.][A-Za-z0-9._+-]*$")
+
+// shellStringWrappers take a whole shell command line as the value of -c or --command.
+var shellStringWrappers = map[string]bool{"script": true, "su": true, "runuser": true}
+
+// unlistedCommand judges a command the walker has no rule for. Before monorepo#3271 such a
+// command made the rest of its line read clean, so every wrapper nobody had listed (flock,
+// runuser, parallel, chrt, taskset, unbuffer, script ...) hid the interpreter it runs. Now a
+// literal operand that names an interpreter is reported, unless the command is one that only
+// treats its operands as data. A dynamic command word never reaches here: it stays unresolved,
+// the narrowing monorepo#3270 decided, so this reports nothing without an interpreter token.
+func (s *scanner) unlistedCommand(name string, args []string, known []bool, line, depth int) error {
+	if depth > 32 {
+		return errors.New("nested command limit exceeded")
+	}
+	if dataOperandCommands[name] || !programName.MatchString(name) {
+		return nil
+	}
+	if shellStringWrappers[name] {
+		for j := 0; j < len(args); j++ {
+			if !known[j] {
+				continue
+			}
+			command, inline := strings.CutPrefix(args[j], "--command=")
+			if !inline {
+				if args[j] != "-c" && args[j] != "--command" || j+1 >= len(args) || !known[j+1] {
+					continue
+				}
+				command = args[j+1]
+			}
+			if err := s.source(command, line, depth, false); err != nil {
+				return err
+			}
+		}
+	}
+	for j := 0; j < len(args); j++ {
+		if !known[j] || !interpreter.MatchString(filepath.Base(args[j])) {
+			continue
+		}
+		hit := args[j]
+		if j+1 < len(args) && known[j+1] && args[j+1] != "" {
+			hit += " " + args[j+1]
+		}
+		s.add(line, hit)
+		return nil
+	}
+	return nil
 }
 
 // envArgs preserves argv boundaries: env -S splits one operand, never shell code.
