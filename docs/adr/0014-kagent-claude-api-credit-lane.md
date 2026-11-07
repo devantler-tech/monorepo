@@ -46,10 +46,16 @@ The maintainer decided on 2026-11-07:
    (`devantler-tech-engineering[bot]`, registered 2026-11-07), never as a personal account. Short
    installation tokens are injected at egress, so neither the App's private key nor a long-lived
    token enters the sandbox. Commits it pushes are signed.
-4. **One brain.** The harness loads the `agentic-engineering` plugin from the reviewed
+4. **Federated model credential.** No long-lived Anthropic API key exists. Outside the agent's
+   sandbox, a Kubernetes service-account token is exchanged through Anthropic workload identity
+   federation for a short-lived access token, which kagent's gateway injects at egress. The
+   federation rule pins one service account and one audience, and its workspace carries the spend
+   limit. The cluster's issuer is registered with inline keys, which must be re-registered if the
+   cluster's service-account signing key changes.
+5. **One brain.** The harness loads the `agentic-engineering` plugin from the reviewed
    `libraries/agent-plugins` gitlink. The lane never runs a hand-copied or partial role.
-5. **Suspended until ready.** The schedule stays suspended until every sub-issue of #4866 is done:
-   the runtime, the identity, the image, whole-plugin loading and the canary run.
+6. **Suspended until ready.** The schedule stays suspended until every sub-issue of #4866 is done:
+   the runtime, the identities, the image, whole-plugin loading and the canary run.
 
 ## Consequences
 
@@ -66,7 +72,9 @@ The maintainer decided on 2026-11-07:
 - kagent's API is `v1alpha3` and 1.0 is not yet generally available, so versions are pinned exactly
   and upgrades are reviewed.
 - Known gaps, each a sub-issue of #4866: kagent has no native schedule, so a `CronJob` invokes the
-  agent over A2A; the Claude harness drops a dual-manifest plugin's agents, hooks and MCP servers
+  agent over A2A; kagent's gateway injects Anthropic credentials as an `x-api-key` header while
+  federated access tokens are bearer tokens, so the injection path must be proven; the Claude
+  harness drops a dual-manifest plugin's agents, hooks and MCP servers
   ([kagent-dev/kagent#3388](https://github.com/kagent-dev/kagent/issues/3388)); and the Agent
   Improver cannot yet see transcripts produced inside the cluster.
 

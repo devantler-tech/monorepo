@@ -268,7 +268,7 @@ Opt into the reviewed Agent Improvement skill's kata procedure. Read the
 
 The reviewed [routing policy](.claude/plugin-consumption/inference-routing.policy.json) and instance
 registry bind task classes and runtimes; **automatic routing is disabled**. Use only included
-subscription inference and the capped kagent credit lane; no other API keys, paid fallbacks or
+subscription inference and the capped kagent credit lane; no API keys, paid fallbacks or
 overage. **No Fable-family model may run in a
 scheduled run, child, advisor, fallback, retry or experiment.** Details:
 [spend and inference guide](.claude/guides/spend-and-inference.md#inference-routing).
