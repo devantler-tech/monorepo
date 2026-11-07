@@ -2418,6 +2418,9 @@ denied_ids() {
 tagged_commands_in() {
   local f="$1" errs drc=0
   errs=$(denied_ids "$f" "$XFINT") || drc=$?
+  # Without the denied IDs every refused command would be classed as executed,
+  # so a failed denied read extracts nothing and reports through the canary.
+  [ "$drc" -eq 0 ] || return "$drc"
   [ -n "$errs" ] || errs='[]'
   jq -r --argjson errs "$errs" '
     .. | objects
@@ -2457,10 +2460,7 @@ tagged_commands_in() {
          | map("\u0001CX" + (if .key==0 then "*" else "" end) + "\u0002" + .value)
          | .[])
       )
-  ' "$f" 2>/dev/null || return
-  # A failed denied read still lets the commands be read, but it is reported
-  # through the canary rather than passing as a complete read.
-  return "$drc"
+  ' "$f" 2>/dev/null
 }
 
 commands_in() {
