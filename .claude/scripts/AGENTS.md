@@ -1,7 +1,7 @@
 # AGENTS.md — deployment scripts and contract tests (`.claude/scripts/`)
 
-The helpers the Agentic Engineer and Agent Improver run, and the contract tests that keep the agent
-guides honest. The root [`AGENTS.md`](../../AGENTS.md) still applies; this file adds this directory's conventions.
+Helpers the Agentic Engineer and Agent Improver run, and contract tests that keep the agent guides
+honest. It adds this directory's conventions to the root [`AGENTS.md`](../../AGENTS.md).
 
 ## Writing a helper
 
@@ -9,7 +9,7 @@ guides honest. The root [`AGENTS.md`](../../AGENTS.md) still applies; this file 
   `<name>-go/` module once it grows. `python-ban-guard.sh` enforces this in CI.
 - **Exit codes:** `0` means the checked property holds, `1` a finding (print each one), and `2`
   UNKNOWN — a usage error, an unreadable input or a failed read. A failed, partial or empty read must
-  never print a clean result: check every command's status, use `pipefail`, and treat an empty result
+  never print a clean result: check every command's status and treat an empty result
   from a filtered read as unproven until an unfiltered control agrees.
 - **Abort safely.** Bash 3.2 may mask `set -u` in EXIT traps. Set a completion flag and add an
   injection or explained exception per EXIT handler in `cleanup-trap-fail-closed.test.sh`.

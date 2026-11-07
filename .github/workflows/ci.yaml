@@ -55,6 +55,7 @@ jobs:
       rule-sensor-inventory: ${{ steps.filter.outputs.rule-sensor-inventory }}
       retired-rule-survivors-contract: ${{ steps.filter.outputs.retired-rule-survivors-contract }}
       bash-call-timeout-budget-contract: ${{ steps.filter.outputs.bash-call-timeout-budget-contract }}
+      repo-delete-guard: ${{ steps.filter.outputs.repo-delete-guard }}
       codex-dispatch-supersession-contract: ${{ steps.filter.outputs.codex-dispatch-supersession-contract }}
       weekly-pacing-contract: ${{ steps.filter.outputs.weekly-pacing-contract }}
       main-head-rung0-probe: ${{ steps.filter.outputs.main-head-rung0-probe }}
@@ -662,6 +663,14 @@ jobs:
               - '.claude/guides/**'
               - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/bash-call-timeout-budget-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            repo-delete-guard:
+              # The guard reads the maps and the trust gate from AGENTS.md, and the test reads the
+              # rule that names it in the GitHub artifact guide.
+              - 'AGENTS.md'
+              - '.claude/guides/github-artifacts.md'
+              - '.claude/scripts/repo-delete-guard.sh'
+              - '.claude/scripts/repo-delete-guard.test.sh'
               - '.github/workflows/ci.yaml'
             codex-dispatch-supersession-contract:
               - 'AGENTS.md'
@@ -2491,6 +2500,26 @@ jobs:
       - name: Verify the bash call timeout budget contract
         run: bash .claude/scripts/bash-call-timeout-budget-contract.test.sh
 
+  test-repo-delete-guard:
+    name: Test repository deletion guard
+    needs: changes
+    if: needs.changes.outputs.repo-delete-guard == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # A fixture gh only: no repository, issue or token is touched (monorepo#4289).
+      - name: Self-test the repository deletion guard
+        run: bash .claude/scripts/repo-delete-guard.test.sh
+
   test-codex-dispatch-supersession-contract:
     name: Test codex dispatch supersession contract
     needs: changes
@@ -3508,7 +3537,7 @@ jobs:
       actions: read
     steps:
       - name: Inspect workflow startup metadata
-        uses: devantler-tech/.github/actions/aggregate-job-checks@16f1a6c96aaf2581885e17389a0e0f9f42387970 # v20.1.1
+        uses: devantler-tech/.github/actions/aggregate-job-checks@66b52462d8f6c74b95196cc3642091d05b253983 # v20.1.7
         with:
           check-name: Workflow startup snapshot
           check-workflow-startup: "true"
@@ -3574,6 +3603,7 @@ jobs:
       - test-rule-sensor-inventory
       - test-retired-rule-survivors-contract
       - test-bash-call-timeout-budget-contract
+      - test-repo-delete-guard
       - test-codex-dispatch-supersession-contract
       - test-weekly-pacing-contract
       - test-main-head-rung0-probe
@@ -3623,7 +3653,7 @@ jobs:
     permissions: {}
     steps:
       - name: Check job results
-        uses: devantler-tech/.github/actions/aggregate-job-checks@16f1a6c96aaf2581885e17389a0e0f9f42387970 # v20.1.1
+        uses: devantler-tech/.github/actions/aggregate-job-checks@66b52462d8f6c74b95196cc3642091d05b253983 # v20.1.7
         with:
           job-results: >-
             ${{ needs.workflow-startup.result }}
@@ -3681,6 +3711,7 @@ jobs:
             ${{ needs.test-rule-sensor-inventory.result }}
             ${{ needs.test-retired-rule-survivors-contract.result }}
             ${{ needs.test-bash-call-timeout-budget-contract.result }}
+            ${{ needs.test-repo-delete-guard.result }}
             ${{ needs.test-codex-dispatch-supersession-contract.result }}
             ${{ needs.test-weekly-pacing-contract.result }}
             ${{ needs.test-main-head-rung0-probe.result }}

@@ -89,7 +89,9 @@ capabilities, not a copy of the role or an inferred namespace.
 This deployment **consumes** the `agentic-engineering` plugin from
 [`devantler-tech/agent-plugins`](https://github.com/devantler-tech/agent-plugins) — declared in
 [`.claude/settings.json`](../settings.json) (`extraKnownMarketplaces` +
-`enabledPlugins: agentic-engineering@devantler-plugins`). The plugin carries the generic **role**
+`enabledPlugins: agentic-engineering@devantler-plugins`). Beside it, `ksail@devantler-plugins` is
+enabled so the agents can dogfood KSail (see the advance work guide's *Dogfood KSail*); its MCP write
+tools need an approval. The `agentic-engineering` plugin carries the generic **role**
 (entrypoint **`agentic-engineer`**; also `portfolio-surveyor` and `agent-improver`); this contract
 supplies the deployment **configuration**. Plugin agents and skills fail closed unless these named
 contract sections resolve:

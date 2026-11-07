@@ -22,7 +22,7 @@ to it:
   guard a repository's agent skills. They are not submodules, so work on them through the GitHub API
   or a fresh clone; each repository's own `AGENTS.md` carries its task menu.
 
-This monorepo consumes `agentic-engineering@devantler-plugins` via
+This monorepo consumes `agentic-engineering@devantler-plugins`, plus `ksail@devantler-plugins` for dogfooding KSail, via
   [`.claude/settings.json`](../../../settings.json) (see monorepo#2363). Keep plugins
   additive & backward-compatible; generic role improvements land here so every consumer inherits them.
 

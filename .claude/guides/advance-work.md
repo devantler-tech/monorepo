@@ -3,7 +3,8 @@
 > Part of the devantler-tech agent contract. [`AGENTS.md`](../../AGENTS.md) is the always-on core
 > and indexes every guide; this guide carries the full rules for value-first shaping, the
 > enhancement levers, security hardening without a DevEx tax, feature flags, the scripting stack,
-> and shared-library stewardship. Read it before starting advance (non-hotfix) work.
+> shared-library stewardship and dogfooding KSail. Read it before starting advance (non-hotfix)
+> work, and before any task that needs a Kubernetes cluster.
 
 ## Build the right thing — value before output
 Bringing user value is the portfolio's highest goal. Engineering quality is necessary, but it cannot
@@ -449,3 +450,49 @@ platform-template consume instead of vendoring copies). A generic pattern proven
 product remains owned by that product. Move it into a shared library only after demonstrated use in
 at least two repositories proves a product-neutral contract worth inheriting — keep shared components
 **industry-standard and tool-neutral** (the portability principle).
+
+## Dogfood KSail
+
+KSail is the portfolio's own Kubernetes tool, and using it on our own work is how we learn what to
+improve (maintainer direction, interactive session 2026-11-04). Whenever a task needs a cluster of
+its own, **create and operate it with KSail first**: the `ksail` CLI in every lane, or its MCP server
+where the runtime loads the `ksail` plugin. That covers a throwaway cluster to try a manifest, chart
+or policy, a template's smoke test, and reproducing a KSail bug. A product card that requires static
+validation still wins: the platform's repository work, for example, never spins up a cluster to test
+a diff.
+
+- **Production stays read-only.** Inspect the live platform only through the context
+  `prod-kube-context.sh` selects, with the read-only reads the guides already allow. KSail's write
+  tools, `cipher decrypt` and every other write never target a production context; production
+  changes only through GitOps delivery. The `kubectl` reads that `platform-security-surveyor` and the
+  helper scripts make stay as they are.
+- **Give each local cluster a lifecycle and its own client state.** Run `disk-preflight.sh` first.
+  Name the cluster with your writer namespace and run id so parallel runs never share one. Write its
+  credentials to a kubeconfig file only this run uses, and pass that file and the cluster's context
+  explicitly to **every command that talks to the cluster** — KSail, `kubectl`, `helm`, `flux`,
+  `talosctl` and any other client, through that tool's own config-file and context flags (a per-run
+  talosconfig for `talosctl`): a shared `~/.kube/config` lets a parallel run's context switch send
+  your writes to its cluster, and an exported `KUBECONFIG` alone does not prove every wrapper reads
+  it. KSail's `--config` flag takes a `ksail.yaml`, not a kubeconfig, so give each run its own
+  `ksail.yaml` whose `spec.cluster.connection.kubeconfig` and `spec.cluster.connection.context` name
+  that run's kubeconfig file and context. With the `Kubernetes` provider, which nests a cluster
+  inside a host cluster, that connection selects only the nested cluster: the host comes from
+  `spec.provider.kubernetes.kubeconfig` and `spec.provider.kubernetes.context`, and KSail falls back
+  to `~/.kube/config` and its current context when they are unset. Set both explicitly to a
+  non-production host, so a fallback can never place the nested cluster on production. Keep one
+  cluster per run, and delete it before the run ends, confirming it is gone.
+- Reach for `kind`, `k3d`, `talosctl`, `kubectl` or `helm` directly only for a step KSail cannot do.
+  Never block work on a KSail gap: work around it, and say so in the pull request body.
+- **File each gap and friction** on `devantler-tech/ksail`, one issue per distinct root cause: a
+  missing capability, a confusing error, a slow step, a missing flag or a misleading doc. Search for
+  an existing issue first and add your evidence there. Give the command, what KSail did, what you
+  expected and the workaround, sanitised per
+  [*Sensitive information stays private*](egress-and-privacy.md#sensitive-information-stays-private--never-publish-it):
+  describe a failure on a platform cluster generically and keep raw output in private memory. A
+  security weakness goes to a [private security advisory](#security-advisories--private-vulnerability-reports),
+  never a public issue. Set the issue's Type and add it to the board, as for any issue.
+- Filing issues is exempt from the draft caps; fixing KSail is ordinary KSail work, chosen through
+  the work-selection ladder.
+- A local cluster needs no special approval. A real-cluster trial keeps the once-a-day limit in
+  *Cadence & focus* and the cost rules in
+  [*Temporary engineering costs*](spend-and-inference.md#temporary-engineering-costs).
