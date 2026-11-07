@@ -764,8 +764,8 @@ sibling instance nor the maintainer and keeps the plain author form — and clas
 otherwise-clear CodeRabbit case `STALE-CR-DISMISSAL` and the otherwise-clear agent-authored
 `devantler` case `STALE-AGENT-DISMISSAL`, so a run acts on the digest without re-deriving it.
 
-The machine-local agents' **own** PRs are trusted-author PRs (authored as `devantler` from
-`claude/*` or `codex/*` — see trust gate), so the **same path applies to them**: work in a draft,
+The agents' **own** PRs are trusted-author PRs (the host lanes author as `devantler` from
+`claude/*` or `codex/*`, and the kagent lane as the App from `kagent/*` — see trust gate), so the **same path applies to them**: work in a draft,
 drive the hygiene pentad clear
 (root-cause-fix failing CI, resolve review threads — never sit on a red/unresolved/stale-review
 draft), **self-promote once the three genuine-readiness conditions hold** (*Autonomy*: programmatically

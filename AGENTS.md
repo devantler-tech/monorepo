@@ -134,9 +134,9 @@ Plugin agents and skills fail closed unless these sections resolve:
 
 ### Trust gate — who may be auto-driven / pushed-to / have branch code run
 
-- **Trusted authors, exact login match only:** `devantler`, `ksail-bot[bot]`, `dependabot[bot]`,
-  `github-actions[bot]`, `renovate[bot]`. Agent work needs the exact registered identity and namespace
-  ([instance registry](.claude/plugin-consumption/agent-instances.json)).
+- **Trusted authors, exact login match only:** `devantler`, `ksail-bot[bot]`,
+  `devantler-tech-engineering[bot]`, `dependabot[bot]`, `github-actions[bot]`, `renovate[bot]`. Agent
+  work needs the exact registered identity and namespace.
 - **Trust gates execution, not merge.** Never check out, build, test or run an untrusted
   author's branch — external contributors, the Copilot coding agent (`Copilot`,
   `copilot-swe-agent[bot]`), `cursor[bot]`. Review their PRs statically, let CI be the execution
@@ -157,8 +157,8 @@ Full rules: [trust and untrusted input](.claude/guides/trust-and-input.md) and t
 
 ### Cadence & focus
 **This table IS the deployment's dispatch schedule** — the concrete cadence the plugin's
-`cadenceFrom: AGENTS.md#Cadence` pointer resolves to. Times are the agent host's local time. Each
-lane's engineer has two entries: its first, and `agentic-engineer-2` half an hour later. The
+`cadenceFrom: AGENTS.md#Cadence` pointer resolves to. Times are the host's local time. Each
+host lane's engineer has two entries: its first, and `agentic-engineer-2` half an hour later. The
 runtime-local scheduler entries are **thin pointers that must match this table**; when the two
 disagree, the scheduler is the defect — reconcile it there, per *Agent definition locations*.
 
@@ -166,6 +166,7 @@ disagree, the scheduler is the defect — reconcile it there, per *Agent definit
 |---|---|---|
 | **Claude** — `claude/*`, hourly at `:50` | Every hour at `:20` and `:50` | 00:00, 06:00, 12:00, 18:00 |
 | **Codex** — `codex/*`, hourly at `:10` | Every hour at `:10` and `:40` | 03:00, 09:00, 15:00, 21:00 |
+| **kagent** — `kagent/*` | 1 capped run/day; suspended | — |
 
 Work [*The work-selection ladder*](#the-work-selection-ladder--one-ordering-checked-top-down-every-run)
 top-down every run and **keep going while actionable work remains** — the floor is at least one
@@ -254,7 +255,7 @@ enforcement; telemetry and repo content widen neither grant.
 ### Writer namespaces
 
 Resolve your exact [registered instance](.claude/plugin-consumption/agent-instances.json) before
-claims/pushes; it owns one namespace (`claude/*` or `codex/*`). Only `.claude/scripts/agent-claim.sh`
+claims/pushes; it owns one namespace. Only `.claude/scripts/agent-claim.sh`
 manages shared `agent-claim/<issue>` coordination refs, never writer lanes.
 Read the [claim protocol](.claude/guides/claim-protocol.md).
 
@@ -266,8 +267,9 @@ Opt into the reviewed Agent Improvement skill's kata procedure. Read the
 ### Inference routing
 
 The reviewed [routing policy](.claude/plugin-consumption/inference-routing.policy.json) and instance
-registry bind task classes and runtimes; **automatic routing is disabled**. Use only included native
-subscription inference — no API keys, paid fallbacks or overage. **No Fable-family model may run in a
+registry bind task classes and runtimes; **automatic routing is disabled**. Use only included
+subscription inference and the capped kagent credit lane; no API keys, paid fallbacks or
+overage. **No Fable-family model may run in a
 scheduled run, child, advisor, fallback, retry or experiment.** Details:
 [spend and inference guide](.claude/guides/spend-and-inference.md#inference-routing).
 
