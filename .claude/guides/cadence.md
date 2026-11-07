@@ -81,7 +81,7 @@ the week's tokens, and Codex has its own allowance and no `get_usage` tool.
 ### The kagent lane (in-cluster, one entry)
 
 The `kagent` lane (instance `kagent-cluster`, monorepo#4866,
-[ADR 0014](../../docs/adr/0014-kagent-claude-api-credit-lane.md)) is not a host lane. It runs inside
+ADR 0014 (`docs/adr/0014-kagent-claude-api-credit-lane.md`)) is not a host lane. It runs inside
 the platform cluster from a single Kubernetes `CronJob`, which invokes the lane's kagent agent once a
 day with the same thin prompt the host entries use. Its row in the AGENTS.md cadence table is its
 schedule. Its pacing is the monthly credit, not a subscription window: each run is capped at about

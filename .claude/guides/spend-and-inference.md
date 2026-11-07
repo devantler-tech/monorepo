@@ -103,7 +103,7 @@ gate remain unchanged. A quota or capability failure queues the dependent work; 
 
 **The kagent credit lane** (maintainer decision 2026-11-07,
 [#4866](https://github.com/devantler-tech/monorepo/issues/4866),
-[ADR 0014](../../docs/adr/0014-kagent-claude-api-credit-lane.md)). The `kagent-cluster` instance's
+ADR 0014 (`docs/adr/0014-kagent-claude-api-credit-lane.md`)). The `kagent-cluster` instance's
 scheduled Agentic Engineer runs on the maintainer's **monthly Claude API credit grant**, the only
 inference API credential this deployment holds. It is bound by all of these:
 

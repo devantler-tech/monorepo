@@ -136,7 +136,7 @@ Plugin agents and skills fail closed unless these sections resolve:
 
 - **Trusted authors, exact login match only:** `devantler`, `ksail-bot[bot]`,
   `devantler-tech-engineering[bot]`, `dependabot[bot]`, `github-actions[bot]`, `renovate[bot]`. Agent
-  work needs the exact registered identity and namespace (*Writer namespaces*).
+  work needs the exact registered identity and namespace.
 - **Trust gates execution, not merge.** Never check out, build, test or run an untrusted
   author's branch — external contributors, the Copilot coding agent (`Copilot`,
   `copilot-swe-agent[bot]`), `cursor[bot]`. Review their PRs statically, let CI be the execution
@@ -166,7 +166,7 @@ disagree, the scheduler is the defect — reconcile it there, per *Agent definit
 |---|---|---|
 | **Claude** — `claude/*`, hourly at `:50` | Every hour at `:20` and `:50` | 00:00, 06:00, 12:00, 18:00 |
 | **Codex** — `codex/*`, hourly at `:10` | Every hour at `:10` and `:40` | 03:00, 09:00, 15:00, 21:00 |
-| **kagent** — `kagent/*` | 1 capped run/day; suspended (monorepo#4866) | — |
+| **kagent** — `kagent/*` | 1 capped run/day; suspended | — |
 
 Work [*The work-selection ladder*](#the-work-selection-ladder--one-ordering-checked-top-down-every-run)
 top-down every run and **keep going while actionable work remains** — the floor is at least one
