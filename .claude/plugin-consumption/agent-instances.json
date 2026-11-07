@@ -13,6 +13,12 @@
       "authors": {"cli": "devantler", "rest": "devantler", "graphql": "devantler", "search": "devantler"},
       "definitionAdapter": "codex",
       "roles": ["agentic-engineer", "agent-improver"]
+    },
+    "kagent-cluster": {
+      "namespace": "kagent",
+      "authors": {"cli": "app/devantler-tech-engineering", "rest": "devantler-tech-engineering[bot]", "graphql": "devantler-tech-engineering", "search": "app/devantler-tech-engineering"},
+      "definitionAdapter": "claude",
+      "roles": ["agentic-engineer"]
     }
   }
 }

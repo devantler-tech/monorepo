@@ -18,7 +18,7 @@ odds jump. Before the lane-neutral ref delivered by
 [monorepo#2302](https://github.com/devantler-tech/monorepo/issues/2302), rule 4 had no cross-lane
 arbitration: each lane could push its own branch successfully, and an open PR appeared only at the
 **end** of a build. **The shared ref closes that historical hole before a build starts** — on rungs
-2–3, acquire it without exception and scan it plus **all three** lane namespaces. The evidence for
+2–3, acquire it without exception and scan it plus **every registered** lane namespace. The evidence for
 why that protection is mandatory remains: measured on `world-at-ruin` (2026-07-18), **six
 end-to-end builds
 discarded in ~24 hours** — #66 built to completion twice over, #81 lost after a full build with a
