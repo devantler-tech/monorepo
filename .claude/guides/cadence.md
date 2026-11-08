@@ -78,9 +78,22 @@ This happens only while usage is ahead of the week, and the lane goes back to tw
 the week catches up. The Agent Improver and the Codex lane are not paced: the Improver used 2–16% of
 the week's tokens, and Codex has its own allowance and no `get_usage` tool.
 
+### The kagent lane (in-cluster, one entry)
+
+The `kagent` lane (instance `kagent-cluster`, monorepo#4866,
+ADR 0014 (`docs/adr/0014-kagent-claude-api-credit-lane.md`)) is not a host lane. It runs inside
+the platform cluster from a single Kubernetes `CronJob`, which invokes the lane's kagent agent once a
+day with the same thin prompt the host entries use. Its row in the AGENTS.md cadence table is its
+schedule. Its pacing is the monthly credit, not a subscription window: each run is capped at about
+$6, and the month's credit is the hard stop (spend and inference guide, *kagent credit lane*). So it
+never reads `get_usage`, *Weekly pacing* does not apply, and neither do the two-entry rules below.
+While the `CronJob` is suspended the lane is not scheduled at all. The liveness, drift and telemetry
+checks do not watch it yet (monorepo#4870): treat it as unobserved, never as producing and never as
+an outage.
+
 ### Two engineer entries per lane
 
-Each lane's engineer starts from **two hourly scheduler entries**: its first entry
+Each host lane's engineer starts from **two hourly scheduler entries**: its first entry
 (`daily-ai-assistant` on Claude at `:50`, `daily-ai-engineer` on Codex at `:10`) and
 `agentic-engineer-2` half an hour later (`:20` on Claude, `:40` on Codex). The second entry is the
 first one again with another start minute: the same prompt apart from its own entry name, the same

@@ -2,6 +2,7 @@
 
 - **Status:** Rejected — **superseded by maintainer direction on subscription economics** (2026-09-10; see *Decision*)
 - **Date:** 2026-07-07 (rejected 2026-09-10)
+- **Reopened:** 2026-11-07 on a fixed monthly API credit — see [ADR 0014](0014-kagent-claude-api-credit-lane.md)
 - **Deciders:** devantler-tech maintainers
 - **Issue:** [#2075](https://github.com/devantler-tech/monorepo/issues/2075) (Phase 0 of epic [#2074](https://github.com/devantler-tech/monorepo/issues/2074) — *run cheap, capable agents at scale to level up the Daily AI Engineer*)
 

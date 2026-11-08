@@ -79,7 +79,7 @@ MP-070	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**One hu
 MP-071	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**The dismissal itself is ALWAYS the maintainer's**	none	-	-
 MP-072	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	It is safe here only because it can move a review	narrative	-	-
 MP-073	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	A `devantler` review carrying **neither** marker	none	-	-
-MP-074	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The machine-local agents' **own** PRs are trusted-author	none	-	-
+MP-074	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The agents' **own** PRs are trusted-author	none	-	-
 MP-075	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Self-merge means the **normal** path only — never	none	-	-
 MP-076	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**External-contributor PRs are merged like any other**	none	-	-
 MP-077	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Scheduled/autonomous portfolio surveys remain limited	none	-	-

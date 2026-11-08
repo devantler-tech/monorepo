@@ -7,7 +7,8 @@ Adding a compatible native adapter does not require another role definition or i
 Its opt-in controls the new automatic routing and
 delegation mechanism; it does not stop or reconfigure existing native parent schedules. Existing
 parent execution also requires an independently confirmed permitted model and included billing
-route, or a listing under [Accepted scheduled parent routes](#accepted-scheduled-parent-routes).
+route, the [kagent credit lane](#kagent-credit-lane)'s bounds, or a listing under
+[Accepted scheduled parent routes](#accepted-scheduled-parent-routes).
 Disabled routing does not establish that compliance. Outside a listed route, missing pre-inference
 controls hold the affected startup, resume or fallback; unresolved parent enforcement remains an
 explicit rollout gap. A listed route is never held for them.
@@ -56,6 +57,17 @@ row; a row accepts the parent run alone and enables no route, child, switch or f
 | `codex-local` | Engineer and improver schedules, on the model fixed in each scheduler entry and the ChatGPT subscription sign-in | Maintainer, 2026-10-07, monorepo#3314 |
 
 The enforcement gaps recorded above for this surface are unchanged and stay open on monorepo#3314.
+
+## kagent credit lane
+
+The `kagent-cluster` instance is not an accepted subscription route. It is the one API-credit lane,
+bound by the *kagent credit lane* rules in `AGENTS.md` **Inference routing** (spend and inference
+guide), maintainer decision 2026-11-07, monorepo#4866. Unlike the host lanes it has pre-inference
+controls by construction: kagent compiles the model fixed in the lane's `ModelConfig` into the
+runtime before any turn, and the API workspace spend limit is enforced by the provider. Neither is
+verified yet. The lane stays suspended until every sub-issue of monorepo#4866 is done and the
+canary run (monorepo#4869) records the effective model, the per-run cost and the maintainer's
+confirmation of the spend limit here.
 
 ## Native verification procedure
 

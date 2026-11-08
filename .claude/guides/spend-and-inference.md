@@ -95,10 +95,35 @@ records the concrete surface/version, expiry, capability gaps and promotion crit
 does not establish entitlement or enforcement.
 
 **Inference spend stewardship is mandatory and separate from infrastructure FinOps opt-in.** Use
-only already-included native subscription inference. No inference API keys, pay-as-you-go endpoints,
+only already-included native subscription inference, and the one **kagent credit lane** below. No
+other inference API keys, pay-as-you-go endpoints,
 purchased/reset credits, paid fallback, overage activation, automatic subscription upgrades, or
 inference brokers. The existing infrastructure `spendStewardshipEnabled: false` and private-channel
 gate remain unchanged. A quota or capability failure queues the dependent work; it never widens billing.
+
+**The kagent credit lane** (maintainer decision 2026-11-07,
+[#4866](https://github.com/devantler-tech/monorepo/issues/4866),
+ADR 0014 (`docs/adr/0014-kagent-claude-api-credit-lane.md`)). The `kagent-cluster` instance's
+scheduled Agentic Engineer runs on the maintainer's **monthly Claude API credit grant**, the only
+inference API credential this deployment holds. It is bound by all of these:
+
+- **One model:** `claude-opus-5-5`, fixed in the lane's kagent `ModelConfig`. No fallback model,
+  child, advisor, model switch or automatic routing, and No-Fable binds it like every other run.
+- **One capped run a day:** at most one scheduled run a day, each capped at about $6 of usage. An API
+  workspace spend limit equal to the credit is the hard stop; the maintainer confirms it before the
+  schedule is resumed.
+- **A federated credential that stays out of the run:** there is no long-lived Anthropic API key.
+  Outside the run's sandbox, the cluster's service-account identity is exchanged through Anthropic
+  workload identity federation for a short-lived access token, and kagent's gateway injects it at
+  egress. Neither token enters the run's sandbox, environment, logs or artifacts. The federation
+  rule pins one service account and one audience.
+- **Exhaustion stops the lane:** reaching the per-run cap or the monthly limit ends the run and
+  queues its work. Nothing buys, tops up or reloads credit, raises the limit, or adds or switches a
+  credential.
+- **In the run, a backstop:** the run stops on what it observes: a model ID other than
+  `claude-opus-5-5`, or a billing route other than the credit.
+
+The schedule stays suspended until every sub-issue of #4866 is done.
 
 **No-Fable is a protected limit:** the entire Fable model family is prohibited in recurring parent
 runs, children, advisors, fallback, retries and experiments, even if a provider describes it as
@@ -122,7 +147,8 @@ once across providers; stop the previous writer first. One delivery owner retain
 
 **Activation:** automatic routing is initially disabled in the policy and every runtime registration.
 Existing native parent execution may continue only on an independently confirmed permitted model
-and included billing route, or on an **accepted scheduled parent route** (below). Disabled routing
+and included billing route, within the kagent credit lane's bounds (above), or on an **accepted
+scheduled parent route** (below). Disabled routing
 does not grandfather an unknown parent route, reconfigure
 its scheduler, or prove its initial inference is quota-protected. Outside an accepted route, missing
 pre-inference controls hold the affected startup, resume or fallback; report unresolved parent
