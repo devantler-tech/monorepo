@@ -145,6 +145,19 @@ expect "status-block findings + did-not-run marker" 1 "FINDINGS 3" "${status_hea
 sed "s/^${verdict_line}\$/**Actionable comments posted: 0**/" "${status_fixture}" >"${tmp}/status-zero.txt"
 { cat "${tmp}/status-zero.txt"; printf '\n> ## Review limit reached\n'; } >"${tmp}/status-zero-plus-limit.txt"
 expect "status-block zero findings + did-not-run marker" 1 "NONE did-not-run" "${status_head}" "${tmp}/status-zero-plus-limit.txt"
+# A zero in one supported block must never hide positive evidence in the other (#4820).
+expect "status-block zero-only summary" 0 "GREEN" "${status_head}" "${tmp}/status-zero.txt"
+awk '{ print } /<!-- recent_review_start -->/ { print "**Actionable comments posted: 3**" }' \
+  "${tmp}/status-zero.txt" >"${tmp}/status-zero-recent-findings.txt"
+expect "status zero cannot hide recent-review findings" 1 "FINDINGS 3" "${status_head}" "${tmp}/status-zero-recent-findings.txt"
+awk '{ print } /<!-- recent_review_start -->/ { print "**Actionable comments posted: 0**" }' \
+  "${tmp}/status-findings.txt" >"${tmp}/status-findings-recent-zero.txt"
+expect "recent-review zero cannot hide status findings" 1 "FINDINGS 3" "${status_head}" "${tmp}/status-findings-recent-zero.txt"
+{ cat "${tmp}/status-zero-recent-findings.txt"; printf '\n> ## Review limit reached\n'; } >"${tmp}/conflicting-counts-plus-limit.txt"
+expect "cross-block findings survive a did-not-run marker" 1 "FINDINGS 3" "${status_head}" "${tmp}/conflicting-counts-plus-limit.txt"
+awk '{ print } /<!-- recent_review_start -->/ { print "**Actionable comments posted: 0**"; print "**Actionable comments posted: 3**" }' \
+  "${status_fixture}" >"${tmp}/recent-zero-then-findings.txt"
+expect "first zero cannot hide later findings in one block" 1 "FINDINGS 3" "${status_head}" "${tmp}/recent-zero-then-findings.txt"
 # Ablation: deleting ONLY the status-block verdict line is what flips the real summary.
 grep -vxF "${verdict_line}" "${status_fixture}" >"${tmp}/status-no-verdict.txt"
 expect "status-block layout minus verdict line" 1 "NONE no-verdict" "${status_head}" "${tmp}/status-no-verdict.txt"
@@ -204,7 +217,7 @@ json_verdict() { # json_verdict <json-file> → prints "rc<TAB>output"
   set -e
   printf '%s\t%s\n' "${rc}" "${got}"
 }
-for f in "${green_fixture}" "${limited_fixture}" "${walkthrough_fixture}" "${status_fixture}" "${tmp}/plain.txt"; do
+for f in "${green_fixture}" "${limited_fixture}" "${walkthrough_fixture}" "${status_fixture}" "${tmp}/status-zero-recent-findings.txt" "${tmp}/plain.txt"; do
   for h in "${green_head}" "${limited_head}" "${status_head}" "${other_head}"; do
     checks=$((checks + 1))
     jq -n --arg h "${h}" --rawfile b "${f}" '{head: $h, body: $b}' >"${tmp}/pair.json"
