@@ -179,10 +179,12 @@ public and private — no per-repo loop needed to enumerate):
    (`invalid character '<'`), 38 of 57 times on 10-16..22 (monorepo#4492). The orchestrator cannot
    review, promote, merge, close or park a PR whose pentad it never received, so the deepening set
    is defined by *what the run may act on*, not by who authored it. **Author trust decides EXECUTION, never deepening** — reading a PR's metadata
-   runs none of its code, so the exact-login list (`devantler`, `ksail-bot[bot]`,
-   `github-actions[bot]`, `coderabbitai[bot]`, `cursor[bot]` — **exact match, never a substring**;
-   `Copilot`/`copilot-swe-agent[bot]` are NOT trusted) survives only to mark which branches may be
-   run locally, and is reported per row rather than used as a filter.
+   runs none of its code, so the root `AGENTS.md` **Trust gate** list and its identity bindings
+   (today `devantler`, `ksail-bot[bot]`, `devantler-tech-engineering[bot]` only from its own
+   `kagent/*` branch in the same repository, `dependabot[bot]`, `github-actions[bot]`,
+   `renovate[bot]` — **exact match, never a substring**; `Copilot`/`copilot-swe-agent[bot]`,
+   `cursor[bot]` and reviewers such as `coderabbitai[bot]` are NOT trusted) survive only to mark
+   which branches may be run locally, and are reported per row rather than used as a filter.
    ⚠️ **Deepening is both shard-bounded and budgeted, so spend it in the order the orchestrator will
    work.** This set is
    much larger than the `devantler`-only one it replaces, and the heavy fields plus the GraphQL
@@ -601,7 +603,8 @@ public and private — no per-repo loop needed to enumerate):
      (`active=pushed:<age>@<lane>:<headRefName>@<headRefOid>`, the comment/review age, the request
      envelope) so the orchestrator can subtract its own push and decide; never emit a stand-down
      directive. Every other author —
-     `app/ksail-bot` (reported as `ksail-bot[bot]` on the search surface), `github-actions[bot]`,
+     `app/ksail-bot` (reported as `ksail-bot[bot]` on the search surface),
+     `app/devantler-tech-engineering` (reported as `devantler-tech-engineering[bot]`), `github-actions[bot]`,
      `coderabbitai[bot]`, `cursor[bot]`, `Copilot`, and external contributors — takes those same
      four classifications on the same evidence. **One author-dependent addition, and it is about
      execution rather than ownership:** tag an untrusted author's row `NEVER-RUN-LOCALLY` so the
