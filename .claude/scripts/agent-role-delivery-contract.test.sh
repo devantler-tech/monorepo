@@ -1208,6 +1208,46 @@ safe_payload='{"tool_input":{"command":"gh pr list --repo devantler-tech/monorep
 run_surveyor_hook "${safe_payload}" >/dev/null ||
   fail "consumer surveyor hook refused a guard-approved forge read"
 
+# The production registry holds one record per install scope: a user-scope record
+# plus a project-scope record for each session worktree, most of them for OTHER
+# checkouts and other cache versions (monorepo#4835). Only this project's record,
+# else the user record, may decide; foreign records must neither block nor be used.
+hook_repo_root="$(CDPATH='' cd -- "${repo_root}" && pwd -P)"
+write_scoped_hook_registry() {
+  jq -n --arg reviewed "${plugin_root}" --arg root "${hook_repo_root}" --arg shape "$1" '
+    [{scope: "project", projectPath: "/elsewhere/wt-a", installPath: "/elsewhere/cache/6.8.0"},
+     {scope: "project", projectPath: "/elsewhere/wt-b", installPath: "/elsewhere/cache/7.1.1"}] as $foreign
+    | {version: 2, plugins: {"agentic-engineering@devantler-plugins": (
+        if $shape == "user" then $foreign + [{scope: "user", installPath: $reviewed}]
+        elif $shape == "project" then $foreign
+          + [{scope: "user", installPath: "/elsewhere/cache/6.8.1"},
+             {scope: "project", projectPath: ($root + "/"), installPath: $reviewed}]
+        elif $shape == "foreign-only" then $foreign
+        else $foreign
+          + [{scope: "project", projectPath: $root, installPath: $reviewed},
+             {scope: "local", projectPath: $root, installPath: "/elsewhere/cache/7.1.0"}]
+        end)}}' > "${hook_registry}"
+}
+for scoped_shape in user project; do
+  write_scoped_hook_registry "${scoped_shape}"
+  run_surveyor_hook "${safe_payload}" >/dev/null ||
+    fail "consumer surveyor hook refused a forge read with a ${scoped_shape}-scope record for this project among foreign records (monorepo#4835)"
+done
+for scoped_shape in foreign-only ambiguous; do
+  write_scoped_hook_registry "${scoped_shape}"
+  set +e
+  scoped_output="$(run_surveyor_hook "${safe_payload}" 2>&1)"
+  scoped_status=$?
+  set -e
+  [ "${scoped_status}" -eq 2 ] ||
+    fail "consumer surveyor hook resolved an install from a ${scoped_shape} registry (exit ${scoped_status})"
+  case "${scoped_output}" in
+    *'must name exactly one install path'*) ;;
+    *) fail "${scoped_shape} registry was refused for the wrong reason: ${scoped_output}" ;;
+  esac
+done
+write_hook_registry "${plugin_root}"
+
 write_payload='{"tool_input":{"command":"gh pr merge 1 --repo devantler-tech/monorepo"}}'
 set +e
 write_output="$(run_surveyor_hook "${write_payload}" 2>&1)"

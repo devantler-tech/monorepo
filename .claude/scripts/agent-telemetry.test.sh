@@ -5959,6 +5959,92 @@ if grep -qE 'bash timeouts \.+ 1 ' <<<"$OUT"; then
 else bad "an escaped is_error timeout is counted" "$(grep 'timeouts' <<<"$OUT")"; fi
 check "escaped tool_use type keeps its timed-out description" "$OUT" "escaped key wait"
 
+# Interrupts are counted in the same read as the denied calls (#4823). A record
+# the denied filter cannot use (a bare JSON scalar has no .type) or a line that
+# is not JSON must not stop the interrupt count, and every file's interrupts
+# are summed.
+mkdir -p "$FIX/effint"
+cat > "$FIX/effint/a.jsonl" <<'EOF'
+5
+not json at all
+{"type":"user","toolUseResult":{"interrupted":true},"message":{"content":[{"type":"text","text":"x"}]}}
+EOF
+cat > "$FIX/effint/b.jsonl" <<'EOF'
+{"type":"user","toolUseResult":{"interrupted":true},"message":{"content":[{"type":"tool_result","tool_use_id":"ti1","is_error":true,"content":"x","nested":{"interrupted":true}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/effint" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if grep -qE 'interrupted tool calls \.+ 3$' <<<"$OUT"; then
+  ok "interrupts after a record the denied read cannot use are still counted, across files"
+else bad "interrupts after a record the denied read cannot use are still counted, across files" \
+  "$(grep 'interrupted' <<<"$OUT")"; fi
+
+# A bare JSON scalar as the LAST line is not a failed read: jq reports an error
+# on the final record through its exit status, so the denied filter must skip
+# non-objects rather than raise one there.
+mkdir -p "$FIX/effintlast"
+cp "$FIX/effint/b.jsonl" "$FIX/effintlast/a.jsonl"
+printf '5\n' >> "$FIX/effintlast/a.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/effintlast" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+# The delegated inventory reports this file as unparsable on its own; only the
+# interrupt count and the extraction canary are asserted here.
+if grep -qE 'interrupted tool calls \.+ 2$' <<<"$OUT" && ! grep -qi 'extraction failed' <<<"$OUT"; then
+  ok "a scalar last line still counts interrupts without an extraction failure"
+else bad "a scalar last line still counts interrupts without an extraction failure" \
+  "$(grep -E 'interrupted|extraction' <<<"$OUT" | head -3)"; fi
+
+# A transcript the read cannot open appends no count, so the interrupt count is
+# UNKNOWN and the report exits 2 instead of passing a short count as complete.
+# Root reads through any mode, so the case cannot be built as root.
+if [ "$(id -u)" -ne 0 ]; then
+  mkdir -p "$FIX/effintfail"
+  cp "$FIX/effint/b.jsonl" "$FIX/effintfail/a.jsonl"
+  cp "$FIX/effint/b.jsonl" "$FIX/effintfail/b.jsonl"
+  chmod 000 "$FIX/effintfail/b.jsonl"
+  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/effintfail" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        bash "$TARGET" --since-days 3650 --section efficiency 2>&1); RC=$?
+  chmod 600 "$FIX/effintfail/b.jsonl"
+  if [ "$RC" -eq 2 ] && grep -qE 'interrupted tool calls \.+ UNKNOWN \(counted 1 of 2 transcripts\)' <<<"$OUT"; then
+    ok "an unreadable transcript makes the interrupt count UNKNOWN with exit 2"
+  else bad "an unreadable transcript makes the interrupt count UNKNOWN with exit 2" \
+    "rc=$RC $(grep -E 'interrupted|UNKNOWN' <<<"$OUT" | head -3)"; fi
+fi
+
+# The same failure isolated from every other read (#4836 review): both files are
+# readable and the shim fails ONLY the combined denied/interrupt read of b.jsonl,
+# so the timeout-description pass cannot be what sets the exit status. Without
+# its denied IDs, b.jsonl's refused sleep would be classed as executed, so its
+# commands must not be extracted at all: one foreground launch, not two.
+mkdir -p "$FIX/effintdeny/proj" "$FIX/effintdeny/bin"
+cat > "$FIX/effintdeny/proj/a.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"ok1","name":"Bash","input":{"command":"sleep 5"}}]}}
+{"type":"user","timestamp":"__NOW__","message":{"content":[{"type":"tool_result","tool_use_id":"ok1","is_error":false,"content":"done"}]}}
+EOF
+cat > "$FIX/effintdeny/proj/b.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"dn1","name":"Bash","input":{"command":"sleep 60"}}]}}
+{"type":"user","timestamp":"__NOW__","toolUseResult":{"interrupted":true},"message":{"content":[{"type":"tool_result","tool_use_id":"dn1","is_error":true,"content":"<tool_use_error>Blocked: sleep 60 followed by: gh pr checks 1"}]}}
+EOF
+subst "$FIX/effintdeny/proj/a.jsonl"
+subst "$FIX/effintdeny/proj/b.jsonl"
+effintdeny_jq=$(command -v jq)
+cat > "$FIX/effintdeny/bin/jq" <<'SHIM'
+#!/usr/bin/env bash
+case "$*" in
+  *'\u0001I'*) case "${!#}" in */b.jsonl) exit 5 ;; esac ;;
+esac
+exec "$EFFINTDENY_REAL_JQ" "$@"
+SHIM
+chmod +x "$FIX/effintdeny/bin/jq"
+OUT=$(PATH="$FIX/effintdeny/bin:$PATH" EFFINTDENY_REAL_JQ="$effintdeny_jq" \
+      CLAUDE_PROJECTS_DIR="$FIX/effintdeny/proj" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1); RC=$?
+if [ "$RC" -eq 2 ] && grep -qE 'interrupted tool calls \.+ UNKNOWN \(counted 1 of 2 transcripts\)' <<<"$OUT" \
+   && grep -qE 'foreground launch \.+ 1' <<<"$OUT" && grep -q 'extraction failed on 1 of' <<<"$OUT"; then
+  ok "a failed denied read alone makes interrupts UNKNOWN, exits 2 and extracts no commands"
+else bad "a failed denied read alone makes interrupts UNKNOWN, exits 2 and extracts no commands" \
+  "rc=$RC $(grep -E 'interrupted|foreground|extraction' <<<"$OUT" | head -4)"; fi
+
 # The description list is streamed per line, never slurped, so a multi-GB
 # transcript is not held in memory (#4793). Trace the description program's jq
 # calls and prove none of them slurps its file.

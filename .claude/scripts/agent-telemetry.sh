@@ -793,7 +793,7 @@ fi
 # Drift reads definitions and schedules, so it needs none of the transcript
 # scratch files below. Avoid fifteen unused mktemp processes on each drift run (#4160).
 ERRTMP='' RAWTMP='' INJTMP='' PROVTMP='' CONCTMP='' INJSNAP='' CREDCONC='' CREDPROV=''
-SIGTMP='' XFTMP='' XFREL='' XFDENY='' XFINJ='' XFBUILD='' XFA2A='' CXTAIL=''
+SIGTMP='' XFTMP='' XFINT='' XFREL='' XFDENY='' XFINJ='' XFBUILD='' XFA2A='' CXTAIL=''
 if [ "$SECTION" != drift ]; then
 # Scratch file for the error-signature pass. `mktemp` (0600, unpredictable name)
 # rather than a guessable `/tmp/.name.$$`, and removed on ANY exit including a
@@ -820,6 +820,10 @@ CREDPROV=$(mktemp "${TMPDIR:-/tmp}/.agtel_credprov.XXXXXXXX") || { echo "cannot 
 # would read 0 and the run would report the agent had stopped busy-waiting.
 # The walk runs in a pipeline subshell, so the count must survive on disk.
 XFTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_xf.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+# Interrupted tool calls, one count per transcript, written by the same read
+# that lists its denied calls (#4823). The walk is a pipeline subshell, so the
+# counts must survive on disk.
+XFINT=$(mktemp "${TMPDIR:-/tmp}/.agtel_xfint.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # The same counter for every other walk that extracts once per file (#2916):
 # reliability, the two safety walks, and the cross-instance walk. One file per
 # walk, because each canary compares its OWN failures with its OWN reads.
@@ -858,8 +862,8 @@ fi
 # Keep the same signal termination even when drift has no scratch to remove.
 # Remove on normal exit; on a SIGNAL also terminate, since a trap that only
 # cleans up leaves the script running after the scheduler asked it to stop.
-trap '[ -z "$CXTAIL" ] || rm -rf "$CXTAIL"; rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP" "$XFREL" "$XFDENY" "$XFINJ" "$XFBUILD" "$XFA2A"' EXIT
-trap '[ -z "$CXTAIL" ] || rm -rf "$CXTAIL"; rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP" "$XFREL" "$XFDENY" "$XFINJ" "$XFBUILD" "$XFA2A"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+trap '[ -z "$CXTAIL" ] || rm -rf "$CXTAIL"; rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP" "$XFINT" "$XFREL" "$XFDENY" "$XFINJ" "$XFBUILD" "$XFA2A"' EXIT
+trap '[ -z "$CXTAIL" ] || rm -rf "$CXTAIL"; rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP" "$XFINT" "$XFREL" "$XFDENY" "$XFINJ" "$XFBUILD" "$XFA2A"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
 
 # extraction_canary <failure-file> <reads> <walk>
 # States how many of a walk's per-file extractions failed (#2916). Each failed
@@ -2379,12 +2383,29 @@ def usable_ts:
 # so an anchored pattern never reaches the denial text and the call is counted
 # as an executed foreground launch even though it never ran. Anchoring without
 # normalising is precisely that bug.
+#
+# The same read counts interrupted tool calls (#4823): a second parse of every
+# transcript for that one flag was about 15% of the efficiency section. Pass a
+# file as $2 and the count is appended to it. The two results keep the meaning
+# they had as separate reads. The interrupt branch runs first, and the denied filter
+# skips any record that is not an object, so a bare JSON scalar raises no
+# error, even as the last line, where jq would report it as a failed read.
+# The \001 marker cannot be a tool_use_id: the harness writes those.
+# A read that fails appends no count and returns its status, so the count
+# check reports UNKNOWN instead of accepting a short or zero count.
 denied_ids() {
-  jq -Rr --arg re "$NEVER_RAN_RE" "$JQ_SHAPE_DEFS"'select(length>0)|(try fromjson catch empty)
-          | select(.type=="user") | content_blocks
-          | select(.type=="tool_result" and .is_error==true)
-          | select((block_text) | test($re))
-          | .tool_use_id // empty' "$1" 2>/dev/null \
+  local ids
+  ids=$(jq -Rr --arg re "$NEVER_RAN_RE" "$JQ_SHAPE_DEFS"'select(length>0)|(try fromjson catch empty)
+          | (.. | objects | select(.interrupted? == true) | "\u0001I"),
+            (objects | select(.type=="user") | content_blocks
+             | select(.type=="tool_result" and .is_error==true)
+             | select((block_text) | test($re))
+             | .tool_use_id // empty)' "$1" 2>/dev/null) || return
+  printf '%s\n' "$ids" \
+    | awk -v sink="${2:-}" '
+        $0 == "\001I" { n++; next }
+        { print }
+        END { if (sink != "") print n + 0 >> sink }' \
     | jq -Rs 'split("\n")|map(select(length>0))' 2>/dev/null
 }
 
@@ -2395,8 +2416,12 @@ denied_ids() {
 # real shell command line starts with one, which keeps untrusted command text
 # from forging a tag and moving itself between classes.
 tagged_commands_in() {
-  local f="$1" errs
-  errs=$(denied_ids "$f"); [ -n "$errs" ] || errs='[]'
+  local f="$1" errs drc=0
+  errs=$(denied_ids "$f" "$XFINT") || drc=$?
+  # Without the denied IDs every refused command would be classed as executed,
+  # so a failed denied read extracts nothing and reports through the canary.
+  [ "$drc" -eq 0 ] || return "$drc"
+  [ -n "$errs" ] || errs='[]'
   jq -r --argjson errs "$errs" '
     .. | objects
     | (
@@ -4737,10 +4762,8 @@ if want efficiency; then
     all_files() { printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$'; }
     TIMEOUTS=$(all_files | while IFS= read -r f; do tool_result_failure_text "$f"; done \
                | grep -cE 'Command timed out after' || true)
-    INTERRUPT=$(all_files | while IFS= read -r f; do
-                  jq -Rr 'select(length>0)|(try fromjson catch empty)
-                          | .. | objects | select(.interrupted? == true) | "1"' "$f" 2>/dev/null
-                done | wc -l | tr -d ' ')
+    # Interrupted tool calls are counted by the tagged walk below, in the same
+    # read that lists each transcript's denied calls (#4823).
     # STRUCTURAL, not a text grep: only commands the agent actually ran count.
     # A grep would let untrusted prose that merely mentions `sleep 60` fabricate
     # a busy-wait pattern, and this metric is evidence for definition changes.
@@ -4791,6 +4814,19 @@ if want efficiency; then
                  # never happened.
                  printf '\001EOF\002\n'
                done)
+    # One count per transcript was written by the walk. Fewer lines than files
+    # means a read never reported: say so instead of printing a short count.
+    INT_FILES=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -cv '^$' || true)
+    if [ "$(grep -c . "$XFINT" || true)" -eq "${INT_FILES:-0}" ]; then
+      # A count file that cannot be read here is UNKNOWN, never an empty count.
+      INTERRUPT=$(awk '{ n += $1 } END { print n + 0 }' "$XFINT") || {
+        INTERRUPT="UNKNOWN (the count file could not be read)"
+        main_rc=2
+      }
+    else
+      INTERRUPT="UNKNOWN (counted $(grep -c . "$XFINT" || true) of ${INT_FILES:-0} transcripts)"
+      main_rc=2
+    fi
     # Each LINE of a command carries its class tag, so multi-line commands keep
     # their structure and their order within a class — which the separator-
     # anchored sleep regex and the heredoc stripper both depend on. A command's
@@ -8302,7 +8338,7 @@ if [ "$SAFETY_WORKER" = 0 ]; then
   ( main | redact ) &
   report_pid=$!
   set +m
-  trap 'stop_process_group "$report_pid"; rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP" "$XFREL" "$XFDENY" "$XFINJ" "$XFBUILD" "$XFA2A"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+  trap 'stop_process_group "$report_pid"; rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP" "$XFINT" "$XFREL" "$XFDENY" "$XFINJ" "$XFBUILD" "$XFA2A"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
   report_rc=0
   wait "$report_pid" || report_rc=$?
 else

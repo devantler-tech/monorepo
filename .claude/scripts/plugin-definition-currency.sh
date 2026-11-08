@@ -606,13 +606,31 @@ elif [ -z "$INSTALLED" ]; then
   command -v jq >/dev/null 2>&1 || die "jq is required to read the runtime plugin registry"
   registry="$PLUGINS_ROOT/installed_plugins.json"
   [ -r "$registry" ] || die "cannot read the runtime plugin registry: $registry"
+  # The registry holds one record per install SCOPE, not one per plugin: every session worktree adds
+  # a project-scope record keyed by its `projectPath`, and records for removed worktrees stay behind
+  # (178 records naming 5 cache versions on 2026-11-08). Counting every record therefore made the
+  # bare check UNKNOWN on every Claude run (monorepo#4835). Only the records that apply to THIS
+  # checkout count: a project- or local-scope record for REPO_ROOT, the more specific scope, else
+  # the user-scope record (a record with no scope is read as user scope). Identical paths are one
+  # path. More than one distinct path in the deciding tier is still ambiguous and stays UNKNOWN.
   # No `mapfile`: the host runs bash 3.2, where it does not exist and the array would stay empty.
   # Guarded: malformed JSON, or entries of an unexpected shape, make jq exit 5.
-  paths="$(jq -r --arg id "$PLUGIN_ID" '.plugins[$id][]?.installPath // empty' "$registry" 2>/dev/null)" \
-    || die "could not parse the runtime plugin registry: $registry"
-  [ -n "$paths" ] || die "plugin '$PLUGIN_ID' is not installed in $registry"
-  count="$(printf '%s\n' "$paths" | wc -l | tr -d ' ')"
-  [ "$count" -eq 1 ] || die "plugin '$PLUGIN_ID' has $count install paths; pass --installed to pick one"
+  paths="$(jq -r --arg id "$PLUGIN_ID" --arg root "$REPO_ROOT" '
+    [.plugins[$id][]?
+      | select(type == "object" and (.installPath | type) == "string" and (.installPath | length) > 0)]
+    | (if length == 0 then error("not installed") else . end) as $all
+    | ([$all[] | select((.scope == "project" or .scope == "local")
+          and ((.projectPath // "") | sub("/+$"; "")) == ($root | sub("/+$"; "")))
+        | .installPath] | unique) as $project
+    | ([$all[] | select(.scope == null or .scope == "user") | .installPath] | unique) as $user
+    | (if ($project | length) > 0 then $project else $user end)
+    | if length == 1 then .[0] else "AMBIGUOUS \(length)" end
+  ' "$registry" 2>/dev/null)" \
+    || die "plugin '$PLUGIN_ID' is not installed, or the runtime plugin registry could not be parsed: $registry"
+  case "$paths" in
+    "AMBIGUOUS 0") die "plugin '$PLUGIN_ID' has no user-scope or project-scope record for $REPO_ROOT in $registry; pass --installed" ;;
+    "AMBIGUOUS "*) die "plugin '$PLUGIN_ID' has ${paths#AMBIGUOUS } distinct install paths that apply to $REPO_ROOT; pass --installed to pick one" ;;
+  esac
   INSTALLED="$paths"
 fi
 [ -d "$INSTALLED" ] || die "installed plugin path does not exist: $INSTALLED"
