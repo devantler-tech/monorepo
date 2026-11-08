@@ -512,11 +512,86 @@ else
   fail "a well-formed registry with a matching install must exit 0, got $?: ${out}"
 fi
 
+other_install="${tmp}/other-install"
+mkdir -p "${other_install}"
+printf '{"version":2,"plugins":{"agentic-engineering@devantler-plugins":[{"installPath":"%s"},{"installPath":"%s"}]}}\n' \
+  "${cur}" "${other_install}" > "${reg_root}/installed_plugins.json"
+set +e; out="$("${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --plugins-root "${reg_root}" 2>&1)"; rc=$?; set -e
+[ "${rc}" -eq 2 ] || fail "an ambiguous registry (2 distinct install paths) must exit 2, got ${rc}: ${out}"
+case "${out}" in
+  *"2 distinct install paths"*) ok "an ambiguous registry exits 2 rather than picking one" ;;
+  *) fail "an ambiguous registry exited 2 for the wrong reason: ${out}" ;;
+esac
+
+# Records that name the SAME path are one install, not an ambiguity (monorepo#4835).
 printf '{"version":2,"plugins":{"agentic-engineering@devantler-plugins":[{"installPath":"%s"},{"installPath":"%s"}]}}\n' \
   "${cur}" "${cur}" > "${reg_root}/installed_plugins.json"
+if out="$("${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --plugins-root "${reg_root}")"; then
+  ok "duplicate records for one install path resolve to it"
+else
+  fail "duplicate records for one install path must exit 0, got $?: ${out}"
+fi
+
+# The production shape: one user-scope record plus one project-scope record per session worktree,
+# most of them for OTHER checkouts and naming other cache versions. Only this checkout's project
+# record applies, and it outranks the user record; the other checkouts' records are ignored.
+consumer_root="$(cd "${tmp}/consumer" && pwd)"
+jq -n --arg cur "${cur}" --arg other "${other_install}" --arg root "${consumer_root}" '{version: 2,
+  plugins: {"agentic-engineering@devantler-plugins": [
+    {scope: "user", installPath: $other},
+    {scope: "project", projectPath: "/elsewhere/wt-a", installPath: $other},
+    {scope: "project", projectPath: "/elsewhere/wt-b", installPath: "/elsewhere/cache/6.8.0"},
+    {scope: "project", projectPath: ($root + "/"), installPath: $cur}]}}' \
+  > "${reg_root}/installed_plugins.json"
+if out="$("${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --plugins-root "${reg_root}")"; then
+  case "${out}" in
+    *"${cur}"*) ok "this checkout's project-scope record outranks the user record and other checkouts' records" ;;
+    *) fail "resolved, but not from this checkout's project-scope record: ${out}" ;;
+  esac
+else
+  fail "a registry with one project record for this checkout must exit 0, got $?: ${out}"
+fi
+
+# No project record for this checkout: the single user-scope record decides, however many other
+# checkouts have their own records.
+jq -n --arg cur "${cur}" --arg other "${other_install}" '{version: 2,
+  plugins: {"agentic-engineering@devantler-plugins": [
+    {scope: "project", projectPath: "/elsewhere/wt-a", installPath: $other},
+    {scope: "user", installPath: $cur},
+    {scope: "project", projectPath: "/elsewhere/wt-b", installPath: "/elsewhere/cache/6.8.0"}]}}' \
+  > "${reg_root}/installed_plugins.json"
+if out="$("${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --plugins-root "${reg_root}")"; then
+  case "${out}" in
+    *"${cur}"*) ok "without a record for this checkout, the user-scope record decides" ;;
+    *) fail "resolved, but not from the user-scope record: ${out}" ;;
+  esac
+else
+  fail "a registry with one user record and only foreign project records must exit 0, got $?: ${out}"
+fi
+
+# Only foreign project records: nothing applies here, so the check is UNKNOWN, never a guess.
+jq -n --arg cur "${cur}" '{version: 2,
+  plugins: {"agentic-engineering@devantler-plugins": [
+    {scope: "project", projectPath: "/elsewhere/wt-a", installPath: $cur}]}}' \
+  > "${reg_root}/installed_plugins.json"
 set +e; out="$("${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --plugins-root "${reg_root}" 2>&1)"; rc=$?; set -e
-[ "${rc}" -eq 2 ] || fail "an ambiguous registry (2 install paths) must exit 2, got ${rc}: ${out}"
-ok "an ambiguous registry exits 2 rather than picking one"
+[ "${rc}" -eq 2 ] || fail "a registry with only other checkouts' records must exit 2, got ${rc}: ${out}"
+case "${out}" in
+  *"no user-scope or project-scope record"*) ok "only other checkouts' records exit 2, never borrowing one" ;;
+  *) fail "only other checkouts' records exited 2 for the wrong reason: ${out}" ;;
+esac
+
+# Two distinct project records for THIS checkout are still ambiguous: the user record does not
+# break the tie, because the more specific tier already decided and could not.
+jq -n --arg cur "${cur}" --arg other "${other_install}" --arg root "${consumer_root}" '{version: 2,
+  plugins: {"agentic-engineering@devantler-plugins": [
+    {scope: "user", installPath: $cur},
+    {scope: "project", projectPath: $root, installPath: $cur},
+    {scope: "local", projectPath: $root, installPath: $other}]}}' \
+  > "${reg_root}/installed_plugins.json"
+set +e; out="$("${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --plugins-root "${reg_root}" 2>&1)"; rc=$?; set -e
+[ "${rc}" -eq 2 ] || fail "two distinct records for this checkout must exit 2, got ${rc}: ${out}"
+ok "two distinct records for this checkout exit 2 rather than falling back to the user record"
 
 printf 'not json at all\n' > "${reg_root}/installed_plugins.json"
 set +e; out="$("${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --plugins-root "${reg_root}" 2>&1)"; rc=$?; set -e
