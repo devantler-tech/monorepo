@@ -65,8 +65,9 @@ bound by the *kagent credit lane* rules in `AGENTS.md` **Inference routing** (sp
 guide), maintainer decision 2026-11-07, monorepo#4866. Unlike the host lanes it has pre-inference
 controls by construction: kagent compiles the model fixed in the lane's `ModelConfig` into the
 runtime before any turn, and the API workspace spend limit is enforced by the provider. Neither is
-verified yet. The lane stays suspended until the canary run (monorepo#4869) records the effective
-model, the per-run cost and the maintainer's confirmation of the spend limit here.
+verified yet. The lane stays suspended until every sub-issue of monorepo#4866 is done and the
+canary run (monorepo#4869) records the effective model, the per-run cost and the maintainer's
+confirmation of the spend limit here.
 
 ## Native verification procedure
 
