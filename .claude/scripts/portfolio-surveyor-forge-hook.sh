@@ -41,12 +41,33 @@ registry="${plugins_root}/installed_plugins.json"
 [ -r "${registry}" ] ||
   die "cannot read runtime plugin registry: ${registry}"
 
-install_path="$(jq -er --arg id "${PLUGIN_ID}" '
-  [.plugins[$id][]?.installPath | select(type == "string" and length > 0)]
+# The registry holds one record per install SCOPE: every session worktree adds a
+# project-scope record keyed by its `projectPath`, and records for removed
+# worktrees stay behind. Requiring exactly one record therefore refused every
+# surveyor call from 2026-11-04 (14 of 14 dispatches; 178 records naming 5 cache
+# versions on 2026-11-08, monorepo#4835). Only records that apply to THIS
+# project count: a project- or local-scope record for REPO_ROOT or the
+# runtime's CLAUDE_PROJECT_DIR (the more specific scope), else the user-scope
+# record (no scope reads as user). Identical paths are one path; two distinct
+# paths in the deciding tier are still refused. Whichever path resolves, every
+# asset below must still match its pinned digest before anything runs.
+install_path="$(jq -er --arg id "${PLUGIN_ID}" \
+  --arg root "${REPO_ROOT}" --arg project_dir "${CLAUDE_PROJECT_DIR:-}" '
+  def trimmed: sub("/+$"; "");
+  [.plugins[$id][]?
+    | select(type == "object" and (.installPath | type) == "string"
+        and (.installPath | length) > 0)] as $all
+  | ([$root, $project_dir] | map(select(length > 0) | trimmed)) as $roots
+  | ([$all[] | select((.scope == "project" or .scope == "local")
+        and (((.projectPath // "") | trimmed) as $p | any($roots[]; . == $p)))
+      | .installPath] | unique) as $project
+  | ([$all[] | select(.scope == null or .scope == "user") | .installPath]
+      | unique) as $user
+  | (if ($project | length) > 0 then $project else $user end)
   | select(length == 1)
   | .[0]
 ' "${registry}" 2>/dev/null)" ||
-  die "runtime registry must name exactly one install path for ${PLUGIN_ID}"
+  die "runtime registry must name exactly one install path for ${PLUGIN_ID} that applies to ${REPO_ROOT}"
 [ -d "${install_path}" ] ||
   die "registered plugin install path does not exist: ${install_path}"
 
