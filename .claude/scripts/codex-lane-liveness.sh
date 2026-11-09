@@ -126,7 +126,8 @@ RECOVERY="
   run has settled."
 
 usage() {
-  sed -n '2,62p' "$0" | sed 's/^# \{0,1\}//'
+  # Print the whole leading comment header, so --help never truncates it when the header grows.
+  awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"
 }
 
 die_unknown() {
