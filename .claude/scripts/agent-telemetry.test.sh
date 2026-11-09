@@ -1075,6 +1075,48 @@ check "outcomes resolve the reviewed classifier from the active Claude install r
 OUT=$(claude_no_sibling_run); RC=$?
 check "outcomes fail closed when the active Claude install is unavailable" "$OUT" 'UNKNOWN (reviewed classifier unavailable)'
 nocheck "outcomes never substitute a sibling Codex cache for the active Claude install" "$OUT" 'GITHUB-MANAGED'
+# The registry keeps one project-scope record per session worktree, and records for removed
+# worktrees stay behind (228 records on 2026-11-09), so "exactly one record" never holds on the
+# host (monorepo#4883, the miner's half of #4873). Only the records that apply to THIS checkout
+# count: its project or local record, else the user-scope record. The digest check still decides.
+mkdir -p "$FIX/outcomes/claude-stale-install/scripts"
+printf '#!/usr/bin/env bash\necho stale\n' \
+  > "$FIX/outcomes/claude-stale-install/scripts/classify-default-branch-ci-runs.sh"
+chmod +x "$FIX/outcomes/claude-stale-install/scripts/classify-default-branch-ci-runs.sh"
+claude_registry_run() {
+  mkdir -p "$FIX/outcomes/claude-registry-$1/plugins"
+  printf '%s\n' "$2" > "$FIX/outcomes/claude-registry-$1/plugins/installed_plugins.json"
+  PATH="$FIX/outcomes/bin:$PATH" OUTCOMES_PRS="$FIX/outcomes/prs.json" \
+  OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-managed.tsv" \
+  OUTCOMES_MANAGED_HISTORY="$FIX/outcomes/managed-history-first.json" \
+  MONOREPO_DIR="$FIX/outcomes/repo" CLAUDE_PROJECTS_DIR="$FIX/outcomes/no-corpus" \
+  AGENT_TELEMETRY_RUNTIME=claude CLAUDE_CONFIG_DIR="$FIX/outcomes/claude-registry-$1" \
+  CODEX_HOME="$FIX/outcomes/no-codex" \
+  bash "$FIX/outcomes/cache-definition-root/.claude/scripts/agent-telemetry.sh" \
+    --section outcomes --instances "$FIX/outcomes/instances.json" 2>&1
+}
+GOOD="$FIX/outcomes/claude-install"; STALE="$FIX/outcomes/claude-stale-install"
+HERE="$FIX/outcomes/cache-definition-root"
+OUT=$(claude_registry_run user-among-projects "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
+  {\"scope\":\"user\",\"installPath\":\"$GOOD\"},
+  {\"scope\":\"project\",\"projectPath\":\"/elsewhere/a\",\"installPath\":\"$STALE\"},
+  {\"scope\":\"project\",\"projectPath\":\"/elsewhere/b\",\"installPath\":\"$GOOD\"}]}}"); RC=$?
+check "outcomes resolve the user-scope Claude record when other worktrees hold project records" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
+OUT=$(claude_registry_run project-wins "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
+  {\"scope\":\"user\",\"installPath\":\"$STALE\"},
+  {\"scope\":\"project\",\"projectPath\":\"$HERE/\",\"installPath\":\"$GOOD\"},
+  {\"scope\":\"local\",\"projectPath\":\"$HERE\",\"installPath\":\"$GOOD\"}]}}"); RC=$?
+check "outcomes prefer this checkout's project record over the user-scope record" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
+OUT=$(claude_registry_run project-stale "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
+  {\"scope\":\"user\",\"installPath\":\"$GOOD\"},
+  {\"scope\":\"project\",\"projectPath\":\"$HERE\",\"installPath\":\"$STALE\"}]}}"); RC=$?
+check "outcomes fail closed when this checkout's own install fails the reviewed digest" "$OUT" 'UNKNOWN (reviewed classifier unavailable)'
+nocheck "outcomes never fall back past this checkout's own install to the user record" "$OUT" 'GITHUB-MANAGED'
+OUT=$(claude_registry_run user-ambiguous "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
+  {\"scope\":\"user\",\"installPath\":\"$GOOD\"},
+  {\"installPath\":\"$STALE\"}]}}"); RC=$?
+check "outcomes fail closed when the deciding tier names two distinct install paths" "$OUT" 'UNKNOWN (reviewed classifier unavailable)'
+nocheck "outcomes never pick one of two distinct deciding-tier install paths" "$OUT" 'GITHUB-MANAGED'
 cat > "$FIX/outcomes/repo/.gitmodules" <<'EOF'
 [submodule "outside"]
   path = applications/outside

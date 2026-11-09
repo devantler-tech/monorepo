@@ -8098,11 +8098,27 @@ EOF
             plugins_root="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins"
             registry="$plugins_root/installed_plugins.json"
             [ -r "$registry" ] || return 1
-            installed_root=$(jq -er --arg id "$plugin_id" '
+            # The registry holds one record per install SCOPE: every session worktree adds a
+            # project-scope record keyed by its projectPath, and records for removed worktrees
+            # stay behind (228 on 2026-11-09). Requiring exactly one record therefore left every
+            # repository UNKNOWN on every Claude run (monorepo#4883, the miner's half of #4873).
+            # Only the records that apply to THIS checkout count: its project or local record,
+            # else the user-scope record (no scope reads as user). Identical paths are one path;
+            # two distinct paths in the deciding tier stay unresolved. The digest check decides.
+            installed_root=$(jq -er --arg id "$plugin_id" --arg root "$DEFINITION_ROOT" '
               .plugins[$id]
-              | select(type == "array" and length == 1)
-              | .[0].installPath
-              | select(type == "string" and length > 0)
+              | select(type == "array")
+              | [.[] | select(type == "object"
+                              and (.installPath | type) == "string"
+                              and (.installPath | length) > 0)] as $all
+              | ([$all[] | select((.scope == "project" or .scope == "local")
+                    and ((.projectPath // "") | sub("/+$"; "")) == ($root | sub("/+$"; "")))
+                  | .installPath] | unique) as $project
+              | ([$all[] | select(.scope == null or .scope == "user") | .installPath]
+                 | unique) as $user
+              | (if ($project | length) > 0 then $project else $user end)
+              | select(length == 1)
+              | .[0]
             ' "$registry" 2>/dev/null) || return 1
             ;;
           *) return 1 ;;
