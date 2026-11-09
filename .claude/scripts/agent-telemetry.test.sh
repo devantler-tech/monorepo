@@ -1100,7 +1100,7 @@ HERE="$FIX/outcomes/cache-definition-root"
 OUT=$(claude_registry_run user-among-projects "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
   {\"scope\":\"user\",\"installPath\":\"$GOOD\"},
   {\"scope\":\"project\",\"projectPath\":\"/elsewhere/a\",\"installPath\":\"$STALE\"},
-  {\"scope\":\"project\",\"projectPath\":\"/elsewhere/b\",\"installPath\":\"$GOOD\"}]}}"); RC=$?
+  {\"scope\":\"project\",\"projectPath\":\"/elsewhere/b\",\"installPath\":\"$STALE\"}]}}"); RC=$?
 check "outcomes resolve the user-scope Claude record when other worktrees hold project records" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
 OUT=$(claude_registry_run project-wins "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
   {\"scope\":\"user\",\"installPath\":\"$STALE\"},
@@ -1112,9 +1112,14 @@ OUT=$(claude_registry_run project-stale "{\"plugins\":{\"agentic-engineering@dev
   {\"scope\":\"project\",\"projectPath\":\"$HERE\",\"installPath\":\"$STALE\"}]}}"); RC=$?
 check "outcomes fail closed when this checkout's own install fails the reviewed digest" "$OUT" 'UNKNOWN (reviewed classifier unavailable)'
 nocheck "outcomes never fall back past this checkout's own install to the user record" "$OUT" 'GITHUB-MANAGED'
+# Both paths pass the digest, so picking EITHER one would report a managed result: only refusing
+# the ambiguous tier yields UNKNOWN, which proves the refusal and not a digest failure.
+GOOD2="$FIX/outcomes/claude-install-copy"
+mkdir -p "$GOOD2/scripts"
+cp -p "$GOOD/scripts/classify-default-branch-ci-runs.sh" "$GOOD2/scripts/"
 OUT=$(claude_registry_run user-ambiguous "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
   {\"scope\":\"user\",\"installPath\":\"$GOOD\"},
-  {\"installPath\":\"$STALE\"}]}}"); RC=$?
+  {\"installPath\":\"$GOOD2\"}]}}"); RC=$?
 check "outcomes fail closed when the deciding tier names two distinct install paths" "$OUT" 'UNKNOWN (reviewed classifier unavailable)'
 nocheck "outcomes never pick one of two distinct deciding-tier install paths" "$OUT" 'GITHUB-MANAGED'
 cat > "$FIX/outcomes/repo/.gitmodules" <<'EOF'
