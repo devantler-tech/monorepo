@@ -1075,6 +1075,105 @@ check "outcomes resolve the reviewed classifier from the active Claude install r
 OUT=$(claude_no_sibling_run); RC=$?
 check "outcomes fail closed when the active Claude install is unavailable" "$OUT" 'UNKNOWN (reviewed classifier unavailable)'
 nocheck "outcomes never substitute a sibling Codex cache for the active Claude install" "$OUT" 'GITHUB-MANAGED'
+# The registry keeps one project-scope record per session worktree, and records for removed
+# worktrees stay behind (228 records on 2026-11-09), so "exactly one record" never holds on the
+# host (monorepo#4883, the miner's half of #4873). Only the records that apply to THIS checkout
+# count: its project or local record, else the user-scope record. The digest check still decides.
+mkdir -p "$FIX/outcomes/claude-stale-install/scripts"
+printf '#!/usr/bin/env bash\necho stale\n' \
+  > "$FIX/outcomes/claude-stale-install/scripts/classify-default-branch-ci-runs.sh"
+chmod +x "$FIX/outcomes/claude-stale-install/scripts/classify-default-branch-ci-runs.sh"
+claude_registry_run() {
+  mkdir -p "$FIX/outcomes/claude-registry-$1/plugins"
+  printf '%s\n' "$2" > "$FIX/outcomes/claude-registry-$1/plugins/installed_plugins.json"
+  PATH="$FIX/outcomes/bin:$PATH" OUTCOMES_PRS="$FIX/outcomes/prs.json" \
+  OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-managed.tsv" \
+  OUTCOMES_MANAGED_HISTORY="$FIX/outcomes/managed-history-first.json" \
+  MONOREPO_DIR="$FIX/outcomes/repo" CLAUDE_PROJECTS_DIR="$FIX/outcomes/no-corpus" \
+  AGENT_TELEMETRY_RUNTIME=claude CLAUDE_CONFIG_DIR="$FIX/outcomes/claude-registry-$1" \
+  CODEX_HOME="$FIX/outcomes/no-codex" \
+  bash "$FIX/outcomes/cache-definition-root/.claude/scripts/agent-telemetry.sh" \
+    --section outcomes --instances "$FIX/outcomes/instances.json" 2>&1
+}
+GOOD="$FIX/outcomes/claude-install"; STALE="$FIX/outcomes/claude-stale-install"
+HERE="$FIX/outcomes/cache-definition-root"
+OUT=$(claude_registry_run user-among-projects "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
+  {\"scope\":\"user\",\"installPath\":\"$GOOD\"},
+  {\"scope\":\"project\",\"projectPath\":\"/elsewhere/a\",\"installPath\":\"$STALE\"},
+  {\"scope\":\"project\",\"projectPath\":\"/elsewhere/b\",\"installPath\":\"$STALE\"}]}}"); RC=$?
+check "outcomes resolve the user-scope Claude record when other worktrees hold project records" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
+OUT=$(claude_registry_run project-wins "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
+  {\"scope\":\"user\",\"installPath\":\"$STALE\"},
+  {\"scope\":\"project\",\"projectPath\":\"$HERE/\",\"installPath\":\"$GOOD\"},
+  {\"scope\":\"local\",\"projectPath\":\"$HERE\",\"installPath\":\"$GOOD\"}]}}"); RC=$?
+check "outcomes prefer this checkout's project record over the user-scope record" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
+OUT=$(claude_registry_run project-stale "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
+  {\"scope\":\"user\",\"installPath\":\"$GOOD\"},
+  {\"scope\":\"project\",\"projectPath\":\"$HERE\",\"installPath\":\"$STALE\"}]}}"); RC=$?
+check "outcomes fail closed when this checkout's own install fails the reviewed digest" "$OUT" 'UNKNOWN (reviewed classifier unavailable)'
+nocheck "outcomes never fall back past this checkout's own install to the user record" "$OUT" 'GITHUB-MANAGED'
+# Both paths pass the digest, so picking EITHER one would report a managed result: only refusing
+# the ambiguous tier yields UNKNOWN, which proves the refusal and not a digest failure.
+GOOD2="$FIX/outcomes/claude-install-copy"
+mkdir -p "$GOOD2/scripts"
+cp -p "$GOOD/scripts/classify-default-branch-ci-runs.sh" "$GOOD2/scripts/"
+OUT=$(claude_registry_run user-ambiguous "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
+  {\"scope\":\"user\",\"installPath\":\"$GOOD\"},
+  {\"installPath\":\"$GOOD2\"}]}}"); RC=$?
+check "outcomes fail closed when the deciding tier names two distinct install paths" "$OUT" 'UNKNOWN (reviewed classifier unavailable)'
+nocheck "outcomes never pick one of two distinct deciding-tier install paths" "$OUT" 'GITHUB-MANAGED'
+OUT=$(claude_registry_run project-ambiguous "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
+  {\"scope\":\"user\",\"installPath\":\"$GOOD\"},
+  {\"scope\":\"project\",\"projectPath\":\"$HERE\",\"installPath\":\"$GOOD\"},
+  {\"scope\":\"local\",\"projectPath\":\"$HERE\",\"installPath\":\"$GOOD2\"}]}}"); RC=$?
+check "outcomes fail closed when this checkout's own records name two distinct install paths" "$OUT" 'UNKNOWN (reviewed classifier unavailable)'
+nocheck "outcomes never fall through an ambiguous project tier to the user record" "$OUT" 'GITHUB-MANAGED'
+# The runtime records the PHYSICAL working directory; a checkout reached through a symlink
+# (/var -> /private/var on macOS) must still match its own project record.
+HERE_P=$(cd "$HERE" && pwd -P)
+OUT=$(claude_registry_run project-physical "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
+  {\"scope\":\"user\",\"installPath\":\"$STALE\"},
+  {\"scope\":\"project\",\"projectPath\":\"$HERE_P\",\"installPath\":\"$GOOD\"},
+  {\"scope\":\"project\",\"projectPath\":7,\"installPath\":\"$STALE\"}]}}"); RC=$?
+check "outcomes match this checkout's project record by its physical path, ignoring a malformed record" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
+# The classifier sources a sibling library, so a matching classifier beside an unreviewed library
+# is not authenticated: every pinned scripts/ asset must match beside it (#4883 review).
+printf '# reviewed library\n' > "$GOOD/scripts/json-stream.lib.sh"
+printf '# CHANGED library\n' > "$GOOD2/scripts/json-stream.lib.sh"
+if command -v sha256sum >/dev/null 2>&1; then
+  outcomes_lib_sha=$(sha256sum "$GOOD/scripts/json-stream.lib.sh" | awk '{print $1}')
+else
+  outcomes_lib_sha=$(shasum -a 256 "$GOOD/scripts/json-stream.lib.sh" | awk '{print $1}')
+fi
+cat > "$FIX/outcomes/desired-state-lib.json" <<JSON
+{"spec":{"source":{"requiredRuntimeAssets":[
+  {"path":"scripts/json-stream.lib.sh","sha256":"$outcomes_lib_sha","executable":false},
+  {"path":"scripts/classify-default-branch-ci-runs.sh","sha256":"$outcomes_classifier_sha","executable":true}
+]}}}
+JSON
+OUT=$(AGENT_CI_DESIRED_STATE="$FIX/outcomes/desired-state-lib.json" \
+      claude_registry_run lib-good "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
+  {\"scope\":\"user\",\"installPath\":\"$GOOD\"}]}}"); RC=$?
+check "outcomes accept an install whose pinned sibling library matches" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
+OUT=$(AGENT_CI_DESIRED_STATE="$FIX/outcomes/desired-state-lib.json" \
+      claude_registry_run lib-changed "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
+  {\"scope\":\"user\",\"installPath\":\"$GOOD2\"}]}}"); RC=$?
+check "outcomes fail closed when the classifier matches but its pinned sibling library does not" "$OUT" 'UNKNOWN (reviewed classifier unavailable)'
+nocheck "outcomes never run a matching classifier beside an unreviewed library" "$OUT" 'GITHUB-MANAGED'
+# A malformed scripts/ pin must reject the list, never be skipped while the rest is checked.
+cat > "$FIX/outcomes/desired-state-malformed-pin.json" <<JSON
+{"spec":{"source":{"requiredRuntimeAssets":[
+  {"path":"scripts/json-stream.lib.sh","sha256":"$outcomes_lib_sha","executable":false},
+  {"path":"scripts/unpinned-helper.sh","sha256":"not-a-digest","executable":true},
+  {"path":"scripts/classify-default-branch-ci-runs.sh","sha256":"$outcomes_classifier_sha","executable":true}
+]}}}
+JSON
+OUT=$(AGENT_CI_DESIRED_STATE="$FIX/outcomes/desired-state-malformed-pin.json" \
+      claude_registry_run malformed-pin "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
+  {\"scope\":\"user\",\"installPath\":\"$GOOD\"}]}}"); RC=$?
+check "outcomes fail closed when any pinned scripts/ asset is malformed" "$OUT" 'UNKNOWN (reviewed classifier unavailable)'
+nocheck "outcomes never skip a malformed pin and accept the rest" "$OUT" 'GITHUB-MANAGED'
+rm -f "$GOOD/scripts/json-stream.lib.sh" "$GOOD2/scripts/json-stream.lib.sh"
 cat > "$FIX/outcomes/repo/.gitmodules" <<'EOF'
 [submodule "outside"]
   path = applications/outside
