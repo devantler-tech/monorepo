@@ -27,6 +27,13 @@
 #                              [--automation ID] [--grace-seconds N]
 #                              [--stub-seconds N] [--preflight-seconds N] [--consecutive N]
 #                              [--now-ms MS] [--quiet]
+#        codex-lane-liveness.sh --resolve-store   (print the store a default run reads, or exit 2)
+#
+# Without --store, the store is the DECLARED one, `$CODEX_HOME/sqlite/codex.db` (monorepo#4787).
+# The runtime moved its scheduler there from `codex-dev.db` on 2026-11-02, and the old default kept
+# reading the abandoned file as an outage for six days. Another store beside it that recorded a
+# later dispatch makes the declaration stale, and one whose dispatches cannot be read makes it
+# ambiguous: both are UNKNOWN. Timestamps only ever refuse a store; they never choose one.
 #
 # Exit 0  every ACTIVE automation checked has a healthy run among its newest settled runs
 #      1  NOT PRODUCING — some automation's scheduled run is overdue, its newest runs are ALL stubs,
@@ -93,7 +100,10 @@ set -Eeuo pipefail
 # closed stdout would otherwise page an operator for a dead lane. Any unhandled error becomes 2.
 trap 'ec=$?; [ "$ec" -eq 0 ] || exit 2' ERR
 
-STORE="${CODEX_HOME:-$HOME/.codex}/sqlite/codex-dev.db"
+CODEX_ROOT="${CODEX_HOME:-$HOME/.codex}"
+DECLARED_STORE="$CODEX_ROOT/sqlite/codex.db"
+STORE=""
+RESOLVE_ONLY=0
 SESSIONS=""
 ARCHIVED_SESSIONS=""
 AUTOMATION=""
@@ -128,7 +138,8 @@ die_unknown() {
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
-    --store) [ "$#" -ge 2 ] || die_unknown "--store needs a value"; STORE="$2"; shift 2 ;;
+    --store) [ "$#" -ge 2 ] || die_unknown "--store needs a value"; [ -n "$2" ] || die_unknown "--store needs a non-empty value"; STORE="$2"; shift 2 ;;
+    --resolve-store) RESOLVE_ONLY=1; shift ;;
     --sessions) [ "$#" -ge 2 ] || die_unknown "--sessions needs a value"; SESSIONS="$2"; shift 2 ;;
     --archived-sessions) [ "$#" -ge 2 ] || die_unknown "--archived-sessions needs a value"; ARCHIVED_SESSIONS="$2"; shift 2 ;;
     --automation) [ "$#" -ge 2 ] || die_unknown "--automation needs a value"; AUTOMATION="$2"; AUTOMATION_SET=1; shift 2 ;;
@@ -172,6 +183,53 @@ else
 fi
 
 command -v sqlite3 >/dev/null 2>&1 || die_unknown "sqlite3 is not available"
+
+# store_ro <path> <sql> — one read-only query with the same pinned output knobs as `sq` below.
+store_ro() {
+  sqlite3 -batch -init /dev/null -noheader -list -separator '|' \
+    "file:${1}?mode=ro" "$2" 2>/dev/null || return 1
+}
+
+# store_marker <path> — the newest dispatch the store recorded, in epoch ms (0 when it recorded
+# none). Prints nothing and returns 1 when the store cannot be read as a scheduler store.
+store_marker() {
+  local has_runs marker
+  has_runs=$(store_ro "$1" "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'automation_runs';") || return 1
+  if [ "$has_runs" = 1 ]; then
+    marker=$(store_ro "$1" "SELECT MAX(COALESCE((SELECT MAX(last_run_at) FROM automations), 0), COALESCE((SELECT MAX(created_at) FROM automation_runs), 0));") || return 1
+  else
+    marker=$(store_ro "$1" "SELECT COALESCE(MAX(last_run_at), 0) FROM automations;") || return 1
+  fi
+  case "$marker" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$marker"
+}
+
+# resolve_store — the declared store, verified against every other scheduler store beside it.
+resolve_store() {
+  local declared_marker other has_automations other_marker
+  [ -f "$DECLARED_STORE" ] || die_unknown "declared scheduler store not found: $DECLARED_STORE"
+  [ -r "$DECLARED_STORE" ] || die_unknown "declared scheduler store is not readable: $DECLARED_STORE"
+  declared_marker=$(store_marker "$DECLARED_STORE") \
+    || die_unknown "declared scheduler store could not be read as a scheduler store: $DECLARED_STORE"
+  for other in "${DECLARED_STORE%/*}"/*.db; do
+    [ -e "$other" ] || continue
+    [ "$other" != "$DECLARED_STORE" ] || continue
+    has_automations=$(store_ro "$other" "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'automations';") \
+      || die_unknown "another store beside the declared one could not be read, so the declaration is ambiguous: $other"
+    [ "$has_automations" = 1 ] || continue
+    other_marker=$(store_marker "$other") \
+      || die_unknown "another scheduler store's dispatches could not be read, so the declaration is ambiguous: $other"
+    [ "$other_marker" -le "$declared_marker" ] \
+      || die_unknown "declared scheduler store is stale: $other recorded a later dispatch, so the runtime may have moved its scheduler; update the declared store"
+  done
+  STORE="$DECLARED_STORE"
+}
+
+[ -n "$STORE" ] || resolve_store
+if [ "$RESOLVE_ONLY" -eq 1 ]; then
+  printf '%s\n' "$STORE"
+  exit 0
+fi
 [ -f "$STORE" ] || die_unknown "scheduler store not found: $STORE"
 [ -r "$STORE" ] || die_unknown "scheduler store is not readable: $STORE"
 

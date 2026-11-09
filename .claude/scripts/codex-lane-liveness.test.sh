@@ -883,6 +883,101 @@ expect_out "cause=quota/billing" "the archive must be read even when the session
 run_check "$db" --archived-sessions
 expect_rc 2 "--archived-sessions without a value must be UNKNOWN"
 
+# --- the declared scheduler store (monorepo#4787) --------------------------------------------------
+# The runtime moved its scheduler from codex-dev.db to codex.db and left the old file behind with
+# its automations still ACTIVE. Reading that file reported a producing lane as stopped for six days.
+# Without --store, the check reads the declared codex.db and refuses it when another scheduler store
+# beside it is newer or unreadable. Timestamps may refuse a store, never pick one.
+run_default() {
+  set +e
+  OUT=$(CODEX_HOME="$1" bash "$SCRIPT" --sessions "$TMP/sessions" --now-ms "$NOW_MS" "${@:2}" 2>&1)
+  RC=$?
+  set -e
+}
+# add_obsolete <db> <id> <last_run_at_ms> — an abandoned store: ACTIVE, slot long overdue.
+add_obsolete() {
+  sqlite3 "$1" "INSERT INTO automations (id,status,rrule,next_run_at,last_run_at,updated_at)
+                VALUES ('$2','ACTIVE','RRULE:FREQ=DAILY',$(( $3 + 3600000 )),$3,$3);"
+}
+OLD_MS=$(( NOW_MS - 6 * 86400000 ))
+
+# Both stores present, the abandoned one ACTIVE and overdue: the declared healthy store decides.
+home=$TMP/home-migrated; mkdir -p "$home/sqlite"
+mkstore "$home/sqlite/codex-dev.db"; add_obsolete "$home/sqlite/codex-dev.db" lane-a "$OLD_MS"
+db=$home/sqlite/codex.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  900 yes
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 800 yes
+run_default "$home"
+expect_rc 0 "an abandoned store beside the declared one must not report a producing lane as stopped"
+expect_out "store=$db" "the default run must read the declared store"
+expect_out_not "overdue" "the abandoned store's overdue slot must not be read"
+run_default "$home" --resolve-store
+expect_rc 0 "--resolve-store must succeed on a verified declared store"
+expect_out "$db" "--resolve-store must print the declared store"
+
+# A store with no automations table beside it is not a scheduler store and is ignored.
+sqlite3 "$home/sqlite/codex-thread-summaries-dev.db" "CREATE TABLE summaries (id TEXT);"
+run_default "$home" --resolve-store
+expect_rc 0 "a non-scheduler database beside the declared store must not make it ambiguous"
+
+# The declared store genuinely overdue, the abandoned one older still: a real outage is reported.
+home=$TMP/home-overdue; mkdir -p "$home/sqlite"
+mkstore "$home/sqlite/codex-dev.db"; add_obsolete "$home/sqlite/codex-dev.db" lane-a "$OLD_MS"
+db=$home/sqlite/codex.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE $(( NOW_MS - GRACE_MS - 3600000 ))
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  900 yes
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 800 yes
+run_default "$home"
+expect_rc 1 "a genuinely overdue declared store must be NOT-PRODUCING"
+expect_out "overdue" "the real outage must be named as overdue"
+
+# The other store recorded a LATER dispatch: the runtime may have moved again, so UNKNOWN.
+home=$TMP/home-stale; mkdir -p "$home/sqlite"
+db=$home/sqlite/codex.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  900 yes
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 800 yes
+mkstore "$home/sqlite/codex-next.db"; add_obsolete "$home/sqlite/codex-next.db" lane-a $(( NOW_MS + 60000 ))
+run_default "$home"
+expect_rc 2 "a declared store older than another scheduler store must be UNKNOWN"
+expect_out "declared scheduler store is stale" "the refusal must say the declaration is stale"
+expect_out_not "OK  lane-a" "a stale declaration must not certify the lane"
+run_default "$home" --resolve-store
+expect_rc 2 "--resolve-store must refuse a stale declaration"
+
+# The newer dispatch only in the other store's run table still makes the declaration stale.
+home=$TMP/home-stale-runs; mkdir -p "$home/sqlite"
+db=$home/sqlite/codex.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  900 yes
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 800 yes
+mkstore "$home/sqlite/codex-next.db"; add_obsolete "$home/sqlite/codex-next.db" lane-a "$OLD_MS"
+sqlite3 "$home/sqlite/codex-next.db" "INSERT INTO automation_runs (thread_id,automation_id,status,created_at,updated_at)
+  VALUES ('t-next','lane-a','PENDING_REVIEW',$(( NOW_MS + 60000 )),$(( NOW_MS + 60000 )));"
+run_default "$home"
+expect_rc 2 "a later run recorded only in another store's run table must make the declaration stale"
+
+# Another file that cannot be read as a database makes the declaration ambiguous.
+home=$TMP/home-ambiguous; mkdir -p "$home/sqlite"
+db=$home/sqlite/codex.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  900 yes
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 800 yes
+printf 'not a database\n' > "$home/sqlite/codex-dev.db"
+run_default "$home"
+expect_rc 2 "an unreadable store beside the declared one must be UNKNOWN"
+expect_out "ambiguous" "the refusal must say the declaration is ambiguous"
+
+# Only the abandoned store exists: never fall back to it.
+home=$TMP/home-undeclared; mkdir -p "$home/sqlite"
+mkstore "$home/sqlite/codex-dev.db"; add_obsolete "$home/sqlite/codex-dev.db" lane-a "$OLD_MS"
+run_default "$home"
+expect_rc 2 "a missing declared store must be UNKNOWN, never a fallback to another file"
+expect_out "declared scheduler store not found" "the refusal must name the missing declared store"
+
+# An explicit --store is the caller's choice and is read as given.
+run_check "$home/sqlite/codex-dev.db" --resolve-store
+expect_rc 0 "--resolve-store with --store must print the caller's store"
+expect_out "codex-dev.db" "an explicit --store is never replaced by the declared one"
+run_check ""
+expect_rc 2 "an empty --store must be UNKNOWN, not a silent switch to the declared store"
+
 # Structural privacy: the outcome record is read for its classifier only.
 asserts=$(( asserts + 1 ))
 noncomment=$(grep -vE '^[[:space:]]*#' "$SCRIPT" || true)
@@ -892,7 +987,7 @@ fi
 
 echo "codex-lane-liveness.test.sh: $asserts assertions, $fails failure(s)"
 # A floor on the count, so deleting a whole section cannot leave the suite green and silent.
-if [ "$asserts" -lt 115 ]; then
+if [ "$asserts" -lt 170 ]; then
   echo "FAIL: only $asserts assertions ran — a section is missing" >&2
   exit 1
 fi

@@ -90,7 +90,9 @@ never a `find` or `grep -r` over `$HOME`, which times out. The drift check asks 
 engineer entries that have a pointer file on the host, so an entry that is not created yet does not
 leave the store unfound. Codex cadence and its
 dispatch marker come from the exact automation id's `rrule` and `last_run_at` fields in Codex's local
-`sqlite/codex-dev.db` scheduler store. The complete RRULE in `automation.toml` is a required thin
+`sqlite/codex.db` scheduler store, the declared store `codex-lane-liveness.sh --resolve-store`
+prints. Another scheduler store beside it that recorded a later dispatch, or one it cannot read,
+makes that store `UNKNOWN`; the abandoned `codex-dev.db` is never read as a fallback. The complete RRULE in `automation.toml` is a required thin
 pointer and must equal that scheduler record before the drift check reports `MATCH`;
 `automation.toml.updated_at` is only an apply marker and does not advance on dispatch. A missing or
 ambiguous store, missing baseline, marker that did not advance, or incomplete recurrence rule is

@@ -6647,7 +6647,16 @@ if want drift; then
   CLAUDE_IMPROVER_LOADER="${CLAUDE_IMPROVER_LOADER_PATH:-$HOME/.claude/scheduled-tasks/agent-improver/SKILL.md}"
   CODEX_LOADER="${CODEX_LOADER_PATH:-$CODEX_HOME/automations/daily-ai-engineer/automation.toml}"
   CODEX_IMPROVER_LOADER="${CODEX_IMPROVER_LOADER_PATH:-$CODEX_HOME/automations/agent-improver/automation.toml}"
-  CODEX_AUTOMATION_STORE="${CODEX_AUTOMATION_STORE_PATH:-$CODEX_HOME/sqlite/codex-dev.db}"
+  # The Codex scheduler store is the declared one, verified by the liveness check that reads it
+  # too (monorepo#4787): the runtime moved it from codex-dev.db to codex.db and left the old file
+  # behind. A store the check cannot verify stays a missing store here, so the drift lines are
+  # UNKNOWN rather than read from an abandoned file.
+  if [ -n "${CODEX_AUTOMATION_STORE_PATH:-}" ]; then
+    CODEX_AUTOMATION_STORE="$CODEX_AUTOMATION_STORE_PATH"
+  else
+    CODEX_AUTOMATION_STORE=$(CODEX_HOME="$CODEX_HOME" bash "$SCRIPT_DIR/codex-lane-liveness.sh" --resolve-store 2>/dev/null) \
+      || CODEX_AUTOMATION_STORE="$CODEX_HOME/sqlite/unverified-declared-scheduler-store"
+  fi
   AGENTS_MD="$MONOREPO/AGENTS.md"
 
   # A lane has more than one engineer entry (monorepo#4117, #4116). The Claude
