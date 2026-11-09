@@ -8084,7 +8084,12 @@ EOF
         assets_checked=0
         while IFS=$'\t' read -r asset_name asset_sha asset_exec; do
           case "$asset_name" in ''|*/*|.|..) return 1 ;; esac
-          asset_file="$candidate_dir/$asset_name"
+          # The classifier's own pin is the candidate itself, whatever an explicit override names it.
+          if [ "$asset_name" = classify-default-branch-ci-runs.sh ]; then
+            asset_file=$candidate
+          else
+            asset_file="$candidate_dir/$asset_name"
+          fi
           [ -f "$asset_file" ] && [ ! -L "$asset_file" ] || return 1
           if [ "$asset_exec" = true ]; then [ -x "$asset_file" ] || return 1; fi
           asset_actual=$(sha256_digest < "$asset_file" 2>/dev/null) || return 1
