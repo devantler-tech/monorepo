@@ -166,7 +166,7 @@ disagree, the scheduler is the defect — reconcile it there, per *Agent definit
 |---|---|---|
 | **Claude** — `claude/*`, hourly at `:50` | Every hour at `:20` and `:50` | 00:00, 06:00, 12:00, 18:00 |
 | **Codex** — `codex/*`, hourly at `:10` | Every hour at `:10` and `:40` | 03:00, 09:00, 15:00, 21:00 |
-| **kagent** — `kagent/*` | 1 capped run/day; suspended | — |
+| **kagent** — `kagent/*` | 1 run/day; suspended | — |
 
 Work [*The work-selection ladder*](#the-work-selection-ladder--one-ordering-checked-top-down-every-run)
 top-down every run and **keep going while actionable work remains** — the floor is at least one

@@ -89,3 +89,12 @@ The maintainer decided on 2026-11-07:
 - **A GitHub Actions workflow running Claude Code.** Simple to schedule, but it has no gateway
   credential injection, puts the model key in the job environment and does not exercise the
   platform-hosted sandbox the agents are moving to.
+
+## Amendments
+
+- **2026-11-09: no per-run time limit.** Decision 2 capped each run at about $6, enforced as a
+  20-minute cancel by the trigger. The maintainer replaced that cap: a run that is cancelled
+  mid-task wastes what it has already spent, and a real engineering run needs longer. A run now goes
+  until the agent ends it, and the Anthropic workspace spend limit equal to the credit is the lane's
+  only spend cap. The lane still runs at most once a day and stops when the credit runs out
+  ([platform#5964](https://github.com/devantler-tech/platform/pull/5964)).

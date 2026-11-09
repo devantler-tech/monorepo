@@ -109,16 +109,17 @@ inference API credential this deployment holds. It is bound by all of these:
 
 - **One model:** `claude-opus-5-5`, fixed in the lane's kagent `ModelConfig`. No fallback model,
   child, advisor, model switch or automatic routing, and No-Fable binds it like every other run.
-- **One capped run a day:** at most one scheduled run a day, each capped at about $6 of usage. An API
-  workspace spend limit equal to the credit is the hard stop; the maintainer confirms it before the
+- **One run a day, with no time limit:** at most one scheduled run a day, and a run goes until the
+  agent ends it. Cutting a run off mid-task wastes what it has already spent (maintainer decision
+  2026-11-09, which replaced the earlier cap of about $6 a run). An API workspace spend limit equal to
+  the credit is the lane's only spend cap and the hard stop; the maintainer confirms it before the
   schedule is resumed.
 - **A federated credential that stays out of the run:** there is no long-lived Anthropic API key.
   Outside the run's sandbox, the cluster's service-account identity is exchanged through Anthropic
   workload identity federation for a short-lived access token, and kagent's gateway injects it at
   egress. Neither token enters the run's sandbox, environment, logs or artifacts. The federation
   rule pins one service account and one audience.
-- **Exhaustion stops the lane:** reaching the per-run cap or the monthly limit ends the run and
-  queues its work. Nothing buys, tops up or reloads credit, raises the limit, or adds or switches a
+- **Exhaustion stops the lane:** reaching the monthly limit ends the run and queues its work. Nothing buys, tops up or reloads credit, raises the limit, or adds or switches a
   credential.
 - **In the run, a backstop:** the run stops on what it observes: a model ID other than
   `claude-opus-5-5`, or a billing route other than the credit.
