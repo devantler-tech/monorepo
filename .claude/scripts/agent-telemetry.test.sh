@@ -1160,6 +1160,19 @@ OUT=$(AGENT_CI_DESIRED_STATE="$FIX/outcomes/desired-state-lib.json" \
   {\"scope\":\"user\",\"installPath\":\"$GOOD2\"}]}}"); RC=$?
 check "outcomes fail closed when the classifier matches but its pinned sibling library does not" "$OUT" 'UNKNOWN (reviewed classifier unavailable)'
 nocheck "outcomes never run a matching classifier beside an unreviewed library" "$OUT" 'GITHUB-MANAGED'
+# A malformed scripts/ pin must reject the list, never be skipped while the rest is checked.
+cat > "$FIX/outcomes/desired-state-malformed-pin.json" <<JSON
+{"spec":{"source":{"requiredRuntimeAssets":[
+  {"path":"scripts/json-stream.lib.sh","sha256":"$outcomes_lib_sha","executable":false},
+  {"path":"scripts/unpinned-helper.sh","sha256":"not-a-digest","executable":true},
+  {"path":"scripts/classify-default-branch-ci-runs.sh","sha256":"$outcomes_classifier_sha","executable":true}
+]}}}
+JSON
+OUT=$(AGENT_CI_DESIRED_STATE="$FIX/outcomes/desired-state-malformed-pin.json" \
+      claude_registry_run malformed-pin "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
+  {\"scope\":\"user\",\"installPath\":\"$GOOD\"}]}}"); RC=$?
+check "outcomes fail closed when any pinned scripts/ asset is malformed" "$OUT" 'UNKNOWN (reviewed classifier unavailable)'
+nocheck "outcomes never skip a malformed pin and accept the rest" "$OUT" 'GITHUB-MANAGED'
 rm -f "$GOOD/scripts/json-stream.lib.sh" "$GOOD2/scripts/json-stream.lib.sh"
 cat > "$FIX/outcomes/repo/.gitmodules" <<'EOF'
 [submodule "outside"]

@@ -8063,21 +8063,25 @@ EOF
       # matching classifier alone does not authenticate the code that runs. Every pinned runtime
       # asset in scripts/ must sit beside the candidate as a regular, unlinked file with its pinned
       # digest (monorepo#4883 review). An unreadable or malformed pin list fails the candidate.
+      # A malformed scripts/ pin rejects the whole list rather than being skipped unchecked.
       pinned_script_assets=$(jq -er '
         [.spec.source.requiredRuntimeAssets[]?
-          | select((.path | type) == "string" and (.path | startswith("scripts/"))
-                   and (.sha256 | type) == "string" and (.sha256 | length) == 64)
-          | "\(.path | ltrimstr("scripts/"))\t\(.sha256)\t\(.executable == true)"]
+          | select(type == "object" and (.path | type) == "string"
+                   and (.path | startswith("scripts/")))]
         | select(length > 0)
+        | select(all(.[]; (.sha256 | type) == "string" and (.sha256 | test("^[0-9a-f]{64}$"))))
         | .[]
+        | "\(.path | ltrimstr("scripts/"))\t\(.sha256)\t\(.executable == true)"
       ' "$AGENT_CI_DESIRED_STATE" 2>/dev/null) || pinned_script_assets=""
+      pinned_script_asset_count=$(printf '%s\n' "$pinned_script_assets" | awk 'NF { n++ } END { print n + 0 }')
       classifier_matches_reviewed_digest() {
         candidate=$1
         [ -f "$candidate" ] && [ -x "$candidate" ] && [ ! -L "$candidate" ] || return 1
         candidate_sha=$(sha256_digest < "$candidate" 2>/dev/null) || return 1
         [ "$candidate_sha" = "$expected_classifier_sha" ] || return 1
-        [ -n "$pinned_script_assets" ] || return 1
+        [ -n "$pinned_script_assets" ] && [ "$pinned_script_asset_count" -gt 0 ] || return 1
         candidate_dir=$(dirname "$candidate")
+        assets_checked=0
         while IFS=$'\t' read -r asset_name asset_sha asset_exec; do
           case "$asset_name" in ''|*/*|.|..) return 1 ;; esac
           asset_file="$candidate_dir/$asset_name"
@@ -8085,10 +8089,13 @@ EOF
           if [ "$asset_exec" = true ]; then [ -x "$asset_file" ] || return 1; fi
           asset_actual=$(sha256_digest < "$asset_file" 2>/dev/null) || return 1
           [ "$asset_actual" = "$asset_sha" ] || return 1
-        done <<EOF_PINNED_ASSETS
+          assets_checked=$((assets_checked + 1))
+        done <<EOF_PINNED_ASSETS || return 1
 $pinned_script_assets
 EOF_PINNED_ASSETS
-        return 0
+        # Success only when every pinned asset was examined: a here-document that could not be
+        # created, or a short read, leaves the count behind and fails the candidate.
+        [ "$assets_checked" -eq "$pinned_script_asset_count" ]
       }
       resolve_reviewed_classifier() {
         if classifier_matches_reviewed_digest "$AGENT_CI_CLASSIFIER"; then
