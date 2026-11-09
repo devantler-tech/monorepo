@@ -1122,6 +1122,45 @@ OUT=$(claude_registry_run user-ambiguous "{\"plugins\":{\"agentic-engineering@de
   {\"installPath\":\"$GOOD2\"}]}}"); RC=$?
 check "outcomes fail closed when the deciding tier names two distinct install paths" "$OUT" 'UNKNOWN (reviewed classifier unavailable)'
 nocheck "outcomes never pick one of two distinct deciding-tier install paths" "$OUT" 'GITHUB-MANAGED'
+OUT=$(claude_registry_run project-ambiguous "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
+  {\"scope\":\"user\",\"installPath\":\"$GOOD\"},
+  {\"scope\":\"project\",\"projectPath\":\"$HERE\",\"installPath\":\"$GOOD\"},
+  {\"scope\":\"local\",\"projectPath\":\"$HERE\",\"installPath\":\"$GOOD2\"}]}}"); RC=$?
+check "outcomes fail closed when this checkout's own records name two distinct install paths" "$OUT" 'UNKNOWN (reviewed classifier unavailable)'
+nocheck "outcomes never fall through an ambiguous project tier to the user record" "$OUT" 'GITHUB-MANAGED'
+# The runtime records the PHYSICAL working directory; a checkout reached through a symlink
+# (/var -> /private/var on macOS) must still match its own project record.
+HERE_P=$(cd "$HERE" && pwd -P)
+OUT=$(claude_registry_run project-physical "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
+  {\"scope\":\"user\",\"installPath\":\"$STALE\"},
+  {\"scope\":\"project\",\"projectPath\":\"$HERE_P\",\"installPath\":\"$GOOD\"},
+  {\"scope\":\"project\",\"projectPath\":7,\"installPath\":\"$STALE\"}]}}"); RC=$?
+check "outcomes match this checkout's project record by its physical path, ignoring a malformed record" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
+# The classifier sources a sibling library, so a matching classifier beside an unreviewed library
+# is not authenticated: every pinned scripts/ asset must match beside it (#4883 review).
+printf '# reviewed library\n' > "$GOOD/scripts/json-stream.lib.sh"
+printf '# CHANGED library\n' > "$GOOD2/scripts/json-stream.lib.sh"
+if command -v sha256sum >/dev/null 2>&1; then
+  outcomes_lib_sha=$(sha256sum "$GOOD/scripts/json-stream.lib.sh" | awk '{print $1}')
+else
+  outcomes_lib_sha=$(shasum -a 256 "$GOOD/scripts/json-stream.lib.sh" | awk '{print $1}')
+fi
+cat > "$FIX/outcomes/desired-state-lib.json" <<JSON
+{"spec":{"source":{"requiredRuntimeAssets":[
+  {"path":"scripts/json-stream.lib.sh","sha256":"$outcomes_lib_sha","executable":false},
+  {"path":"scripts/classify-default-branch-ci-runs.sh","sha256":"$outcomes_classifier_sha","executable":true}
+]}}}
+JSON
+OUT=$(AGENT_CI_DESIRED_STATE="$FIX/outcomes/desired-state-lib.json" \
+      claude_registry_run lib-good "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
+  {\"scope\":\"user\",\"installPath\":\"$GOOD\"}]}}"); RC=$?
+check "outcomes accept an install whose pinned sibling library matches" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
+OUT=$(AGENT_CI_DESIRED_STATE="$FIX/outcomes/desired-state-lib.json" \
+      claude_registry_run lib-changed "{\"plugins\":{\"agentic-engineering@devantler-plugins\":[
+  {\"scope\":\"user\",\"installPath\":\"$GOOD2\"}]}}"); RC=$?
+check "outcomes fail closed when the classifier matches but its pinned sibling library does not" "$OUT" 'UNKNOWN (reviewed classifier unavailable)'
+nocheck "outcomes never run a matching classifier beside an unreviewed library" "$OUT" 'GITHUB-MANAGED'
+rm -f "$GOOD/scripts/json-stream.lib.sh" "$GOOD2/scripts/json-stream.lib.sh"
 cat > "$FIX/outcomes/repo/.gitmodules" <<'EOF'
 [submodule "outside"]
   path = applications/outside

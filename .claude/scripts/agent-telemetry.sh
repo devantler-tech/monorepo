@@ -8059,11 +8059,36 @@ EOF
         | select(length == 1)
         | .[0]
       ' "$AGENT_CI_DESIRED_STATE" 2>/dev/null) || expected_classifier_sha=""
+      # The classifier sources sibling files from its own directory (json-stream.lib.sh), so a
+      # matching classifier alone does not authenticate the code that runs. Every pinned runtime
+      # asset in scripts/ must sit beside the candidate as a regular, unlinked file with its pinned
+      # digest (monorepo#4883 review). An unreadable or malformed pin list fails the candidate.
+      pinned_script_assets=$(jq -er '
+        [.spec.source.requiredRuntimeAssets[]?
+          | select((.path | type) == "string" and (.path | startswith("scripts/"))
+                   and (.sha256 | type) == "string" and (.sha256 | length) == 64)
+          | "\(.path | ltrimstr("scripts/"))\t\(.sha256)\t\(.executable == true)"]
+        | select(length > 0)
+        | .[]
+      ' "$AGENT_CI_DESIRED_STATE" 2>/dev/null) || pinned_script_assets=""
       classifier_matches_reviewed_digest() {
         candidate=$1
         [ -f "$candidate" ] && [ -x "$candidate" ] && [ ! -L "$candidate" ] || return 1
         candidate_sha=$(sha256_digest < "$candidate" 2>/dev/null) || return 1
-        [ "$candidate_sha" = "$expected_classifier_sha" ]
+        [ "$candidate_sha" = "$expected_classifier_sha" ] || return 1
+        [ -n "$pinned_script_assets" ] || return 1
+        candidate_dir=$(dirname "$candidate")
+        while IFS=$'\t' read -r asset_name asset_sha asset_exec; do
+          case "$asset_name" in ''|*/*|.|..) return 1 ;; esac
+          asset_file="$candidate_dir/$asset_name"
+          [ -f "$asset_file" ] && [ ! -L "$asset_file" ] || return 1
+          if [ "$asset_exec" = true ]; then [ -x "$asset_file" ] || return 1; fi
+          asset_actual=$(sha256_digest < "$asset_file" 2>/dev/null) || return 1
+          [ "$asset_actual" = "$asset_sha" ] || return 1
+        done <<EOF_PINNED_ASSETS
+$pinned_script_assets
+EOF_PINNED_ASSETS
+        return 0
       }
       resolve_reviewed_classifier() {
         if classifier_matches_reviewed_digest "$AGENT_CI_CLASSIFIER"; then
@@ -8105,14 +8130,21 @@ EOF
             # Only the records that apply to THIS checkout count: its project or local record,
             # else the user-scope record (no scope reads as user). Identical paths are one path;
             # two distinct paths in the deciding tier stay unresolved. The digest check decides.
-            installed_root=$(jq -er --arg id "$plugin_id" --arg root "$DEFINITION_ROOT" '
+            # The runtime records the physical working directory; the checkout may be reached
+            # through a symlink (/var -> /private/var on macOS), so either spelling matches.
+            physical_root=$(cd "$DEFINITION_ROOT" && pwd -P) || return 1
+            installed_root=$(jq -er --arg id "$plugin_id" \
+                --arg root "$DEFINITION_ROOT" --arg proot "$physical_root" '
               .plugins[$id]
               | select(type == "array")
               | [.[] | select(type == "object"
                               and (.installPath | type) == "string"
                               and (.installPath | length) > 0)] as $all
+              | ([$root, $proot] | map(sub("/+$"; "")) | map(select(length > 0))) as $roots
               | ([$all[] | select((.scope == "project" or .scope == "local")
-                    and ((.projectPath // "") | sub("/+$"; "")) == ($root | sub("/+$"; "")))
+                    and (.projectPath | type) == "string"
+                    and ((.projectPath | sub("/+$"; "")) as $p
+                         | ($p | length) > 0 and any($roots[]; . == $p)))
                   | .installPath] | unique) as $project
               | ([$all[] | select(.scope == null or .scope == "user") | .installPath]
                  | unique) as $user
