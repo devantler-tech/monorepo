@@ -84,8 +84,9 @@ The `kagent` lane (instance `kagent-cluster`, monorepo#4866,
 ADR 0014 (`docs/adr/0014-kagent-claude-api-credit-lane.md`)) is not a host lane. It runs inside
 the platform cluster from a single Kubernetes `CronJob`, which invokes the lane's kagent agent once a
 day with the same thin prompt the host entries use. Its row in the AGENTS.md cadence table is its
-schedule. Its pacing is the monthly credit, not a subscription window: each run is capped at about
-$6, and the month's credit is the hard stop (spend and inference guide, *kagent credit lane*). So it
+schedule. Its pacing is the monthly credit, not a subscription window: a run has no time limit and
+goes until the agent ends it, and the month's credit is the hard stop (spend and inference guide,
+*kagent credit lane*). So it
 never reads `get_usage`, *Weekly pacing* does not apply, and neither do the two-entry rules below.
 While the `CronJob` is suspended the lane is not scheduled at all. The liveness, drift and telemetry
 checks do not watch it yet (monorepo#4870): treat it as unobserved, never as producing and never as
