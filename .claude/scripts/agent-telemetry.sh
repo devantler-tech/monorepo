@@ -4762,6 +4762,70 @@ if want efficiency; then
     all_files() { printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$'; }
     TIMEOUTS=$(all_files | while IFS= read -r f; do tool_result_failure_text "$f"; done \
                | grep -cE 'Command timed out after' || true)
+    # Timed-out command descriptions, and the timeouts the runtime moved to the
+    # background instead of killing.
+    # Correlated by tool_use_id, not a bare grep over every description. The
+    # previous version listed the most common descriptions in the corpus and
+    # labelled them "timeout victims" — in a window with zero timeouts it still
+    # produced a confident-looking list, which is worse than an empty one.
+    # STREAMED, one JSONL line at a time, so memory stays flat whatever the file
+    # size. A whole-file slurp would hold a multi-GB Codex transcript in memory
+    # (measured 6.3 GB RSS on one) to keep a few kilobytes of tool calls (#4793).
+    # jq emits each tool_use's description (T), each Bash tool_use id (B), each
+    # killed-form timed-out result's id (E), and each result id whose text
+    # STARTS with the runtime's moved-to-background phrase (M). awk joins them
+    # per file, and the last description for an id wins.
+    # The runtime no longer kills a foreground Bash call at its timeout: it
+    # moves the call to the background and returns a SUCCESSFUL result
+    # (is_error false) that begins "Command did not complete within its <N>s
+    # timeout and was moved to the background". The killed-form count above
+    # cannot see that, so it read 0 while such timeouts recurred daily
+    # (monorepo#4896). The moved form counts only for a Bash tool_use and only
+    # at the START of the result text, so prose or a file that merely quotes the
+    # phrase is not a timeout. It is its own series; the killed-form line keeps
+    # its history unchanged.
+    # Matching stays structural after JSON decoding, so
+    # escaped keys and timeout text split across blocks are still found.
+    # A read that fails makes the whole list, and the moved-form count, UNKNOWN
+    # (exit 2): a partial list beside the clean-empty footer would read as a
+    # complete observation (#4793 review). Rows are tagged D (description),
+    # M (one moved-form timeout) and U (unread) on a channel transcript text
+    # cannot reach: jq folds any newline inside a description, so every line
+    # awk prints starts with D or M.
+    # shellcheck disable=SC2016  # $t is a jq variable, not a shell expansion
+    TIMEOUT_DESC_JQ="$JQ_SHAPE_DEFS"'select(length>0)|(try fromjson catch empty)
+        | if .type=="assistant" then content_blocks | select(.type=="tool_use")
+            | ("T\t\(.id)\t" + ((.input?.description? // .input?.command? // "?") | .[0:60] | gsub("[\r\n]"; " "))),
+              (select(.name=="Bash") | "B\t\(.id)")
+          elif .type=="user" then content_blocks
+            | select(.type=="tool_result")
+            | (block_text) as $t
+            | if .is_error==true and ($t | test("Command timed out after")) then "E\t\(.tool_use_id)"
+              elif ($t | test("^Command did not complete within its [0-9][^ ]* timeout and was moved to the background")) then "M\t\(.tool_use_id)"
+              else empty end
+          else empty end
+      '
+    # shellcheck disable=SC2016  # $1/$2 are awk fields, not shell expansions
+    TIMEOUT_DESC_JOIN='$1=="T" { d[$2] = substr($0, length($2) + 4); next }
+      $1=="B" { b[$2] = 1; next }
+      $1=="E" { e[++n] = $2; next }
+      $1=="M" { m[++k] = $2 }
+      END {
+        for (i = 1; i <= n; i++) print "D\t" ((e[i] in d) ? d[e[i]] : "<unknown command>")
+        for (i = 1; i <= k; i++) if (m[i] in b) { print "M"; print "D\t" d[m[i]] }
+      }'
+    TIMEOUT_DESC_ROWS=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
+      jq -Rr "$TIMEOUT_DESC_JQ" "$f" 2>/dev/null | awk -F'\t' "$TIMEOUT_DESC_JOIN"
+      st=("${PIPESTATUS[@]}")
+      { [ "${st[0]}" -eq 0 ] && [ "${st[1]}" -eq 0 ]; } || echo U
+    done)
+    TIMEOUT_DESC_UNREAD=$(printf '%s\n' "$TIMEOUT_DESC_ROWS" | grep -c '^U$' || true)
+    [ "$TIMEOUT_DESC_UNREAD" = 0 ] && TIMEOUT_DESC_UNREAD=''
+    if [ -n "$TIMEOUT_DESC_UNREAD" ]; then
+      TIMEOUTS_MOVED=UNKNOWN
+    else
+      TIMEOUTS_MOVED=$(printf '%s\n' "$TIMEOUT_DESC_ROWS" | grep -c '^M$' || true)
+    fi
     # Interrupted tool calls are counted by the tagged walk below, in the same
     # read that lists each transcript's denied calls (#4823).
     # STRUCTURAL, not a text grep: only commands the agent actually ran count.
@@ -5248,6 +5312,7 @@ if want efficiency; then
     SLEEPS=$((SLEEP_FG + SLEEP_BG + SLEEP_CX))
     echo "  [BOTH instances: ${SF_COUNT} Claude + ${CX_COUNT} Codex sessions]"
     echo "  bash timeouts .............. ${TIMEOUTS}   (each = a foreground block that produced nothing)"
+    echo "  bash timeouts backgrounded . ${TIMEOUTS_MOVED}   (runtime moved the call to the background at its timeout; separate series, #4896)"
     echo "  interrupted tool calls ..... ${INTERRUPT}"
     # Extraction canary. Every number in this section derives from TAGGED,
     # so an extractor that failed makes them all read 0 — indistinguishable
@@ -5393,41 +5458,8 @@ if want efficiency; then
     echo "          or as a violation."
     echo
     echo "  descriptions of commands that ACTUALLY timed out:"
-    # Correlated by tool_use_id, not a bare grep over every description. The
-    # previous version listed the most common descriptions in the corpus and
-    # labelled them "timeout victims" — in a window with zero timeouts it still
-    # produced a confident-looking list, which is worse than an empty one.
-    # STREAMED, one JSONL line at a time, so memory stays flat whatever the file
-    # size. A whole-file slurp would hold a multi-GB Codex transcript in memory
-    # (measured 6.3 GB RSS on one) to keep a few kilobytes of tool calls (#4793).
-    # jq emits each tool_use's description (T) and each timed-out result's id
-    # (E); awk joins them per file, and the last description for an id wins.
-    # Matching stays structural after JSON decoding, so
-    # escaped keys and timeout text split across blocks are still found.
-    # A read that fails makes the whole list UNKNOWN (exit 2): a partial list
-    # beside the clean-empty footer would read as a complete observation
-    # (#4793 review). Rows are tagged D (description) and U (unread) on a
-    # channel transcript text cannot reach: jq folds any newline inside a
-    # description, so every line awk prints starts with D.
-    TIMEOUT_DESC_JQ="$JQ_SHAPE_DEFS"'select(length>0)|(try fromjson catch empty)
-        | if .type=="assistant" then content_blocks | select(.type=="tool_use")
-            | "T\t\(.id)\t" + ((.input?.description? // .input?.command? // "?") | .[0:60] | gsub("[\r\n]"; " "))
-          elif .type=="user" then content_blocks
-            | select(.type=="tool_result" and .is_error==true)
-            | select((block_text) | test("Command timed out after"))
-            | "E\t\(.tool_use_id)"
-          else empty end
-      '
-    # shellcheck disable=SC2016  # $1/$2 are awk fields, not shell expansions
-    TIMEOUT_DESC_JOIN='$1=="T" { d[$2] = substr($0, length($2) + 4); next }
-      $1=="E" { e[++n] = $2 }
-      END { for (i = 1; i <= n; i++) print "D\t" ((e[i] in d) ? d[e[i]] : "<unknown command>") }'
-    TIMEOUT_DESC_ROWS=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      jq -Rr "$TIMEOUT_DESC_JQ" "$f" 2>/dev/null | awk -F'\t' "$TIMEOUT_DESC_JOIN"
-      st=("${PIPESTATUS[@]}")
-      { [ "${st[0]}" -eq 0 ] && [ "${st[1]}" -eq 0 ]; } || echo U
-    done)
-    if TIMEOUT_DESC_UNREAD=$(printf '%s\n' "$TIMEOUT_DESC_ROWS" | grep -c '^U$'); then
+    # Rows were read beside the counts above (TIMEOUT_DESC_ROWS).
+    if [ -n "$TIMEOUT_DESC_UNREAD" ]; then
       echo "    UNKNOWN — ${TIMEOUT_DESC_UNREAD} transcript(s) could not be read; the list is withheld"
       main_rc=2
     else
