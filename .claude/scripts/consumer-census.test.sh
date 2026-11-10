@@ -6,6 +6,8 @@
 # one that does not use it, one that is not populated, and one whose origin cannot be fetched. It
 # proves a hit is found on the fetched tip (not the working tree), a miss is reported only after the
 # control passes, and an unpopulated or unfetchable repository is UNKNOWN (exit 2), never zero.
+# An offline `gh` stub proves an archived repository is ARCHIVED and not searched, and an unreadable
+# archive state or a non-GitHub URL is UNKNOWN.
 # TEST_BASH=/bin/bash runs the helper under macOS's bash 3.2.
 #
 # Exit codes: 0 every assertion held · 1 an assertion failed
@@ -66,19 +68,38 @@ g -C "$work/root/unreachable" remote set-url origin "$work/origins/missing.git"
 cat > "$work/root/.gitmodules" <<'EOF'
 [submodule "consumer"]
 	path = consumer
-	url = ../consumer.git
+	url = git@github.com:fixture-org/consumer.git
 [submodule "bystander"]
 	path = bystander
-	url = ../bystander.git
+	url = git@github.com:fixture-org/bystander.git
 [submodule "empty"]
 	path = empty
-	url = ../empty.git
+	url = git@github.com:fixture-org/empty.git
 [submodule "unreachable"]
 	path = unreachable
-	url = ../unreachable.git
+	url = git@github.com:fixture-org/unreachable.git
 EOF
 
 symbol='.github/workflows/shared.yaml'
+
+# An offline `gh`: archive state comes from $work/gh-state (`<owner>/<repo> true|false|error`); any
+# repository not listed is not archived. Every call is logged, so the test needs no network.
+mkdir -p "$work/bin"
+: > "$work/gh-state"
+cat > "$work/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${GH_STUB_LOG:?}"
+[ "$1" = api ] || exit 9
+slug=${2#repos/}
+state=$(awk -v s="$slug" '$1 == s { print $2 }' "${GH_STUB_STATE:?}")
+case "$state" in
+  true) echo true ;;
+  error) echo 'HTTP 403: API rate limit exceeded' >&2; exit 1 ;;
+  *) echo false ;;
+esac
+EOF
+chmod +x "$work/bin/gh"
+export PATH="$work/bin:$PATH" GH_STUB_LOG="$work/gh-calls" GH_STUB_STATE="$work/gh-state"
 
 # run <args...>: sets rc and leaves stdout in $work/out
 run() {
@@ -99,7 +120,7 @@ if grep -q 'shared.yaml' "$work/root/consumer/workflow.yaml"; then
 else
   pass "fixture: the hit exists only on origin, so it came from the fetched tip"
 fi
-if has "$(printf 'SUMMARY\thits=1\trepos-with-hits=1\tnone=0\tunknown=0')"; then
+if has "$(printf 'SUMMARY\thits=1\trepos-with-hits=1\tnone=0\tarchived=0\tunknown=0')"; then
   pass "found symbol: summary counts one hit"
 else
   fail "found symbol: summary wrong: $(cat "$work/out")"
@@ -120,7 +141,7 @@ g clone -q "$work/origins/binary.git" "$work/other-binary" 2>/dev/null
 cp "$work/other-bin" "$work/other-binary/data.bin"
 g -C "$work/other-binary" commit -q -a -m binary-only
 g -C "$work/other-binary" push -q origin HEAD:main
-printf '[submodule "binary"]\n\tpath = binary\n\turl = ../binary.git\n' >> "$work/root/.gitmodules"
+printf '[submodule "binary"]\n\tpath = binary\n\turl = git@github.com:fixture-org/binary.git\n' >> "$work/root/.gitmodules"
 run --only binary "$symbol"
 if [ "$rc" -eq 2 ] && has "$(printf 'UNKNOWN\tbinary\tcontrol query found no text')"; then
   pass "failed control: a tree with no searchable text is UNKNOWN"
@@ -146,7 +167,7 @@ fi
 
 # --- the whole census: hits still print, but one UNKNOWN makes it incomplete ---------------------
 run "$symbol"
-if [ "$rc" -eq 2 ] && has "$(printf 'HIT\tconsumer\t')" && has "$(printf 'SUMMARY\thits=1\trepos-with-hits=1\tnone=1\tunknown=3')"; then
+if [ "$rc" -eq 2 ] && has "$(printf 'HIT\tconsumer\t')" && has "$(printf 'SUMMARY\thits=1\trepos-with-hits=1\tnone=1\tarchived=0\tunknown=3')"; then
   pass "full census: hits printed, exit 2 while any repository is UNKNOWN"
 else
   fail "full census: rc=$rc out=$(cat "$work/out")"
@@ -160,7 +181,48 @@ else
   fail "--no-fetch: rc=$rc out=$(cat "$work/out")"
 fi
 
-# --- usage errors are exit 2 --------------------------------------------------------------------
+# --- archived repositories are outside the census; an unreadable state is UNKNOWN ---------------
+printf 'fixture-org/consumer true\n' > "$work/gh-state"
+: > "$work/gh-calls"
+run --only consumer "$symbol"
+if [ "$rc" -eq 0 ] && has "$(printf 'ARCHIVED\tconsumer\tfixture-org/consumer')" && ! has 'HIT' \
+  && has "$(printf 'SUMMARY\thits=0\trepos-with-hits=0\tnone=0\tarchived=1\tunknown=0')"; then
+  pass "archived: reported ARCHIVED and not searched, even though it uses the symbol"
+else
+  fail "archived: rc=$rc out=$(cat "$work/out")"
+fi
+if grep -qxF 'api repos/fixture-org/consumer --jq .archived' "$work/gh-calls"; then
+  pass "archived: the state was read live, one call for the repository"
+else
+  fail "archived: unexpected gh calls: $(cat "$work/gh-calls")"
+fi
+
+printf 'fixture-org/consumer false\n' > "$work/gh-state"
+run --only consumer "$symbol"
+if [ "$rc" -eq 0 ] && has "$(printf 'HIT\tconsumer\t')" && ! has 'ARCHIVED'; then
+  pass "not archived: searched as usual"
+else
+  fail "not archived: rc=$rc out=$(cat "$work/out")"
+fi
+
+printf 'fixture-org/consumer error\n' > "$work/gh-state"
+run --only consumer "$symbol"
+if [ "$rc" -eq 2 ] && has "$(printf 'UNKNOWN\tconsumer\tarchive state of fixture-org/consumer could not be read')" && ! has 'HIT'; then
+  pass "unreadable archive state (403): UNKNOWN and exit 2, never assumed not archived"
+else
+  fail "unreadable archive state: rc=$rc out=$(cat "$work/out")"
+fi
+: > "$work/gh-state"
+
+printf '[submodule "elsewhere"]\n\tpath = elsewhere\n\turl = https://gitlab.example.invalid/x/y.git\n' >> "$work/root/.gitmodules"
+run --only elsewhere "$symbol"
+if [ "$rc" -eq 2 ] && has "$(printf 'UNKNOWN\telsewhere\tarchive state unknown: not a GitHub submodule URL')"; then
+  pass "non-GitHub URL: archive state cannot be read, so UNKNOWN"
+else
+  fail "non-GitHub URL: rc=$rc out=$(cat "$work/out")"
+fi
+
+# --- usage errors are exit 2--------------------------------------------------------------------
 run
 if [ "$rc" -eq 2 ]; then pass "usage: no symbol is exit 2"; else fail "usage: no symbol gave $rc"; fi
 run --only nosuch "$symbol"

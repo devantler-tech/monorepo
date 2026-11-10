@@ -8,7 +8,12 @@
 #
 # For each submodule in `.gitmodules` it fetches the default branch's tip (the working tree may be
 # stale) and searches that commit for SYMBOL as a fixed string. It never changes a working tree, an
-# index or a branch; the only write is the fetched remote-tracking ref. It makes no GitHub API call.
+# index or a branch; the only write is the fetched remote-tracking ref.
+#
+# The portfolio contract keeps archived repositories out of every census, so each submodule's archive
+# state is read live first (one `gh api repos/<owner>/<repo>` call each): an archived repository is
+# ARCHIVED and not searched, and one whose state cannot be read is UNKNOWN. Nothing else calls the
+# GitHub API.
 #
 # Usage: consumer-census.sh [--root DIR] [--only PATH]... [--no-fetch] SYMBOL
 #   --root DIR    the monorepo checkout whose `.gitmodules` lists the submodules (default: this one)
@@ -19,7 +24,8 @@
 #   HIT      <path> <file>:<line> <text>          a consumer (text cut at 200 characters)
 #   NONE     <path> <branch>@<sha> control-passed  searched, no hit, and the control read the tree
 #   UNKNOWN  <path> <reason>                       not populated, no remote, fetch or search failed
-#   SUMMARY  hits=<n> repos-with-hits=<n> none=<n> unknown=<n>
+#   ARCHIVED <path> <owner>/<repo>                 archived on GitHub, so not part of the census
+#   SUMMARY  hits=<n> repos-with-hits=<n> none=<n> archived=<n> unknown=<n>
 # A zero count is only ever printed as NONE, after a control query (any text line in the same commit)
 # proves the search actually read that tree; a repository that could not be searched is UNKNOWN.
 #
@@ -57,11 +63,11 @@ if [ ! -f "$root/.gitmodules" ]; then
   exit 2
 fi
 
-if ! paths=$(git config -f "$root/.gitmodules" --get-regexp '^submodule\..*\.path$'); then
+if ! pathlines=$(git config -f "$root/.gitmodules" --get-regexp '^submodule\..*\.path$'); then
   echo "consumer-census: .gitmodules lists no submodule path" >&2
   exit 2
 fi
-paths=$(printf '%s\n' "$paths" | awk '{ print $2 }')
+paths=$(printf '%s\n' "$pathlines" | awk '{ print $2 }')
 if [ "${#only[@]}" -gt 0 ]; then
   for want in "${only[@]}"; do
     if ! grep -qxF -- "$want" <<<"$paths"; then
@@ -76,11 +82,38 @@ hits=0
 repos_with_hits=0
 none=0
 unknown=0
+archived=0
 unknown_line() { printf 'UNKNOWN\t%s\t%s\n' "$1" "$2"; unknown=$((unknown + 1)); }
+
+# slug_for <path>: owner/repo from the submodule's .gitmodules URL, or nothing for a non-GitHub URL.
+slug_for() {
+  local key name url
+  key=$(printf '%s\n' "$pathlines" | awk -v p="$1" '$2 == p && !found { print $1; found = 1 }')
+  name=${key#submodule.}
+  name=${name%.path}
+  url=$(git config -f "$root/.gitmodules" --get "submodule.${name}.url" 2>/dev/null) || return 0
+  url=${url%.git}
+  case "$url" in
+    git@github.com:*/*) printf '%s\n' "${url#git@github.com:}" ;;
+    https://github.com/*/*) printf '%s\n' "${url#https://github.com/}" ;;
+  esac
+}
 
 while IFS= read -r path; do
   [ -n "$path" ] || continue
   dir="$root/$path"
+  # Archived repositories are outside every census (root AGENTS.md); an unreadable state is UNKNOWN.
+  slug=$(slug_for "$path")
+  if [ -z "$slug" ]; then
+    unknown_line "$path" "archive state unknown: not a GitHub submodule URL"
+    continue
+  fi
+  state=$(gh api "repos/${slug}" --jq .archived 2>/dev/null) || state=""
+  case "$state" in
+    true) printf 'ARCHIVED\t%s\t%s\n' "$path" "$slug"; archived=$((archived + 1)); continue ;;
+    false) ;;
+    *) unknown_line "$path" "archive state of ${slug} could not be read"; continue ;;
+  esac
   # Populated = the directory is the top of its own work tree. An empty submodule directory
   # resolves to the monorepo itself, which would search the wrong repository.
   top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null) || top=""
@@ -147,7 +180,7 @@ done <<EOF
 $paths
 EOF
 
-printf 'SUMMARY\thits=%s\trepos-with-hits=%s\tnone=%s\tunknown=%s\n' "$hits" "$repos_with_hits" "$none" "$unknown"
+printf 'SUMMARY\thits=%s\trepos-with-hits=%s\tnone=%s\tarchived=%s\tunknown=%s\n' "$hits" "$repos_with_hits" "$none" "$archived" "$unknown"
 if [ "$unknown" -gt 0 ]; then
   exit 2
 fi
