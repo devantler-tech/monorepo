@@ -340,6 +340,7 @@ coderabbit-summary-verdict.test.sh|
 coderabbit-comment-verdict.test.sh|
 coderabbit-review-verdict.test.sh|
 local-review-verdict.test.sh|
+local-review-payload.test.sh|
 managed-run-streak.test.sh|
 pr-unresolved-threads.test.sh|
 review-no-gate-guard.test.sh|

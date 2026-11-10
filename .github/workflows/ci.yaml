@@ -904,6 +904,8 @@ jobs:
               - '.claude/scripts/review-no-gate-guard.test.sh'
               - '.claude/scripts/local-review-verdict.sh'
               - '.claude/scripts/local-review-verdict.test.sh'
+              - '.claude/scripts/local-review-payload.sh'
+              - '.claude/scripts/local-review-payload.test.sh'
               - '.claude/scripts/managed-run-streak.sh'
               - '.claude/scripts/managed-run-streak.test.sh'
               # The captured review bodies the contract test asserts against. A
@@ -3004,6 +3006,9 @@ jobs:
       # Hermetic: judges captured local review rounds, no API call.
       - name: Verify the local review round verdict classifier
         run: bash .claude/scripts/local-review-verdict.test.sh
+      # Hermetic: builds fallback review payloads and judges them with the classifier above.
+      - name: Verify the local review round payload builder
+        run: bash .claude/scripts/local-review-payload.test.sh
       # Hermetic: judges captured and synthetic managed-run histories, no API call.
       - name: Verify the GitHub-managed run streak classifier
         run: bash .claude/scripts/managed-run-streak.test.sh
