@@ -817,7 +817,7 @@ measurement the first valuable slice when evidence is missing. Record `last_valu
    service failure advances to the next lane) — plus the **last-resort
    local review round** when no lane will deliver at that head — unavailable, OR rate/billing limited — reviewed with your own review skills and posted as a **real GitHub Review
    with inline comments** (`event: COMMENT`, disclosure line, `## Self-review (fallback` heading,
-   verdict line) so the sibling agent can see and act on it, incremental re-reviews,
+   verdict line: built by `local-review-payload.sh`, never by hand) so the sibling agent can see and act on it, incremental re-reviews,
    green-while-draft as the promotion precondition, the **dependency-PR self-progressing/intervention boundary**, and the trusted programmed
    **bot carve-out** — exact-classifier-matched exit-0 agent-skills updater PRs and tap cask PRs
    are check-gated, need NO review, and are never review-chased;
