@@ -81,6 +81,7 @@ jobs:
       security-advisory-sweep: ${{ steps.filter.outputs.security-advisory-sweep }}
       platform-live-health: ${{ steps.filter.outputs.platform-live-health }}
       lane-draft-count: ${{ steps.filter.outputs.lane-draft-count }}
+      kagent-lane-runs: ${{ steps.filter.outputs.kagent-lane-runs }}
       delivered-open-candidates: ${{ steps.filter.outputs.delivered-open-candidates }}
       improver-role-disclosure: ${{ steps.filter.outputs.improver-role-disclosure }}
       merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
@@ -147,6 +148,8 @@ jobs:
               - '.claude/scripts/finops-snapshot.sh'
               - '.claude/scripts/flow-scorecard.sh'
               - '.claude/scripts/flow-scorecard.test.sh'
+              - '.claude/scripts/kagent-lane-runs.sh'
+              - '.claude/scripts/kagent-lane-runs.test.sh'
               - '.claude/scripts/platform-live-health.sh'
               - '.claude/scripts/platform-live-health.test.sh'
               - '.claude/scripts/prod-kube-context.sh'
@@ -225,6 +228,8 @@ jobs:
               - '.claude/scripts/agent-telemetry.sh'
               - '.claude/scripts/agent-telemetry.test.sh'
               - '.claude/scripts/agent-telemetry-outcome-scope.test.sh'
+              # The drift section reads the kagent lane's cadence row through this reader.
+              - '.claude/scripts/kagent-lane-runs.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -871,6 +876,14 @@ jobs:
               - '.claude/scripts/lane-draft-count.test.sh'
               # The run loop's fail-closed intake check is pinned by this suite.
               - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - '.github/workflows/ci.yaml'
+            kagent-lane-runs:
+              # The suite reads the real kagent row of the AGENTS.md cadence table, and the
+              # reader resolves its context through prod-kube-context.sh.
+              - 'AGENTS.md'
+              - '.claude/scripts/kagent-lane-runs.sh'
+              - '.claude/scripts/kagent-lane-runs.test.sh'
+              - '.claude/scripts/prod-kube-context.sh'
               - '.github/workflows/ci.yaml'
             self-review-contract:
               - 'AGENTS.md'
@@ -2946,6 +2959,28 @@ jobs:
       - name: Verify the lane draft count
         run: bash .claude/scripts/lane-draft-count.test.sh
 
+  test-kagent-lane-runs:
+    name: Test kagent lane runs reader
+    needs: changes
+    if: needs.changes.outputs.kagent-lane-runs == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # A stub kubectl serves recorded rclone folder indexes -- no cluster, no kubeconfig, no
+      # network. The macOS leg runs in test-macos-batch-2, because the Agent Improver reads the
+      # store from macOS, where awk and date are the BSD ones.
+      - name: Verify the kagent lane runs reader
+        run: bash .claude/scripts/kagent-lane-runs.test.sh
+
   test-plugin-definition-refresh:
     name: Test plugin definition refresh
     needs: changes
@@ -3494,6 +3529,7 @@ jobs:
           bash .claude/scripts/squash-closing-keywords.test.sh || batch_status=1
           bash .claude/scripts/prod-kube-context.test.sh || batch_status=1
           bash .claude/scripts/flow-scorecard.test.sh || batch_status=1
+          bash .claude/scripts/kagent-lane-runs.test.sh || batch_status=1
           exit "$batch_status"
 
   # These short cases share setup; every child runs and a failure fails the batch.
@@ -3655,6 +3691,7 @@ jobs:
       - test-security-advisory-sweep
       - test-platform-live-health
       - test-lane-draft-count
+      - test-kagent-lane-runs
       - test-delivered-open-candidates
       - test-self-review-contract
       - test-fix-hint-contract
@@ -3764,6 +3801,7 @@ jobs:
             ${{ needs.test-security-advisory-sweep.result }}
             ${{ needs.test-platform-live-health.result }}
             ${{ needs.test-lane-draft-count.result }}
+            ${{ needs.test-kagent-lane-runs.result }}
             ${{ needs.test-delivered-open-candidates.result }}
             ${{ needs.test-self-review-contract.result }}
             ${{ needs.test-fix-hint-contract.result }}

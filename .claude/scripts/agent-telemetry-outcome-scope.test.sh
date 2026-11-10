@@ -22,10 +22,13 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir -p "$FIX/definition/.claude/scripts" "$FIX/definition/.claude/guides" \
-  "$FIX/bin" "$FIX/corpus/.git" "$FIX/home"
+  "$FIX/definition/.claude/plugin-consumption" "$FIX/bin" "$FIX/corpus/.git" "$FIX/home"
 cp "$SCRIPT_DIR/agent-telemetry.sh" "$FIX/definition/.claude/scripts/"
 cp "$SOURCE_ROOT/.claude/guides/work-selection.md" "$SOURCE_ROOT/.claude/guides/egress-and-privacy.md" \
   "$FIX/definition/.claude/guides/"
+# The default instance registry sits beside the script in a checkout. Without it the transcript
+# runs below would exit UNKNOWN for the unreadable registry alone, not for the scope under test.
+cp "$SOURCE_ROOT/.claude/plugin-consumption/agent-instances.json" "$FIX/definition/.claude/plugin-consumption/"
 awk '
   { print }
   /^## Portfolio map$/ { inside = 1 }

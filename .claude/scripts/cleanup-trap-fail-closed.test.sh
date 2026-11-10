@@ -322,6 +322,8 @@ security-advisory-sweep.test.sh|
 claude-task-live-runs.test.sh|
 delivered-open-candidates.test.sh|
 lane-draft-count.test.sh|
+kagent-lane-runs.sh|
+kagent-lane-runs.test.sh|
 portfolio-surveyor.test.sh|
 product-value-contract.test.sh|
 review-request-comment.test.sh|

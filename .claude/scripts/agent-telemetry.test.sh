@@ -92,9 +92,14 @@ fixture_script_path() {
   local name=$1 root
   case "$name" in ''|*[!a-zA-Z0-9_-]*) return 1 ;; esac
   root="$FIX/collector-copies/$name"
-  mkdir -p "$root/.claude/scripts" "$root/.claude/guides" || return 2
+  mkdir -p "$root/.claude/scripts" "$root/.claude/guides" "$root/.claude/plugin-consumption" || return 2
   cp "$SCRIPT_DIR/../../AGENTS.md" "$root/AGENTS.md" || return 2
   cp "$SCRIPT_DIR/../guides/work-selection.md" "$SCRIPT_DIR/../guides/egress-and-privacy.md" "$root/.claude/guides/" || return 2
+  # The default instance registry sits beside the script in a checkout; without it
+  # every transcript section of a copy would exit UNKNOWN for that reason alone.
+  cp "$SCRIPT_DIR/../plugin-consumption/agent-instances.json" "$root/.claude/plugin-consumption/" || return 2
+  # Drift reads the kagent cadence row through the reader beside the script.
+  cp "$SCRIPT_DIR/kagent-lane-runs.sh" "$root/.claude/scripts/" || return 2
   printf '%s/.claude/scripts/agent-telemetry.sh\n' "$root"
 }
 
@@ -341,9 +346,18 @@ cp "$SCRIPT_DIR/../guides/work-selection.md" "$SCRIPT_DIR/../guides/egress-and-p
 awk '{ print; if ($0 == "populate_session_cache() {")
   print "  printf walked >> \"$TRANSCRIPT_WALK_SENTINEL\"" }' "$TARGET" \
   > "$FIX/section-selection/.claude/scripts/agent-telemetry.sh"
+# Drift reads the kagent cadence row through the reader beside the script, as a
+# checkout has it; without it the drift section would exit UNKNOWN for that alone.
+cp "$SCRIPT_DIR/kagent-lane-runs.sh" "$FIX/section-selection/.claude/scripts/"
 for section in drift outcomes reliability dispatch; do
   sentinel="$FIX/section-selection/$section.walk"
-  OUT=$(HOME="$FIX" MONOREPO_DIR="$FIX/section-selection/empty" \
+  # Drift reads the cadence table, so it gets the copied AGENTS.md: an unreadable
+  # table is UNKNOWN (exit 2), which is not what this sentinel case measures.
+  case "$section" in
+    drift) monorepo="$FIX/section-selection" ;;
+    *) monorepo="$FIX/section-selection/empty" ;;
+  esac
+  OUT=$(HOME="$FIX" MONOREPO_DIR="$monorepo" \
     CLAUDE_PROJECTS_DIR="$FIX/section-selection/empty" \
     CODEX_HOME="$FIX/section-selection/empty" \
     TRANSCRIPT_WALK_SENTINEL="$sentinel" \
@@ -748,6 +762,7 @@ Definition PRs: their separate human promotion gate was retired by maintainer di
 |---|---|---|
 | **Claude** — `claude/*`, hourly at `:50` | Every hour at `:50` | 00:00, 12:00 |
 | **Codex** — `codex/*`, hourly at `:10` | Every hour at `:10` | 07:00, 19:00 |
+| **kagent** — `kagent/*` | 1 run/day; suspended | — |
 EOF
 mkdir -p "$FIX/monorepo/.claude"
 
@@ -1329,7 +1344,11 @@ all_run() {
 }
 printf '{}\n' > "$FIX/outcomes/malformed-instances.json"
 OUT=$(all_run); RC=$?
-if [ "$RC" != 2 ]; then ok "malformed registry does not abort a default all-section run"; else bad "malformed registry does not abort a default all-section run" "rc=$RC"; fi
+# Not aborting is shown by the sections below rendering. The registry is still an
+# unreadable input, which the banner names, so the finished run exits UNKNOWN/2
+# rather than reading as a clean one (#4909).
+if [ "$RC" = 2 ]; then ok "malformed registry: a default all-section run finishes and exits UNKNOWN/2"; else bad "malformed registry: a default all-section run finishes and exits UNKNOWN/2" "rc=$RC"; fi
+check "default all-section run names the unreadable registry" "$OUT" "other instances: NOT LISTED"
 check "default all-section run still renders a registry-independent section" "$OUT" '── DISPATCH HEALTH'
 check "default all-section run reports outcomes as UNKNOWN" "$OUT" 'merged PRs: UNKNOWN'
 check "default all-section run marks every merged-PR row UNKNOWN, never a count" "$OUT" 'UNKNOWN (query or provenance)'
@@ -1549,6 +1568,35 @@ OUT=$(run --section efficiency)
 check "counts bash timeouts"  "$OUT" "bash timeouts .............. 1"
 check "counts sleep/poll"     "$OUT" "explicit sleep/poll calls .. 1"
 
+# ── instances this host cannot see (monorepo#4870) ────────────────────────────
+# The in-cluster kagent lane keeps no transcripts here. The banner names it as
+# UNOBSERVED, with the reader that does see it, so a zero below is never read as
+# that lane being quiet. The registry decides which instances are named.
+check "banner names the kagent lane as unobserved" "$OUT" "kagent-cluster: UNOBSERVED"
+check "banner names the kagent lane's reader" "$OUT" ".claude/scripts/kagent-lane-runs.sh (list | transcript <date> | liveness)"
+nocheck "banner never names a host instance as unobserved" "$OUT" "claude-local: UNOBSERVED"
+OUT=$(run --section efficiency --instances "$FIX/outcomes/instances.json"); unobserved_rc=$?
+check "banner names every non-host instance the registry holds" "$OUT" "build-worker: UNOBSERVED"
+nocheck "banner names only the registry's instances" "$OUT" "kagent-cluster"
+if [ "$unobserved_rc" -eq 0 ]; then ok "a readable registry naming an unobserved instance is not an unknown"
+else bad "a readable registry naming an unobserved instance is not an unknown" "exit=$unobserved_rc"; fi
+# An unreadable registry is an unreadable input: the report says so AND exits
+# UNKNOWN/2, so a caller reading only the status never sees a clean run (#4909).
+printf '{"version":1}\n' > "$FIX/no-instances-object.json"
+OUT=$(run --section efficiency --instances "$FIX/no-instances-object.json"); unobserved_rc=$?
+check "an unreadable registry is said to leave other instances unlisted" "$OUT" "other instances: NOT LISTED"
+check "an unreadable registry still says the others are unobserved" "$OUT" "beyond claude-local and codex-local is UNOBSERVED"
+if [ "$unobserved_rc" -eq 2 ]; then ok "an unreadable registry exits UNKNOWN/2"
+else bad "an unreadable registry exits UNKNOWN/2" "exit=$unobserved_rc"; fi
+printf '{"version":1,"instances":{"claude-local":{},"Bad_Name":{}}}\n' > "$FIX/unusable-instance-name.json"
+OUT=$(run --section efficiency --instances "$FIX/unusable-instance-name.json"); unobserved_rc=$?
+check "an instance name that cannot be printed is still named as unobserved" "$OUT" "an instance with an unusable name: UNOBSERVED"
+nocheck "an instance name that cannot be printed is never echoed" "$OUT" "Bad_Name"
+if [ "$unobserved_rc" -eq 2 ]; then ok "an unusable instance name exits UNKNOWN/2"
+else bad "an unusable instance name exits UNKNOWN/2" "exit=$unobserved_rc"; fi
+OUT=$(run --section drift)
+nocheck "drift collects no transcripts, so it names no unobserved transcript source" "$OUT" "kagent-cluster: UNOBSERVED"
+
 # ── 5. drift: the highest-yield check ─────────────────────────────────────────
 echo
 echo "drift"
@@ -1562,6 +1610,59 @@ check "reports Codex engineer dispatch advance" "$OUT" "MATCH persistence=CONFIR
 check "reports Codex improver dispatch advance" "$OUT" "MATCH persistence=CONFIRMED marker=1785222864850 baseline=1785222863000"
 check "proves staggered local starts"      "$OUT" "local simultaneous starts/day: 0"
 check "proves hourly engineer slots"       "$OUT" "local engineer slots scheduled/day: 48"
+
+# ── the kagent lane's cadence row (monorepo#4870) ─────────────────────────────
+# The in-cluster lane has ONE engineer entry a day and no improver entry, unlike
+# the host lanes' two engineer entries an hour. Its row must neither break the
+# host comparisons nor read as drift for having one entry, and it stays out of
+# the local start figures. Its schedule is in the cluster, so it is UNOBSERVED.
+# The base fixture carries the kagent row, as the real AGENTS.md does.
+OUT=$(run --section drift); kagent_drift_rc=$?
+if [ "$kagent_drift_rc" -eq 0 ]; then ok "kagent row: drift still completes"
+else bad "kagent row: drift still completes" "exit=$kagent_drift_rc"; fi
+check "kagent row: the Claude engineer still matches" "$OUT" "claude engineer: expected=*@50 actual=*@50 MATCH"
+check "kagent row: the Claude improver still matches" "$OUT" "claude improver: expected=0,12@0 actual=0,12@0 MATCH"
+check "kagent row: the Codex engineer still matches"  "$OUT" "codex engineer:  expected=*@10 actual=*@10 MATCH"
+check "kagent row: the Codex improver still matches"  "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
+check "kagent row: one entry a day, suspended, reported UNOBSERVED" "$OUT" \
+  "kagent engineer: expected=1/day entries=1 state=suspended improver=none UNOBSERVED"
+nocheck "kagent row: one entry a day is not drift" "$OUT" "DRIFT: kagent"
+nocheck "kagent row: a readable row is not unknown" "$OUT" "UNKNOWN: kagent"
+nocheck "kagent row: never a MATCH, which would claim a comparison nobody made" "$OUT" "kagent engineer: expected=1/day actual="
+check "kagent row: the local collision figure is unchanged" "$OUT" "local simultaneous starts/day: 0"
+check "kagent row: the local engineer slots are unchanged" "$OUT" "local engineer slots scheduled/day: 48"
+cp "$FIX/monorepo/AGENTS.md" "$FIX/monorepo/AGENTS.md.with-kagent"
+sed -i.bak 's/| 1 run\/day; suspended |/| 1 run\/day |/' "$FIX/monorepo/AGENTS.md"
+OUT=$(run --section drift)
+check "kagent row: a resumed lane reads as scheduled, one entry a day" "$OUT" \
+  "kagent engineer: expected=1/day entries=1 state=scheduled improver=none UNOBSERVED"
+# An unreadable row is an unreadable input, so drift exits 2 (UNKNOWN), never 0.
+sed -i.bak 's/| 1 run\/day |/| 2 runs\/day |/' "$FIX/monorepo/AGENTS.md"
+OUT=$(run --section drift); kagent_drift_rc=$?
+check "kagent row: a cell the lane cannot have is unknown" "$OUT" \
+  "UNKNOWN: kagent engineer schedule absent from or unreadable in the AGENTS.md cadence table"
+nocheck "kagent row: an unreadable cell claims no schedule" "$OUT" "kagent engineer: expected="
+check "kagent row: an unreadable cell leaves the host comparisons alone" "$OUT" \
+  "claude engineer: expected=*@50 actual=*@50 MATCH"
+if [ "$kagent_drift_rc" -eq 2 ]; then ok "kagent row: an unreadable cell makes drift exit 2"
+else bad "kagent row: an unreadable cell makes drift exit 2" "exit=$kagent_drift_rc"; fi
+grep -v '^| \*\*kagent\*\* ' "$FIX/monorepo/AGENTS.md.with-kagent" >"$FIX/monorepo/AGENTS.md"
+OUT=$(run --section drift); kagent_drift_rc=$?
+check "a table without the kagent row says the lane's schedule is unread" "$OUT" \
+  "UNKNOWN: kagent engineer schedule absent from or unreadable in the AGENTS.md cadence table"
+if [ "$kagent_drift_rc" -eq 2 ]; then ok "a table without the kagent row makes drift exit 2"
+else bad "a table without the kagent row makes drift exit 2" "exit=$kagent_drift_rc"; fi
+cp "$FIX/monorepo/AGENTS.md.with-kagent" "$FIX/monorepo/AGENTS.md"
+# A reader answer the drift section does not recognise is unknown too, and exits 2.
+KAGENT_ODD=$(fixture_script_path kagent-odd-cadence) || exit 1
+cp "$TARGET" "$KAGENT_ODD" || exit 1
+printf '#!/usr/bin/env bash\necho "engineer=3/day state=odd improver=none"\n' >"${KAGENT_ODD%/*}/kagent-lane-runs.sh"
+OUT=$(TARGET="$KAGENT_ODD" run --section drift); kagent_drift_rc=$?
+check "kagent row: an unrecognised reader answer is unknown" "$OUT" \
+  "UNKNOWN: kagent engineer schedule unreadable from the AGENTS.md cadence table"
+nocheck "kagent row: an unrecognised reader answer claims no schedule" "$OUT" "kagent engineer: expected="
+if [ "$kagent_drift_rc" -eq 2 ]; then ok "kagent row: an unrecognised reader answer makes drift exit 2"
+else bad "kagent row: an unrecognised reader answer makes drift exit 2" "exit=$kagent_drift_rc"; fi
 
 # Schedule-only observations must not depend on unused transcript scratch.
 mkdir -p "$FIX/drift-no-scratch"

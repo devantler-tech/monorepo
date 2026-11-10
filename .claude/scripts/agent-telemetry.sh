@@ -3730,6 +3730,44 @@ run_safety_bounded() {
   run_safety_early_and_emit 0
 }
 
+# The registered instances this report cannot see (monorepo#4870). The transcript
+# sections mine what this host keeps, and only the two host instances write it.
+# Any other instance in the registry, today the in-cluster kagent lane, leaves no
+# transcript here, so no per-session figure below counts it. It is named rather
+# than left out, so that its absence never reads as a quiet lane or a clean zero.
+# The registry is read on its own here: the outcomes block reads it only when that
+# section runs. A registry that cannot be read, or that names an instance this
+# cannot print, is an unreadable input: the function returns 2 and the report
+# exits UNKNOWN (.claude/scripts/AGENTS.md), whatever the sections below found.
+HOST_TRANSCRIPT_INSTANCES="claude-local codex-local"
+report_unobserved_instances() {
+  local others inst status=0
+  if ! others=$(jq -r --arg host "$HOST_TRANSCRIPT_INSTANCES" '
+      if (.instances | type) == "object" then
+        .instances | keys[] | select(. as $id | ($host | split(" ") | index($id)) == null)
+      else error("no instances object") end
+    ' "$INSTANCES" 2>/dev/null); then
+    echo " other instances: NOT LISTED — the instance registry is unreadable. Any instance"
+    echo "   beyond ${HOST_TRANSCRIPT_INSTANCES// / and } is UNOBSERVED, and no figure below counts it."
+    return 2
+  fi
+  while IFS= read -r inst; do
+    [ -n "$inst" ] || continue
+    case "$inst" in
+      *[!abcdefghijklmnopqrstuvwxyz0123456789-]*)
+        status=2
+        echo " an instance with an unusable name: UNOBSERVED — no figure below counts it." ;;
+      kagent-cluster)
+        echo " kagent-cluster: UNOBSERVED — it runs in the platform cluster and keeps no transcripts"
+        echo "   on this host, so no figure below counts it. Read its runs and liveness with"
+        echo "   .claude/scripts/kagent-lane-runs.sh (list | transcript <date> | liveness)." ;;
+      *)
+        echo " $inst: UNOBSERVED — it keeps no transcripts on this host, so no figure below counts it." ;;
+    esac
+  done <<<"$others"
+  return "$status"
+}
+
 # Everything the report prints goes through main(), whose entire stdout is piped
 # through redact() at the single call site below.
 #
@@ -3813,7 +3851,8 @@ case "$SECTION" in
     echo " claude sessions in window: ${SF_COUNT} (cap ${MAX_FILES})"
     echo ' transcript cohort: authorized-live-v2; prior selector-only observations remain a separate series'
     echo ' Coverage changes are not performance improvements; rebind hypothesis exposure and companion floors.'
-    fi ;;
+    fi
+    report_unobserved_instances || main_rc=2 ;;
 esac
 # Only the report controller prints coverage, and only when it walked the Claude
 # files itself (SF_COUNT is numeric; see main). A safety worker's banner frames
@@ -6819,7 +6858,7 @@ if want drift; then
   fi
 
   echo
-  echo "  cadence table vs the runtime schedule pointers (two engineer entries and one improver entry a lane):"
+  echo "  cadence table vs the runtime schedule pointers (two engineer entries and one improver entry a host lane; the kagent lane: one entry a day):"
 
   # Canonicalise schedule slots for exact comparison. The compact form is
   # "hours@minutes" (for example 0,12@0), with * representing every hour.
@@ -7613,6 +7652,29 @@ if want drift; then
   compare_codex_schedule "codex improver" "$CODEX_IMPROVER_EXPECTED" \
     "$CODEX_IMPROVER_POINTER_ACTUAL" "$CODEX_IMPROVER_STORE_ACTUAL" \
     "$CODEX_IMPROVER_LOADER" "$CODEX_AUTOMATION_STORE" "$CODEX_IMPROVER_MARKER" "$CODEX_IMPROVER_BASELINE"
+
+  # The kagent lane (monorepo#4866, #4870) is not a host lane. It has ONE engineer
+  # entry, a kagent scheduled run once a day in the platform cluster, and no
+  # improver entry, so none of the two-entry and hourly rules above apply to it.
+  # Its schedule is not on this host, so there is no pointer or store to compare
+  # with: its row is read, through the same reader its liveness check uses, and
+  # reported as UNOBSERVED. It never counts as a MATCH, never as DRIFT for having
+  # one entry, and never enters the local start figures below, which count the
+  # starts this host's schedulers make.
+  if KAGENT_CADENCE=$(bash "$SCRIPT_DIR/kagent-lane-runs.sh" cadence --agents-md "$AGENTS_MD" 2>/dev/null); then
+    case "$KAGENT_CADENCE" in
+      "engineer=1/day state=scheduled improver=none"|"engineer=1/day state=suspended improver=none")
+        KAGENT_STATE=${KAGENT_CADENCE#*state=}
+        KAGENT_STATE=${KAGENT_STATE%% *}
+        printf '    %-16s expected=1/day entries=1 state=%s improver=none UNOBSERVED (in-cluster schedule, not on this host; kagent-lane-runs.sh liveness reads its runs)\n' \
+          "kagent engineer:" "$KAGENT_STATE" ;;
+      *) echo "    UNKNOWN: kagent engineer schedule unreadable from the AGENTS.md cadence table"
+         main_rc=2 ;;
+    esac
+  else
+    echo "    UNKNOWN: kagent engineer schedule absent from or unreadable in the AGENTS.md cadence table"
+    main_rc=2
+  fi
 
   # Gated on cadence READABILITY, never on persistence (#2621): these two figures
   # are pure functions of the schedules. An unreadable or ambiguous pointer still
