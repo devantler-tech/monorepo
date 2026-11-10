@@ -23,9 +23,12 @@
 #                  one line each saying WHAT failed for that lane and WHEN, for example
 #                  `rate limited at 2026-11-04T06:12Z ("Review limit reached")`. All three are
 #                  required: the fallback is invalid without evidence for every lane.
-#   --finding      one inline finding; repeat the flag for more. The severity is the comment's
-#                  first token. <path> is relative to the repository root and <line> is a line on
-#                  the right-hand side of the diff. P0 and P1 block; a nit does not.
+#   --finding      one inline finding; repeat the flag for more. Each inline comment begins with
+#                  the same disclosure line as the review body, because inline comments are
+#                  read on their own and an undisclosed one reads as the maintainer; the
+#                  severity is the first token after it. <path> is relative to the repository
+#                  root and <line> is a line on the right-hand side of the diff. P0 and P1
+#                  block; a nit does not.
 #   --actor        `engineer` (default) or `improver`: selects the canonical disclosure line.
 #   --interactive  an interactive Claude Code session: marks the disclosure line as such and ends
 #                  the body with the interactive-session marker.
@@ -45,7 +48,7 @@
 set -euo pipefail
 
 usage() {
-  sed -n '15,41p' "$0" >&2
+  sed -n '15,44p' "$0" >&2
   exit 2
 }
 
@@ -73,7 +76,7 @@ codex_set=0
 bugbot_set=0
 actor="engineer"
 interactive=0
-comments='[]'
+findings='[]'
 p0=0
 p1=0
 total=0
@@ -132,9 +135,9 @@ while [ "$#" -gt 0 ]; do
       [[ "${line}" =~ ^[1-9][0-9]*$ ]] || die "a finding's line must be a positive integer"
       one_line "a finding's text" "${text}"
       total=$((total + 1))
-      comments="$(jq -cn --argjson acc "${comments}" --arg path "${path}" --arg line "${line}" \
-        --arg body "${severity}: ${text}" \
-        '$acc + [{path: $path, line: ($line | tonumber), side: "RIGHT", body: $body}]')" ||
+      findings="$(jq -cn --argjson acc "${findings}" --arg path "${path}" --arg line "${line}" \
+        --arg severity "${severity}" --arg text "${text}" \
+        '$acc + [{path: $path, line: ($line | tonumber), severity: $severity, text: $text}]')" ||
         die "could not encode a finding"
       ;;
     -h | --help) usage ;;
@@ -182,6 +185,12 @@ Reviewed commit: ${head}
 - Cursor Bugbot: ${bugbot}
 
 ${verdict}${footer}"
+
+# Inline comments are fetched on their own (pulls/<n>/comments), so each one carries the
+# disclosure too: a `devantler` comment without it reads as a maintainer instruction.
+comments="$(jq -c --arg disclosure "${disclosure}" --arg footer "${footer}" \
+  'map({path, line, side: "RIGHT", body: ($disclosure + "\n\n" + .severity + ": " + .text + $footer)})' \
+  <<<"${findings}")" || die "could not encode the findings"
 
 payload="$(jq -cn --arg commit "${head}" --arg body "${body}" --argjson comments "${comments}" \
   '{commit_id: $commit, event: "COMMENT", body: $body, comments: $comments}')" ||

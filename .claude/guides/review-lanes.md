@@ -708,8 +708,9 @@ result at the current head — self-promotion is forbidden before that. Request 
     where each lane's text says *what* failed and *when*, add one
     `--finding <P0|P1|nit> <path> <line> <text>` per finding, and post its output with
     `gh api --method POST repos/<owner>/<repo>/pulls/<n>/reviews --input <file>`. It writes the one
-    shape the verdict helper below accepts, as a `COMMENT` review: GitHub refuses
-    `APPROVE`/`REQUEST_CHANGES` on your own PR.
+    shape the verdict helper below accepts, with the disclosure line on the review body and on
+    every inline comment, as a `COMMENT` review: GitHub refuses `APPROVE`/`REQUEST_CHANGES` on
+    your own PR.
   - **It satisfies the green-review gate only when it is clean** — no P0/P1 findings — **at a SHA
     equal to the current PR head**; the survey reports it as `green_review=self@<sha>`, and it
     stales on the next push exactly like any other green. Findings you raise on your own PR are
