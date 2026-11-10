@@ -37,6 +37,7 @@ cat >"$tmp/cases.tsv" <<'CASES'
 2	squash-closing-keywords
 2	prod-kube-context
 2	flow-scorecard
+2	kagent-lane-runs
 3	review-lane-health
 3	plugin-definition-currency
 3	board-archive
@@ -217,5 +218,5 @@ for group in 1 2 3 4; do
     else diff -u "$tmp/expected" "$tmp/observed" || fail "$job omitted later cases after $mode"; fi
   done
 done
-echo 'ci-macos-batches: OK — 20 cases retain both OSes; four batches run every child and propagate all failures'
+echo 'ci-macos-batches: OK — 21 cases retain both OSes; four batches run every child and propagate all failures'
 finished=1

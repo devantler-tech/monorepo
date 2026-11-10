@@ -1549,6 +1549,23 @@ OUT=$(run --section efficiency)
 check "counts bash timeouts"  "$OUT" "bash timeouts .............. 1"
 check "counts sleep/poll"     "$OUT" "explicit sleep/poll calls .. 1"
 
+# ── instances this host cannot see (monorepo#4870) ────────────────────────────
+# The in-cluster kagent lane keeps no transcripts here. The banner names it as
+# UNOBSERVED, with the reader that does see it, so a zero below is never read as
+# that lane being quiet. The registry decides which instances are named.
+check "banner names the kagent lane as unobserved" "$OUT" "kagent-cluster: UNOBSERVED"
+check "banner names the kagent lane's reader" "$OUT" ".claude/scripts/kagent-lane-runs.sh (list | transcript <date> | liveness)"
+nocheck "banner never names a host instance as unobserved" "$OUT" "claude-local: UNOBSERVED"
+OUT=$(run --section efficiency --instances "$FIX/outcomes/instances.json")
+check "banner names every non-host instance the registry holds" "$OUT" "build-worker: UNOBSERVED"
+nocheck "banner names only the registry's instances" "$OUT" "kagent-cluster"
+printf '{"version":1}\n' > "$FIX/no-instances-object.json"
+OUT=$(run --section efficiency --instances "$FIX/no-instances-object.json")
+check "an unreadable registry is said to leave other instances unlisted" "$OUT" "other instances: NOT LISTED"
+check "an unreadable registry still says the others are unobserved" "$OUT" "beyond claude-local and codex-local is UNOBSERVED"
+OUT=$(run --section drift)
+nocheck "drift collects no transcripts, so it names no unobserved transcript source" "$OUT" "kagent-cluster: UNOBSERVED"
+
 # ── 5. drift: the highest-yield check ─────────────────────────────────────────
 echo
 echo "drift"
@@ -1562,6 +1579,42 @@ check "reports Codex engineer dispatch advance" "$OUT" "MATCH persistence=CONFIR
 check "reports Codex improver dispatch advance" "$OUT" "MATCH persistence=CONFIRMED marker=1785222864850 baseline=1785222863000"
 check "proves staggered local starts"      "$OUT" "local simultaneous starts/day: 0"
 check "proves hourly engineer slots"       "$OUT" "local engineer slots scheduled/day: 48"
+
+# ── the kagent lane's cadence row (monorepo#4870) ─────────────────────────────
+# The in-cluster lane has ONE engineer entry a day and no improver entry, unlike
+# the host lanes' two engineer entries an hour. Its row must neither break the
+# host comparisons nor read as drift for having one entry, and it stays out of
+# the local start figures. Its schedule is in the cluster, so it is UNOBSERVED.
+check "a table without the kagent row says the lane's schedule is unread" "$OUT" \
+  "UNKNOWN: kagent engineer schedule absent from or unreadable in the AGENTS.md cadence table"
+cp "$FIX/monorepo/AGENTS.md" "$FIX/monorepo/AGENTS.md.without-kagent"
+printf '| **kagent** — `kagent/*` | 1 run/day; suspended | — |\n' >> "$FIX/monorepo/AGENTS.md"
+OUT=$(run --section drift); kagent_drift_rc=$?
+if [ "$kagent_drift_rc" -eq 0 ]; then ok "kagent row: drift still completes"
+else bad "kagent row: drift still completes" "exit=$kagent_drift_rc"; fi
+check "kagent row: the Claude engineer still matches" "$OUT" "claude engineer: expected=*@50 actual=*@50 MATCH"
+check "kagent row: the Claude improver still matches" "$OUT" "claude improver: expected=0,12@0 actual=0,12@0 MATCH"
+check "kagent row: the Codex engineer still matches"  "$OUT" "codex engineer:  expected=*@10 actual=*@10 MATCH"
+check "kagent row: the Codex improver still matches"  "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
+check "kagent row: one entry a day, suspended, reported UNOBSERVED" "$OUT" \
+  "kagent engineer: expected=1/day entries=1 state=suspended improver=none UNOBSERVED"
+nocheck "kagent row: one entry a day is not drift" "$OUT" "DRIFT: kagent"
+nocheck "kagent row: a readable row is not unknown" "$OUT" "UNKNOWN: kagent"
+nocheck "kagent row: never a MATCH, which would claim a comparison nobody made" "$OUT" "kagent engineer: expected=1/day actual="
+check "kagent row: the local collision figure is unchanged" "$OUT" "local simultaneous starts/day: 0"
+check "kagent row: the local engineer slots are unchanged" "$OUT" "local engineer slots scheduled/day: 48"
+sed -i.bak 's/| 1 run\/day; suspended |/| 1 run\/day |/' "$FIX/monorepo/AGENTS.md"
+OUT=$(run --section drift)
+check "kagent row: a resumed lane reads as scheduled, one entry a day" "$OUT" \
+  "kagent engineer: expected=1/day entries=1 state=scheduled improver=none UNOBSERVED"
+sed -i.bak 's/| 1 run\/day |/| 2 runs\/day |/' "$FIX/monorepo/AGENTS.md"
+OUT=$(run --section drift)
+check "kagent row: a cell the lane cannot have is unknown" "$OUT" \
+  "UNKNOWN: kagent engineer schedule absent from or unreadable in the AGENTS.md cadence table"
+nocheck "kagent row: an unreadable cell claims no schedule" "$OUT" "kagent engineer: expected="
+check "kagent row: an unreadable cell leaves the host comparisons alone" "$OUT" \
+  "claude engineer: expected=*@50 actual=*@50 MATCH"
+cp "$FIX/monorepo/AGENTS.md.without-kagent" "$FIX/monorepo/AGENTS.md"
 
 # Schedule-only observations must not depend on unused transcript scratch.
 mkdir -p "$FIX/drift-no-scratch"
