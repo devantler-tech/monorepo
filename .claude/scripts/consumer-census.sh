@@ -64,7 +64,7 @@ fi
 paths=$(printf '%s\n' "$paths" | awk '{ print $2 }')
 if [ "${#only[@]}" -gt 0 ]; then
   for want in "${only[@]}"; do
-    if ! printf '%s\n' "$paths" | grep -qxF -- "$want"; then
+    if ! grep -qxF -- "$want" <<<"$paths"; then
       echo "consumer-census: --only $want is not a submodule path in .gitmodules" >&2
       exit 2
     fi
@@ -93,7 +93,7 @@ while IFS= read -r path; do
     continue
   fi
   if [ "$fetch" -eq 1 ]; then
-    if ! head_ref=$(git -C "$dir" ls-remote --symref origin HEAD 2>/dev/null | awk '$1 == "ref:" && $3 == "HEAD" { print $2; exit }'); then
+    if ! head_ref=$(git -C "$dir" ls-remote --symref origin HEAD 2>/dev/null | awk '$1 == "ref:" && $3 == "HEAD" && !found { print $2; found = 1 }'); then
       head_ref=""
     fi
     branch=${head_ref#refs/heads/}
