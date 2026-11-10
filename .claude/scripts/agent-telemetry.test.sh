@@ -98,6 +98,8 @@ fixture_script_path() {
   # The default instance registry sits beside the script in a checkout; without it
   # every transcript section of a copy would exit UNKNOWN for that reason alone.
   cp "$SCRIPT_DIR/../plugin-consumption/agent-instances.json" "$root/.claude/plugin-consumption/" || return 2
+  # Drift reads the kagent cadence row through the reader beside the script.
+  cp "$SCRIPT_DIR/kagent-lane-runs.sh" "$root/.claude/scripts/" || return 2
   printf '%s/.claude/scripts/agent-telemetry.sh\n' "$root"
 }
 
@@ -344,9 +346,18 @@ cp "$SCRIPT_DIR/../guides/work-selection.md" "$SCRIPT_DIR/../guides/egress-and-p
 awk '{ print; if ($0 == "populate_session_cache() {")
   print "  printf walked >> \"$TRANSCRIPT_WALK_SENTINEL\"" }' "$TARGET" \
   > "$FIX/section-selection/.claude/scripts/agent-telemetry.sh"
+# Drift reads the kagent cadence row through the reader beside the script, as a
+# checkout has it; without it the drift section would exit UNKNOWN for that alone.
+cp "$SCRIPT_DIR/kagent-lane-runs.sh" "$FIX/section-selection/.claude/scripts/"
 for section in drift outcomes reliability dispatch; do
   sentinel="$FIX/section-selection/$section.walk"
-  OUT=$(HOME="$FIX" MONOREPO_DIR="$FIX/section-selection/empty" \
+  # Drift reads the cadence table, so it gets the copied AGENTS.md: an unreadable
+  # table is UNKNOWN (exit 2), which is not what this sentinel case measures.
+  case "$section" in
+    drift) monorepo="$FIX/section-selection" ;;
+    *) monorepo="$FIX/section-selection/empty" ;;
+  esac
+  OUT=$(HOME="$FIX" MONOREPO_DIR="$monorepo" \
     CLAUDE_PROJECTS_DIR="$FIX/section-selection/empty" \
     CODEX_HOME="$FIX/section-selection/empty" \
     TRANSCRIPT_WALK_SENTINEL="$sentinel" \
@@ -751,6 +762,7 @@ Definition PRs: their separate human promotion gate was retired by maintainer di
 |---|---|---|
 | **Claude** — `claude/*`, hourly at `:50` | Every hour at `:50` | 00:00, 12:00 |
 | **Codex** — `codex/*`, hourly at `:10` | Every hour at `:10` | 07:00, 19:00 |
+| **kagent** — `kagent/*` | 1 run/day; suspended | — |
 EOF
 mkdir -p "$FIX/monorepo/.claude"
 
@@ -1604,10 +1616,7 @@ check "proves hourly engineer slots"       "$OUT" "local engineer slots schedule
 # the host lanes' two engineer entries an hour. Its row must neither break the
 # host comparisons nor read as drift for having one entry, and it stays out of
 # the local start figures. Its schedule is in the cluster, so it is UNOBSERVED.
-check "a table without the kagent row says the lane's schedule is unread" "$OUT" \
-  "UNKNOWN: kagent engineer schedule absent from or unreadable in the AGENTS.md cadence table"
-cp "$FIX/monorepo/AGENTS.md" "$FIX/monorepo/AGENTS.md.without-kagent"
-printf '| **kagent** — `kagent/*` | 1 run/day; suspended | — |\n' >> "$FIX/monorepo/AGENTS.md"
+# The base fixture carries the kagent row, as the real AGENTS.md does.
 OUT=$(run --section drift); kagent_drift_rc=$?
 if [ "$kagent_drift_rc" -eq 0 ]; then ok "kagent row: drift still completes"
 else bad "kagent row: drift still completes" "exit=$kagent_drift_rc"; fi
@@ -1622,18 +1631,38 @@ nocheck "kagent row: a readable row is not unknown" "$OUT" "UNKNOWN: kagent"
 nocheck "kagent row: never a MATCH, which would claim a comparison nobody made" "$OUT" "kagent engineer: expected=1/day actual="
 check "kagent row: the local collision figure is unchanged" "$OUT" "local simultaneous starts/day: 0"
 check "kagent row: the local engineer slots are unchanged" "$OUT" "local engineer slots scheduled/day: 48"
+cp "$FIX/monorepo/AGENTS.md" "$FIX/monorepo/AGENTS.md.with-kagent"
 sed -i.bak 's/| 1 run\/day; suspended |/| 1 run\/day |/' "$FIX/monorepo/AGENTS.md"
 OUT=$(run --section drift)
 check "kagent row: a resumed lane reads as scheduled, one entry a day" "$OUT" \
   "kagent engineer: expected=1/day entries=1 state=scheduled improver=none UNOBSERVED"
+# An unreadable row is an unreadable input, so drift exits 2 (UNKNOWN), never 0.
 sed -i.bak 's/| 1 run\/day |/| 2 runs\/day |/' "$FIX/monorepo/AGENTS.md"
-OUT=$(run --section drift)
+OUT=$(run --section drift); kagent_drift_rc=$?
 check "kagent row: a cell the lane cannot have is unknown" "$OUT" \
   "UNKNOWN: kagent engineer schedule absent from or unreadable in the AGENTS.md cadence table"
 nocheck "kagent row: an unreadable cell claims no schedule" "$OUT" "kagent engineer: expected="
 check "kagent row: an unreadable cell leaves the host comparisons alone" "$OUT" \
   "claude engineer: expected=*@50 actual=*@50 MATCH"
-cp "$FIX/monorepo/AGENTS.md.without-kagent" "$FIX/monorepo/AGENTS.md"
+if [ "$kagent_drift_rc" -eq 2 ]; then ok "kagent row: an unreadable cell makes drift exit 2"
+else bad "kagent row: an unreadable cell makes drift exit 2" "exit=$kagent_drift_rc"; fi
+grep -v '^| \*\*kagent\*\* ' "$FIX/monorepo/AGENTS.md.with-kagent" >"$FIX/monorepo/AGENTS.md"
+OUT=$(run --section drift); kagent_drift_rc=$?
+check "a table without the kagent row says the lane's schedule is unread" "$OUT" \
+  "UNKNOWN: kagent engineer schedule absent from or unreadable in the AGENTS.md cadence table"
+if [ "$kagent_drift_rc" -eq 2 ]; then ok "a table without the kagent row makes drift exit 2"
+else bad "a table without the kagent row makes drift exit 2" "exit=$kagent_drift_rc"; fi
+cp "$FIX/monorepo/AGENTS.md.with-kagent" "$FIX/monorepo/AGENTS.md"
+# A reader answer the drift section does not recognise is unknown too, and exits 2.
+KAGENT_ODD=$(fixture_script_path kagent-odd-cadence) || exit 1
+cp "$TARGET" "$KAGENT_ODD" || exit 1
+printf '#!/usr/bin/env bash\necho "engineer=3/day state=odd improver=none"\n' >"${KAGENT_ODD%/*}/kagent-lane-runs.sh"
+OUT=$(TARGET="$KAGENT_ODD" run --section drift); kagent_drift_rc=$?
+check "kagent row: an unrecognised reader answer is unknown" "$OUT" \
+  "UNKNOWN: kagent engineer schedule unreadable from the AGENTS.md cadence table"
+nocheck "kagent row: an unrecognised reader answer claims no schedule" "$OUT" "kagent engineer: expected="
+if [ "$kagent_drift_rc" -eq 2 ]; then ok "kagent row: an unrecognised reader answer makes drift exit 2"
+else bad "kagent row: an unrecognised reader answer makes drift exit 2" "exit=$kagent_drift_rc"; fi
 
 # Schedule-only observations must not depend on unused transcript scratch.
 mkdir -p "$FIX/drift-no-scratch"

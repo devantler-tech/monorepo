@@ -7668,10 +7668,12 @@ if want drift; then
         KAGENT_STATE=${KAGENT_STATE%% *}
         printf '    %-16s expected=1/day entries=1 state=%s improver=none UNOBSERVED (in-cluster schedule, not on this host; kagent-lane-runs.sh liveness reads its runs)\n' \
           "kagent engineer:" "$KAGENT_STATE" ;;
-      *) echo "    UNKNOWN: kagent engineer schedule unreadable from the AGENTS.md cadence table" ;;
+      *) echo "    UNKNOWN: kagent engineer schedule unreadable from the AGENTS.md cadence table"
+         main_rc=2 ;;
     esac
   else
     echo "    UNKNOWN: kagent engineer schedule absent from or unreadable in the AGENTS.md cadence table"
+    main_rc=2
   fi
 
   # Gated on cadence READABILITY, never on persistence (#2621): these two figures
