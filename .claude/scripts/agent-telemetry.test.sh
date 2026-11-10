@@ -6058,6 +6058,35 @@ if grep -qE 'bash timeouts \.+ 1 ' <<<"$OUT"; then
 else bad "an escaped is_error timeout is counted" "$(grep 'timeouts' <<<"$OUT")"; fi
 check "escaped tool_use type keeps its timed-out description" "$OUT" "escaped key wait"
 
+# The runtime no longer kills a foreground Bash call at its timeout: it moves
+# the call to the background and returns a SUCCESSFUL result whose text starts
+# with the phrase below (monorepo#4896). Only a Bash result that STARTS with it
+# counts; a Bash result quoting it mid-text, a non-Bash result starting with
+# it, and plain prose do not. The legacy killed-form line stays a separate
+# series, so this file must leave it at 0.
+mkdir -p "$FIX/effmoved"
+cat > "$FIX/effmoved/moved.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"mb1","name":"Bash","input":{"command":"gh run watch 1","description":"moved slow wait"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"mb1","is_error":false,"content":[{"type":"text","text":"Command did not complete within its 90s timeout and was moved to the background (ID: bx1). Output is being written to: /x"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"mb2","name":"Bash","input":{"command":"cat notes.md","description":"quoted phrase read"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"mb2","is_error":false,"content":"notes: Command did not complete within its 90s timeout and was moved to the background"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"mb3","name":"Read","input":{"file_path":"/x","description":"non-bash read"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"mb3","is_error":false,"content":"Command did not complete within its 90s timeout and was moved to the background"}]}}
+{"type":"user","message":{"content":[{"type":"text","text":"Command did not complete within its 90s timeout and was moved to the background"}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/effmoved" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if grep -qE 'bash timeouts backgrounded \. 1 ' <<<"$OUT"; then
+  ok "a Bash timeout the runtime moved to the background is counted"
+else bad "a Bash timeout the runtime moved to the background is counted" "$(grep 'timeouts' <<<"$OUT")"; fi
+if grep -qE 'bash timeouts \.+ 0 ' <<<"$OUT"; then
+  ok "a backgrounded timeout leaves the killed-form series unchanged"
+else bad "a backgrounded timeout leaves the killed-form series unchanged" "$(grep 'timeouts' <<<"$OUT")"; fi
+check "a backgrounded timeout keeps its description" "$OUT" "moved slow wait"
+if grep -qE 'quoted phrase read|non-bash read' <<<"$OUT"; then
+  bad "a quoted or non-Bash backgrounded phrase is not a timeout" "$(grep -A4 'ACTUALLY timed out' <<<"$OUT")"
+else ok "a quoted or non-Bash backgrounded phrase is not a timeout"; fi
+
 # Interrupts are counted in the same read as the denied calls (#4823). A record
 # the denied filter cannot use (a bare JSON scalar has no .type) or a line that
 # is not JSON must not stop the interrupt count, and every file's interrupts
