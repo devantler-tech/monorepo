@@ -5,6 +5,11 @@ description: Maintenance task menu for devantler-tech/ksail (a Go CLI for local 
 
 # Maintain: KSail
 
+- **Serves:** people who set up, deploy to and operate Kubernetes clusters, from a terminal, VS Code or an AI assistant · **Outcome:** cluster setup, application deployment and everyday operations in one tool ([README](https://github.com/devantler-tech/ksail#readme))
+- **Constraints:** local clusters need only Docker; cloud providers need their own setup and incur charges (README)
+- **Non-goals:** UNKNOWN
+- **Evidence:** UNKNOWN
+
 The canonical KSail maintenance task menu lives **in the repo itself** — read the **`## Maintenance`**
 section of `applications/ksail/AGENTS.md` (on the submodule's latest `main`):
 <https://github.com/devantler-tech/ksail/blob/main/AGENTS.md>.

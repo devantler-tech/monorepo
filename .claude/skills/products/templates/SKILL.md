@@ -5,6 +5,11 @@ description: Maintenance task menu for the devantler-tech project templates — 
 
 # Maintain: Templates (go-template + dotnet-template)
 
+- **Serves:** developers starting a new Go or .NET repository, in devantler-tech and elsewhere · **Outcome:** they write their first package on day one instead of assembling tooling ([go-template README](https://github.com/devantler-tech/go-template#readme))
+- **Constraints:** keep each scaffold minimal, idiomatic and current (below)
+- **Non-goals:** product features, and a runnable application: each starts as an empty module or a library with tests (below, both READMEs)
+- **Evidence:** UNKNOWN
+
 Each template's canonical maintenance task menu lives **in its own repo** — read the **`## Maintenance`**
 section of each `AGENTS.md` (on the submodule's latest `main`):
 - `templates/go-template/AGENTS.md` — <https://github.com/devantler-tech/go-template/blob/main/AGENTS.md>

@@ -5,6 +5,11 @@ description: Maintenance + advance task menu for devantler-tech/provider-upjet-u
 
 # Maintain: UniFi Crossplane provider (shared agent/infra library)
 
+- **Serves:** people who already run Crossplane and want their UniFi controller configured from Git; in this portfolio, the platform cluster ([README](https://github.com/devantler-tech/provider-upjet-unifi#readme)) · **Outcome:** UniFi networks, Wi-Fi, firewall, VPN and DNS managed as Kubernetes resources
+- **Constraints:** the resource types are generated with Upjet from the community Terraform provider, so generated files change only through the generator
+- **Non-goals:** UNKNOWN
+- **Evidence:** UNKNOWN
+
 A [Crossplane](https://crossplane.io) provider for **Ubiquiti UniFi**, generated with
 [Upjet](https://github.com/crossplane/upjet) from
 [`ubiquiti-community/terraform-provider-unifi`](https://github.com/ubiquiti-community/terraform-provider-unifi)

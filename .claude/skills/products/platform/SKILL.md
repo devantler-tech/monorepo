@@ -5,6 +5,11 @@ description: Repo + live-platform health/maintenance menu for devantler-tech/pla
 
 # Maintain: Platform
 
+- **Serves:** Devantler Tech's business services and personal applications, which run on it · **Outcome:** affordable production infrastructure (redundant nodes, replicated storage, backups, monitoring, reviewed deployments) without a managed control-plane fee ([README](https://github.com/devantler-tech/platform#readme))
+- **Constraints:** changes are reviewed in Git and applied by Flux; its owner runs its operation and recovery (README)
+- **Non-goals:** a ready-to-use distribution: others start from `platform-template` (README)
+- **Evidence:** the live cluster's incidents, alerts, risks and cost views in Coroot (below)
+
 Platform has **two surfaces to keep healthy *and* advance** — the **repository** (manifests, Helm,
 Flux, policies) and the **live platform** (the running prod cluster it delivers). **Cover both** each
 time you select Platform: the repo can be green while the cluster is unhealthy (and vice-versa).

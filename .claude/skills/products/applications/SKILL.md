@@ -5,6 +5,11 @@ description: Maintenance task menu for the PRIVATE platform-tenant apps — wedd
 
 # Maintain: Applications (private platform tenants)
 
+- **Serves:** wedding-app: invited guests, who RSVP, request a room and read the programme; ascoachingogvaner: visitors to a Danish coaching practice, who read about it and book a time · **Outcome:** each audience can find what it needs and act (each repository's README)
+- **Constraints:** guest records, invitation codes and dietary notes never reach public issues or examples (wedding-app README); the coaching site is static, with no database, login or backend, and sends no mail itself
+- **Non-goals:** an invitation service for unrelated events (wedding-app README); new wedding or coaching sites in general (root `AGENTS.md` Stack map)
+- **Evidence:** UNKNOWN
+
 Each app's canonical maintenance task menu lives **in its own (private) repo** — read the
 **`## Maintenance`** section of each `AGENTS.md` (on the submodule's latest `main`):
 - `applications/wedding-app/AGENTS.md` — <https://github.com/devantler-tech/wedding-app/blob/main/AGENTS.md>

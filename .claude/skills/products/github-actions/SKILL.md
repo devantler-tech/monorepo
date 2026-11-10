@@ -5,6 +5,11 @@ description: Maintenance task menu for shared CI/CD building blocks in devantler
 
 # Maintain: GitHub Actions (composite actions + reusable workflows)
 
+- **Serves:** every devantler-tech product repository, which uses its shared CI/CD building blocks, and the organisation itself, whose profile and GitHub configuration live there · **Outcome:** automatic checks, releases and chores that work the same everywhere ([README](https://github.com/devantler-tech/.github#readme), root `AGENTS.md` Stack map)
+- **Constraints:** changes ripple to every consumer, so they stay additive and backward-compatible (below)
+- **Non-goals:** UNKNOWN
+- **Evidence:** UNKNOWN
+
 The repo's canonical maintenance task menu lives **in its own repo** — read the **`## Maintenance`**
 section of its `AGENTS.md` (on the submodule's latest `main`):
 - `github/devantler-tech/.github-public/AGENTS.md` — <https://github.com/devantler-tech/.github/blob/main/AGENTS.md>

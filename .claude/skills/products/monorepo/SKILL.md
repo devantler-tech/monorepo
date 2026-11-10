@@ -5,6 +5,11 @@ description: Maintenance menu for the portfolio aggregator, its agent tooling an
 
 # Maintain: Portfolio aggregator
 
+- **Serves:** the maintainer and the agents working across the portfolio · **Outcome:** every product in one checkout under one shared contract, and one place to file needs no product owns (root `AGENTS.md`)
+- **Constraints:** the root `AGENTS.md` is the always-on core and stays within Codex's 32 KiB limit; each product's own `AGENTS.md` wins for that product
+- **Non-goals:** UNKNOWN
+- **Evidence:** UNKNOWN
+
 **Repo** `devantler-tech/monorepo` · **path** repo root · **Issues ENABLED**.
 Read the root [`AGENTS.md`](../../../../AGENTS.md) and its named guides. Use registered writer
 namespaces, isolated worktrees, issue claims and reviewed signed commits; never sweep unrelated pins.

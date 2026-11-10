@@ -5,6 +5,11 @@ description: Maintain and advance the shared agent-plugins marketplace, its auth
 
 # Maintain: Agent Plugins (shared agent extensions)
 
+- **Serves:** developers using VS Code, GitHub Copilot CLI or Claude Code, and this portfolio's own agents · **Outcome:** one install gives their assistant the skills, tool connections and roles it needs ([README](https://github.com/devantler-tech/agent-plugins#readme))
+- **Constraints:** first-party skills are authored here; curated external skills keep their original authors and upstream update paths; bundled skills keep their own licences
+- **Non-goals:** UNKNOWN
+- **Evidence:** OpenTelemetry usage exports and skill evaluation results ([plugin effectiveness](https://github.com/devantler-tech/agent-plugins/blob/main/docs/plugin-effectiveness.md))
+
 The shared **agent-extension** marketplace and supporting actions — the agentic counterpart to the CI building blocks in the
 [github-actions](../github-actions/SKILL.md) card. The marketplace is a checked-in submodule, so a per-run
 worktree can give you a working copy to build and validate in — but only once the submodule is

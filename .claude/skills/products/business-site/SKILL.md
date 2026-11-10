@@ -5,6 +5,11 @@ description: Maintenance menu for the devantler.tech business website, Projects 
 
 # Maintain: Devantler Tech business site
 
+- **Serves:** visitors to devantler.tech, in English and Danish · **Outcome:** they can explore Devantler Tech's work through its project catalogue, Journal and technical guides ([README](https://github.com/devantler-tech/business-site#readme))
+- **Constraints:** the public site is SvelteKit's prerendered static output ([ADR 0027](https://github.com/devantler-tech/business-site/blob/main/docs/adr/0027-svelte-only-public-build.md)); the Go portal is default-off and not deployed
+- **Non-goals:** UNKNOWN (today the published site has no sign-in, customer intake or payments, per the README)
+- **Evidence:** privacy-safe aggregate Umami data, read in the Blog Stewardship task below
+
 **Repo** `devantler-tech/business-site` · **path** `applications/business-site` (SvelteKit site under `web/`, default-off Go portal server under `server/`, authored content and build scripts at the repository root) · **Issues ENABLED**
 (issue + PR triage/creation, labels, comments). Shared rules: monorepo
 [`AGENTS.md`](../../../../AGENTS.md). Memory = your **native memory** (the business-site cursors +

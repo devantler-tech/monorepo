@@ -5,6 +5,11 @@ description: Product card for devantler-tech/fleet-gitops, the FleetDM GitOps co
 
 # Maintain: FleetDM device config
 
+- **Serves:** the suite's enrolled Macs and other managed devices · **Outcome:** they are configured and checked as the FleetDM GitOps files declare (root `AGENTS.md` Stack map)
+- **Constraints:** read the repository's visibility live; while it is private, nothing from it reaches a public surface (below)
+- **Non-goals:** device management in general (Stack map)
+- **Evidence:** UNKNOWN
+
 `applications/fleet-gitops` is the tracked submodule of `devantler-tech/fleet-gitops`, which holds
 the FleetDM configuration for the suite's managed devices as GitOps-managed files.
 

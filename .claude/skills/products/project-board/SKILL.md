@@ -5,6 +5,11 @@ description: Maintenance + advance task menu for the 🌊 Project Board (org pro
 
 # Maintain: 🌊 Project Board (org project 5)
 
+- **Serves:** the maintainer and the agent instances (below) · **Outcome:** opening the board answers "can I tell what is happening here?" across about 20 repositories
+- **Constraints:** its column limits encode the work-selection WIP discipline ([work-selection guide](../../../guides/work-selection.md))
+- **Non-goals:** UNKNOWN
+- **Evidence:** UNKNOWN
+
 **[github.com/orgs/devantler-tech/projects/5](https://github.com/orgs/devantler-tech/projects/5)** is a
 **product**, not a byproduct — it is the maintainer's *single* surface for seeing what exists, what is
 moving, and where it is headed across ~20 repos. It gets the same continuous-enhancement treatment as

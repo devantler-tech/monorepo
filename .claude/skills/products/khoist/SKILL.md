@@ -5,6 +5,11 @@ description: Product card for devantler-tech/khoist (KHoist), the cloud-native c
 
 # Maintain: KHoist
 
+- **Serves:** teams that publish data products, and the people and tools that consume them · **Outcome:** each product is described as a Kubernetes resource, its readiness is reported and the registry lists it ([README](https://github.com/devantler-tech/khoist#readme))
+- **Constraints:** the controller handles descriptions only; product data and credentials stay with the owning team; `v1alpha1` is deliberately small and expected to change
+- **Non-goals:** holding product data or credentials; the registry does not embed product pages or execute publisher code (README)
+- **Evidence:** UNKNOWN
+
 The canonical maintenance procedure lives in the **`## Maintenance`** section of
 `applications/khoist/AGENTS.md` on the submodule's latest `main`:
 <https://github.com/devantler-tech/khoist/blob/main/AGENTS.md>.
