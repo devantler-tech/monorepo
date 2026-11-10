@@ -92,9 +92,12 @@ fixture_script_path() {
   local name=$1 root
   case "$name" in ''|*[!a-zA-Z0-9_-]*) return 1 ;; esac
   root="$FIX/collector-copies/$name"
-  mkdir -p "$root/.claude/scripts" "$root/.claude/guides" || return 2
+  mkdir -p "$root/.claude/scripts" "$root/.claude/guides" "$root/.claude/plugin-consumption" || return 2
   cp "$SCRIPT_DIR/../../AGENTS.md" "$root/AGENTS.md" || return 2
   cp "$SCRIPT_DIR/../guides/work-selection.md" "$SCRIPT_DIR/../guides/egress-and-privacy.md" "$root/.claude/guides/" || return 2
+  # The default instance registry sits beside the script in a checkout; without it
+  # every transcript section of a copy would exit UNKNOWN for that reason alone.
+  cp "$SCRIPT_DIR/../plugin-consumption/agent-instances.json" "$root/.claude/plugin-consumption/" || return 2
   printf '%s/.claude/scripts/agent-telemetry.sh\n' "$root"
 }
 
@@ -1329,7 +1332,11 @@ all_run() {
 }
 printf '{}\n' > "$FIX/outcomes/malformed-instances.json"
 OUT=$(all_run); RC=$?
-if [ "$RC" != 2 ]; then ok "malformed registry does not abort a default all-section run"; else bad "malformed registry does not abort a default all-section run" "rc=$RC"; fi
+# Not aborting is shown by the sections below rendering. The registry is still an
+# unreadable input, which the banner names, so the finished run exits UNKNOWN/2
+# rather than reading as a clean one (#4909).
+if [ "$RC" = 2 ]; then ok "malformed registry: a default all-section run finishes and exits UNKNOWN/2"; else bad "malformed registry: a default all-section run finishes and exits UNKNOWN/2" "rc=$RC"; fi
+check "default all-section run names the unreadable registry" "$OUT" "other instances: NOT LISTED"
 check "default all-section run still renders a registry-independent section" "$OUT" '── DISPATCH HEALTH'
 check "default all-section run reports outcomes as UNKNOWN" "$OUT" 'merged PRs: UNKNOWN'
 check "default all-section run marks every merged-PR row UNKNOWN, never a count" "$OUT" 'UNKNOWN (query or provenance)'
@@ -1556,13 +1563,25 @@ check "counts sleep/poll"     "$OUT" "explicit sleep/poll calls .. 1"
 check "banner names the kagent lane as unobserved" "$OUT" "kagent-cluster: UNOBSERVED"
 check "banner names the kagent lane's reader" "$OUT" ".claude/scripts/kagent-lane-runs.sh (list | transcript <date> | liveness)"
 nocheck "banner never names a host instance as unobserved" "$OUT" "claude-local: UNOBSERVED"
-OUT=$(run --section efficiency --instances "$FIX/outcomes/instances.json")
+OUT=$(run --section efficiency --instances "$FIX/outcomes/instances.json"); unobserved_rc=$?
 check "banner names every non-host instance the registry holds" "$OUT" "build-worker: UNOBSERVED"
 nocheck "banner names only the registry's instances" "$OUT" "kagent-cluster"
+if [ "$unobserved_rc" -eq 0 ]; then ok "a readable registry naming an unobserved instance is not an unknown"
+else bad "a readable registry naming an unobserved instance is not an unknown" "exit=$unobserved_rc"; fi
+# An unreadable registry is an unreadable input: the report says so AND exits
+# UNKNOWN/2, so a caller reading only the status never sees a clean run (#4909).
 printf '{"version":1}\n' > "$FIX/no-instances-object.json"
-OUT=$(run --section efficiency --instances "$FIX/no-instances-object.json")
+OUT=$(run --section efficiency --instances "$FIX/no-instances-object.json"); unobserved_rc=$?
 check "an unreadable registry is said to leave other instances unlisted" "$OUT" "other instances: NOT LISTED"
 check "an unreadable registry still says the others are unobserved" "$OUT" "beyond claude-local and codex-local is UNOBSERVED"
+if [ "$unobserved_rc" -eq 2 ]; then ok "an unreadable registry exits UNKNOWN/2"
+else bad "an unreadable registry exits UNKNOWN/2" "exit=$unobserved_rc"; fi
+printf '{"version":1,"instances":{"claude-local":{},"Bad_Name":{}}}\n' > "$FIX/unusable-instance-name.json"
+OUT=$(run --section efficiency --instances "$FIX/unusable-instance-name.json"); unobserved_rc=$?
+check "an instance name that cannot be printed is still named as unobserved" "$OUT" "an instance with an unusable name: UNOBSERVED"
+nocheck "an instance name that cannot be printed is never echoed" "$OUT" "Bad_Name"
+if [ "$unobserved_rc" -eq 2 ]; then ok "an unusable instance name exits UNKNOWN/2"
+else bad "an unusable instance name exits UNKNOWN/2" "exit=$unobserved_rc"; fi
 OUT=$(run --section drift)
 nocheck "drift collects no transcripts, so it names no unobserved transcript source" "$OUT" "kagent-cluster: UNOBSERVED"
 

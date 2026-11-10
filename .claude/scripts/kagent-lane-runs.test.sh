@@ -36,10 +36,14 @@ pass() { echo "ok   $1"; }
 # from $FAKE/<path with / as _> (the root is `_root`), prints $FAKE/<key>.err and fails when that
 # exists, prints $FAKE/<key>.partial and then fails when that exists, and fails as NotFound
 # otherwise. Every request is logged. Anything outside the reader's proxy path is refused with 64,
-# so a read anywhere else fails the case that made it.
+# so a read anywhere else fails the case that made it. Every kubeconfig read is logged to
+# $FAKE/config.calls, and every --context the stub is given, before it is checked, to
+# $FAKE/contexts.
 cat >"$tmp/kubectl" <<'EOF'
 #!/usr/bin/env bash
+[ "$1" != --context ] || printf 'context=[%s]\n' "$2" >>"$FAKE/contexts"
 if [ "$1" = config ]; then
+  echo config >>"$FAKE/config.calls"
   [ ! -e "$FAKE/config.fail" ] || exit 1
   printf '{"contexts":[{"name":"admin-ctx","context":{"cluster":"prod","user":"admin"}},{"name":"prod-ctx","context":{"cluster":"prod","user":"oidc-user"}}]}'
   exit 0
@@ -299,9 +303,18 @@ done
 cadence_md '1 run/day' '06:00' >"$FAKE/AGENTS.md"
 run cadence --agents-md "$FAKE/AGENTS.md"
 expect "an improver schedule on the kagent row is unreadable" 2 - "missing or unreadable"
-{ cadence_md '1 run/day'; printf '| **kagent** — `kagent/*` | 1 run/day | — |\n'; } >"$FAKE/AGENTS.md"
+# Two rows, both inside the cadence section and none outside it, so only the one-row rule can
+# refuse this fixture. The insert lands just before the next heading, which ends the section.
+cadence_md '1 run/day' >"$FAKE/AGENTS.md"
 awk '/^### Durable memory/ { print "| **kagent** — `kagent/*` | 1 run/day; suspended | — |" } { print }' \
   "$FAKE/AGENTS.md" >"$FAKE/AGENTS.twice.md"
+asserts=$((asserts + 1))
+twice_shape=$(awk '/^### Durable memory/ { after = 1 }
+  index($0, "**kagent**") { if (after) outside++; else inside++ }
+  END { printf "inside=%d outside=%d", inside, outside }' "$FAKE/AGENTS.twice.md")
+if [ "$twice_shape" = "inside=2 outside=0" ]; then
+  pass "the two-row fixture holds two kagent rows, both in the cadence section"
+else note_fail "the two-row fixture's kagent rows: $twice_shape, want inside=2 outside=0"; fi
 run cadence --agents-md "$FAKE/AGENTS.twice.md"
 expect "two kagent rows in the cadence section are unreadable" 2 - "missing or unreadable"
 printf '### Cadence & focus\n\n| Lane | A | B |\n|---|---|---|\n\n### Elsewhere\n| **kagent** — `kagent/*` | 1 run/day | — |\n' \
@@ -388,6 +401,47 @@ scenario live-report-refused
 printf 'Error from server (ServiceUnavailable): no endpoints available\n' >"$FAKE/runs_2026-11-09_report.md.err"
 live
 expect "a listed report that cannot be read is UNKNOWN, not NOT-PRODUCING" 2 "KAGENT-LANE=UNKNOWN reason=report-unavailable newest=2026-11-09"
+
+# ── a failed context resolution stays failed (#4909) ──────────────────────────
+# Every mode stops at its first failed read, so no mode reads twice after one. This lifts the
+# reader's own classify, resolve_context and store_get out of the script and reads twice. kubectl
+# given an empty --context uses the kubeconfig's current context, which can be the admin one, so
+# the second read must fail the same way and must never reach kubectl.
+lift_reads() { # <output script> — the lifted functions and a loop that reads the root twice
+  {
+    printf '%s\n' 'set -Eeuo pipefail' "trap 'exit 2' ERR"
+    printf 'KUBECTL=%q\nscript_dir=%q\ntmp=%q\n' "$tmp/kubectl" "$root/.claude/scripts" "$FAKE"
+    printf '%s\n' 'PROXY="/api/v1/namespaces/agentic-engineer/services/lane-store-reader/proxy"' \
+      'context=""' 'contexted=0' 'read_class=""'
+    for fn in classify resolve_context store_get; do
+      awk -v fn="$fn" '$0 == fn "() {" { on = 1 } on { print } on && $0 == "}" { exit }' "$reader"
+    done
+    printf '%s\n' 'for attempt in 1 2; do' \
+      '  if store_get "" "$tmp/read.$attempt" 30s; then echo "read $attempt ok"; else echo "read $attempt failed: $read_class"; fi' \
+      'done'
+  } >"$1"
+}
+scenario resolve-twice
+lift_reads "$FAKE/lifted.sh"
+asserts=$((asserts + 1))
+lifted=$(grep -cE '^(classify|resolve_context|store_get)\(\) \{$' "$FAKE/lifted.sh" || true)
+if [ "$lifted" = 3 ]; then pass "the three read functions are lifted from the reader"
+else note_fail "lifted $lifted of the 3 read functions; the cases below prove nothing"; fi
+touch "$FAKE/config.fail"
+set +e; out=$(bash "$FAKE/lifted.sh" 2>"$tmp/err"); rc=$?; set -e; err=$(cat "$tmp/err")
+expect "a failed context resolution fails the first read" 0 "read 1 failed: no-prod-context"
+expect "a read after a failed context resolution is still refused, as no prod context" 0 "read 2 failed: no-prod-context"
+asserts=$((asserts + 1))
+if [ ! -e "$FAKE/contexts" ]; then pass "no read after a failed context resolution reaches kubectl"
+else note_fail "kubectl was called after a failed context resolution: $(cat "$FAKE/contexts")"; fi
+rm -f "$FAKE/config.fail" "$FAKE/config.calls" "$FAKE/contexts"
+set +e; out=$(bash "$FAKE/lifted.sh" 2>"$tmp/err"); rc=$?; set -e; err=$(cat "$tmp/err")
+expect "a resolved context serves the first read" 0 "read 1 ok"
+expect "a resolved context serves a later read" 0 "read 2 ok"
+asserts=$((asserts + 1))
+if [ "$(cat "$FAKE/config.calls")" = config ] && [ "$(sort -u "$FAKE/contexts")" = "context=[prod-ctx]" ]; then
+  pass "the context is resolved once and every read uses the scoped one"
+else note_fail "kubeconfig reads: $(wc -l <"$FAKE/config.calls"); contexts: $(sort -u "$FAKE/contexts" | tr '\n' ' ')"; fi
 
 scenario live-no-clock
 mkdir -p "$FAKE/bin"

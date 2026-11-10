@@ -3736,10 +3736,12 @@ run_safety_bounded() {
 # transcript here, so no per-session figure below counts it. It is named rather
 # than left out, so that its absence never reads as a quiet lane or a clean zero.
 # The registry is read on its own here: the outcomes block reads it only when that
-# section runs.
+# section runs. A registry that cannot be read, or that names an instance this
+# cannot print, is an unreadable input: the function returns 2 and the report
+# exits UNKNOWN (.claude/scripts/AGENTS.md), whatever the sections below found.
 HOST_TRANSCRIPT_INSTANCES="claude-local codex-local"
 report_unobserved_instances() {
-  local others inst
+  local others inst status=0
   if ! others=$(jq -r --arg host "$HOST_TRANSCRIPT_INSTANCES" '
       if (.instances | type) == "object" then
         .instances | keys[] | select(. as $id | ($host | split(" ") | index($id)) == null)
@@ -3747,12 +3749,13 @@ report_unobserved_instances() {
     ' "$INSTANCES" 2>/dev/null); then
     echo " other instances: NOT LISTED — the instance registry is unreadable. Any instance"
     echo "   beyond ${HOST_TRANSCRIPT_INSTANCES// / and } is UNOBSERVED, and no figure below counts it."
-    return 0
+    return 2
   fi
   while IFS= read -r inst; do
     [ -n "$inst" ] || continue
     case "$inst" in
       *[!abcdefghijklmnopqrstuvwxyz0123456789-]*)
+        status=2
         echo " an instance with an unusable name: UNOBSERVED — no figure below counts it." ;;
       kagent-cluster)
         echo " kagent-cluster: UNOBSERVED — it runs in the platform cluster and keeps no transcripts"
@@ -3762,6 +3765,7 @@ report_unobserved_instances() {
         echo " $inst: UNOBSERVED — it keeps no transcripts on this host, so no figure below counts it." ;;
     esac
   done <<<"$others"
+  return "$status"
 }
 
 # Everything the report prints goes through main(), whose entire stdout is piped
@@ -3848,7 +3852,7 @@ case "$SECTION" in
     echo ' transcript cohort: authorized-live-v2; prior selector-only observations remain a separate series'
     echo ' Coverage changes are not performance improvements; rebind hypothesis exposure and companion floors.'
     fi
-    report_unobserved_instances ;;
+    report_unobserved_instances || main_rc=2 ;;
 esac
 # Only the report controller prints coverage, and only when it walked the Claude
 # files itself (SF_COUNT is numeric; see main). A safety worker's banner frames

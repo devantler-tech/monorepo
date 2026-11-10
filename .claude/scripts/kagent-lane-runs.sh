@@ -219,9 +219,14 @@ classify() {
 read_class=""
 contexted=0
 # resolve_context — the scoped prod context, through the same kubectl the reads use, so a KUBECTL
-# override cannot resolve against one kubeconfig and read through another.
+# override cannot resolve against one kubeconfig and read through another. It resolves once. A later
+# call answers from that one attempt, so a failed resolution stays failed: kubectl given an empty
+# --context falls back to the kubeconfig's current context, which can be the break-glass admin one.
 resolve_context() {
-  [ "$contexted" = 0 ] || return 0
+  if [ "$contexted" != 0 ]; then
+    [ -n "$context" ]
+    return
+  fi
   contexted=1
   [ -z "$context" ] || return 0
   if ! "$KUBECTL" config view -o json >"$tmp/kubeconfig.json" 2>/dev/null \
