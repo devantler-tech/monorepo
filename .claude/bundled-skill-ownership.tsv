@@ -69,6 +69,8 @@ agentic-engineering	portfolio-maintenance	LOCAL
 agentic-engineering	product-brainstorming	https://github.com/anthropics/knowledge-work-plugins
 agentic-engineering	product-documentation	LOCAL
 agentic-engineering	product-engineering	LOCAL
+agentic-engineering	prometheus	https://github.com/grafana/skills
+agentic-engineering	promql	https://github.com/grafana/skills
 agentic-engineering	prototype	https://github.com/mattpocock/skills
 agentic-engineering	reconciliation	https://github.com/anthropics/knowledge-work-plugins
 agentic-engineering	refactor	https://github.com/github/awesome-copilot
