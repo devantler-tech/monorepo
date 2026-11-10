@@ -431,6 +431,11 @@ work misses:
   `devantler-tech/agent-plugins` (skills and their plugin delivery); cluster
   guardrail / admission / generation policies → `devantler-tech/kyverno-policies`. Then propagate consumers
   to the shared version.
+- **Census consumers before changing a shared surface.** Before changing a `.github` reusable workflow
+  or action, a KSail config key, a Kyverno policy name, a template variable or an agent-plugins contract
+  section, run `.claude/scripts/consumer-census.sh <symbol>` over the populated submodules. Classify the
+  change as additive, deprecating or breaking from its hits; a breaking change goes expand-contract with
+  linked consumer PRs. An `UNKNOWN` repository is not zero consumers: populate it or fetch it and rerun.
 - **Consistency & drift.** Versions, pinned actions, toolchains, conventions, and `AGENTS.md
   ## Maintenance` sections aligned across the suite; divergence reconciled toward the best pattern.
 - **Industry-standard vs. native** (per *Design principles*): anything generic should sit in a portable,

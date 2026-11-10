@@ -53,6 +53,7 @@ jobs:
       security-advisory-contract: ${{ steps.filter.outputs.security-advisory-contract }}
       upstream-first-contract: ${{ steps.filter.outputs.upstream-first-contract }}
       rule-sensor-inventory: ${{ steps.filter.outputs.rule-sensor-inventory }}
+      consumer-census: ${{ steps.filter.outputs.consumer-census }}
       retired-rule-survivors-contract: ${{ steps.filter.outputs.retired-rule-survivors-contract }}
       bash-call-timeout-budget-contract: ${{ steps.filter.outputs.bash-call-timeout-budget-contract }}
       repo-delete-guard: ${{ steps.filter.outputs.repo-delete-guard }}
@@ -652,6 +653,10 @@ jobs:
             rule-sensor-inventory:
               - '.claude/**'
               - '.github/**'
+            consumer-census:
+              - '.claude/scripts/consumer-census.sh'
+              - '.claude/scripts/consumer-census.test.sh'
+              - '.github/workflows/ci.yaml'
             retired-rule-survivors-contract:
               - 'AGENTS.md'
               - '.claude/guides/**'
@@ -2470,6 +2475,21 @@ jobs:
       - name: Verify the rule sensor inventory
         run: bash .claude/scripts/rule-sensor-inventory.test.sh
 
+  test-consumer-census:
+    name: Test consumer census
+    needs: changes
+    if: needs.changes.outputs.consumer-census == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the consumer census
+        run: bash .claude/scripts/consumer-census.test.sh
+
   test-retired-rule-survivors-contract:
     name: Test retired rule survivors contract
     needs: changes
@@ -3601,6 +3621,7 @@ jobs:
       - test-security-advisory-contract
       - test-upstream-first-contract
       - test-rule-sensor-inventory
+      - test-consumer-census
       - test-retired-rule-survivors-contract
       - test-bash-call-timeout-budget-contract
       - test-repo-delete-guard
@@ -3709,6 +3730,7 @@ jobs:
             ${{ needs.test-security-advisory-contract.result }}
             ${{ needs.test-upstream-first-contract.result }}
             ${{ needs.test-rule-sensor-inventory.result }}
+            ${{ needs.test-consumer-census.result }}
             ${{ needs.test-retired-rule-survivors-contract.result }}
             ${{ needs.test-bash-call-timeout-budget-contract.result }}
             ${{ needs.test-repo-delete-guard.result }}

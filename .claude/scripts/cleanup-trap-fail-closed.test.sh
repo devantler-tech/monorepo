@@ -315,6 +315,7 @@ unsigned-commit-report.test.sh|
 ci-job-wiring.test.sh|
 pipefail-grep-guard.test.sh|
 rule-sensor-inventory.test.sh|
+consumer-census.test.sh|
 skill-owner.test.sh|
 silent-scheduled-workflows.test.sh|
 security-advisory-sweep.test.sh|
