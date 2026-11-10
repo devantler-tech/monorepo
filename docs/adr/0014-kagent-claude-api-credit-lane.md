@@ -98,3 +98,14 @@ The maintainer decided on 2026-11-07:
   until the agent ends it, and the Anthropic workspace spend limit equal to the credit is the lane's
   only spend cap. The lane still runs at most once a day and stops when the credit runs out
   ([platform#5964](https://github.com/devantler-tech/platform/pull/5964)).
+- **2026-11-10: kagent's own scheduled runs replace the CronJob.** The first known gap under
+  *Consequences* was wrong: kagent has had native scheduled runs since 2026-09-09
+  ([kagent-dev/kagent#2741](https://github.com/kagent-dev/kagent/pull/2741)), before the release
+  candidate the lane runs. The maintainer chose to switch to them. Each run is a kagent session shown
+  in the kagent UI with the schedule's history, and the lane no longer needs its own trigger. kagent
+  keeps a schedule in its database rather than as a Kubernetes resource
+  ([kagent-dev/kagent#2853](https://github.com/kagent-dev/kagent/issues/2853)), so a Job applied by
+  Flux writes it from the platform repository. kagent cancels a run at its execution deadline, so
+  the deadline is set to ten years to keep the 2026-11-09 amendment. The schedule stays paused until
+  every sub-issue of #4866 is done
+  ([platform#5999](https://github.com/devantler-tech/platform/pull/5999)).
