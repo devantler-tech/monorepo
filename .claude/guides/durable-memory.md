@@ -64,9 +64,29 @@ step:
    run stops before acting on memory rather than starting empty, and it **uploads nothing**, so a
    partial copy never replaces the store's. Only one run may write the store at a time, and the
    scheduler does not stop runs from overlapping, so a run that cannot show it is the only writer
-   treats memory as UNKNOWN in the same way (the single-writer lease is monorepo#4910). After a
-   complete download or a first-run `404`, the run uploads the directory back before it stops,
-   however the run ended, and it leaves its transcript and report under `runs/<UTC date>/`.
+   treats memory as UNKNOWN in the same way. It shows that with the store's **single-writer
+   lease**, an exclusive WebDAV `LOCK` on `memory/` taken before memory is read (monorepo#4910,
+   devantler-tech/platform#6070). A `423` means another run holds the lease, and any other
+   failure to take it is UNKNOWN. The lease **fences** the store: a write under `memory/` must
+   carry the lease's token (`If: (<token>)`), so the store itself refuses another run's writes,
+   and refuses the former holder's after a store restart has freed its lease. The store numbers
+   tokens up from the second it started, and an `UNLOCK` checks only the token, so a restarted
+   store could hand a token out again and a stale `UNLOCK` would release the new holder's lease.
+   A token is safe once it is at least 60 below a reply's `Date` in Unix seconds, because no
+   restart can reissue it then; this relies on the cluster's node clocks agreeing within a
+   minute. A run never releases a token before it is safe: one that takes the lease moments
+   after the store started waits until the store's clock is past it, refreshes, and goes on only
+   if the refresh still names it, leaving the lease alone otherwise. Before uploading, the run
+   refreshes the lease and counts as the writer only when the refresh **names it as the
+   holder**. It then
+   uploads one file at a time, since the store refuses two writes with one token at once, and a
+   `412` or `423` means it lost the lease. It releases the lease with an `UNLOCK` only when every
+   write under `memory/` succeeded, and never removes a lease it did not take. A run that dies
+   holding the lease stops every later run until the `lane-store` Deployment restarts: no run
+   writes, rather than two. A stopped run's report is its kagent session. After a complete
+   download or a first-run `404`, the run uploads the directory back before it stops, however the
+   run ended, provided it still holds the lease. It also leaves its transcript and report under
+   `runs/<UTC date>/`.
    The maintainer and the Agent Improver read the store read-only through the Kubernetes API:
    `kubectl get --raw /api/v1/namespaces/agentic-engineer/services/lane-store-reader/proxy/<path>`
    (devantler-tech/platform#6014).
