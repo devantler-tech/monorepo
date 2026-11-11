@@ -311,7 +311,6 @@ submodule-agents-drift.test.sh|
 inference-routing-scorecard.test.sh|
 submodule-pin-currency.test.sh|
 ci-job-wiring.test.sh|
-pipefail-grep-guard.test.sh|
 rule-sensor-inventory.test.sh|
 consumer-census.test.sh|
 skill-owner.test.sh|

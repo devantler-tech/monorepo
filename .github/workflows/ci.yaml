@@ -1101,7 +1101,7 @@ jobs:
               # filter contradicts its stated scope and lets an extensionless
               # `tools/check` or a repository-root `check` land unscanned. An
               # enumerated set of "script-ish" directories only moves the gap
-              # rather than closing it. The sweep is ~9s over the whole
+              # rather than closing it. The sweep is under a second over the whole
               # repository, so running it unconditionally is the cheaper error.
               - '**'
             python-ban-guard:
@@ -1817,7 +1817,13 @@ jobs:
     name: Test pipefail grep guard
     needs: changes
     if: needs.changes.outputs.pipefail-grep-guard == 'true'
-    runs-on: ubuntu-latest
+    # Both OSes: the guard is a Go program behind a shell entrypoint (monorepo#2797), and
+    # scheduled runs execute on macOS. It builds Go, so it cannot sit in a macOS batch.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     steps:
@@ -1825,10 +1831,18 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/pipefail-grep-guard-go/go.mod
+          cache: false
+      - name: Install GNU build deadline utility
+        if: runner.os == 'macOS'
+        run: brew install coreutils
       # The self-test proves the class is real by executing it, then covers each
       # spelling the guard must catch and each safe shape it must leave alone.
       - name: Self-test the guard
-        run: bash .claude/scripts/pipefail-grep-guard.test.sh
+        run: go -C .claude/scripts/pipefail-grep-guard-go test ./...
       # The repository-wide sweep gates every PR that reaches this job. A finding
       # names the offending line; a false positive on a valid script is fixed in
       # the guard, never by skipping the sweep.

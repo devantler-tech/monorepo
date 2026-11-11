@@ -1,0 +1,17 @@
+USAGE
+  pipefail-grep-guard.sh [path ...]
+      Reject a writer piped into a grep that stops at its first match (-q, -l, a finite -m),
+      which under `set -o pipefail` reports FAILURE on a successful match.
+      With no paths, scans every tracked shell script in the repository —
+      `*.sh` by name, plus any tracked file whose shebang names a shell.
+
+ESCAPE HATCHES
+  A comment containing `pipefail-grep-guard: allow` on the line where the pipeline ends skips
+  that pipeline. A comment line beginning with `pipefail-grep-guard: allow-file` skips the whole
+  file, for a file whose subject is this bug. Say why in the same comment. Text inside strings or
+  heredoc bodies is never a directive.
+
+EXIT CODES
+  0  no offending pipeline found
+  1  at least one offending pipeline found (each is printed), or a file that cannot be parsed
+  2  usage, or the repository/file could not be read
