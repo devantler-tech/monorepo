@@ -53,6 +53,24 @@ step:
    not a lane outage. If it recurs once both entries run, it is evidence about the Codex cadence
    for the maintainer, never a reason to skip the guard.
 
+   **The kagent lane's memory lives in its in-cluster store, because every run starts in a fresh
+   sandbox** (monorepo#4869, maintainer choice 2026-11-10). The store is the `lane-store` WebDAV
+   server in the platform cluster's `agentic-engineer` namespace. The sandbox reaches it only
+   through Substrate's egress gateway, which supplies the credential. Before reading memory, a run
+   downloads the store's `memory/` into a local directory and treats that directory as its native
+   memory, in the legacy layout (a `MEMORY.md` index plus topic files), so pre-flight runs
+   `memory-hygiene.sh --layout legacy --dir <that directory>`. Only a `404` for `memory/` means a
+   first run. An unreachable store, an interrupted download or any other failure is UNKNOWN: the
+   run stops before acting on memory rather than starting empty, and it **uploads nothing**, so a
+   partial copy never replaces the store's. Only one run may write the store at a time, and the
+   scheduler does not stop runs from overlapping, so a run that cannot show it is the only writer
+   treats memory as UNKNOWN in the same way (the single-writer lease is monorepo#4910). After a
+   complete download or a first-run `404`, the run uploads the directory back before it stops,
+   however the run ended, and it leaves its transcript and report under `runs/<UTC date>/`.
+   The maintainer and the Agent Improver read the store read-only through the Kubernetes API:
+   `kubectl get --raw /api/v1/namespaces/agentic-engineer/services/lane-store-reader/proxy/<path>`
+   (devantler-tech/platform#6014).
+
    **Bound the Codex automation-ledger read by bytes, not lines.** Start with
    `.claude/scripts/automation-memory-read.sh --file "$HOME/.codex/automations/daily-ai-engineer/memory.md"`
    (the Improver uses its own declared file). It returns up to three complete recent sections within
