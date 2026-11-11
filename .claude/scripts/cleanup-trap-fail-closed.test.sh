@@ -310,7 +310,6 @@ claude-lane-liveness.test.sh|
 submodule-agents-drift.test.sh|
 inference-routing-scorecard.test.sh|
 submodule-pin-currency.test.sh|
-unsigned-commit-report.test.sh|
 ci-job-wiring.test.sh|
 pipefail-grep-guard.test.sh|
 rule-sensor-inventory.test.sh|
