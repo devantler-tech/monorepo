@@ -1981,6 +1981,10 @@ for a in "\$@"; do
   if [ -n "\${STUB_LSOF_LATE_BLOCKED:-}" ] && [ "\$a" = "\$STUB_LSOF_LATE_BLOCKED" ]; then
     echo "lsof: WARNING: can't opendir(\$a/nested): Permission denied" >&2
   fi
+  # A scan killed part-way: no rows, no diagnostic, and a signal status (monorepo#3819).
+  if [ -n "\${STUB_LSOF_LATE_KILLED:-}" ] && [ "\$a" = "\$STUB_LSOF_LATE_KILLED" ]; then
+    kill -9 \$\$
+  fi
 done
 exit 1
 STUB
@@ -2030,9 +2034,22 @@ cleaned -cache || fail 'a late holder of the module cache also kept the idle bui
 
 # 19c. a late probe that could not finish is not an idle answer: the cache is kept.
 out=$(STUB_LSOF_LATE_BLOCKED="$late_mod_canon" run_late_go apply)
+rc=$?
 cleaned -modcache && fail 'go clean -modcache ran although the late liveness scan could not complete'
 grep -q 'KEEP  (scan incomplete)' <<<"$out" ||
   fail 'a module cache whose late scan could not complete was not reported as such'
+[ "$rc" -eq 2 ] || fail "a late scan that could not complete exited ${rc}, not 2 (UNKNOWN)"
+
+# 19c2. a late scan KILLED part-way prints no row and no diagnostic; only lsof's status says it
+# never finished. Read as idle, the cache was emptied under a build (monorepo#3819). 19a, whose
+# scan ends with lsof's ordinary status, is the ablation partner.
+out=$(STUB_LSOF_LATE_KILLED="$late_mod_canon" run_late_go apply)
+rc=$?
+cleaned -modcache && fail 'go clean -modcache ran although the late liveness scan was killed part-way'
+grep -qF "KEEP  (scan incomplete) ${late_mod_canon}: lsof exited" <<<"$out" ||
+  fail 'a module cache whose late scan was killed was not reported as an incomplete scan'
+[ "$rc" -eq 2 ] || fail "a late scan killed part-way exited ${rc}, not 2 (UNKNOWN)"
+cleaned -cache || fail 'a killed scan of the module cache also kept the idle build cache'
 
 # 19d. dry-run never cleans, and its projection is the up-front answer: the late probe is
 # about the moment of removal, which a dry-run never reaches.
@@ -2040,6 +2057,30 @@ out=$(STUB_LSOF_LATE_HELD="$late_mod_canon" run_late_go dry-run)
 [ -e "$cache_cleans" ] && fail 'dry-run ran go clean'
 grep -q 'GOMODCACHE would be cleaned' <<<"$out" ||
   fail 'dry-run did not project an over-budget module cache that is idle in the snapshot'
+
+# 19e. a Go cache whose size cannot be measured is kept AND makes the run UNKNOWN (exit 2): it was
+# kept with exit 0, so the summary called a run that never examined the cache complete
+# (monorepo#3819). The `du` stub fails for the build cache alone; the same run without it is the
+# ablation partner and must exit 0.
+du_stub="${fixture_root}/du-fail-bin"
+mkdir -p "$du_stub" || fail 'fixture: du stub dir'
+real_du=$(command -v du) || fail 'fixture: no du on PATH'
+cat > "${du_stub}/du" <<STUB
+#!/bin/sh
+for a in "\$@"; do
+  [ "\$a" = "${late_go_cache}" ] && exit 1
+done
+exec "${real_du}" "\$@"
+STUB
+chmod +x "${du_stub}/du" || fail 'fixture: chmod du stub'
+out=$(run_late_go dry-run)
+rc=$?
+[ "$rc" -eq 0 ] || fail "ablation partner: a dry-run with every cache measurable exited ${rc}, not 0"
+out=$(PATH="${du_stub}:$PATH" run_late_go dry-run)
+rc=$?
+grep -q 'GOCACHE size unmeasurable' <<<"$out" || fail 'an unmeasurable build cache was not reported'
+[ "$rc" -eq 2 ] || fail "a run that could not measure the build cache exited ${rc}, not 2 (UNKNOWN)"
+grep -q 'GOCACHE would be cleaned' <<<"$out" && fail 'an unmeasurable build cache was projected for cleaning'
 
 # --- 20. a per-lane fallback module cache is budgeted too (monorepo#3710) --------------
 # A runtime whose sandbox cannot write the default caches points GOMODCACHE at
@@ -2057,10 +2098,11 @@ make_mod_cache() {
   dd if=/dev/zero of="$1/example.com/dep@v1.0.0/blob.go" bs=1024 count=2048 2> /dev/null
   chmod -R a-w "$1/example.com/dep@v1.0.0" || return 1
 }
-# run_mod <mode> <budget-gb> sweeps mod_root with the stubs of case 19.
+# run_mod <mode> <budget-gb> sweeps mod_root with the stubs of case 19. MOD_PS, when set, names a
+# stub directory whose `ps` replaces the quiet one.
 run_mod() {
   rm -f "$cache_cleans"
-  PATH="${cache_stubs}:$PATH" BUILD_CACHE_RECLAIM_TMPDIR="$mod_root" \
+  PATH="${MOD_PS:+${MOD_PS}:}${cache_stubs}:$PATH" BUILD_CACHE_RECLAIM_TMPDIR="$mod_root" \
     BUILD_CACHE_RECLAIM_GO_TMPDIR="$empty_go_tmp" \
     GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="${MOD_GOMODCACHE:-$GO_MOD_FIXTURE}" \
     bash "$impl" "$1" 3 "$2" 2>&1
@@ -2155,6 +2197,56 @@ if [ "$(id -u)" -ne 0 ]; then
   said "$out" "$mod_held" 'UNKNOWN (unreadable, module cache not examined)' ||
     fail 'an unsearchable fallback module cache was not reported UNKNOWN'
 fi
+
+# 20g. a Go build holds no file open in its module cache between two compile steps, so the
+# open-file checks alone called an over-budget fallback cache idle in the middle of a build, and
+# the rest of that build failed (monorepo#3819). While a toolchain process runs it is kept, in
+# dry-run and apply alike. 20b and 20c, with the quiet table, are the ablation partners.
+make_mod_cache "$mod_idle" || fail 'fixture: 20g idle fallback module cache'
+mod_busy_ps="${fixture_root}/ps-mod-busy"
+printf '%s\n' '00:05 /bin/sh' '00:42 compile' > "${fixture_root}/ps-mod-busy.txt"
+make_ps_stub "$mod_busy_ps" "${fixture_root}/ps-mod-busy.txt" || fail 'fixture: busy ps stub'
+out=$(MOD_PS="$mod_busy_ps" run_mod dry-run 0)
+said "$out" "$mod_idle" 'KEEP  (go running)' ||
+  fail 'an over-budget fallback module cache was not kept while a Go toolchain process runs'
+said "$out" "$mod_idle" 'WOULD REAP' &&
+  fail 'dry-run projected a fallback module cache a running Go build may still read'
+out=$(MOD_PS="$mod_busy_ps" run_mod apply 0)
+[ -e "${mod_idle}/example.com/dep@v1.0.0/blob.go" ] ||
+  fail 'apply removed a fallback module cache while a Go toolchain process runs'
+
+# 20h. a process table that cannot be read proves nothing: the cache is kept and the run is UNKNOWN.
+mod_fail_ps="${fixture_root}/ps-mod-fail"
+make_ps_stub "$mod_fail_ps" || fail 'fixture: failing ps stub'
+out=$(MOD_PS="$mod_fail_ps" run_mod apply 0)
+rc=$?
+[ -e "${mod_idle}/example.com/dep@v1.0.0/blob.go" ] ||
+  fail 'apply removed a fallback module cache although the process table could not be read'
+said "$out" "$mod_idle" 'UNKNOWN (process table unreadable, module cache not examined)' ||
+  fail 'a fallback module cache kept for an unreadable process table was not reported UNKNOWN'
+[ "$rc" -eq 2 ] || fail "an unreadable process table during the fallback sweep exited ${rc}, not 2"
+
+# 20i. a build that starts while the caches are measured is only in a FRESH table: the stub
+# answers the startup read quietly and every later read with a running go command.
+mod_late_ps="${fixture_root}/ps-mod-late"
+mkdir -p "$mod_late_ps" || fail 'fixture: late ps stub dir'
+cat > "${mod_late_ps}/ps" <<STUB
+#!/bin/sh
+c="${fixture_root}/ps-mod-late-calls"
+n=\$(cat "\$c" 2>/dev/null || echo 0)
+echo \$((n + 1)) > "\$c"
+if [ "\$n" -eq 0 ]; then
+  cat "${quiet_table}"
+else
+  printf '%s\n' '00:05 /bin/sh' '00:03 go'
+fi
+STUB
+chmod +x "${mod_late_ps}/ps" || fail 'fixture: chmod late ps stub'
+out=$(MOD_PS="$mod_late_ps" run_mod apply 0)
+[ -e "${mod_idle}/example.com/dep@v1.0.0/blob.go" ] ||
+  fail 'apply removed a fallback module cache although a Go build started before removal'
+said "$out" "$mod_idle" 'KEEP  (go running, late)' ||
+  fail 'a fallback module cache kept by the late toolchain check did not say why'
 chmod -R u+w "$mod_root" "$mod_elsewhere" 2> /dev/null
 rm -rf -- "$mod_root" "$mod_elsewhere"
 
