@@ -6,6 +6,8 @@
 # one that does not use it, one that is not populated, and one whose origin cannot be fetched. It
 # proves a hit is found on the fetched tip (not the working tree), a miss is reported only after the
 # control passes, and an unpopulated or unfetchable repository is UNKNOWN (exit 2), never zero.
+# The monorepo itself is one more row (monorepo#4917): its own hit is found, its submodule gitlinks are
+# not searched again, and a failed fetch of it is UNKNOWN.
 # An offline `gh` stub proves an archived repository is ARCHIVED and not searched, and an unreadable
 # archive state or a non-GitHub URL is UNKNOWN.
 # TEST_BASH=/bin/bash runs the helper under macOS's bash 3.2.
@@ -81,6 +83,21 @@ cat > "$work/root/.gitmodules" <<'EOF'
 EOF
 
 symbol='.github/workflows/shared.yaml'
+
+# The monorepo itself (monorepo#4917): its origin's default branch uses a symbol no submodule uses,
+# and records the consumer submodule as a gitlink, so a search that descended into gitlinks would
+# count the consumer's hit twice. The configured URL names the GitHub repository; `insteadOf` points
+# the fetch at a local bare repository.
+g init -q --bare "$work/origins/monorepo.git"
+g clone -q "$work/origins/monorepo.git" "$work/other-monorepo" 2>/dev/null
+printf '## Monorepo-only contract section\n' > "$work/other-monorepo/AGENTS.md"
+g -C "$work/other-monorepo" add AGENTS.md
+g -C "$work/other-monorepo" update-index --add --cacheinfo "160000,$(g -C "$work/other-consumer" rev-parse HEAD),consumer"
+g -C "$work/other-monorepo" commit -q -m init
+g -C "$work/other-monorepo" push -q origin HEAD:main
+g -C "$work/root" remote add origin git@github.com:fixture-org/monorepo.git
+g -C "$work/root" config "url.$work/origins/monorepo.git.insteadOf" git@github.com:fixture-org/monorepo.git
+mono_symbol='Monorepo-only contract section'
 
 # An offline `gh`: archive state comes from $work/gh-state (`<owner>/<repo> true|false|error`); any
 # repository not listed is not archived. Every call is logged, so the test needs no network.
@@ -167,11 +184,66 @@ fi
 
 # --- the whole census: hits still print, but one UNKNOWN makes it incomplete ---------------------
 run "$symbol"
-if [ "$rc" -eq 2 ] && has "$(printf 'HIT\tconsumer\t')" && has "$(printf 'SUMMARY\thits=1\trepos-with-hits=1\tnone=1\tarchived=0\tunknown=3')"; then
+if [ "$rc" -eq 2 ] && has "$(printf 'HIT\tconsumer\t')" && has "$(printf 'SUMMARY\thits=1\trepos-with-hits=1\tnone=2\tarchived=0\tunknown=3')"; then
   pass "full census: hits printed, exit 2 while any repository is UNKNOWN"
 else
   fail "full census: rc=$rc out=$(cat "$work/out")"
 fi
+if has "$(printf 'NONE\t.\tmain@')" && ! has "$(printf 'HIT\t.\t')"; then
+  pass "full census: the monorepo row is searched, and its submodule gitlink is not counted again"
+else
+  fail "full census: monorepo row missing or double-counted: $(cat "$work/out")"
+fi
+
+# --- the monorepo itself is a row (monorepo#4917) ----------------------------------------------
+run "$mono_symbol"
+if has "$(printf 'HIT\t.\tAGENTS.md:1\t## Monorepo-only contract section')" \
+  && has "$(printf 'SUMMARY\thits=1\trepos-with-hits=1\t')"; then
+  pass "monorepo row: a symbol only the monorepo uses is a HIT with file:line"
+else
+  fail "monorepo row: rc=$rc out=$(cat "$work/out")"
+fi
+if [ ! -e "$work/root/AGENTS.md" ]; then
+  pass "fixture: the monorepo hit exists only on origin, so it came from the fetched tip"
+else
+  fail "fixture: the root working tree holds AGENTS.md, so the fetch is not proven"
+fi
+run --only . "$mono_symbol"
+if [ "$rc" -eq 0 ] && has "$(printf 'HIT\t.\tAGENTS.md:1')" && ! has "$(printf '\tconsumer\t')" \
+  && has "$(printf 'SUMMARY\thits=1\trepos-with-hits=1\tnone=0\tarchived=0\tunknown=0')"; then
+  pass "monorepo row: --only . searches the monorepo alone"
+else
+  fail "monorepo row --only .: rc=$rc out=$(cat "$work/out")"
+fi
+run --only consumer "$mono_symbol"
+if ! has "$(printf '\t.\t')"; then
+  pass "monorepo row: an --only list without . leaves the monorepo out"
+else
+  fail "monorepo row: --only consumer still searched the monorepo: $(cat "$work/out")"
+fi
+
+# A failed fetch for the monorepo row is UNKNOWN, even though an earlier fetch left a tip with a hit.
+g -C "$work/root" config --unset "url.$work/origins/monorepo.git.insteadOf"
+g -C "$work/root" config "url.$work/origins/missing-monorepo.git.insteadOf" git@github.com:fixture-org/monorepo.git
+run --only . "$mono_symbol"
+if [ "$rc" -eq 2 ] && has "$(printf 'UNKNOWN\t.\t')" && ! has 'HIT' \
+  && has "$(printf 'SUMMARY\thits=0\trepos-with-hits=0\tnone=0\tarchived=0\tunknown=1')"; then
+  pass "monorepo row: a failed fetch is UNKNOWN and exit 2, never zero consumers or a stale hit"
+else
+  fail "monorepo row failed fetch: rc=$rc out=$(cat "$work/out")"
+fi
+g -C "$work/root" config --unset "url.$work/origins/missing-monorepo.git.insteadOf"
+g -C "$work/root" config "url.$work/origins/monorepo.git.insteadOf" git@github.com:fixture-org/monorepo.git
+
+# An unreadable archive state for the monorepo is UNKNOWN, read from its configured GitHub URL.
+printf 'fixture-org/monorepo error\n' > "$work/gh-state"
+run --only . "$mono_symbol"
+if [ "$rc" -eq 2 ] && has "$(printf 'UNKNOWN\t.\tarchive state of fixture-org/monorepo could not be read')" && ! has 'HIT'; then
+  pass "monorepo row: an unreadable archive state is UNKNOWN"
+else
+  fail "monorepo row archive state: rc=$rc out=$(cat "$work/out")"
+fi
+: > "$work/gh-state"
 
 # --- --no-fetch searches what was already fetched -----------------------------------------------
 run --no-fetch --only consumer "$symbol"
@@ -226,7 +298,7 @@ fi
 run
 if [ "$rc" -eq 2 ]; then pass "usage: no symbol is exit 2"; else fail "usage: no symbol gave $rc"; fi
 run --only nosuch "$symbol"
-if [ "$rc" -eq 2 ] && grep -q 'not a submodule path' "$work/err"; then
+if [ "$rc" -eq 2 ] && grep -q 'nor a submodule path' "$work/err"; then
   pass "usage: an --only path outside .gitmodules is exit 2"
 else
   fail "usage: --only nosuch gave $rc ($(cat "$work/err"))"

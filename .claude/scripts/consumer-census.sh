@@ -6,21 +6,23 @@
 # but nothing listed the consumers when the change was made, so breaks surfaced late. The monorepo
 # already aggregates every product as a submodule, so the census is local and free.
 #
-# For each submodule in `.gitmodules` it fetches the default branch's tip (the working tree may be
-# stale) and searches that commit for SYMBOL as a fixed string. It never changes a working tree, an
-# index or a branch; the only write is the fetched remote-tracking ref.
+# For the monorepo itself (row path `.`) and each submodule in `.gitmodules` it fetches the default
+# branch's tip (the working tree may be stale) and searches that commit for SYMBOL as a fixed string.
+# The monorepo row searches only the monorepo's own files: `git grep` over a commit does not descend
+# into submodule gitlinks, so no submodule is counted twice (monorepo#4917). It never changes a working
+# tree, an index or a branch; the only write is the fetched remote-tracking ref.
 #
-# The portfolio contract keeps archived repositories out of every census, so each submodule's archive
+# The portfolio contract keeps archived repositories out of every census, so each repository's archive
 # state is read live first (one `gh api repos/<owner>/<repo>` call each): an archived repository is
 # ARCHIVED and not searched, and one whose state cannot be read is UNKNOWN. Nothing else calls the
 # GitHub API.
 #
 # Usage: consumer-census.sh [--root DIR] [--only PATH]... [--no-fetch] SYMBOL
 #   --root DIR    the monorepo checkout whose `.gitmodules` lists the submodules (default: this one)
-#   --only PATH   search only this submodule path (repeatable)
+#   --only PATH   search only this path: a submodule path, or `.` for the monorepo itself (repeatable)
 #   --no-fetch    search the already-fetched default-branch tip instead of fetching it first
 #
-# Output, one tab-separated line each:
+# Output, one tab-separated line each (<path> is `.` for the monorepo itself):
 #   HIT      <path> <file>:<line> <text>          a consumer (text cut at 200 characters)
 #   NONE     <path> <branch>@<sha> control-passed  searched, no hit, and the control read the tree
 #   UNKNOWN  <path> <reason>                       not populated, no remote, fetch or search failed
@@ -68,14 +70,17 @@ if ! pathlines=$(git config -f "$root/.gitmodules" --get-regexp '^submodule\..*\
   exit 2
 fi
 paths=$(printf '%s\n' "$pathlines" | awk '{ print $2 }')
+# The monorepo row comes first; `.` is never a submodule path, so it cannot collide with one.
 if [ "${#only[@]}" -gt 0 ]; then
   for want in "${only[@]}"; do
-    if ! grep -qxF -- "$want" <<<"$paths"; then
-      echo "consumer-census: --only $want is not a submodule path in .gitmodules" >&2
+    if [ "$want" != "." ] && ! grep -qxF -- "$want" <<<"$paths"; then
+      echo "consumer-census: --only $want is neither . nor a submodule path in .gitmodules" >&2
       exit 2
     fi
   done
   paths=$(printf '%s\n' "${only[@]}")
+else
+  paths=$(printf '.\n%s\n' "$paths")
 fi
 
 hits=0
@@ -85,13 +90,19 @@ unknown=0
 archived=0
 unknown_line() { printf 'UNKNOWN\t%s\t%s\n' "$1" "$2"; unknown=$((unknown + 1)); }
 
-# slug_for <path>: owner/repo from the submodule's .gitmodules URL, or nothing for a non-GitHub URL.
+# slug_for <path>: owner/repo from the submodule's .gitmodules URL (for `.`, the monorepo's own
+# origin URL), or nothing for a non-GitHub URL.
 slug_for() {
   local key name url
-  key=$(printf '%s\n' "$pathlines" | awk -v p="$1" '$2 == p && !found { print $1; found = 1 }')
-  name=${key#submodule.}
-  name=${name%.path}
-  url=$(git config -f "$root/.gitmodules" --get "submodule.${name}.url" 2>/dev/null) || return 0
+  if [ "$1" = "." ]; then
+    # The configured URL names the repository; `remote get-url` would apply `insteadOf` rewrites.
+    url=$(git -C "$root" config --get remote.origin.url 2>/dev/null) || return 0
+  else
+    key=$(printf '%s\n' "$pathlines" | awk -v p="$1" '$2 == p && !found { print $1; found = 1 }')
+    name=${key#submodule.}
+    name=${name%.path}
+    url=$(git config -f "$root/.gitmodules" --get "submodule.${name}.url" 2>/dev/null) || return 0
+  fi
   url=${url%.git}
   case "$url" in
     git@github.com:*/*) printf '%s\n' "${url#git@github.com:}" ;;
@@ -101,7 +112,7 @@ slug_for() {
 
 while IFS= read -r path; do
   [ -n "$path" ] || continue
-  dir="$root/$path"
+  if [ "$path" = "." ]; then dir="$root"; else dir="$root/$path"; fi
   # Archived repositories are outside every census (root AGENTS.md); an unreadable state is UNKNOWN.
   slug=$(slug_for "$path")
   if [ -z "$slug" ]; then
@@ -115,7 +126,8 @@ while IFS= read -r path; do
     *) unknown_line "$path" "archive state of ${slug} could not be read"; continue ;;
   esac
   # Populated = the directory is the top of its own work tree. An empty submodule directory
-  # resolves to the monorepo itself, which would search the wrong repository.
+  # resolves to the monorepo itself, which would search the wrong repository. For `.` the same
+  # check proves --root is a work tree's top.
   top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null) || top=""
   if [ -z "$top" ] || [ "$(cd "$top" && pwd -P)" != "$(cd "$dir" && pwd -P)" ]; then
     unknown_line "$path" "not populated"
