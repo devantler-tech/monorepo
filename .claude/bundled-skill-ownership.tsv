@@ -20,6 +20,7 @@
 agentic-engineering	accessibility-review	https://github.com/anthropics/knowledge-work-plugins
 agentic-engineering	agent-improvement	LOCAL
 agentic-engineering	agent-instructions	LOCAL
+agentic-engineering	application-security	LOCAL
 agentic-engineering	architecture	https://github.com/anthropics/knowledge-work-plugins
 agentic-engineering	audit-support	https://github.com/anthropics/knowledge-work-plugins
 agentic-engineering	autofix	https://github.com/coderabbitai/skills
@@ -34,6 +35,7 @@ agentic-engineering	connector-setup	LOCAL
 agentic-engineering	content-creation	https://github.com/anthropics/knowledge-work-plugins
 agentic-engineering	context7-mcp	https://github.com/upstash/context7
 agentic-engineering	conventional-release	LOCAL
+agentic-engineering	danish-business-rules	LOCAL
 agentic-engineering	debug	https://github.com/anthropics/knowledge-work-plugins
 agentic-engineering	dependabot	https://github.com/github/awesome-copilot
 agentic-engineering	dependency-scanning	https://github.com/github/copilot-advanced-security-plugin
@@ -66,6 +68,7 @@ agentic-engineering	memory-management	https://github.com/anthropics/knowledge-wo
 agentic-engineering	metrics-review	https://github.com/anthropics/knowledge-work-plugins
 agentic-engineering	performance-report	https://github.com/anthropics/knowledge-work-plugins
 agentic-engineering	portfolio-maintenance	LOCAL
+agentic-engineering	privacy-engineering	LOCAL
 agentic-engineering	product-brainstorming	https://github.com/anthropics/knowledge-work-plugins
 agentic-engineering	product-documentation	LOCAL
 agentic-engineering	product-engineering	LOCAL
@@ -80,6 +83,7 @@ agentic-engineering	secret-scanning	https://github.com/github/awesome-copilot
 agentic-engineering	self-improvement	LOCAL
 agentic-engineering	seo-audit	https://github.com/anthropics/knowledge-work-plugins
 agentic-engineering	siderolabs	https://github.com/siderolabs/docs
+agentic-engineering	skill-lifecycle	LOCAL
 agentic-engineering	sox-testing	https://github.com/anthropics/knowledge-work-plugins
 agentic-engineering	sprint-planning	https://github.com/anthropics/knowledge-work-plugins
 agentic-engineering	stakeholder-update	https://github.com/anthropics/knowledge-work-plugins
