@@ -832,6 +832,12 @@ case "${CODEX_SHIM_MODE:-enabled}" in
   config-error)
     printf 'failed to load configuration\n' >&2
     exit 1 ;;
+  hang)
+    # A stalled runtime (monorepo#4932): it ignores TERM and leaves a descendant that records its
+    # PID and holds the output open.
+    trap '' TERM
+    sh -c 'echo $$ >"$CODEX_SHIM_PIDFILE"; trap "" TERM; exec sleep 60' &
+    sleep 60 ;;
 esac
 SHIMBIN
 chmod +x "${codex_shim}/codex"
@@ -926,6 +932,51 @@ set -e
 case "${out}" in
   *"runtime state query failed"*) ok "a Codex config/runtime error never falls back to static CURRENT" ;;
   *) fail "failed Codex state query did not name the UNKNOWN reason: ${out}" ;;
+esac
+
+# A runtime that never answers must end as UNKNOWN at the runtime deadline, not hold the preflight
+# (monorepo#4932). The stalled shim ignores TERM and leaves a descendant, so the deadline only holds
+# when the check ends the query's whole process group; the matching-cache CURRENT above is the
+# negative control that a runtime which answers is unaffected.
+hang_pidfile="${tmp}/codex-hang.pid"
+rm -f "${hang_pidfile}"
+hang_started=${SECONDS}
+set +e
+out="$(CODEX_SHIM_MODE=hang CODEX_SHIM_PIDFILE="${hang_pidfile}" PLUGIN_CURRENCY_RUNTIME_TIMEOUT_SECS=1 \
+  "${script}" --runtime codex --codex-home "${codex_home}" \
+  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+hang_elapsed=$((SECONDS - hang_started))
+[ "${rc}" -eq 2 ] || fail "a Codex runtime query that never answers must be UNKNOWN, got ${rc}: ${out}"
+case "${out}" in
+  *"runtime state query did not answer within 1s"*) ;;
+  *) fail "a stalled Codex runtime query exited 2 without naming the deadline: ${out}" ;;
+esac
+case "${out}" in
+  *CURRENT*|*DRIFT*) fail "a stalled Codex runtime query still printed a verdict: ${out}" ;;
+esac
+[ "${hang_elapsed}" -lt 30 ] \
+  || fail "a stalled Codex runtime query held the check for ${hang_elapsed}s — the deadline did not apply"
+[ -s "${hang_pidfile}" ] || fail "the stalled shim never started its descendant, so this case proves nothing"
+hang_pid="$(cat "${hang_pidfile}")"
+# A killed process can take a moment to be reaped; probe a bounded number of times.
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  kill -0 "${hang_pid}" 2>/dev/null || break
+  sleep 0.5
+done
+if kill -0 "${hang_pid}" 2>/dev/null; then
+  kill -KILL "${hang_pid}" 2>/dev/null || true
+  fail "the stalled Codex query's descendant ${hang_pid} outlived the check"
+fi
+ok "a Codex runtime query that never answers is UNKNOWN at its deadline and leaves no process (${hang_elapsed}s)"
+set +e
+out="$(PLUGIN_CURRENCY_RUNTIME_TIMEOUT_SECS=soon "${script}" --runtime codex --codex-home "${codex_home}" \
+  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+case "${rc}:${out}" in
+  2:*"PLUGIN_CURRENCY_RUNTIME_TIMEOUT_SECS must be a whole number"*)
+    ok "a malformed runtime deadline is UNKNOWN, not an unbounded query" ;;
+  *) fail "a malformed runtime deadline was accepted (exit ${rc}): ${out}" ;;
 esac
 
 printf 'stale Codex improver definition\n' > "${codex_install}/agents/agent-improver.agent.md"

@@ -195,5 +195,9 @@ func (c *check) validate() error {
 	if !regexp.MustCompile(`^[1-9][0-9]{0,2}$`).MatchString(c.timeout) {
 		return die("PLUGIN_CURRENCY_REMOTE_TIMEOUT_SECS must be a whole number of seconds from 1 to 999, got '%s'", c.timeout)
 	}
+	c.runtimeTimeout = envDefault("PLUGIN_CURRENCY_RUNTIME_TIMEOUT_SECS", "30")
+	if !regexp.MustCompile(`^[1-9][0-9]{0,2}$`).MatchString(c.runtimeTimeout) {
+		return die("PLUGIN_CURRENCY_RUNTIME_TIMEOUT_SECS must be a whole number of seconds from 1 to 999, got '%s'", c.runtimeTimeout)
+	}
 	return nil
 }
