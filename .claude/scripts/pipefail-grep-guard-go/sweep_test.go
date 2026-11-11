@@ -43,6 +43,7 @@ command grep -F 'Broken pipe' "$tmp/writer-error" >/dev/null && broken=yes
 printf '%s:%s:%s %s %s\n' "${status[0]}" "${status[1]}" "${status[2]}" "$here_rc" "$broken"
 `
 
+// TestBehaviour executes the hazard and its fix on this host.
 func TestBehaviour(t *testing.T) {
 	out, err := exec.Command("bash", "-o", "pipefail", "-c", behaviourProbe, "probe", t.TempDir()).Output()
 	if err != nil {
@@ -92,6 +93,7 @@ func mkrepo(t *testing.T, shebang string) string {
 	return dir
 }
 
+// TestShebangSweep checks which interpreters the repository-wide sweep scans.
 func TestShebangSweep(t *testing.T) {
 	for _, c := range []struct {
 		name, shebang string
@@ -109,11 +111,46 @@ func TestShebangSweep(t *testing.T) {
 		{"an env -S shebang naming a non-shell is not swept", "#!/usr/bin/env -S ruby", 0},
 		{"a non-shell interpreter is not swept", "#!/usr/bin/perl", 0},
 		{"a CRLF shebang still names its shell", "#!/bin/bash\r", 1},
+		{"an env -S shebang with assignments after -- still reaches the shell", "#!/usr/bin/env -S -- LC_ALL=C bash", 1},
+		{"env -S decodes its \\_ separator before naming the command", `#!/usr/bin/env -S bash\_-e`, 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Chdir(mkrepo(t, c.shebang))
 			if rc, out := guard(); rc != c.want {
 				t.Fatalf("rc=%d, want %d\n%s", rc, c.want, out)
+			} else if c.want == 1 && !strings.Contains(out, "tool:2: producer | grep -q MATCH") {
+				t.Fatalf("the shebang script itself was not the finding\n%s", out)
+			}
+		})
+	}
+}
+
+// A tracked file the sweep cannot inspect is an error, never a silent omission: its shebang is
+// unknown, so its pipelines would go unscanned while the sweep reported the tree clean.
+func TestSweepUnreadableTrackedFile(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		break_ func(path string) error
+	}{
+		{"a tracked file deleted from the working tree is an error", os.Remove},
+		{"a tracked file that cannot be opened is an error", func(p string) error { return os.Chmod(p, 0) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := mkrepo(t, "#!/bin/bash")
+			tool := filepath.Join(dir, "tool")
+			if err := c.break_(tool); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(tool, 0o644) })
+			if f, err := os.Open(tool); err == nil {
+				f.Close()
+				if _, statErr := os.Stat(tool); statErr == nil {
+					t.Skip("this user can open a mode-0 file (root), so the fault cannot be staged")
+				}
+			}
+			t.Chdir(dir)
+			if rc, out := guard(); rc != 2 || !strings.Contains(out, "cannot read tool") {
+				t.Fatalf("rc=%d, want 2\n%s", rc, out)
 			}
 		})
 	}
@@ -146,6 +183,7 @@ type workflow struct {
 	} `yaml:"jobs"`
 }
 
+// stepsNamed returns every workflow step with the given name, parsed as a mapping.
 func stepsNamed(t *testing.T, path, name string) []map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -167,6 +205,7 @@ func stepsNamed(t *testing.T, path, name string) []map[string]any {
 	return out
 }
 
+// TestCIWiring checks that CI runs the sweep unconditionally and runs these tests.
 func TestCIWiring(t *testing.T) {
 	ci := filepath.Join("..", "..", "..", ".github", "workflows", "ci.yaml")
 	steps := stepsNamed(t, ci, sweepStep)

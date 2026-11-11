@@ -36,6 +36,7 @@ import (
 //go:embed help.txt
 var helpText string
 
+// main runs the guard over the process arguments and exits with its status.
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }

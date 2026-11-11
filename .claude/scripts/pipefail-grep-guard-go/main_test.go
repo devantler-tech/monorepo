@@ -41,8 +41,12 @@ type lineCase struct {
 	lines []string
 }
 
+// one is a single-line case.
 func one(name, line string) lineCase { return lineCase{name, []string{line}} }
 
+// expect runs each case and checks its exit status. A case expected to flag must flag for the
+// RIGHT reason: it reports an early-exiting grep and no parse failure, so a fixture the parser
+// rejects can never pass as a detection. Unparsable fixtures live in TestUnparsableFilesAreReported.
 func expect(t *testing.T, cases []lineCase, want int) {
 	t.Helper()
 	for _, c := range cases {
@@ -50,6 +54,12 @@ func expect(t *testing.T, cases []lineCase, want int) {
 			rc, out := guard(mkscript(t, "fixture.sh", c.lines...))
 			if rc != want {
 				t.Fatalf("rc=%d, want %d\n%s", rc, want, out)
+			}
+			if strings.Contains(out, "cannot be parsed") {
+				t.Fatalf("the fixture did not parse, so this verdict is not about the case\n%s", out)
+			}
+			if want == 1 && !strings.Contains(out, "stops at the first match") {
+				t.Fatalf("exit 1 without an early-exiting grep reported\n%s", out)
 			}
 		})
 	}
@@ -155,8 +165,10 @@ var cleanCases = []lineCase{
 	one("'&& sort -m' is a separate command, not grep's early exit", `printf "MATCH\n" | grep MATCH && sort -m /dev/null`),
 }
 
+// TestFlags runs the early-exit spellings that must be reported.
 func TestFlags(t *testing.T) { expect(t, flagCases, 1) }
 
+// TestClean runs the safe shapes that must not be reported.
 func TestClean(t *testing.T) { expect(t, cleanCases, 0) }
 
 // 2c, 2f, 2g. Multi-line structure: continuations, comments, heredocs, strings and directives.
@@ -200,7 +212,6 @@ var multiLineFlag = []lineCase{
 	{"a comment opened straight after ';' is not a heredoc operator", []string{`:;# <<EOF`, `printf "%s" "$v" | grep -q NEEDLE`, `EOF`}},
 	{"a comment opened straight after '&' is not a heredoc operator", []string{`:&# <<EOF`, `printf "%s" "$v" | grep -q NEEDLE`, `EOF`}},
 	{"a comment opened straight after '|' is not a heredoc operator", []string{`:|# <<EOF`, `printf "%s" "$v" | grep -q NEEDLE`, `EOF`}},
-	{"an unparsable delimiter masks nothing rather than guessing", []string{`cat <<E"OF`, `producer | grep -q MATCH`, `EOF`}},
 	{"a delimiter with trailing whitespace does not terminate a heredoc", []string{`cat <<EOF`, `EOF `, `# pipefail-grep-guard: allow-file — payload, not a directive`, `EOF`, `printf "%s" "$v" | grep -q REAL`}},
 	{"an allow-file marker inside a multi-line string is not a directive", []string{`doc="first line`, `# pipefail-grep-guard: allow-file — payload, not a directive`, `last line"`, `producer | grep -q MATCH`}},
 	{"a line starting with a backslash does not abort the walk", []string{`\ls /tmp`, `printf "%s" "$v" | grep -q NEEDLE`}},
@@ -226,8 +237,10 @@ var multiLineClean = []lineCase{
 	{"an apostrophe in a comment does not leak an open quote", []string{`x=1 # it does not open a quote`, `# pipefail-grep-guard: allow-file — still a directive`, `producer | grep -q MATCH`}},
 }
 
+// TestMultiLineFlags runs the multi-line shapes that must be reported.
 func TestMultiLineFlags(t *testing.T) { expect(t, multiLineFlag, 1) }
 
+// TestMultiLineClean runs the multi-line shapes that must not be reported.
 func TestMultiLineClean(t *testing.T) { expect(t, multiLineClean, 0) }
 
 // The former KNOWN LIMITS, under their old names with the expectation INVERTED. The Bash layer
@@ -250,6 +263,7 @@ var formerLimitsClean = []lineCase{
 	{"inverted — KNOWN LIMIT: arithmetic bitwise-OR can read as a pipeline", []string{`value=$(( a | grep -q ))`}},
 }
 
+// TestFormerKnownLimits runs the inverted KNOWN LIMIT pins.
 func TestFormerKnownLimits(t *testing.T) {
 	expect(t, formerLimitsFlag, 1)
 	expect(t, formerLimitsClean, 0)

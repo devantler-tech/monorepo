@@ -209,6 +209,7 @@ func longOption(w word, pending *string, wantCount, skipNext *bool) (string, boo
 	return "", false
 }
 
+// finiteOr returns show when count can stop grep mid-stream, and "" when it cannot.
 func finiteOr(count, show string) string {
 	if maxCountIsFinite(count) {
 		return show
@@ -216,6 +217,7 @@ func finiteOr(count, show string) string {
 	return ""
 }
 
+// settle reports the max-count verdict once the command has ended.
 func settle(pending string) (string, bool) {
 	return pending, pending != ""
 }

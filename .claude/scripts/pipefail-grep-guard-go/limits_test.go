@@ -26,6 +26,7 @@ var quotedHashClean = []lineCase{
 		[]string{`marker="# x"; producer | grep -q MATCH # pipefail-grep-guard: allow — fixture`}},
 }
 
+// TestQuotedHashResidualClosed pins the closed quoted-# residual and its control.
 func TestQuotedHashResidualClosed(t *testing.T) {
 	expect(t, quotedHashFlag, 1)
 	expect(t, quotedHashClean, 0)
@@ -56,6 +57,7 @@ var hatchClean = []lineCase{
 		[]string{`producer \`, `  | grep -q MATCH # pipefail-grep-guard: allow — fixture`}},
 }
 
+// TestEscapeHatchPlacement pins where the line and file escape hatches must sit.
 func TestEscapeHatchPlacement(t *testing.T) {
 	expect(t, hatchFlag, 1)
 	expect(t, hatchFileFlag, 1)
@@ -85,6 +87,12 @@ var gapFlag = []lineCase{
 		[]string{`producer | grep -q"$extra" MATCH`}},
 	{"a max count only the running shell knows is reported",
 		[]string{`producer | grep -m "$n" MATCH`}},
+	{"an ANSI-C hex escape spelling the option is still that option",
+		[]string{`producer | grep $'\x2d'q MATCH`}},
+	{"an ANSI-C octal escape spelling the option is still that option",
+		[]string{`producer | grep $'\055q' MATCH`}},
+	{"an ANSI-C escape spelling the command name is still grep",
+		[]string{`producer | $'\x67rep' -q MATCH`}},
 }
 
 var gapClean = []lineCase{
@@ -104,6 +112,7 @@ var gapClean = []lineCase{
 		[]string{`producer | "$GREP" -q MATCH`}},
 }
 
+// TestRecordedGaps covers the gaps recorded on monorepo#2797, each with a control.
 func TestRecordedGaps(t *testing.T) {
 	expect(t, gapFlag, 1)
 	expect(t, gapClean, 0)
@@ -115,7 +124,7 @@ func TestRecordedGaps(t *testing.T) {
 // unparsable (exit 1, as before) instead of passing — fail-closed, and named in the output.
 func TestUnparsableFilesAreReported(t *testing.T) {
 	for _, c := range []lineCase{
-		{"an unparsable delimiter is reported as unparsable", []string{`cat <<E"OF`, `producer | grep -q MATCH`, `EOF`}},
+		{"an unparsable delimiter masks nothing rather than guessing", []string{`cat <<E"OF`, `producer | grep -q MATCH`, `EOF`}},
 		{"KNOWN LIMIT: an escaped quote inside a delimiter word is not dequoted", []string{`cat <<"E\"OF"`, `producer | grep -q MATCH`, `E"OF`}},
 		{"a syntax error is reported even in a file carrying the allow-file directive", []string{`# pipefail-grep-guard: allow-file — x`, `if then fi (`}},
 	} {

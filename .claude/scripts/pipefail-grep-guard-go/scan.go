@@ -134,6 +134,7 @@ func scanSource(src string) []finding {
 	return out
 }
 
+// isPipe reports whether a binary command is a `|` or `|&` pipe.
 func isPipe(b *syntax.BinaryCmd) bool {
 	return b.Op == syntax.Pipe || b.Op == syntax.PipeAll
 }

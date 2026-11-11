@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -34,32 +35,44 @@ func trackedShellScripts() ([]string, error) {
 			targets = append(targets, f)
 			continue
 		}
-		if isShellScript(f) {
+		shell, err := isShellScript(f)
+		if err != nil {
+			return nil, err
+		}
+		if shell {
 			targets = append(targets, f)
 		}
 	}
 	return targets, nil
 }
 
-// isShellScript reports whether a regular, readable file's shebang names a shell. The executable
-// bit alone would sweep in every compiled helper, so the interpreter is resolved instead.
-func isShellScript(path string) bool {
+// isShellScript reports whether a tracked file's shebang names a shell. The executable bit alone
+// would sweep in every compiled helper, so the interpreter is resolved instead. A directory (a
+// submodule gitlink) or another non-regular entry is not a script; a tracked path that cannot be
+// stat'ed or read is an error, never a silent omission that leaves its pipelines unscanned.
+func isShellScript(path string) (bool, error) {
 	info, err := os.Stat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		return false
+	if err != nil {
+		return false, fmt.Errorf("cannot read %s", path)
+	}
+	if !info.Mode().IsRegular() {
+		return false, nil
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("cannot read %s", path)
 	}
 	defer f.Close()
 	buf := make([]byte, 4096)
-	n, _ := f.Read(buf)
+	n, err := io.ReadFull(f, buf)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return false, fmt.Errorf("cannot read %s", path)
+	}
 	first := buf[:n]
 	if i := bytes.IndexByte(first, '\n'); i >= 0 {
 		first = first[:i]
 	}
-	return shebangIsShell(strings.TrimSuffix(string(first), "\r"))
+	return shebangIsShell(strings.TrimSuffix(string(first), "\r")), nil
 }
 
 // shebangIsShell resolves the interpreter a first line names rather than asking whether it ends
@@ -94,6 +107,7 @@ func envOperand(rest string) string {
 	} else {
 		rest = ""
 	}
+	options := true
 loop:
 	for {
 		rest = trimLeftSpace(rest)
@@ -101,16 +115,24 @@ loop:
 			break
 		}
 		tok := envNextToken(rest)
+		if !options {
+			// After `--` env still consumes NAME=value operands before the command.
+			if !isEnvAssignment(tok) {
+				break
+			}
+			rest = rest[len(tok):]
+			continue
+		}
 		switch {
 		case tok == "--":
 			rest = rest[2:]
-			break loop
+			options = false
 		case tok == "-S" || tok == "--split-string":
-			rest = rest[len(tok):]
+			rest = splitStringSeparators(rest[len(tok):])
 		case strings.HasPrefix(tok, "--split-string="):
-			rest = rest[len("--split-string="):]
+			rest = splitStringSeparators(rest[len("--split-string="):])
 		case strings.HasPrefix(tok, "-S"):
-			rest = rest[2:]
+			rest = splitStringSeparators(rest[2:])
 		case strings.HasPrefix(tok, "--unset=") || strings.HasPrefix(tok, "--chdir="):
 			rest = rest[len(tok):]
 		case tok == "-u" || tok == "-C" || tok == "--unset" || tok == "--chdir":
@@ -126,6 +148,34 @@ loop:
 		}
 	}
 	return envDequote(envNextToken(trimLeftSpace(rest)))
+}
+
+// splitStringSeparators applies env -S's own separator escape: outside quotes `\_` separates
+// arguments exactly as a space does, so `bash\_-e` is the command `bash` with `-e`.
+func splitStringSeparators(s string) string {
+	var b strings.Builder
+	var q byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case q != 0:
+			if c == q {
+				q = 0
+			}
+		case c == '\'' || c == '"':
+			q = c
+		case c == '\\' && i+1 < len(s):
+			if s[i+1] == '_' {
+				b.WriteByte(' ')
+			} else {
+				b.WriteString(s[i : i+2])
+			}
+			i++
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 // envNextToken returns the next whitespace-delimited token exactly as written, honouring single
@@ -172,16 +222,20 @@ func isEnvAssignment(tok string) bool {
 	return strings.Contains(tok[1:], "=")
 }
 
+// basename returns the last slash-separated element of a path.
 func basename(p string) string {
 	return p[strings.LastIndexByte(p, '/')+1:]
 }
 
+// isSpace matches the POSIX [[:space:]] class in ASCII.
 func isSpace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r'
 }
 
+// isSpaceRune is isSpace for a rune.
 func isSpaceRune(r rune) bool { return r < 0x80 && isSpace(byte(r)) }
 
+// trimLeftSpace drops leading [[:space:]] characters.
 func trimLeftSpace(s string) string {
 	return strings.TrimLeftFunc(s, isSpaceRune)
 }
