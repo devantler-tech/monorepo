@@ -7,13 +7,13 @@ import (
 )
 
 // unknown stands for the part of a word only the running shell could know (an expansion). It is
-// a character no option name, digit or command name contains, so a test against a word with an
-// unknown tail decides only on the literal prefix bash would also have seen.
+// a character no option name, digit or command name contains, so a test against a partial word
+// decides only on the literal text bash would also have seen.
 const unknown = "\x00"
 
 // word is one argv word after quote removal, decided statically.
 type word struct {
-	val  string // the value bash would pass; for a partial word, its literal prefix + unknown
+	val  string // the value bash would pass; in a partial word each expansion is one unknown
 	lit  bool   // the whole word is literal, so val is exactly what the command receives
 	show string // the spelling a finding prints
 }
@@ -29,34 +29,35 @@ func argvWords(src string, ws []*syntax.Word) []word {
 	return out
 }
 
-// toWord converts one parsed word, keeping its literal prefix when an expansion follows it.
+// toWord converts one parsed word. Every literal piece is kept, quoted or not, and each expansion
+// becomes one unknown character in its place: `"-q$extra"` still hands grep an argument starting
+// with -q, and `-F$x-q` still carries the letter q, exactly as the Bash guard read them.
 func toWord(src string, w *syntax.Word) word {
 	var b strings.Builder
 	lit := true
 	for _, part := range w.Parts {
-		v, ok := literalPart(part)
-		if !ok {
-			// Keep the literal text a double-quoted run carries BEFORE its first expansion:
-			// `"-q$extra"` still hands grep an argument starting with -q.
-			if dq, isDQ := part.(*syntax.DblQuoted); isDQ {
-				for _, inner := range dq.Parts {
-					l, isLit := inner.(*syntax.Lit)
-					if !isLit {
-						break
-					}
-					b.WriteString(unescapeDouble(l.Value))
-				}
-			}
-			lit = false
-			break
+		if v, ok := literalPart(part); ok {
+			b.WriteString(v)
+			continue
 		}
-		b.WriteString(v)
+		lit = false
+		dq, isDQ := part.(*syntax.DblQuoted)
+		if !isDQ {
+			b.WriteString(unknown)
+			continue
+		}
+		for _, inner := range dq.Parts {
+			if l, isLit := inner.(*syntax.Lit); isLit {
+				b.WriteString(unescapeDouble(l.Value))
+			} else {
+				b.WriteString(unknown)
+			}
+		}
 	}
 	if lit {
 		return word{val: b.String(), lit: true, show: b.String()}
 	}
-	show := src[w.Pos().Offset():w.End().Offset()]
-	return word{val: b.String() + unknown, show: show}
+	return word{val: b.String(), show: src[w.Pos().Offset():w.End().Offset()]}
 }
 
 // literalPart returns the quote-removed value of a word part that needs no expansion.
