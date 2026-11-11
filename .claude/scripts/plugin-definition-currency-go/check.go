@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -17,7 +18,8 @@ type check struct {
 	o              options
 	stdout, stderr io.Writer
 	status         int
-	timeout        string
+	timeout        string // seconds each remote call may take
+	runtimeTimeout string // seconds the runtime state query may take
 
 	pinSource     string // where the pin came from; printed with every verdict
 	adoptedCommit string // the consumer commit whose gitlink is the adopted pin
@@ -193,8 +195,20 @@ func (c *check) resolveInstalled() error {
 		if jqErr != nil {
 			return die("jq is required to parse Codex runtime state for %s", o.codexHome)
 		}
-		raw, err := command("", []string{"CODEX_HOME=" + o.codexHome}, "codex", "plugin", "list", "--json")
-		if err != nil {
+		// The query is a local process, but it can stall without output (monorepo#4932), so it is
+		// bounded like a remote call: a runtime that has not answered by the deadline, or a check
+		// stopped while it runs, is UNKNOWN, and its whole process group is ended.
+		seconds, convErr := strconv.Atoi(c.runtimeTimeout)
+		if convErr != nil || seconds < 1 {
+			return die("the Codex runtime state query has no valid deadline ('%s')", c.runtimeTimeout)
+		}
+		raw, err := bounded(seconds, []string{"CODEX_HOME=" + o.codexHome}, "codex", "plugin", "list", "--json")
+		switch {
+		case errors.Is(err, errStopped):
+			return die("the check was stopped while the Codex runtime state query ran for %s — cannot establish effective plugin state", o.codexHome)
+		case errors.Is(err, errDeadline):
+			return die("the Codex runtime state query did not answer within %ss for %s — cannot establish effective plugin state. Check that the codex on PATH answers 'codex --version' promptly; PLUGIN_CURRENCY_RUNTIME_TIMEOUT_SECS sets the deadline", c.runtimeTimeout, o.codexHome)
+		case err != nil:
 			return die("Codex runtime state query failed for %s — cannot establish effective plugin state", o.codexHome)
 		}
 		if strings.TrimRight(string(raw), "\n") == "" {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -191,12 +192,16 @@ func (c *check) resolveAdoptedFromRemote() error {
 	if !gitOK(o.repoRoot, "--no-replace-objects", "cat-file", "-e", c.adoptedCommit+"^{commit}") {
 		// Fetch that one commit and nothing else: the empty --refmap and the bare object id mean no
 		// remote-tracking ref moves and FETCH_HEAD is not written. The object being readable
-		// afterwards is the evidence, not the fetch's own status.
-		_, _ = boundedRemote(c.timeout, "git", "-C", o.repoRoot,
+		// afterwards is the evidence, not the fetch's own status. A stop request is the one outcome
+		// that is not left to that evidence: the check was asked to end, so it does.
+		_, fetchErr := boundedRemote(c.timeout, "git", "-C", o.repoRoot,
 			"-c", "http.followRedirects=false",
 			"-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime="+c.timeout,
 			"fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "--no-auto-maintenance",
 			"--no-write-fetch-head", "--refmap=", "--", o.remote, c.adoptedCommit)
+		if errors.Is(fetchErr, errStopped) {
+			return die("the check was stopped while fetching the default-branch tip %s of remote '%s' — the adopted pin is unknown", c.adoptedCommit, o.remote)
+		}
 		if !gitOK(o.repoRoot, "--no-replace-objects", "cat-file", "-e", c.adoptedCommit+"^{commit}") {
 			return die("the default-branch tip %s of remote '%s' is not in the local object database and could not be fetched — the adopted pin is unknown%s", c.adoptedCommit, o.remote, adoptedRecovery)
 		}

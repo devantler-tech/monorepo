@@ -47,6 +47,13 @@
 # --remote takes the NAME of a configured remote, never a path or URL. Each remote call is bounded
 # by PLUGIN_CURRENCY_REMOTE_TIMEOUT_SECS (default 20): a remote that does not answer in time is
 # UNKNOWN, not a hang.
+# The Codex runtime state query (`codex plugin list --json`) is bounded the same way, by
+# PLUGIN_CURRENCY_RUNTIME_TIMEOUT_SECS (default 30): a runtime that has not answered by then is
+# UNKNOWN. Each bounded call runs in its own process group, which is ended at the deadline, and
+# also when the check itself is stopped (INT, TERM or HUP) while the call runs, together with every
+# descendant the process table shows then, including one that moved to a session of its own. Its
+# output is read only until that deadline: a process already orphaned out of reach that holds the
+# output open cannot keep the check waiting, and the call is UNKNOWN.
 #
 # Usage: plugin-definition-currency.sh [--runtime claude|codex|git-ref] [--repo-root DIR]
 #                                      [--plugins-root DIR] [--codex-home DIR]

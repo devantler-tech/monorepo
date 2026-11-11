@@ -7,14 +7,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
-	"time"
 )
 
 var lookPath = exec.LookPath
-
-// killGrace is how long a TERM at the remote bound has before the whole process group is killed.
-const killGrace = 2 * time.Second
 
 // command runs name with args in dir (the process's own directory when empty) and returns its
 // standard output. Standard error is discarded, as `2>/dev/null` discards it.
@@ -85,36 +80,5 @@ func boundedRemote(secs string, args ...string) ([]byte, error) {
 	if variant == "ssh" {
 		env = append(env, "GIT_SSH_COMMAND="+baseSSH+" -o BatchMode=yes -o ConnectTimeout="+secs)
 	}
-	cmd := exec.Command(args[0], args[1:]...)
-	cmd.Env = append(os.Environ(), env...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	bound := time.Duration(seconds) * time.Second
-	// Wait also waits for the output pipe to close. A process outside the group can hold it open,
-	// so the wait for it after the command exits is bounded too, and a pipe closed that way is a
-	// failed read (exec.ErrWaitDelay), never a clean one.
-	cmd.WaitDelay = bound + killGrace
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	pgid := cmd.Process.Pid
-	term := time.AfterFunc(bound, func() {
-		if syscall.Kill(-pgid, syscall.SIGTERM) != nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-		}
-	})
-	// TERM only asks. KILL follows on its own clock, so a helper that ignores TERM, or a
-	// descendant holding the output open, cannot keep this call waiting.
-	kill := time.AfterFunc(bound+killGrace, func() {
-		if syscall.Kill(-pgid, syscall.SIGKILL) != nil {
-			_ = cmd.Process.Kill()
-		}
-	})
-	err = cmd.Wait()
-	term.Stop()
-	kill.Stop()
-	// KILL reaps whatever in the group outlived the command.
-	_ = syscall.Kill(-pgid, syscall.SIGKILL)
-	return out.Bytes(), err
+	return bounded(seconds, env, args[0], args[1:]...)
 }
