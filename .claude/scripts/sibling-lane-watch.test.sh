@@ -184,8 +184,9 @@ state_has "a quota slot keeps a notified outage" '.notified_epoch > 0'
 liveness 1 "$DOWN_NO_SESSION"
 check "and the outage is not paged again after it" 0 "verdict=ALREADY-NOTIFIED" $((32 * SLOT))
 # The quiet rule matches a literal the liveness checks print. Pin that both still print it.
-for live in claude codex; do
-  if grep -qF 'quota/billing' "$SCRIPT_DIR/${live}-lane-liveness.sh"; then ok; else bad "${live}-lane-liveness.sh no longer names the quota/billing cause class"; fi
+# The Claude check prints it from its Go implementation (monorepo#3592), so that is the file read.
+for printer in claude-lane-go/liveness.go codex-lane-liveness.sh; do
+  if grep -qF 'quota/billing' "$SCRIPT_DIR/$printer"; then ok; else bad "$printer no longer names the quota/billing cause class"; fi
 done
 
 # --- the cause class is bounded ------------------------------------------------------------------

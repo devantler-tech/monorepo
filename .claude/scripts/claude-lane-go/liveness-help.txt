@@ -1,0 +1,56 @@
+claude-lane-liveness.sh — did the Claude lane's dispatched runs actually RUN?
+
+The Claude counterpart to codex-lane-liveness.sh, and it exists for the same reason: *Agent
+definition locations* resolves Claude cadence from a `scheduled-tasks.json` record with `lastRunAt`
+as its marker, and that marker records only that a dispatch STARTED. When a dispatched run dies
+immediately, `lastRunAt` advances exactly as it does on a healthy run, so every prescribed check
+reports a healthy lane while that lane produces nothing.
+
+monorepo#3268 made an Improver prove its sibling lane is producing before treating that sibling's
+ledger as evidence, and named codex-lane-liveness.sh as the check. That is correct for the Claude
+Improver, whose sibling is Codex. It is unsatisfiable for the CODEX Improver, whose sibling is
+Claude: no Claude-lane check existed, so that direction was `2 UNKNOWN` by construction and could
+never reach a positive verdict. This closes that half. See monorepo#3269.
+
+WHY THIS CANNOT MIRROR THE CODEX CHECK
+Codex records every run in a scheduler table with a duration and an inbox flag, so a stub is visible as
+a row. Claude's store keeps NO run history at all -- one `lastRunAt` per task -- and a dispatch that
+dies does not necessarily leave an attributable transcript: the `<scheduled-task ...>` marker that
+identifies which task a session belongs to is written with the run's first user message, and a
+transcript that never got that far carries no marker (verified on a real 7-line stub transcript:
+zero markers, zero assistant turns). Classifying transcripts alone therefore cannot see a dead
+dispatch, because the dead one is exactly the transcript that cannot be attributed.
+
+So the anchor is the SCHEDULE plus the dispatch, not the transcript: `lastScheduledFor` and
+`cronExpression` establish whether the scheduler is still dispatching, while `lastRunAt` establishes
+whether the newest attempted dispatch produced a session. A healthy dispatch's session starts within
+about a second of `lastRunAt` (measured ~1.0s on both tasks). ABSENCE of a session at that anchor is
+itself the signal, and it needs no marker on the failed run.
+
+READ-ONLY, and deliberately NARROW. Session transcripts contain the entire content of every run --
+code, credentials in tool output, private operator reasoning. This check reads ONLY:
+  - the `<scheduled-task name=...>` marker on the transcript's first line, to attribute it, and
+  - `.timestamp` and `.type` values, to time it and count assistant turns, and
+  - on assistant records only, `isApiErrorMessage`, `message.model` and the `error` class token, to
+    tell a runtime-synthesised error record from a real turn (monorepo#3412).
+It never reads message text. The only transcript-derived value it emits is that error class,
+mapped onto a fixed cause-class vocabulary -- never the message text, which carries reset times.
+It reads one structural fact besides: whether the session's last turn is a tool call with no
+result, which is how a run waiting on an unanswered approval prompt looks (monorepo#3990).
+
+Usage: claude-lane-liveness.sh [--store PATH] [--projects PATH] [--task ID[,ID...]]
+                              [--grace-seconds N] [--skew-seconds N]
+                              [--lookback-hours N] [--stall-seconds N]
+                              [--now-epoch S] [--quiet]
+  --task  judge only this scheduler entry, or up to four separated by commas: a lane whose
+          engineer starts from more than one entry names them all (monorepo#4117). Each named
+          entry gets its own line and the exit status covers exactly the named ones. A named
+          entry that is missing or disabled makes the whole call UNKNOWN, and is named on a
+          `NOT-SCHEDULED` line: the scheduler is not dispatching it, which is a different
+          finding from a dispatch that could not be judged (monorepo#4116).
+
+Exit 0  every enabled task checked is dispatching and produced work on its most recent settled run
+     1  NOT PRODUCING -- a dispatch produced no work, stalled on a tool call, or never happened
+     2  UNKNOWN -- could not determine (no jq, absent/ambiguous store, absent projects root,
+        unparsable record, a named task the scheduler does not hold enabled, or the newest
+        dispatch still in flight)

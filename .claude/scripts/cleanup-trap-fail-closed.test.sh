@@ -267,7 +267,6 @@ review-lane-health.sh|--now 1
 test-partitions.sh|--suite $tmp/canonical.sh|exit:2
 test-partitions.test.sh|
 review-no-gate-guard.sh|
-claude-lane-liveness.sh|--store $tmp/converted/store.json --projects $tmp/converted/projects
 renovate-dashboard-drift.sh|
 pr-ownership-disclosure.sh|--input -
 comment-disclosure-drift.sh|--input -
@@ -283,7 +282,6 @@ shared-checkout-freshness.sh|
 worktree-claim.sh|check $tmp/converted/absent-worktree cleanup-trap-test
 branch-op-lock.sh|run $tmp/converted/lockrepo -- true
 agent-issue-board-sweep.sh|--author cleanup-trap-test
-claude-dispatch-rate.sh|--task alpha --since 1970-01-02T00:00:00Z --until 1970-01-02T06:00:00Z --now-epoch 172800 --store $tmp/converted/store.json --projects $tmp/converted/projects
 board-add.test.sh|
 board-archive.test.sh|
 branch-cleanup.test.sh|
