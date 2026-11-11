@@ -25,7 +25,8 @@
 # Output, one tab-separated line each (<path> is `.` for the monorepo itself):
 #   HIT      <path> <file>:<line> <text>          a consumer (text cut at 200 characters)
 #   NONE     <path> <branch>@<sha> control-passed  searched, no hit, and the control read the tree
-#   UNKNOWN  <path> <reason>                       not populated, no remote, fetch or search failed
+#   UNKNOWN  <path> <reason>                       not populated, no remote, fetch or search failed,
+#                                                   or the monorepo row when origin is a fork
 #   ARCHIVED <path> <owner>/<repo>                 archived on GitHub, so not part of the census
 #   SUMMARY  hits=<n> repos-with-hits=<n> none=<n> archived=<n> unknown=<n>
 # A zero count is only ever printed as NONE, after a control query (any text line in the same commit)
@@ -119,12 +120,24 @@ while IFS= read -r path; do
     unknown_line "$path" "archive state unknown: not a GitHub submodule URL"
     continue
   fi
-  state=$(gh api "repos/${slug}" --jq .archived 2>/dev/null) || state=""
+  # One read gives the archive state and whether the repository is a fork.
+  meta=$(gh api "repos/${slug}" --jq '"\(.archived) \(.fork)"' 2>/dev/null) || meta=""
+  state=${meta%% *}
+  is_fork=${meta#* }
   case "$state" in
     true) printf 'ARCHIVED\t%s\t%s\n' "$path" "$slug"; archived=$((archived + 1)); continue ;;
     false) ;;
     *) unknown_line "$path" "archive state of ${slug} could not be read"; continue ;;
   esac
+  # The monorepo row searches whatever this checkout calls origin. A fork can be behind the
+  # monorepo without saying so, so its row is UNKNOWN, never zero consumers (monorepo#4917).
+  if [ "$path" = "." ]; then
+    case "$is_fork" in
+      false) ;;
+      true) unknown_line "$path" "${slug} is a fork: run the census from a checkout of the monorepo itself"; continue ;;
+      *) unknown_line "$path" "fork state of ${slug} could not be read"; continue ;;
+    esac
+  fi
   # Populated = the directory is the top of its own work tree. An empty submodule directory
   # resolves to the monorepo itself, which would search the wrong repository. For `.` the same
   # check proves --root is a work tree's top.

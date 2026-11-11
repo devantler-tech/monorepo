@@ -99,7 +99,8 @@ g -C "$work/root" remote add origin git@github.com:fixture-org/monorepo.git
 g -C "$work/root" config "url.$work/origins/monorepo.git.insteadOf" git@github.com:fixture-org/monorepo.git
 mono_symbol='Monorepo-only contract section'
 
-# An offline `gh`: archive state comes from $work/gh-state (`<owner>/<repo> true|false|error`); any
+# An offline `gh`: archive state comes from $work/gh-state (`<owner>/<repo> true|false|error [fork]`);
+# a third word `fork` marks the repository as a fork. Any
 # repository not listed is not archived. Every call is logged, so the test needs no network.
 mkdir -p "$work/bin"
 : > "$work/gh-state"
@@ -109,10 +110,11 @@ printf '%s\n' "$*" >> "${GH_STUB_LOG:?}"
 [ "$1" = api ] || exit 9
 slug=${2#repos/}
 state=$(awk -v s="$slug" '$1 == s { print $2 }' "${GH_STUB_STATE:?}")
+fork=$(awk -v s="$slug" '$1 == s { print ($3 == "fork") ? "true" : "false" }' "${GH_STUB_STATE:?}")
 case "$state" in
-  true) echo true ;;
+  true) echo "true ${fork:-false}" ;;
   error) echo 'HTTP 403: API rate limit exceeded' >&2; exit 1 ;;
-  *) echo false ;;
+  *) echo "false ${fork:-false}" ;;
 esac
 EOF
 chmod +x "$work/bin/gh"
@@ -245,6 +247,26 @@ else
 fi
 : > "$work/gh-state"
 
+# A fork as origin makes the monorepo row UNKNOWN, although its fetched tip holds the symbol:
+# a fork can be behind the monorepo without saying so (monorepo#4917).
+printf 'fixture-org/monorepo false fork\n' > "$work/gh-state"
+run --only . "$mono_symbol"
+if [ "$rc" -eq 2 ] && has "$(printf 'UNKNOWN\t.\tfixture-org/monorepo is a fork')" && ! has 'HIT' \
+  && has "$(printf 'SUMMARY\thits=0\trepos-with-hits=0\tnone=0\tarchived=0\tunknown=1')"; then
+  pass "monorepo row: a fork as origin is UNKNOWN and exit 2, never zero consumers or a hit"
+else
+  fail "monorepo row fork: rc=$rc out=$(cat "$work/out")"
+fi
+# The rule is for the monorepo row only: a submodule that is itself a fork is searched as usual.
+printf 'fixture-org/consumer false fork\n' > "$work/gh-state"
+run --only consumer "$symbol"
+if [ "$rc" -eq 0 ] && has "$(printf 'HIT\tconsumer\tworkflow.yaml:1')"; then
+  pass "fork rule: a forked submodule is still searched"
+else
+  fail "fork rule on a submodule: rc=$rc out=$(cat "$work/out")"
+fi
+: > "$work/gh-state"
+
 # --- --no-fetch searches what was already fetched -----------------------------------------------
 run --no-fetch --only consumer "$symbol"
 if [ "$rc" -eq 0 ] && has "$(printf 'HIT\tconsumer\tworkflow.yaml:1')"; then
@@ -263,7 +285,7 @@ if [ "$rc" -eq 0 ] && has "$(printf 'ARCHIVED\tconsumer\tfixture-org/consumer')"
 else
   fail "archived: rc=$rc out=$(cat "$work/out")"
 fi
-if grep -qxF 'api repos/fixture-org/consumer --jq .archived' "$work/gh-calls"; then
+if grep -qxF 'api repos/fixture-org/consumer --jq "\(.archived) \(.fork)"' "$work/gh-calls"; then
   pass "archived: the state was read live, one call for the repository"
 else
   fail "archived: unexpected gh calls: $(cat "$work/gh-calls")"
