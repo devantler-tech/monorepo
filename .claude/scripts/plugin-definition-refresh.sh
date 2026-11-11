@@ -377,18 +377,38 @@ if [ "$candidate" != "$GITLINK" ] && [ "$DRY_RUN" -eq 0 ]; then
   # The runtime's marketplace clone is shallow, so it rarely holds the pin; the consumer's submodule
   # is the reviewed source and does. `-e .git` first: `git -C` on an uninitialised submodule path
   # resolves to the PARENT repository.
+  #
+  # A per-run worktree leaves that submodule unpopulated, which made this UNKNOWN on nearly every
+  # scheduled run (monorepo#4934: 39 of 134 Claude sessions in one day). The superproject's shared
+  # submodule store under its common git dir still holds the pin; `submodule-init.sh` borrows
+  # objects from it. It is read only as a git dir (`--git-dir`), never through `-C`, so a
+  # `core.worktree` in its config is never followed. Objects are content-addressed and every read
+  # keeps `--no-replace-objects`, so this adds a source of the SAME pinned bytes, not a new trust.
+  GITDIR_REPO=""
+  common_dir="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || common_dir=""
+  if [ -n "$common_dir" ] && [ -d "$common_dir/modules/$SUBMODULE_PATH/objects" ]; then
+    GITDIR_REPO="$common_dir/modules/$SUBMODULE_PATH"
+  fi
+  git_in() {
+    local r="$1"; shift
+    if [ -n "$GITDIR_REPO" ] && [ "$r" = "$GITDIR_REPO" ]; then git --git-dir="$r" "$@"; else git -C "$r" "$@"; fi
+  }
   pin_repo=""
-  for repo in "$MARKETPLACE_DIR" "$REPO_ROOT/$SUBMODULE_PATH"; do
-    if [ -e "$repo/.git" ] && git -C "$repo" --no-replace-objects cat-file -e "$GITLINK^{commit}" 2>/dev/null; then
-      pin_repo="$repo"
-      break
+  for repo in "$MARKETPLACE_DIR" "$REPO_ROOT/$SUBMODULE_PATH" "$GITDIR_REPO"; do
+    [ -n "$repo" ] || continue
+    if [ "$repo" = "$GITDIR_REPO" ] || [ -e "$repo/.git" ]; then
+      if git_in "$repo" --no-replace-objects cat-file -e "$GITLINK^{commit}" 2>/dev/null; then
+        pin_repo="$repo"
+        break
+      fi
     fi
   done
-  [ -n "$pin_repo" ] || die "the pinned revision $GITLINK is in neither the marketplace clone nor $REPO_ROOT/$SUBMODULE_PATH — cannot compare the '$PLUGIN_NAME' subtree (populate it with .claude/scripts/submodule-init.sh $SUBMODULE_PATH)"
+  [ -n "$pin_repo" ] || die "the pinned revision $GITLINK is in neither the marketplace clone, $REPO_ROOT/$SUBMODULE_PATH nor the superproject's shared submodule store — cannot compare the '$PLUGIN_NAME' subtree (populate it with .claude/scripts/submodule-init.sh $SUBMODULE_PATH)"
+  say "pin read from ........... $pin_repo"
   # One entry, with its version removed: the version may move while the definitions do not. Every
   # other field (source, inline components) can change what is installed, so it must match.
   entry_at() {
-    git -C "$1" --no-replace-objects show "$2:.claude-plugin/marketplace.json" 2>/dev/null \
+    git_in "$1" --no-replace-objects show "$2:.claude-plugin/marketplace.json" 2>/dev/null \
       | jq -cS --arg n "$PLUGIN_NAME" '[.plugins[]? | select(.name == $n)] | if length == 1 then .[0] | del(.version) else length end' 2>/dev/null
   }
   pin_entry="$(entry_at "$pin_repo" "$GITLINK")" || die "cannot read the marketplace manifest at the pin $GITLINK"
@@ -414,12 +434,12 @@ if [ "$candidate" != "$GITLINK" ] && [ "$DRY_RUN" -eq 0 ]; then
   # (exit 1); a failed read, including an object missing from the clone, is UNKNOWN (exit 2).
   subtree_at() {
     local entry rest kind id
-    entry="$(git -C "$1" --literal-pathspecs --no-replace-objects ls-tree "$2" -- "$source_path" 2>/dev/null)" || return 1
+    entry="$(git_in "$1" --literal-pathspecs --no-replace-objects ls-tree "$2" -- "$source_path" 2>/dev/null)" || return 1
     [ -n "$entry" ] || return 0
     case "$entry" in *$'\n'*) return 1 ;; esac
     rest="${entry#* }"; kind="${rest%% *}"; rest="${rest#* }"; id="${rest%%$'\t'*}"
     if [ "$kind" != commit ]; then
-      git -C "$1" --no-replace-objects cat-file -e "$id" 2>/dev/null || return 1
+      git_in "$1" --no-replace-objects cat-file -e "$id" 2>/dev/null || return 1
     fi
     printf '%s %s' "$kind" "$id"
   }
@@ -436,7 +456,7 @@ if [ "$candidate" != "$GITLINK" ] && [ "$DRY_RUN" -eq 0 ]; then
   # identical subtree proves the install only when it holds nothing but regular files.
   linked=""
   if [ "$head_entry" = "$pin_entry" ] && [ "$head_tree" = "$pin_tree" ]; then
-    listing="$(git -C "$pin_repo" --no-replace-objects ls-tree -r "$pin_tree" 2>/dev/null)" \
+    listing="$(git_in "$pin_repo" --no-replace-objects ls-tree -r "$pin_tree" 2>/dev/null)" \
       || die "cannot list the '$PLUGIN_NAME' subtree at the pin $GITLINK"
     linked="$(printf '%s\n' "$listing" | awk -F'\t' '$1 !~ /^100(644|755) blob / && NF { print $2 }')"
   fi
@@ -462,7 +482,7 @@ if [ "$candidate" != "$GITLINK" ] && [ "$DRY_RUN" -eq 0 ]; then
       say "    $source_path is absent or not a directory at $candidate"
     elif [ "$head_tree" != "$pin_tree" ]; then
       # Naming the files is reporting only; the tree identities above are the verdict.
-      { git -C "$pin_repo" --literal-pathspecs --no-replace-objects ls-tree -r "$GITLINK" -- "$source_path" 2>/dev/null || true
+      { git_in "$pin_repo" --literal-pathspecs --no-replace-objects ls-tree -r "$GITLINK" -- "$source_path" 2>/dev/null || true
         git -C "$MARKETPLACE_DIR" --literal-pathspecs --no-replace-objects ls-tree -r "$candidate" -- "$source_path" 2>/dev/null || true
       } | sort | uniq -u | cut -f2- | sort -u | sed 's/^/    /' | while IFS= read -r line; do say "$line"; done
     fi
