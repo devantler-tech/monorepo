@@ -891,19 +891,13 @@ func TestCLIComposerDigestAndContract(t *testing.T) {
 	// CONTRACT: the merge policy tells a run how to write the record the check
 	// accepts. Scoped to the paragraph that defines it, and failing when that
 	// paragraph cannot be found.
-	parkRule := ""
-	inside := false
-	for _, l := range strings.Split(readGuide(t, "guides/merge-policy.md"), "\n") {
-		if strings.HasPrefix(l, "**A parked PR carries one blocker record") {
-			inside = true
-		}
-		if inside && strings.HasPrefix(l, `**"Is someone actively working on it?"`) {
-			break
-		}
-		if inside {
-			parkRule += l + "\n"
-		}
-	}
+	mergeGuide := readGuide(t, "guides/merge-policy.md")
+	parkRule := parkSection(mergeGuide)
+	// MUTATION: with its closing heading gone, the paragraph reads as not found instead of running
+	// on to the end of the guide, where a later section could satisfy the assertions below.
+	unclosed := strings.ReplaceAll(mergeGuide, parkEnd, "**Is anyone working on it?**")
+	assert(t, "MUTATION: a parked-PR rule whose closing heading is gone is not read to the end of the guide",
+		unclosed != mergeGuide && parkSection(unclosed) == "", "the mutation changed nothing, or the paragraph was still returned")
 	rc, both = guard(t, invocation{split: true}, "--help")
 	help, _ := readSplit(both)
 	assert(t, "the merge policy defines the parked-PR record", parkRule != "", "no paragraph starting '**A parked PR carries one blocker record' in merge-policy.md")
@@ -954,4 +948,30 @@ func TestCLIComposerDigestAndContract(t *testing.T) {
 	}
 	assert(t, "the run procedure runs the parked digest after the survey",
 		strings.Contains(readGuide(t, "skills/portfolio-maintenance/SKILL.md"), "blocked-label-blocker-line.sh --org devantler-tech --parked-digest"), "command not found in the run procedure")
+}
+
+const (
+	parkStart = "**A parked PR carries one blocker record"
+	parkEnd   = `**"Is someone actively working on it?"`
+)
+
+// parkSection is the merge policy's parked-PR rule: the lines from the one opening on parkStart
+// up to the next line opening on parkEnd. It returns nothing unless BOTH anchors are there, in that
+// order, so a renamed closing heading cannot stretch the rule to the end of the guide. (The
+// retired shell suite read to the end of the file in that case; requiring the end only tightens it.)
+func parkSection(text string) string {
+	var rule strings.Builder
+	inside := false
+	for _, l := range strings.Split(text, "\n") {
+		if !inside && strings.HasPrefix(l, parkStart) {
+			inside = true
+		}
+		if inside && strings.HasPrefix(l, parkEnd) {
+			return rule.String()
+		}
+		if inside {
+			rule.WriteString(l + "\n")
+		}
+	}
+	return ""
 }
