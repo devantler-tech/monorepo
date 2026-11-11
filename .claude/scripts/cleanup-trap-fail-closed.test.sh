@@ -302,7 +302,6 @@ python-ban-guard.test.sh|
 review-lane-health.test.sh|
 safe-clone.test.sh|
 unsigned-push-guard.test.sh|
-blocked-label-blocker-line.test.sh|
 claude-dispatch-rate.test.sh|
 codex-lane-liveness.test.sh|
 inference-routing-contract.test.sh|

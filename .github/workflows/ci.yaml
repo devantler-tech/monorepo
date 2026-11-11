@@ -369,7 +369,6 @@ jobs:
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/blocked-label-blocker-line.sh'
-              - '.claude/scripts/blocked-label-blocker-line.test.sh'
               - '.github/workflows/ci.yaml'
             unsigned-commit-report:
               - '.claude/plugin-consumption/agent-instances.json'
@@ -1702,9 +1701,11 @@ jobs:
       - name: Install GNU build deadline utility
         if: runner.os == 'macOS'
         run: brew install coreutils
-      # Hermetic Go and CLI fixtures exercise the same guard on both operating systems.
+      # Hermetic Go and CLI fixtures exercise the same guard on both operating systems: the
+      # compiled CLI, the shell entrypoint and a stubbed `gh`. The entrypoint's bounded build
+      # needs the GNU deadline utility installed above.
       - name: Verify the blocked-label blocker-line check
-        run: bash .claude/scripts/blocked-label-blocker-line.test.sh
+        run: go -C .claude/scripts/blocked-label-blocker-line-go test ./...
 
   test-unsigned-commit-report:
     name: Test unsigned-commit report
