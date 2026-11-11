@@ -17,9 +17,11 @@ rule*). *Querying the data* at the end shows how to read it.
 
 - **4,308 rules** in 77 files. 1,389 (32%) are protected invariants, 1,121 (26%) outcome contracts
   and 1,798 (42%) replaceable defaults.
-- **Three rules in four rest on prose alone.** 3,213 rules (75%) have nothing that checks them.
-  Only 296 (7%) are enforced without the engineer's cooperation. Of the 1,389 protected invariants,
-  1,045 are prose only and 53 have an enforcing control with no known gap.
+- **Three rules in four rest on prose alone, as far as this repository shows.** For 3,213 rules
+  (75%) nothing that checks them was found here or in the plugin; a product repository's own CI
+  was not searched. 202 rules (5%) are enforced here without the engineer's cooperation. For 94
+  more the text names a control that lives elsewhere, which nobody confirmed. Of the 1,389
+  protected invariants, 1,045 are prose only, and 32 are enforced here with no known gap.
 - **The same rule is written down again and again.** 1,838 rules (43%) are one of several copies of
   627 distinct rules. 1,211 of the 4,308 are surplus copies. In 261 of those 627, the copies differ
   in strength, threshold or scope.
