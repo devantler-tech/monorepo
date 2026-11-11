@@ -444,16 +444,31 @@ still_idle() {
   # Probe the RESOLVED path: lsof works in physical paths, so a symlinked spelling would
   # be asking about a different name for the same tree. A path that cannot be resolved is
   # reported in use, so it is kept.
-  local path=$1 rows canon errfile diagnostics
+  local path=$1 raw rc rows canon errfile diagnostics
   [ -n "$LSOF_BIN" ] || return 1
   canon=$(cd -- "$path" 2>/dev/null && pwd -P) || return 1
   [ -n "$canon" ] || return 1
   errfile=$(mktemp 2>/dev/null) || return 1
-  rows=$("$LSOF_BIN" +D "$canon" -Fn 2>"$errfile" | sed -n 's/^n//p')
+  # lsof's own status is kept apart from the row filter: inside a pipeline it would be lost.
+  raw=$("$LSOF_BIN" +D "$canon" -Fn 2>"$errfile")
+  rc=$?
+  rows=$(printf '%s\n' "$raw" | sed -n 's/^n//p')
   diagnostics=$(cat -- "$errfile" 2>/dev/null)
   rm -f -- "$errfile"
+  unset raw
   # A non-empty row set names a holder, so the tree is in use.
   [ -z "$rows" ] || return 1
+  # lsof ends a scan with 0 or 1 whether or not it found a holder. Any other status -- a scan
+  # killed part-way (a signal, a timeout) or one that could not start -- ended before it could
+  # say, and its empty row set says nothing about the tree (monorepo#3819).
+  case "$rc" in
+    0 | 1) ;;
+    *)
+      unknown=$((unknown + 1))
+      log "KEEP  (scan incomplete) $canon: lsof exited ${rc}"
+      return 1
+      ;;
+  esac
   # An EMPTY row set is a claim about the SCAN, not about the tree, and on its own it is
   # not evidence of anything. Measured here: lsof exits 1 for an idle tree, for a tree
   # with a holder, and for a scan it could not finish alike, so the exit status separates
@@ -463,7 +478,9 @@ still_idle() {
   # Anything else keeps the tree: the same fail-closed direction as every other rule here,
   # and the cheap side of the trade -- a kept tree costs one more cycle, while a tree
   # deleted on an answer lsof never gave costs a live run its working state.
+  # Both incomplete forms are counted UNKNOWN, so the run ends with exit 2 rather than a clean 0.
   if [ -n "$diagnostics" ]; then
+    unknown=$((unknown + 1))
     log "KEEP  (scan incomplete) $canon: ${diagnostics%%$'\n'*}"
     return 1
   fi
@@ -557,6 +574,11 @@ oldest_process_secs() {
   [ "$PS_OK" -eq 1 ] || return 1
   oldest_in_table "$PS_TABLE" "$@"
 }
+
+# The toolchain processes that create or write into a Go work dir, or read a module cache. A
+# killed go command's children can outlive it, so the tools are listed as well as the go
+# command itself. Read by the fallback module-cache budget (2c) and the work-dir sweep (4).
+GO_TOOLCHAIN_NAMES=(go compile link asm cgo vet)
 # ---------------------------------------------------------------------------
 # 1. Go build cache, trimmed only when it exceeds its budget.
 #
@@ -619,6 +641,8 @@ reclaim_go_cache() {
   [ -z "$canon" ] || BUDGETED_CACHES="${BUDGETED_CACHES}${canon}"$'\n'
 
   if ! cache_mb=$(size_mb "$dir"); then
+    # Kept, but not examined: the run must say so with exit 2, not a clean 0 (monorepo#3819).
+    unknown=$((unknown + 1))
     log "${label} size unmeasurable — keeping"
     return 0
   fi
@@ -788,7 +812,9 @@ tree_in_use() {
 #       late check re-reads the marker but NOT the idle rule, which such a cache fails by
 #       definition, and it is emptied (empty_marked_cache) rather than removed;
 #       or run-tree / go-work, for a tree under a shared temp root, which repeats tree_guard
-#       against a mount table read just before removal (run-tree with the recency rule)
+#       against a mount table read just before removal (run-tree with the recency rule);
+#       or modcache, for a fallback module cache (2c), which asks again whether a Go toolchain
+#       process runs
 #   $4  optional: the tree's size in MB, when the caller has already measured it
 sweep_candidate() {
   local tree=$1 scope=$2 tree_mb=${4:-} late_hold late_kind late_minutes late_points
@@ -858,6 +884,23 @@ sweep_candidate() {
         *)
           kept=$((kept + 1))
           log "KEEP  (busy, late)    $tree"
+          return 0
+          ;;
+      esac
+    fi
+    # A fallback module cache (2c) is asked about the toolchain again, from a fresh table: a build
+    # that started while the caches were measured is only in that one.
+    if [ "${3:-}" = modcache ]; then
+      case "$(fallback_modcache_hold late)" in
+        '') ;;
+        running)
+          kept=$((kept + 1))
+          log "KEEP  (go running, late) $tree"
+          return 0
+          ;;
+        *)
+          unknown=$((unknown + 1))
+          log "UNKNOWN (process table unreadable, late) $tree"
           return 0
           ;;
       esac
@@ -1916,7 +1959,8 @@ fi
 # it writes to it, so an idle rule would empty a warm cache between every two runs and each
 # run would download its modules again. Over cache_budget_gb it goes through sweep_candidate,
 # with every guard that applies to a tree: the caller's own tree, the liveness snapshot, the
-# late re-probe, and the read-only files a module cache is made of.
+# late re-probe, and the read-only files a module cache is made of. It is also kept while any Go
+# toolchain process runs, asked at the start and again at removal time (monorepo#3819).
 #
 # Recognised by name AND shape: a direct child of the temp root named go-mod-* that holds
 # cache/download, which the go command creates in every module cache it downloads into.
@@ -1977,7 +2021,46 @@ reclaim_fallback_modcache() {
     log "${label} within budget — keeping (a warm cache is worth more than the space)"
     return 0
   fi
-  sweep_candidate "$tree" temp-root
+  # A Go build holds no file open in its module cache between two compile steps, so the open-file
+  # checks alone can call a cache idle in the middle of a build that then fails (monorepo#3819).
+  # While any toolchain process runs, or the process table cannot say, the cache is kept: the rule
+  # reclaim_lint_cache applies to a running linter. Asked before the mode branch, so the dry-run
+  # projection matches apply; sweep_candidate asks again, fresh, just before removal.
+  case "$(fallback_modcache_hold)" in
+    '') ;;
+    running)
+      kept=$((kept + 1))
+      log "KEEP  (go running)    $tree"
+      return 0
+      ;;
+    *)
+      unknown=$((unknown + 1))
+      log "UNKNOWN (process table unreadable, module cache not examined) $tree"
+      return 0
+      ;;
+  esac
+  sweep_candidate "$tree" temp-root modcache
+}
+
+# fallback_modcache_hold [late] prints why a fallback module cache over its budget must be kept,
+# and nothing when it may go: `running` while a Go toolchain process runs, `unknown` when the
+# process table cannot say. `late` reads a fresh table instead of the startup one.
+fallback_modcache_hold() {
+  local table oldest
+  if [ "${1:-}" = late ]; then
+    if ! table=$(read_process_table) || ! oldest=$(oldest_in_table "$table" "${GO_TOOLCHAIN_NAMES[@]}"); then
+      printf unknown
+      return 0
+    fi
+  elif ! oldest=$(oldest_process_secs "${GO_TOOLCHAIN_NAMES[@]}"); then
+    printf unknown
+    return 0
+  fi
+  case "$oldest" in
+    -1) ;;
+    '' | *[!0-9]*) printf unknown ;;
+    *) printf running ;;
+  esac
 }
 
 if [ -d "$TMPDIR_ROOT" ]; then
@@ -2217,9 +2300,7 @@ reclaim_npm_cache
 # Matched by exact name shape AND an hours-scale age AND liveness, where liveness is both
 # the open-file check and the toolchain check below.
 # ---------------------------------------------------------------------------
-# The toolchain processes that create or write into a Go work dir. A killed go command's
-# children can outlive it, so the tools are listed as well as the go command itself.
-GO_TOOLCHAIN_NAMES=(go compile link asm cgo vet)
+# GO_TOOLCHAIN_NAMES is defined beside the process table above, because (2c) reads it too.
 
 # GO_TOOLCHAIN_OLDEST is how long the longest-running toolchain process has run, in
 # seconds: -1 when none is running, "unknown" when the process table cannot say.
