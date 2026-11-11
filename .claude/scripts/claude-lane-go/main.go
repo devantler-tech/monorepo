@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"time"
 )
 
@@ -39,6 +40,7 @@ func run(args []string, stdout, stderr io.Writer, loc *time.Location, now int64)
 		loc:        loc,
 		wallNow:    now,
 		readHeader: readFirstLine,
+		lookPath:   exec.LookPath,
 	}
 	switch args[0] {
 	case "liveness":
@@ -59,6 +61,19 @@ type environment struct {
 	// readHeader reads a transcript's first line. It is a seam only so a test can make one header
 	// unreadable, which the shell suite did by shimming `head` on PATH.
 	readHeader func(path string) (string, error)
+	// lookPath finds a program on PATH; nil (in tests) means every program is present.
+	lookPath func(name string) (string, error)
+}
+
+// hasJQ keeps the scripts' "no jq" UNKNOWN. This implementation parses JSON itself and never runs
+// jq, but a host the Bash could not judge is not one the port starts judging silently; dropping
+// the requirement is a separate, deliberate change.
+func (e environment) hasJQ() bool {
+	if e.lookPath == nil {
+		return true
+	}
+	_, err := e.lookPath("jq")
+	return err == nil
 }
 
 func (e environment) defaultStoreRoot() string {

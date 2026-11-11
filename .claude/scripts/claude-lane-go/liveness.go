@@ -129,6 +129,9 @@ func liveness(args []string, stdout, stderr io.Writer, env environment) (code in
 	} else {
 		o.now = env.wallNow
 	}
+	if !env.hasJQ() {
+		die("jq is not available")
+	}
 
 	// Store discovery requires EXACTLY ONE enabled store: two candidates are two plausible answers
 	// about the same lane, and picking either is a guess.

@@ -70,6 +70,9 @@ func dispatchRate(args []string, stdout, stderr io.Writer, env environment) (cod
 			rateDie("unrecognised argument: %s", a)
 		}
 	}
+	if !env.hasJQ() {
+		rateDie("jq is not available")
+	}
 	if task == "" {
 		rateDie("--task is required")
 	}

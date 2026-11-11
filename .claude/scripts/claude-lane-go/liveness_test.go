@@ -121,3 +121,20 @@ func TestLeadingZeroKnobIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// A host without jq was UNKNOWN for both scripts and stays UNKNOWN, never a verdict.
+func TestNoJQIsUnknown(t *testing.T) {
+	store, projects, _ := twoTaskFixture(t)
+	noJQ := func(string) (string, error) { return "", errors.New("not found") }
+	code, _, stderr := runLiveness(t, environment{readHeader: readFirstLine, lookPath: noJQ},
+		"--store", store, "--projects", projects, "--now-epoch", fmt.Sprint(fixtureNow))
+	if code != 2 || !strings.Contains(stderr, "claude-lane-liveness: UNKNOWN -- jq is not available") {
+		t.Errorf("liveness without jq: exit %d: %s", code, stderr)
+	}
+	var out, errOut bytes.Buffer
+	code = dispatchRate([]string{"--task", "alpha", "--since", "2026-09-01T00:00:00Z", "--store", store, "--projects", projects},
+		&out, &errOut, environment{readHeader: readFirstLine, lookPath: noJQ, loc: time.UTC, wallNow: fixtureNow})
+	if code != 2 || errOut.String() != "claude-dispatch-rate: UNKNOWN -- jq is not available\n" {
+		t.Errorf("dispatch-rate without jq: exit %d: %s", code, errOut.String())
+	}
+}
