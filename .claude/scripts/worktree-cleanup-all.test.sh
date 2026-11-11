@@ -1053,6 +1053,75 @@ $out2"
   rm -rf "$root"
 }
 
+t_claude_lane_judges_submodule_worktrees_in_the_monorepo_root() {
+  # #4922: a submodule's worktree sitting directly in the MONOREPO's .claude/worktrees is not in
+  # the monorepo's worktree list, so the root pass can only keep it as a stray. The submodule's
+  # own pass over that root judges it with every gate: a clean, pushed one is reaped; dirty,
+  # unpushed, in-use and another lane's are kept with their reason; a real stray stays a stray.
+  local name="the claude lane judges a submodule's worktrees in the monorepo root with every gate"
+  local root; root=$(make_root)
+  local wts="$root/repo/.claude/worktrees" n spec branch pid out rc dry dry_rc
+  for spec in sub-spent:claude/sub-spent sub-dirty:claude/sub-dirty sub-unpushed:claude/sub-unpushed \
+              sub-live:claude/sub-live sub-other-lane:codex/sub-other-lane; do
+    n=${spec%%:*}; branch=${spec#*:}
+    if ! git -C "$root/repo/nested" worktree add -q -b "$branch" "$wts/$n" main \
+       || ! git -C "$root/repo/nested" push -q origin "$branch"; then
+      bad "$name" "FIXTURE: worktree add $n"; rm -rf "$root"; return
+    fi
+  done
+  echo edited >> "$wts/sub-dirty/g"
+  echo local > "$wts/sub-unpushed/h" && git -C "$wts/sub-unpushed" add h \
+    && git -C "$wts/sub-unpushed" commit -qm "local only" \
+    || { bad "$name" "FIXTURE: unpushed commit"; rm -rf "$root"; return; }
+  mkdir -p "$wts/stray"
+  touch -t 202001010000 "$wts"/sub-* "$wts/stray"
+  ( cd "$wts/sub-live" && exec sleep 120 ) &
+  pid=$!
+  sleep 1
+  dry=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" dry-run 24 0 2>&1); dry_rc=$?
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 0 2>&1); rc=$?
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+  if [ "$dry_rc" -eq 0 ] && [ "$rc" -eq 0 ] \
+     && grep -q "### nested  \[$wts\]" <<<"$dry" \
+     && grep -q '^REAP .*sub-spent' <<<"$dry" \
+     && grep -q 'KEEP .*sub-dirty.*uncommitted change' <<<"$dry" \
+     && grep -q 'KEEP .*sub-unpushed.*unpushed commit' <<<"$dry" \
+     && grep -q 'KEEP .*sub-live.*live process CWD' <<<"$dry" \
+     && grep -q 'KEEP .*sub-other-lane.*outside the claude/ namespace' <<<"$dry" \
+     && grep -q 'KEEP .*stray.*not a registered worktree' <<<"$dry" \
+     && [ ! -e "$wts/sub-spent" ] && [ -d "$wts/sub-dirty" ] && [ -d "$wts/sub-unpushed" ] \
+     && [ -d "$wts/sub-live" ] && [ -d "$wts/sub-other-lane" ] && [ -d "$wts/stray" ] \
+     && [ ! -e "$wts/spent-root" ] && [ ! -e "$root/repo/nested/.claude/worktrees/spent-sub" ] \
+     && [ "$(git -C "$wts/sub-unpushed" log -1 --format=%s 2>/dev/null)" = "local only" ] \
+     && grep -qx 'edited' <(tail -1 "$wts/sub-dirty/g"); then
+    ok "$name"
+  else
+    bad "$name" "dry_rc=$dry_rc rc=$rc
+$dry
+--- apply
+$out"
+  fi
+  rm -rf "$root"
+}
+
+t_claude_lane_skips_a_submodule_with_no_worktree_in_the_monorepo_root() {
+  # The extra pass runs only when the submodule registers a worktree in the monorepo root, so
+  # an ordinary sweep's output gains no section, and the root pass still keeps its strays.
+  local name="the claude lane adds no monorepo-root pass for a submodule with no worktree there"
+  local root; root=$(make_root)
+  mkdir -p "$root/repo/.claude/worktrees/stray"
+  local out rc
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" dry-run 24 0 2>&1); rc=$?
+  if [ "$rc" -eq 0 ] && ! grep -q "### nested  \[" <<<"$out" \
+     && grep -q 'KEEP .*stray.*not a registered worktree' <<<"$out" \
+     && grep -q '^REAP .*spent-sub' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc $out"
+  fi
+  rm -rf "$root"
+}
+
 t_rejects_a_bad_lane_or_extra_argument() {
   local name="an unknown lane, a missing lane value or an extra argument stops the run"
   local root; root=$(make_root)
@@ -1442,6 +1511,8 @@ t_codex_lane_sweeps_worktrees_nested_in_its_sessions
 t_codex_nested_pass_leaves_a_live_session_alone
 t_nested_passes_never_cross_lanes
 t_rejects_a_bad_lane_or_extra_argument
+t_claude_lane_judges_submodule_worktrees_in_the_monorepo_root
+t_claude_lane_skips_a_submodule_with_no_worktree_in_the_monorepo_root
 t_claim_sweep_runs_for_every_portfolio_repository
 t_claim_sweep_failure_is_visible_and_never_blocks
 t_claim_sweep_dry_run_and_codex_lane
@@ -1452,10 +1523,10 @@ registry="$(printf '%s\n' "$invocations" | awk '!seen[$1]++ {print $1}')"
 listed="$(printf '%s\n' "$registry" | LC_ALL=C sort)"
 declared="$(declare -F | awk '{print $NF}' | sed -n '/^t_[a-zA-Z0-9_]*$/p' | LC_ALL=C sort)"
 registry_failure() { echo 'worktree-cleanup-all.test: case invocation registry differs from complete declared cases and variants' >&2; exit 2; }
-# Forty-five groups cover fifty invocations. Together with
+# Forty-seven groups cover fifty-two invocations. Together with
 # unique calls and the exact allowed arguments below, the census also proves
 # that no parameter variant was silently dropped, repeated or substituted.
-[ "$(printf '%s\n' "$invocations" | wc -l | tr -d ' ')" -eq 50 ] || registry_failure
+[ "$(printf '%s\n' "$invocations" | wc -l | tr -d ' ')" -eq 52 ] || registry_failure
 [ "$invocations" = "$(printf '%s\n' "$invocations" | awk '{print $1 (NF > 1 ? " " $2 : "")}')" ] || registry_failure
 [ -z "$(printf '%s\n' "$invocations" | LC_ALL=C sort | uniq -d)" ] || registry_failure
 [ "$listed" = "$declared" ] || registry_failure

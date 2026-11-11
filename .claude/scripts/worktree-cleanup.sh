@@ -14,6 +14,9 @@
 #     (maintainer direction 2026-09-29, #3676); worktree-cleanup-all.sh --lane passes them.
 #     Every rule below applies unchanged to any root. A symlinked root, and a root holding
 #     the repository's own checkout, are refused.
+#   WORKTREE_CLEANUP_BRANCH_NAMESPACE (env, default empty = off) — when set (e.g. `claude`),
+#     a worktree whose branch is not under <namespace>/ is KEPT, detached HEADs included
+#     (#4922). It only ever adds a KEEP.
 #
 # WHY THIS EXISTS
 #   The harness creates a per-session worktree at <repo>/.claude/worktrees/<slug> and
@@ -31,6 +34,7 @@
 #   KEEP  - a worktree that is the CWD of a LIVE process (a running session)
 #   KEEP  - a worktree younger than min_age_hours
 #   KEEP  - a LOCKED worktree (git locks mean "in use"; we never override)
+#   KEEP  - with WORKTREE_CLEANUP_BRANCH_NAMESPACE set, a worktree on a branch outside it
 #   KEEP  - a worktree with an unexpired Agentic Engineer ownership claim
 #   KEEP  - a worktree whose ownership mutex is held while a claim is acquired/renewed
 #   KEEP  - ANY worktree holding commits not reachable from a remote ref. This one test
@@ -3818,6 +3822,17 @@ while IFS= read -r wt <&3; do
   # KEEP: unresolvable HEAD
   sha=$(git -C "$wt" rev-parse HEAD 2>/dev/null) || { keep "$wt" "no HEAD"; continue; }
   branch=$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null || echo "(detached)")
+
+  # KEEP: a branch outside the lane's namespace, when the caller names one (#4922). The
+  # orchestrator names it where one lane's root holds another repository's worktrees, so a
+  # worktree another lane created there is left for that lane. A detached HEAD names no lane,
+  # so it is kept too. still_the_reviewed_worktree re-reads the branch before any removal.
+  if [ -n "${WORKTREE_CLEANUP_BRANCH_NAMESPACE:-}" ]; then
+    case "$branch" in
+      "$WORKTREE_CLEANUP_BRANCH_NAMESPACE"/?*) ;;
+      *) keep "$wt" "branch $branch is outside the ${WORKTREE_CLEANUP_BRANCH_NAMESPACE}/ namespace (another lane's, or detached)"; continue ;;
+    esac
+  fi
 
   # KEEP: commits not reachable from any remote — the sole-copy-of-real-work test.
   # Covers an unpushed branch and an orphan detached HEAD in one call.

@@ -11,7 +11,8 @@
 #   --lane (default claude) — whose worktrees to sweep. Each lane sweeps ONLY its own roots
 #     (maintainer direction 2026-09-29: "Claude runs should clean up claude, and Codex runs
 #     should clean up codex." — #3676):
-#       claude — <repo>/.claude/worktrees of the monorepo and every submodule
+#       claude — <repo>/.claude/worktrees of the monorepo and every submodule (and each
+#                submodule's claude/* worktrees in the monorepo's, #4922)
 #       codex  — <repo>/.codex/worktrees of the monorepo and every submodule (and each
 #                submodule's worktrees in the monorepo's), plus the monorepo's worktrees in
 #                the Codex app's worktree dir
@@ -424,6 +425,7 @@ sweep() { # <repo_path> [worktree_root, empty = worktree-cleanup.sh's default] [
   # point one lane's sweep at another lane's root.
   local out rc
   out=$(WORKTREE_CLEANUP_WT_ROOT="$wt_root" WORKTREE_CLEANUP_RETAIN="$RETAIN" \
+    WORKTREE_CLEANUP_BRANCH_NAMESPACE="$BRANCH_NAMESPACE" \
     "$SUT" "$path" "$MANIFEST_DIR/$label-$TS.tsv" "$MODE" "$MIN_AGE_HOURS" "$salvage" 2>&1); rc=$?
   # dry-run writes no manifest, so its per-worktree REAP/KEEP lines are the ONLY record
   # of what an apply run would touch — never truncate them. apply has the manifest, so
@@ -644,14 +646,41 @@ sweep_root() {
   sweep "$1" "${2:-}"
 }
 
+# has_worktree_under <repo_path> <root> — 0 when the repository registers a worktree inside
+# <root>, or its list cannot be read (the sweep then reports that failure itself); 1 when it
+# provably registers none there.
+has_worktree_under() {
+  local list root_real p p_real
+  [ -d "$2" ] || return 1
+  root_real=$(cd "$2" 2>/dev/null && pwd -P) || return 0
+  list=$(git -C "$1" worktree list --porcelain 2>/dev/null) || return 0
+  while IFS= read -r p; do
+    case "$p" in worktree\ *) p=${p#worktree } ;; *) continue ;; esac
+    p_real=$(cd "$p" 2>/dev/null && pwd -P) || p_real=$p
+    case "$p_real" in "$root_real"/?*) return 0 ;; esac
+  done <<< "$list"
+  return 1
+}
+
 # sweep_lane <repo_path> — every worktree root the selected lane owns, for that repository's
 # registrations, and no other root. Codex runs also keep a submodule's worktrees in the
 # MONOREPO's .codex/worktrees (measured on the reference host), so each submodule is swept
 # there too; the Codex app's worktree dir holds monorepo worktrees only.
+# Claude runs do the same in the MONOREPO's .claude/worktrees (#4922): the root pass can only
+# call such a folder "not a registered worktree", because it is the submodule's worktree, so
+# the submodule's own pass judges it with every gate. That pass also keeps any worktree whose
+# branch is outside claude/, so a folder another lane put there is left for that lane. It runs
+# only when the submodule registers a worktree there, so the output gains no line otherwise.
+BRANCH_NAMESPACE=""
 sweep_lane() {
   case "$LANE" in
     claude)
       sweep_root "$1"
+      if [ "$1" != "$ROOT" ] && has_worktree_under "$1" "$ROOT/.claude/worktrees"; then
+        BRANCH_NAMESPACE=claude
+        sweep_root "$1" "$ROOT/.claude/worktrees"
+        BRANCH_NAMESPACE=""
+      fi
       ;;
     codex)
       sweep_root "$1" "$1/.codex/worktrees"

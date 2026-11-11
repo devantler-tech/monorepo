@@ -189,6 +189,37 @@ t_reaps_spent() {
   rm -rf "$root"
 }
 
+t_branch_namespace_keeps_other_lanes_and_detached() {
+  # #4922: WORKTREE_CLEANUP_BRANCH_NAMESPACE only adds a KEEP. With it set, another lane's
+  # branch and a detached HEAD are kept while the lane's own spent worktree is still reaped;
+  # without it, the same other-lane worktree is reaped as before.
+  local name="WORKTREE_CLEANUP_BRANCH_NAMESPACE keeps another lane's branch and a detached HEAD"
+  local root; root=$(make_repo)
+  add_wt "$root" spent pushed
+  local other="$root/repo/.claude/worktrees/other" det="$root/repo/.claude/worktrees/det"
+  if ! git -C "$root/repo" worktree add -q -b codex/other "$other" main \
+     || ! git -C "$root/repo" push -q origin codex/other \
+     || ! git -C "$root/repo" worktree add -q --detach "$det" main; then
+    bad "$name" "FIXTURE"; rm -rf "$root"; return
+  fi
+  age_tree "$other" "$det"
+  local gated plain
+  gated=$(WORKTREE_CLEANUP_BRANCH_NAMESPACE=claude run "$root")
+  plain=$(run "$root")
+  if grep -q '^REAP  .*spent' <<<"$gated" \
+     && grep -q 'KEEP .*other .*branch codex/other is outside the claude/ namespace' <<<"$gated" \
+     && grep -q 'KEEP .*det .*branch (detached) is outside the claude/ namespace' <<<"$gated" \
+     && grep -q '^REAP  .*other' <<<"$plain" && grep -q '^REAP  .*det' <<<"$plain"; then
+    ok "$name"
+  else
+    bad "$name" "gated:
+$gated
+plain:
+$plain"
+  fi
+  rm -rf "$root"
+}
+
 t_keeps_unpushed() {
   local root; root=$(make_repo)
   add_wt "$root" spent pushed          # control must still reap
@@ -6895,6 +6926,7 @@ t_modules_fingerprint_batches_literal_paths
 t_modules_fingerprint_refuses_bad_hash_output
 t_modules_fingerprint_bounds_arguments_and_empty_input
 t_reaps_spent
+t_branch_namespace_keeps_other_lanes_and_detached
 t_keeps_unpushed
 t_keeps_detached_orphan
 t_keeps_dirty

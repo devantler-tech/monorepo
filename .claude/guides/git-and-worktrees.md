@@ -340,7 +340,8 @@ direction 2026-09-29: *"Claude runs should clean up claude, and Codex runs shoul
 [#3676](https://github.com/devantler-tech/monorepo/issues/3676)).
 [`.claude/scripts/worktree-cleanup-all.sh [apply|dry-run] [min_age_hours] [salvage_age_hours] [--lane claude|codex]`](../scripts/worktree-cleanup-all.sh)
 covers the monorepo and every submodule discovered from `.gitmodules`. `--lane claude` (the default)
-sweeps `<repo>/.claude/worktrees`; `--lane codex` sweeps `<repo>/.codex/worktrees` (including a
+sweeps `<repo>/.claude/worktrees` (including a submodule's `claude/*` worktrees kept in the
+monorepo's, [#4922](https://github.com/devantler-tech/monorepo/issues/4922)); `--lane codex` sweeps `<repo>/.codex/worktrees` (including a
 submodule's worktrees kept in the monorepo's) and the monorepo's worktrees in the Codex app's
 worktree dir. Two things run it: the `tech.devantler.worktree-cleanup` LaunchAgent (runtime-local,
 `~/Library/LaunchAgents/`) sweeps the claude lane every 6 hours and at login, and **every run starts a
