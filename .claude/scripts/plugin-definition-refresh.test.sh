@@ -326,6 +326,28 @@ if [ "$rc" -eq 0 ] && [ -e "$ROOT/APPLIED" ]; then
 else bad "B5b reads the pin from the consumer's submodule and applies an identical target subtree" "exit $rc, out: $out"; fi
 cleanup
 
+# B5c — a per-run worktree leaves the submodule unpopulated, but the superproject's shared submodule
+# object store holds the pin (monorepo#4934). Its config carries a `core.worktree` that does not
+# exist here, so it must be read as a git dir, never through `-C`.
+make_fixture
+SIDE="$ROOT/side"
+git -c advice.detachedHead=false clone -q "$MK" "$SIDE" || { printf 'FIXTURE FAILURE: clone side\n' >&2; exit 9; }
+git -C "$SIDE" config user.email t@t; git -C "$SIDE" config user.name t
+git -C "$SIDE" checkout -q "$MK_NEW" || exit 9
+echo fd-side > "$SIDE/plugins/frontend-design/s.md"
+PIN_SIDE="$(commit_on "$SIDE" side-only)"; [ -n "$PIN_SIDE" ] || exit 9
+set_gitlink "$PIN_SIDE"
+SHARED="$CONSUMER/.git/modules/libraries/agent-plugins"
+git clone -q --bare "$SIDE" "$SHARED" || { printf 'FIXTURE FAILURE: clone shared store\n' >&2; exit 9; }
+g git --git-dir="$SHARED" config core.bare false
+g git --git-dir="$SHARED" config core.worktree "$ROOT/no-such-worktree"
+[ ! -e "$CONSUMER/libraries/agent-plugins/.git" ] || { printf 'FIXTURE FAILURE: submodule populated\n' >&2; exit 9; }
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -e "$ROOT/APPLIED" ]; then
+  ok "B5c reads the pin from the superproject's shared submodule store and applies an identical target subtree"
+else bad "B5c reads the pin from the superproject's shared submodule store and applies an identical target subtree" "exit $rc, out: $out"; fi
+cleanup
+
 # B6 — a symlink keeps the subtree's tree id while the bytes it installs change: Claude Code
 # dereferences a link into the marketplace when it copies the plugin. Only the moved TARGET
 # file differs here, so the subtree is identical and the shortcut must still refuse.
