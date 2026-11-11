@@ -1756,9 +1756,10 @@ unset worktree_claim_timeout_usable
 #   * the killer's stdout is redirected, because it would otherwise inherit and hold open a caller's
 #     pipe, making every call take the full timeout even when git answered instantly.
 #
-# plugin-definition-currency.sh carries the same function, statement for statement, and its test
-# fails when the two differ (monorepo#3824). A fix made there never reached here: this copy replaced
-# the ssh command a repository configures with plain `ssh`, and set no connect timeout.
+# plugin-definition-currency.sh carried the same function, statement for statement (monorepo#3824),
+# until it became a Go program (monorepo#2851) whose bound follows the same rules. A fix made there
+# once never reached here: this copy replaced the ssh command a repository configures with plain
+# `ssh`, and set no connect timeout.
 bounded_remote() {
   local secs="$1"
   shift
