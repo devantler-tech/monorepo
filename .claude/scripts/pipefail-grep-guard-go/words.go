@@ -36,6 +36,17 @@ func toWord(src string, w *syntax.Word) word {
 	for _, part := range w.Parts {
 		v, ok := literalPart(part)
 		if !ok {
+			// Keep the literal text a double-quoted run carries BEFORE its first expansion:
+			// `"-q$extra"` still hands grep an argument starting with -q.
+			if dq, isDQ := part.(*syntax.DblQuoted); isDQ {
+				for _, inner := range dq.Parts {
+					l, isLit := inner.(*syntax.Lit)
+					if !isLit {
+						break
+					}
+					b.WriteString(unescapeDouble(l.Value))
+				}
+			}
 			lit = false
 			break
 		}
