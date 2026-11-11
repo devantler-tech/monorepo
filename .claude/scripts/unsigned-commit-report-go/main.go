@@ -4,7 +4,7 @@
 // `--help` prints it.
 //
 // Every GitHub read goes through `gh` on PATH with the arguments the Bash implementation used,
-// so the fixture harness (unsigned-commit-report.test.sh) drives both identically.
+// so the launcher suite (cli_suite_test.go) drives it through a stubbed `gh` as it drove Bash.
 package main
 
 import (

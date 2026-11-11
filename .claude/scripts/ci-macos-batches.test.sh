@@ -156,7 +156,7 @@ cat >"$tmp/unsigned-commit-report.jq" <<'CHECK'
 any($j.steps[]; ((.uses // "") | startswith("actions/setup-go@")) and
   .with["go-version-file"] == ".claude/scripts/unsigned-commit-report-go/go.mod") and
 any($j.steps[]; .if == "runner.os == 'macOS'" and .run == "brew install coreutils") and
-any($j.steps[]; .run == "bash .claude/scripts/unsigned-commit-report.test.sh") and
+any($j.steps[]; .run == "go -C .claude/scripts/unsigned-commit-report-go test ./...") and
 ($f | type == "array" and index(".claude/scripts/unsigned-commit-report-go/**") != null and
   index(".claude/scripts/go-helper-build.sh") != null)
 CHECK
@@ -168,7 +168,7 @@ for mutation in \
   '.jobs["test-unsigned-commit-report"].strategy.matrix.os = ["ubuntu-latest"]' \
   '.jobs["test-unsigned-commit-report"].steps |= map(select(((.uses // "") | startswith("actions/setup-go@")) | not))' \
   '.jobs["test-unsigned-commit-report"].steps |= map(select(.run != "brew install coreutils"))' \
-  '.jobs["test-unsigned-commit-report"].steps |= map(select(.run != "bash .claude/scripts/unsigned-commit-report.test.sh"))'; do
+  '.jobs["test-unsigned-commit-report"].steps |= map(select(.run != "go -C .claude/scripts/unsigned-commit-report-go test ./..."))'; do
   jq "$mutation" "$tmp/workflow.json" >"$tmp/mutated.json"
   if check_ucr "$tmp/mutated.json"; then fail "unsigned-commit-report mutation was accepted: $mutation"; fi
 done

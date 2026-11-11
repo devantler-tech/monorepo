@@ -302,7 +302,6 @@ python-ban-guard.test.sh|
 review-lane-health.test.sh|
 safe-clone.test.sh|
 unsigned-push-guard.test.sh|
-blocked-label-blocker-line.test.sh|
 claude-dispatch-rate.test.sh|
 codex-lane-liveness.test.sh|
 inference-routing-contract.test.sh|
@@ -311,7 +310,6 @@ claude-lane-liveness.test.sh|
 submodule-agents-drift.test.sh|
 inference-routing-scorecard.test.sh|
 submodule-pin-currency.test.sh|
-unsigned-commit-report.test.sh|
 ci-job-wiring.test.sh|
 pipefail-grep-guard.test.sh|
 rule-sensor-inventory.test.sh|

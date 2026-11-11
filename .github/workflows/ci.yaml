@@ -369,12 +369,10 @@ jobs:
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/blocked-label-blocker-line.sh'
-              - '.claude/scripts/blocked-label-blocker-line.test.sh'
               - '.github/workflows/ci.yaml'
             unsigned-commit-report:
               - '.claude/plugin-consumption/agent-instances.json'
               - '.claude/scripts/unsigned-commit-report.sh'
-              - '.claude/scripts/unsigned-commit-report.test.sh'
               # The launcher builds the Go implementation through the shared bounded build.
               - '.claude/scripts/unsigned-commit-report-go/**'
               - '.claude/scripts/go-helper-build.sh'
@@ -1702,9 +1700,11 @@ jobs:
       - name: Install GNU build deadline utility
         if: runner.os == 'macOS'
         run: brew install coreutils
-      # Hermetic Go and CLI fixtures exercise the same guard on both operating systems.
+      # Hermetic Go and CLI fixtures exercise the same guard on both operating systems: the
+      # compiled CLI, the shell entrypoint and a stubbed `gh`. The entrypoint's bounded build
+      # needs the GNU deadline utility installed above.
       - name: Verify the blocked-label blocker-line check
-        run: bash .claude/scripts/blocked-label-blocker-line.test.sh
+        run: go -C .claude/scripts/blocked-label-blocker-line-go test ./...
 
   test-unsigned-commit-report:
     name: Test unsigned-commit report
@@ -1733,12 +1733,12 @@ jobs:
       - name: Install GNU build deadline utility
         if: runner.os == 'macOS'
         run: brew install coreutils
-      # Go unit tests, then hand-built commit payloads through the --input seam and a stubbed
-      # `gh` -- no network. Both OSes because the scheduled runs happen on macOS. This job has its
-      # own macOS leg rather than a macOS batch slot: the launcher builds Go, which the batches
-      # do not set up.
+      # Go unit tests, and hand-built commit payloads through the launcher's --input seam and a
+      # stubbed `gh` -- no network. Both OSes because the scheduled runs happen on macOS. This job
+      # has its own macOS leg rather than a macOS batch slot: the launcher builds Go, which the
+      # batches do not set up.
       - name: Verify the unsigned-commit report
-        run: bash .claude/scripts/unsigned-commit-report.test.sh
+        run: go -C .claude/scripts/unsigned-commit-report-go test ./...
 
   # Non-blocking by design (monorepo#3212): this job reports unsigned or unverifiable commits on
   # the pull request as warnings and a step summary, and is deliberately NOT part of the required

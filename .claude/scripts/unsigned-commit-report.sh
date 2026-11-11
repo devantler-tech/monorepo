@@ -5,8 +5,8 @@
 # Compatibility entrypoint for the Go implementation in unsigned-commit-report-go/ (monorepo#3224).
 # The CLI, the three modes, the output lines and the exit codes are unchanged; `--help` prints the
 # full usage and design note (unsigned-commit-report-go/help.txt). Every GitHub read still goes
-# through `gh` on PATH, so unsigned-commit-report.test.sh's stubbed `gh` drives this exactly as it
-# drove the Bash implementation.
+# through `gh` on PATH, so the stubbed `gh` in unsigned-commit-report-go/cli_suite_test.go
+# drives this exactly as it drove the Bash implementation.
 #
 # EXIT CODES
 #   0  the report was produced (findings or not -- this is the non-blocking contract)
