@@ -140,11 +140,8 @@ jobs:
               - '.github/workflows/ci.yaml'
               - 'AGENTS.md'
             macos-batch-2:
-              - '.claude/guides/**'
               - '.claude/guides/issues-and-board.md'
               - '.claude/plugin-consumption/agent-instances.json'
-              - '.claude/scripts/claude-lane-liveness.sh'
-              - '.claude/scripts/codex-lane-liveness.sh'
               - '.claude/scripts/finops-snapshot.sh'
               - '.claude/scripts/flow-scorecard.sh'
               - '.claude/scripts/flow-scorecard.test.sh'
@@ -154,8 +151,6 @@ jobs:
               - '.claude/scripts/platform-live-health.test.sh'
               - '.claude/scripts/prod-kube-context.sh'
               - '.claude/scripts/prod-kube-context.test.sh'
-              - '.claude/scripts/sibling-lane-watch.sh'
-              - '.claude/scripts/sibling-lane-watch.test.sh'
               - '.claude/scripts/squash-closing-keywords.sh'
               - '.claude/scripts/squash-closing-keywords.test.sh'
               - '.github/workflows/ci.yaml'
@@ -179,10 +174,6 @@ jobs:
               - '.claude/guides/**'
               - '.claude/guides/durable-memory.md'
               - '.claude/scripts/blocked-label-blocker-line.sh'
-              - '.claude/scripts/claude-dispatch-rate.sh'
-              - '.claude/scripts/claude-dispatch-rate.test.sh'
-              - '.claude/scripts/claude-lane-liveness.sh'
-              - '.claude/scripts/claude-lane-liveness.test.sh'
               - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/hypothesis-id-reserve.sh'
               - '.claude/scripts/hypothesis-id-reserve.test.sh'
@@ -706,6 +697,8 @@ jobs:
               # skipped, leaving the clause describing semantics that no longer exist.
               - '.claude/scripts/codex-lane-liveness.sh'
               - '.claude/scripts/claude-lane-liveness.sh'
+              # The Go implementation behind it now holds that verdict contract (monorepo#3592).
+              - '.claude/scripts/claude-lane-go/**'
               - '.claude/scripts/improver-cross-read-liveness-contract.test.sh'
               - '.github/workflows/ci.yaml'
             git-safety-contract:
@@ -814,6 +807,9 @@ jobs:
               - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/claude-lane-liveness.sh'
               - '.claude/scripts/claude-lane-liveness.test.sh'
+              # The entrypoint builds the Go implementation through the shared bounded build.
+              - '.claude/scripts/claude-lane-go/**'
+              - '.claude/scripts/go-helper-build.sh'
               - '.github/workflows/ci.yaml'
             claude-task-live-runs:
               # The cadence guide states the rule the suite's contract section pins.
@@ -833,13 +829,19 @@ jobs:
               - 'AGENTS.md'
               - '.claude/guides/**'
               - '.claude/scripts/claude-lane-liveness.sh'
+              - '.claude/scripts/claude-lane-go/**'
               - '.claude/scripts/codex-lane-liveness.sh'
               - '.claude/scripts/sibling-lane-watch.sh'
               - '.claude/scripts/sibling-lane-watch.test.sh'
+              # It drives the real liveness check, whose entrypoint builds Go through the shared build.
+              - '.claude/scripts/go-helper-build.sh'
               - '.github/workflows/ci.yaml'
             claude-dispatch-rate:
               - '.claude/scripts/claude-dispatch-rate.sh'
               - '.claude/scripts/claude-dispatch-rate.test.sh'
+              # The entrypoint builds the Go implementation through the shared bounded build.
+              - '.claude/scripts/claude-lane-go/**'
+              - '.claude/scripts/go-helper-build.sh'
               - '.github/workflows/ci.yaml'
             review-lane-health:
               - '.claude/scripts/review-lane-health.sh'
@@ -2765,7 +2767,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -2774,6 +2776,19 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/claude-lane-go/go.mod
+          cache: false
+      - name: Install GNU build deadline utility
+        if: runner.os == 'macOS'
+        run: brew install coreutils
+      # Both OSes are required: scheduled runs execute on macOS. This job has its own macOS leg
+      # rather than a macOS batch slot because the entrypoint builds Go (monorepo#3592), which the
+      # batches do not set up.
+      - name: Run the Go tests of the Claude lane helpers
+        run: go -C .claude/scripts/claude-lane-go test ./...
       - name: Verify the claude lane liveness check
         run: bash .claude/scripts/claude-lane-liveness.test.sh
 
@@ -2822,7 +2837,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -2831,6 +2846,16 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The suite drives the real Claude liveness check, whose entrypoint builds Go (monorepo#3592),
+      # so this job has its own macOS leg rather than a macOS batch slot, which sets up no Go.
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/claude-lane-go/go.mod
+          cache: false
+      - name: Install GNU build deadline utility
+        if: runner.os == 'macOS'
+        run: brew install coreutils
       - name: Verify the sibling lane watch
         run: bash .claude/scripts/sibling-lane-watch.test.sh
 
@@ -2841,7 +2866,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -2850,6 +2875,19 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/claude-lane-go/go.mod
+          cache: false
+      - name: Install GNU build deadline utility
+        if: runner.os == 'macOS'
+        run: brew install coreutils
+      # Both OSes are required: scheduled runs execute on macOS. This job has its own macOS leg
+      # rather than a macOS batch slot because the entrypoint builds Go (monorepo#3592), which the
+      # batches do not set up.
+      - name: Run the Go tests of the Claude lane helpers
+        run: go -C .claude/scripts/claude-lane-go test ./...
       - name: Verify the claude dispatch rate
         run: bash .claude/scripts/claude-dispatch-rate.test.sh
 
@@ -3547,7 +3585,6 @@ jobs:
         shell: bash
         run: |
           batch_status=0
-          bash .claude/scripts/sibling-lane-watch.test.sh || batch_status=1
           bash .claude/scripts/platform-live-health.test.sh || batch_status=1
           bash .claude/scripts/squash-closing-keywords.test.sh || batch_status=1
           bash .claude/scripts/prod-kube-context.test.sh || batch_status=1
@@ -3598,8 +3635,6 @@ jobs:
         shell: bash
         run: |
           batch_status=0
-          bash .claude/scripts/claude-dispatch-rate.test.sh || batch_status=1
-          bash .claude/scripts/claude-lane-liveness.test.sh || batch_status=1
           bash .claude/scripts/lane-draft-count.test.sh || batch_status=1
           bash .claude/scripts/submodule-pin-currency.test.sh || batch_status=1
           bash .claude/scripts/hypothesis-id-reserve.test.sh || batch_status=1

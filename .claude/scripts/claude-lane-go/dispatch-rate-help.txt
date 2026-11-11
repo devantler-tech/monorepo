@@ -1,0 +1,44 @@
+claude-dispatch-rate.sh — how many of a Claude task's scheduled slots actually dispatched?
+
+AGENTS.md#Cadence & focus says the Claude scheduler refuses a dispatch that would overlap the
+previous run of the same task, so "scheduled every hour" is not "ran every hour". It also says the
+drop rate may be re-derived ONLY by comparing actual dispatches to scheduled slots -- never by
+counting `per_task_limit` skip records, which the scheduler re-writes every minute a run stays open.
+Counting those records produced five mutually inconsistent readings. Every reading so far was a
+one-off hand measurement, so none could be repeated (monorepo#2716). This helper is that comparison.
+
+THE RULE
+  Slots come from the task's `cronExpression`, evaluated in host local time. A slot is DISPATCHED
+  when an attributable session for that task starts in [slot, next slot). A delayed dispatch that
+  starts after its own slot but before the next one therefore still counts. That is the
+  "delayed into the next hour is not dropped" correction the contract records.
+  A slot is SETTLED only once its successor is at or before --until. An open slot has had no chance
+  to dispatch yet and is never counted as dropped.
+
+WHAT IT CANNOT SEE
+  The store keeps only the CURRENT cron, with no edit history. A window is always judged against
+  it, and the output says so (`cron_source=current`). A schedule edited during the window is
+  invisible here, so measure only windows you know the schedule held for. Windows starting before
+  the task's `createdAt` are refused.
+  A dispatch that dies before the run's first user message carries no task marker, so it cannot
+  be attributed and counts as dropped. That is the honest reading: such a run did no work. It is
+  also why `claude-lane-liveness.sh` answers whether the NEWEST dispatch produced work, while this
+  reports a RATE over a window. The two answer different questions.
+
+READ-ONLY, and as narrow as claude-lane-liveness.sh: from each transcript it reads only the
+first line's task marker and timestamp. It never reads run content.
+
+Usage: claude-dispatch-rate.sh --task ID[,ID...] --since ISO [--until ISO] [--store PATH] [--projects PATH]
+                              [--now-epoch S] [--slots]
+  --task           one scheduler entry id, or up to four separated by commas. A lane whose engineer
+                   starts from more than one entry names them all (monorepo#4117): each entry is
+                   measured on its own schedule and sessions and printed on its own line, then one
+                   `DISPATCH-RATE-SET tasks=<ids> ... scheduled= dispatched= dropped= drop_rate=`
+                   line sums them. If any named entry cannot be measured, or two share a schedule,
+                   the whole set is UNKNOWN: it is never the sum of the entries that were readable.
+  --since/--until  UTC instants, YYYY-MM-DDTHH:MM:SSZ. --until defaults to now and may not be later.
+  --slots          also print one line per settled slot: `<slot-utc> dispatched|dropped`.
+
+Exit 0  measured; prints `DISPATCH-RATE task=<id> scheduled=<n> dispatched=<d> dropped=<n-d> ...`
+     2  UNKNOWN -- bad arguments, no jq, absent/ambiguous store, unsupported cron, an unreadable
+        transcript, or no settled slot in the window. Never a rate computed from a partial read.
