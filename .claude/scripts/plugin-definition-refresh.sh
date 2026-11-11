@@ -653,7 +653,31 @@ head_now="$(git -C "$MARKETPLACE_DIR" rev-parse HEAD 2>/dev/null)" \
 # that is missing, changed or extra anywhere is an install that is NOT the gated revision (exit 1),
 # and the run must report it. Modes are not compared, only bytes.
 head_after="$(git -C "$MARKETPLACE_DIR" rev-parse HEAD 2>/dev/null)" || head_after="unreadable"
-install_paths="$(jq -r --arg id "$PLUGIN_ID" '.plugins[$id][]?.installPath // empty' "$registry" 2>/dev/null)" || install_paths=""
+# Only the install that applies to THIS checkout is compared, by the same rule the currency check
+# uses (monorepo#4835, #4873): this checkout's project- or local-scope record, else the user-scope
+# record (a record with no scope is read as user scope). Identical paths are one path. The registry
+# keeps one project-scope record per session worktree, and records for removed worktrees stay
+# behind: 326 records naming 6 directories on 2026-11-11. Walking all of them held the lock for over
+# 15 minutes and compared stale installs this checkout never loads, so every apply read as NOT the
+# gated revision (monorepo#4957). Two distinct paths in the deciding tier are still UNKNOWN.
+install_paths="$(jq -r --arg id "$PLUGIN_ID" --arg root "$REPO_ROOT" '
+  [.plugins[$id][]?
+    | select(type == "object" and (.installPath | type) == "string" and (.installPath | length) > 0)]
+  | ([.[] | select((.scope == "project" or .scope == "local")
+        and ((.projectPath // "") | sub("/+$"; "")) == ($root | sub("/+$"; "")))
+      | .installPath] | unique) as $project
+  | ([.[] | select(.scope == null or .scope == "user") | .installPath] | unique) as $user
+  | (if ($project | length) > 0 then $project else $user end)
+  | if length > 1 then "AMBIGUOUS \(length)" else .[] end
+' "$registry" 2>/dev/null)" || install_paths=""
+case "$install_paths" in
+  "AMBIGUOUS "*)
+    say ""
+    say "APPLIED, BUT UNVERIFIED — the registry '$registry' names ${install_paths#AMBIGUOUS } distinct installs"
+    say "  of '$PLUGIN_ID' that apply to $REPO_ROOT, so this run cannot tell which one to compare with"
+    say "  $candidate. The apply happened; the verdict is UNKNOWN, never 0."
+    exit 2 ;;
+esac
 if [ -z "$install_paths" ]; then
   say ""
   say "APPLIED, BUT UNVERIFIED — the registry '$registry' names no install of '$PLUGIN_ID', so this"

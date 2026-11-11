@@ -1300,6 +1300,60 @@ else
   bad "A9-A11 the definition-and-plugin guide is unreadable at $CONSTITUTION"
 fi
 
+# ── E8 — only the install that applies to THIS checkout is compared (monorepo#4957) ────────────
+# The registry keeps one project-scope record per session worktree, and records for removed
+# worktrees stay behind. Comparing every record walked stale installs this checkout never loads, so
+# a correct apply read as NOT the gated revision, and the walk held the lock for many minutes.
+stale_install() {
+  if ! { mkdir -p "$ROOT/stale/agents" && echo stale > "$ROOT/stale/agents/a.md"; }; then
+    printf 'FIXTURE FAILURE: stale install\n' >&2; exit 9
+  fi
+}
+registry_with() { printf '{"version":2,"plugins":{"agentic-engineering@devantler-plugins":[%s]}}\n' "$1" \
+  > "$PLUGINS/installed_plugins.json" || { printf 'FIXTURE FAILURE: registry\n' >&2; exit 9; }; }
+# E8 — other checkouts' stale project records are not compared; the user record decides.
+make_fixture; stale_install
+set_gitlink "$MK_NEW"
+registry_with "{\"scope\":\"user\",\"installPath\":\"$INSTALLED\"},{\"scope\":\"project\",\"projectPath\":\"$ROOT/other-worktree\",\"installPath\":\"$ROOT/stale\"},{\"scope\":\"project\",\"projectPath\":\"$ROOT/third-worktree\",\"installPath\":\"$ROOT/stale\"}"
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && ! grep -q 'differ from' <<<"$out"; then
+  ok "E8 compares only the install that applies to this checkout, not other worktrees' stale records"
+else bad "E8 compares only the install that applies to this checkout, not other worktrees' stale records" "exit was $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+# E8b — this checkout's project record outranks the user record.
+make_fixture; stale_install
+set_gitlink "$MK_NEW"
+registry_with "{\"scope\":\"user\",\"installPath\":\"$ROOT/stale\"},{\"scope\":\"project\",\"projectPath\":\"$CONSUMER/\",\"installPath\":\"$INSTALLED\"}"
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ]; then ok "E8b this checkout's project record outranks the user-scope record"
+else bad "E8b this checkout's project record outranks the user-scope record" "exit was $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+# E8c — the applicable install is still compared: a stale one for this checkout is exit 1.
+make_fixture; stale_install
+set_gitlink "$MK_NEW"
+registry_with "{\"scope\":\"user\",\"installPath\":\"$INSTALLED\"},{\"scope\":\"project\",\"projectPath\":\"$CONSUMER\",\"installPath\":\"$ROOT/stale\"}"
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+if [ "$rc" -eq 1 ] && grep -qF 'changed  agents/a.md' <<<"$out"; then
+  ok "E8c a stale install that applies to this checkout is still NOT the gated revision (exit 1)"
+else bad "E8c a stale install that applies to this checkout is still NOT the gated revision (exit 1)" "exit was $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+# E8d — two distinct installs in the deciding tier are UNKNOWN; identical paths count once.
+make_fixture; stale_install
+set_gitlink "$MK_NEW"
+registry_with "{\"scope\":\"project\",\"projectPath\":\"$CONSUMER\",\"installPath\":\"$INSTALLED\"},{\"scope\":\"local\",\"projectPath\":\"$CONSUMER\",\"installPath\":\"$ROOT/stale\"}"
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && grep -q 'names 2 distinct installs' <<<"$out"; then
+  ok "E8d two distinct installs that apply to this checkout are UNKNOWN (exit 2)"
+else bad "E8d two distinct installs that apply to this checkout are UNKNOWN (exit 2)" "exit was $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+make_fixture
+set_gitlink "$MK_NEW"
+registry_with "{\"scope\":\"user\",\"installPath\":\"$INSTALLED\"},{\"scope\":\"user\",\"installPath\":\"$INSTALLED\"}"
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ]; then ok "E8e identical install paths count as one install"
+else bad "E8e identical install paths count as one install" "exit was $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+
 printf '\n  %d passed, %d failed\n\n' "$pass" "$fail"
 refresh_test_finished=1
 [ "$fail" -eq 0 ]
