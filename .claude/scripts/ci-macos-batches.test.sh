@@ -32,7 +32,6 @@ cat >"$tmp/cases.tsv" <<'CASES'
 1	shared-checkout-freshness
 1	security-advisory-sweep
 1	gh-json-read
-2	sibling-lane-watch
 2	platform-live-health
 2	squash-closing-keywords
 2	prod-kube-context
@@ -264,6 +263,41 @@ if (expect_claude_lane_rejects claude-lane-liveness control "$tmp/not-a-workflow
   fail "a jq evaluation error counted as the claude-lane predicate rejecting a mutation"
 fi
 
+# sibling-lane-watch left batch 2 for the same reason: its suite drives the real Claude liveness
+# check, whose entrypoint builds Go (monorepo#3592). It needs no Go tests of its own.
+cat >"$tmp/sibling-lane-watch.jq" <<'CHECK'
+.jobs["test-sibling-lane-watch"] as $j | $filters[0]["sibling-lane-watch"] as $f |
+($j.strategy.matrix.os == ["ubuntu-latest", "macos-latest"]) and
+($j["runs-on"] == "${{ matrix.os }}") and
+any($j.steps[]; ((.uses // "") | startswith("actions/setup-go@")) and
+  .with["go-version-file"] == ".claude/scripts/claude-lane-go/go.mod") and
+any($j.steps[]; .if == "runner.os == 'macOS'" and .run == "brew install coreutils") and
+any($j.steps[]; .run == "bash .claude/scripts/sibling-lane-watch.test.sh") and
+($f | type == "array" and index(".claude/scripts/claude-lane-go/**") != null and
+  index(".claude/scripts/go-helper-build.sh") != null)
+CHECK
+check_slw() { # <workflow> [<filters>]
+  jq -e --slurpfile filters "${2:-$tmp/filters.json}" -f "$tmp/sibling-lane-watch.jq" "$1" >/dev/null 2>"$tmp/slw.err"
+}
+expect_slw_rejects() { # <label> <workflow> [<filters>]
+  local rc=0
+  check_slw "$2" "${3:-}" || rc=$?
+  [ "$rc" = 1 ] || fail "sibling-lane-watch $1 was not rejected by the predicate (jq status $rc): $(cat "$tmp/slw.err")"
+}
+check_slw "$tmp/workflow.json" || fail 'sibling-lane-watch lost its macOS leg, Go setup, GNU timeout or Go-module filter'
+for mutation in \
+  '.strategy.matrix.os = ["ubuntu-latest"]' \
+  '.steps |= map(select(((.uses // "") | startswith("actions/setup-go@")) | not))' \
+  '.steps |= map(select(.run != "brew install coreutils"))' \
+  '.steps |= map(select(.run != "bash .claude/scripts/sibling-lane-watch.test.sh"))'; do
+  jq ".jobs[\"test-sibling-lane-watch\"] |= ($mutation)" "$tmp/workflow.json" >"$tmp/mutated.json"
+  expect_slw_rejects "mutation $mutation" "$tmp/mutated.json"
+done
+for entry in '.claude/scripts/claude-lane-go/**' '.claude/scripts/go-helper-build.sh'; do
+  jq --arg entry "$entry" '.["sibling-lane-watch"] -= [$entry]' "$tmp/filters.json" >"$tmp/mutated-slw-filters.json"
+  expect_slw_rejects "filter without $entry" "$tmp/workflow.json" "$tmp/mutated-slw-filters.json"
+done
+
 # Only the exact programs validated above are executed, in a private fixture tree.
 mkdir -p "$tmp/fixture/.claude/scripts"
 while IFS=$'\t' read -r group name; do
@@ -305,5 +339,5 @@ for group in 1 2 3 4; do
     else diff -u "$tmp/expected" "$tmp/observed" || fail "$job omitted later cases after $mode"; fi
   done
 done
-echo 'ci-macos-batches: OK — 18 cases retain both OSes; four batches run every child and propagate all failures'
+echo 'ci-macos-batches: OK — 17 cases retain both OSes; four batches run every child and propagate all failures'
 finished=1
