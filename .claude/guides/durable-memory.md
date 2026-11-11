@@ -70,10 +70,15 @@ step:
    failure to take it is UNKNOWN. The lease **fences** the store: a write under `memory/` must
    carry the lease's token (`If: (<token>)`), so the store itself refuses another run's writes,
    and refuses the former holder's after a store restart has freed its lease. The store numbers
-   tokens up from the second it started, so a restarted store could hand a token out again. A
-   run therefore refuses a token that is not at least 10 below the lock reply's `Date` in Unix
-   seconds, because no restart can reissue one of those. Before uploading, the run refreshes the
-   lease and counts as the writer only when the refresh **names it as the holder**. It then
+   tokens up from the second it started, and an `UNLOCK` checks only the token, so a restarted
+   store could hand a token out again and a stale `UNLOCK` would release the new holder's lease.
+   A token is safe once it is at least 60 below a reply's `Date` in Unix seconds, because no
+   restart can reissue it then; this relies on the cluster's node clocks agreeing within a
+   minute. A run never releases a token before it is safe: one that takes the lease moments
+   after the store started waits until the store's clock is past it, refreshes, and goes on only
+   if the refresh still names it, leaving the lease alone otherwise. Before uploading, the run
+   refreshes the lease and counts as the writer only when the refresh **names it as the
+   holder**. It then
    uploads one file at a time, since the store refuses two writes with one token at once, and a
    `412` or `423` means it lost the lease. It releases the lease with an `UNLOCK` only when every
    write under `memory/` succeeded, and never removes a lease it did not take. A run that dies
