@@ -190,8 +190,15 @@ any($j.steps[]; .run == "bash .claude/scripts/plugin-definition-currency.test.sh
 ($f | type == "array" and index(".claude/scripts/plugin-definition-currency-go/**") != null and
   index(".claude/scripts/go-helper-build.sh") != null)
 CHECK
+# jq -e exits 1 only when the predicate is false; any other non-zero is an evaluation error, which a
+# negative control must not count as a rejection.
 check_pdc() {
-  jq -e --slurpfile filters "${2:-$tmp/filters.json}" -f "$tmp/plugin-definition-currency.jq" "$1" >/dev/null 2>&1
+  jq -e --slurpfile filters "${2:-$tmp/filters.json}" -f "$tmp/plugin-definition-currency.jq" "$1" >/dev/null 2>"$tmp/pdc.err"
+}
+expect_pdc_rejects() { # <label> <workflow> [<filters>]
+  local rc=0
+  check_pdc "$2" "${3:-}" || rc=$?
+  [ "$rc" = 1 ] || fail "plugin-definition-currency $1 was not rejected by the predicate (jq status $rc): $(cat "$tmp/pdc.err")"
 }
 check_pdc "$tmp/workflow.json" || fail 'plugin-definition-currency lost its macOS leg, Go setup, GNU timeout or Go-module filter'
 for mutation in \
@@ -200,12 +207,17 @@ for mutation in \
   '.jobs["test-plugin-definition-currency"].steps |= map(select(.run != "brew install coreutils"))' \
   '.jobs["test-plugin-definition-currency"].steps |= map(select(.run != "bash .claude/scripts/plugin-definition-currency.test.sh"))'; do
   jq "$mutation" "$tmp/workflow.json" >"$tmp/mutated.json"
-  if check_pdc "$tmp/mutated.json"; then fail "plugin-definition-currency mutation was accepted: $mutation"; fi
+  expect_pdc_rejects "mutation $mutation" "$tmp/mutated.json"
 done
 for entry in '.claude/scripts/plugin-definition-currency-go/**' '.claude/scripts/go-helper-build.sh'; do
   jq --arg entry "$entry" '.["plugin-definition-currency"] -= [$entry]' "$tmp/filters.json" >"$tmp/mutated-pdc-filters.json"
-  if check_pdc "$tmp/workflow.json" "$tmp/mutated-pdc-filters.json"; then fail "a plugin-definition-currency filter without $entry was accepted"; fi
+  expect_pdc_rejects "filter without $entry" "$tmp/workflow.json" "$tmp/mutated-pdc-filters.json"
 done
+# CONTROL: an evaluation error is not a rejection. A workflow jq cannot read must fail the helper.
+printf 'not json\n' >"$tmp/not-a-workflow.json"
+if (expect_pdc_rejects "control" "$tmp/not-a-workflow.json") 2>/dev/null; then
+  fail "a jq evaluation error counted as the predicate rejecting a mutation"
+fi
 
 # Only the exact programs validated above are executed, in a private fixture tree.
 mkdir -p "$tmp/fixture/.claude/scripts"

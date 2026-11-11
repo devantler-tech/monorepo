@@ -28,7 +28,7 @@ type check struct {
 	worktreeLine  string // the header line describing it
 	worktreeNote  string // ROLLOUT, SUPERSEDED or UNADOPTED when it is not the adopted pin
 
-	installedListing []string // every installed file and symlink under agents/ and skills/
+	installedListing []string // every installed file and symlink under agents/ and skills/, relative to the install
 	reviewed         string   // "<blob>\t<mode>\t<path>" per file of the loaded surface at a pin
 	quiet            bool
 }
@@ -247,14 +247,18 @@ func (c *check) resolveInstalled() error {
 		} else {
 			_ = f.Close()
 		}
-		// A readable path that is not a file fails as an unparseable registry, as it did for jq.
-		raw, _ := os.ReadFile(registry)
+		// A readable path that is not a file fails as an unparseable registry, as it did for jq. Any
+		// other failed read is UNKNOWN: a partial read is never parsed.
+		if info, statErr := os.Stat(registry); statErr == nil && info.IsDir() {
+			return die("plugin '%s' is not installed, or the runtime plugin registry could not be parsed: %s", o.pluginID, registry)
+		}
+		raw, err := os.ReadFile(registry)
+		if err != nil {
+			return die("cannot read the runtime plugin registry: %s", registry)
+		}
 		// Only the records that apply to THIS checkout count: a project- or local-scope record for
 		// the repository root, the more specific scope, else the user-scope record (monorepo#4835).
 		paths, err := registryPaths(raw, o.pluginID, o.repoRoot)
-		if info, statErr := os.Stat(registry); statErr == nil && info.IsDir() {
-			err = errJQ
-		}
 		if err != nil {
 			return die("plugin '%s' is not installed, or the runtime plugin registry could not be parsed: %s", o.pluginID, registry)
 		}
@@ -278,7 +282,7 @@ func (c *check) resolveInstalled() error {
 		if info, err := os.Stat(root); err != nil || !info.IsDir() {
 			continue
 		}
-		listed, err := findFilesAndLinks(root)
+		listed, err := findFilesAndLinks(root, d)
 		if err != nil {
 			return die("could not enumerate the installed definitions under %s%s", root, recovery)
 		}
@@ -289,8 +293,10 @@ func (c *check) resolveInstalled() error {
 }
 
 // findFilesAndLinks is `find <root> \( -type f -o -type l \)`: it never follows a symlink, and an
-// unreadable directory fails the enumeration.
-func findFilesAndLinks(root string) ([]string, error) {
+// unreadable directory fails the enumeration. Each path is returned relative to the install, under
+// name, as the Bash `${path#"$INSTALLED"/}` did: WalkDir cleans the paths it joins, so an install
+// named with a trailing slash or a `./` prefix must not be compared by string prefix.
+func findFilesAndLinks(root, name string) ([]string, error) {
 	var found []string
 	failed := false
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -302,7 +308,16 @@ func findFilesAndLinks(root string) ([]string, error) {
 			return nil
 		}
 		if t := d.Type(); t.IsRegular() || t&fs.ModeSymlink != 0 {
-			found = append(found, p)
+			rel, err := filepath.Rel(root, p)
+			if err != nil {
+				failed = true
+				return nil
+			}
+			if rel == "." {
+				found = append(found, name)
+			} else {
+				found = append(found, name+"/"+filepath.ToSlash(rel))
+			}
 		}
 		return nil
 	})
@@ -569,11 +584,10 @@ func (c *check) compareReviewed() (int, int, error) {
 			drift++
 		}
 	}
-	for _, p := range c.installedListing {
-		if p == "" {
+	for _, rel := range c.installedListing {
+		if rel == "" {
 			continue
 		}
-		rel := strings.TrimPrefix(p, c.o.installed+"/")
 		if !inReviewed[rel] {
 			c.say("EXTRA    " + rel + "  (installed but absent from the pinned revision)")
 			drift++

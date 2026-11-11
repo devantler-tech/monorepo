@@ -2706,6 +2706,8 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install coreutils
       # Both OSes are required: scheduled runs execute on macOS. This job has its own macOS leg
+      - name: Run the Go tests of the currency check
+        run: go -C .claude/scripts/plugin-definition-currency-go test ./...
       # rather than a macOS batch slot because the entrypoint builds Go (monorepo#2851), which the
       # batches do not set up.
       - name: Verify the plugin definition currency check

@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -167,28 +171,44 @@ func TestForgeFiltersMatchJQ(t *testing.T) {
 	}
 }
 
-// The remote bound kills the whole process group, so a helper that outlives git cannot hold the
-// check past it, and its exit is a failure the caller reads as UNKNOWN.
+// The remote bound kills the whole process group, so neither git nor a helper that ignores TERM
+// and holds the output open can keep the check past it, and a call ended that way is a failure the
+// caller reads as UNKNOWN.
 func TestBoundedRemoteKillsTheProcessGroup(t *testing.T) {
 	dir := t.TempDir()
-	marker := filepath.Join(dir, "child-survived")
+	pidFile := filepath.Join(dir, "descendant.pid")
 	script := filepath.Join(dir, "slow")
-	// The child sleeps in the background and would write the marker if it were not killed.
-	body := "#!/bin/sh\n(sleep 3; : >\"" + marker + "\") &\nsleep 30\n"
+	// Both the command and its descendant ignore TERM; the descendant inherits stdout and records
+	// its PID as evidence it started.
+	body := "#!/bin/sh\ntrap '' TERM\nsh -c 'echo $$ >\"" + pidFile + "\"; exec sleep 30' &\nsleep 30\n"
 	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	start := time.Now()
 	_, err := boundedRemote("1", script)
+	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatal("a call killed at the bound reported success")
 	}
-	if elapsed := time.Since(start); elapsed > 10*time.Second {
+	if elapsed > 1*time.Second+killGrace+5*time.Second {
 		t.Fatalf("the bound did not hold: %v", elapsed)
 	}
-	time.Sleep(4 * time.Second)
-	if _, err := os.Stat(marker); err == nil {
-		t.Fatal("a process in the command's group outlived the bound")
+	raw, readErr := os.ReadFile(pidFile)
+	if readErr != nil {
+		t.Fatalf("the descendant never started, so the test proves nothing: %v", readErr)
+	}
+	pid, convErr := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if convErr != nil || pid <= 1 {
+		t.Fatalf("unreadable descendant PID %q", raw)
+	}
+	// A bounded exit probe: signal 0 fails with ESRCH once the descendant is gone.
+	deadline := time.Now().Add(5 * time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatalf("descendant %d outlived the bound", pid)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
@@ -216,25 +236,97 @@ func TestBoundedRemoteAddsSSHOptionsOnlyToOpenSSH(t *testing.T) {
 	}
 }
 
-// Only 0 and 1 are verdicts. A usage error is UNKNOWN, never the DRIFT status.
+// Only 0 and 1 are verdicts. A usage error is UNKNOWN, never the DRIFT status, and each one is
+// refused by the rule that names it.
 func TestUsageErrorsAreUnknown(t *testing.T) {
-	for _, args := range [][]string{
-		{"--runtime"},
-		{"--bogus"},
-		{"--runtime", "other"},
-		{"--runtime", "codex", "--installed", "/x"},
-		{"--runtime", "git-ref"},
-		{"--runtime", "git-ref", "--loaded-ref", "main"},
-		{"--loaded-ref", "refs/heads/main"},
-		{"--adopted-ref", "refs/heads/main"},
-		{"--adopted-ref", "abc"},
-		{"--adopted-ref", "refs/remotes/origin/main", "--gitlink", "x"},
-		{"--remote", "-x"},
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--runtime"}, "missing value for --runtime"},
+		{[]string{"--bogus"}, "unknown argument: --bogus"},
+		{[]string{"--runtime", "other"}, "unsupported runtime 'other'"},
+		{[]string{"--runtime", "codex", "--installed", "/x"}, "runtime 'codex' does not accept --installed"},
+		{[]string{"--runtime", "git-ref"}, "runtime git-ref requires --loaded-ref"},
+		{[]string{"--runtime", "git-ref", "--loaded-ref", "main"}, "--loaded-ref must be a fully qualified ref or full commit ID"},
+		{[]string{"--loaded-ref", "refs/heads/main"}, "--loaded-ref is only valid with --runtime git-ref"},
+		{[]string{"--adopted-ref", "refs/heads/main"}, "is a local ref, which this checkout wrote itself"},
+		{[]string{"--adopted-ref", "abc"}, "--adopted-ref must be a remote-tracking ref"},
+		{[]string{"--adopted-ref", "refs/remotes/origin/main", "--gitlink", "x"}, "--adopted-ref and --gitlink both name the pin"},
+		{[]string{"--remote", "-x"}, "--remote must name a git remote"},
 	} {
 		var stdout, stderr bytes.Buffer
-		if code := run(args, &stdout, &stderr); code != 2 || !strings.HasPrefix(stderr.String(), "plugin-definition-currency: ") {
-			t.Fatalf("%v: code=%d stderr=%q, want UNKNOWN", args, code, stderr.String())
+		code := run(tc.args, &stdout, &stderr)
+		if code != 2 || !strings.HasPrefix(stderr.String(), "plugin-definition-currency: ") || !strings.Contains(stderr.String(), tc.want) {
+			t.Fatalf("%v: code=%d stderr=%q, want UNKNOWN naming %q", tc.args, code, stderr.String(), tc.want)
 		}
+	}
+}
+
+// An install named with a trailing slash or a `./` prefix is the same install: its files are not
+// EXTRA. The Bash check stripped "$INSTALLED/" from `find`'s own uncleaned output.
+func TestInstallNamedWithATrailingSlashIsTheSameInstall(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "agents"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "agents", "a.md"), []byte("a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	blob, ok := gitOut("", "hash-object", "--no-filters", filepath.Join(dir, "agents", "a.md"))
+	if !ok {
+		t.Fatal("cannot hash the fixture")
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, err := filepath.Rel(wd, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, installed := range []string{dir, dir + "/", dir + "//", "./" + rel} {
+		var stdout bytes.Buffer
+		c := &check{stdout: &stdout, stderr: io.Discard}
+		c.o.runtime, c.o.installed = "claude", installed
+		if err := c.resolveInstalled(); err != nil {
+			t.Fatalf("%s: %v", installed, err)
+		}
+		c.reviewed = blob + "\t100644\tagents/a.md"
+		drift, checked, err := c.compareReviewed()
+		if err != nil || drift != 0 || checked != 1 || strings.Contains(stdout.String(), "EXTRA") {
+			t.Fatalf("%s: drift=%d checked=%d err=%v out=%s", installed, drift, checked, err, stdout.String())
+		}
+	}
+	// CONTROL: a file the pin does not have is still EXTRA under the same spelling.
+	if err := os.WriteFile(filepath.Join(dir, "agents", "b.md"), []byte("b\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	c := &check{stdout: &stdout, stderr: io.Discard}
+	c.o.runtime, c.o.installed = "claude", dir+"/"
+	if err := c.resolveInstalled(); err != nil {
+		t.Fatal(err)
+	}
+	c.reviewed = blob + "\t100644\tagents/a.md"
+	if drift, _, _ := c.compareReviewed(); drift != 1 || !strings.Contains(stdout.String(), "EXTRA    agents/b.md") {
+		t.Fatalf("control: drift=%d out=%s", drift, stdout.String())
+	}
+}
+
+// A registry that exists but cannot be read is UNKNOWN; it is never parsed from a partial read.
+func TestUnreadableRegistryIsUnknown(t *testing.T) {
+	dir := t.TempDir()
+	registry := filepath.Join(dir, "installed_plugins.json")
+	if err := os.WriteFile(registry, []byte(`{"plugins":{}}`), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	c := &check{stdout: io.Discard, stderr: io.Discard}
+	c.o.runtime, c.o.pluginsRoot, c.o.pluginID = "claude", dir, "p@m"
+	err := c.resolveInstalled()
+	var u *unknown
+	if !errors.As(err, &u) || !strings.Contains(u.msg, "cannot read the runtime plugin registry") {
+		t.Fatalf("got %v", err)
 	}
 }
 
