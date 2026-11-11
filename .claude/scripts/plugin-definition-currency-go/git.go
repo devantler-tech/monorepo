@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -103,5 +102,3 @@ func boundedRemote(secs string, args ...string) ([]byte, error) {
 	_ = syscall.Kill(-pgid, syscall.SIGKILL)
 	return out.Bytes(), err
 }
-
-var errNotGitlink = errors.New("not a gitlink")
