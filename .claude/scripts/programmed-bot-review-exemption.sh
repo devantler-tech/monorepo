@@ -210,7 +210,7 @@ matches_agent_skills_files() {
 # belong to its own plugin — so a per-skill PR cannot carry a second skill's update past review routing.
 # The plugin manifests are the Claude one (`.claude-plugin/plugin.json`) and, since the plugin also
 # ships to Codex, the Codex one (`.codex-plugin/plugin.json`); the release-notes bump writes both
-# (monorepo#4928). Each is admitted only under the changed skill's own plugin.
+# (monorepo#4928). The Codex manifest is admitted only for a plugin whose skill changed.
 matches_agent_plugins_review_files() {
   local skill_path="${1-}" skill_re plugin_re
   if [[ -n "${skill_path}" ]]; then
@@ -225,7 +225,8 @@ matches_agent_plugins_review_files() {
     any(.[]; test($skill)) and
     all(.[];
       test($skill) or
-      test("^\($plugin)/(\\.(claude|codex)-plugin/)?plugin\\.json$") or
+      test("^\($plugin)/(\\.claude-plugin/)?plugin\\.json$") or
+      (. as $f | [$changed[] | "\(.)/.codex-plugin/plugin.json"] | index($f) != null) or
       test("^\($plugin)/resources/provider-neutral\\.desired-state\\.json$") or
       (. as $f | [$changed[] | "\(.)/CHANGELOG.md"] | index($f) != null) or
       . == ".claude-plugin/marketplace.json" or

@@ -1353,6 +1353,17 @@ expect_review_required \
   "${agent_plugins_versioned_head}" \
   "${agent_plugins_versioned_files}" \
   "${agent_plugins_versioned_commits}"
+# monorepo#4928: with no per-skill path, a Codex manifest qualifies only for a plugin whose skill changed.
+expect_review_required "agent-plugins update with the changed plugin's Codex manifest" \
+  agent-plugins app/botantler-1 deps/agent-skills-update "chore(deps): update agent skills" \
+  "${agent_plugins_versioned_head}" \
+  "$(jq -c '. + ["plugins/github/.codex-plugin/plugin.json"]' <<<"${agent_plugins_versioned_files}")" \
+  "${agent_plugins_versioned_commits}"
+expect_review_gated "agent-plugins update with an unchanged plugin's Codex manifest" \
+  agent-plugins app/botantler-1 deps/agent-skills-update "chore(deps): update agent skills" \
+  "${agent_plugins_versioned_head}" \
+  "$(jq -c '. + ["plugins/ksail/.codex-plugin/plugin.json"]' <<<"${agent_plugins_versioned_files}")" \
+  "${agent_plugins_versioned_commits}"
 
 # agent-plugins opens one updater PR per skill (agent-plugins#241). This fixture is the shape of
 # agent-plugins#245 before any adaptation: the App-signed sync commit, then the caller's digest
