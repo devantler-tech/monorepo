@@ -64,9 +64,18 @@ step:
    run stops before acting on memory rather than starting empty, and it **uploads nothing**, so a
    partial copy never replaces the store's. Only one run may write the store at a time, and the
    scheduler does not stop runs from overlapping, so a run that cannot show it is the only writer
-   treats memory as UNKNOWN in the same way (the single-writer lease is monorepo#4910). After a
-   complete download or a first-run `404`, the run uploads the directory back before it stops,
-   however the run ended, and it leaves its transcript and report under `runs/<UTC date>/`.
+   treats memory as UNKNOWN in the same way. It shows that with the store's **single-writer
+   lease**, an exclusive WebDAV `LOCK` on `/lease` taken before memory is read (monorepo#4910,
+   devantler-tech/platform#6070). A `423` means another run holds the lease, and any other
+   failure to take it is UNKNOWN. Before uploading, the run refreshes the lease, and it counts
+   as the writer only when the refresh succeeds **and names it as the holder**. A store restart
+   frees every lease and can hand a token to a later run, so a bare success proves nothing. The
+   run releases the lease with an `UNLOCK` after its uploads, and never removes a lease it did not
+   take. A run that dies holding the lease stops every later run until the `lane-store`
+   Deployment restarts: no run writes, rather than two. A stopped run's report is its kagent
+   session. After a complete download or a first-run `404`, the run uploads the directory back
+   before it stops, however the run ended, provided it still holds the lease. It also leaves its
+   transcript and report under `runs/<UTC date>/`.
    The maintainer and the Agent Improver read the store read-only through the Kubernetes API:
    `kubectl get --raw /api/v1/namespaces/agentic-engineer/services/lane-store-reader/proxy/<path>`
    (devantler-tech/platform#6014).
