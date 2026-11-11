@@ -5,6 +5,11 @@ description: Product card for devantler-tech/cloudflare, the declarative owner o
 
 # Maintain: Cloudflare bootstrap owner
 
+- **Serves:** the suite's platform, which needs these resources before it can start · **Outcome:** DNS, certificate issuance and backup storage that survive a full platform outage ([README](https://github.com/devantler-tech/cloudflare#readme))
+- **Constraints:** its automation and state must not depend on the platform it bootstraps; the configuration is import-first
+- **Non-goals:** a reusable module (it configures one organisation's account); in-cluster use of these resources stays with the platform (README)
+- **Evidence:** UNKNOWN
+
 `devantler-tech/cloudflare` declares the Cloudflare resources the suite depends on before its
 platform, Flux or Crossplane can run — DNS, certificate issuance and backup storage. It deliberately
 exists outside the cluster: its automation and state must not depend on the platform it

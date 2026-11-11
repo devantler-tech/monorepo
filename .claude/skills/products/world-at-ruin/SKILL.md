@@ -5,6 +5,11 @@ description: Product card for World at Ruin — a source-available, cloud-native
 
 # Maintain: World at Ruin (game)
 
+- **Serves:** players of a source-available, cloud-native MMORPG, who watch it grow by playing ([README](https://github.com/devantler-tech/world-at-ruin#readme)) · **Outcome:** a world that grows in public over years and never takes anything from a player silently (Product law below)
+- **Constraints:** the Product law below; source-available, never called open source; art generated as code from OSS or CC0 sources only
+- **Non-goals:** games in general (root `AGENTS.md` Stack map)
+- **Evidence:** UNKNOWN
+
 A cloud-native MMORPG the maintainer wants to exist, built **almost entirely by agents** as a
 **first-class portfolio product** (maintainer direction 2026-07-17: it needs the same attention and
 love as the rest of the portfolio — not a back-of-queue pick). It participates in the normal

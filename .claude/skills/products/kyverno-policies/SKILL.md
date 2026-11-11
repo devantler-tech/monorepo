@@ -5,6 +5,11 @@ description: Maintenance + advance task menu for devantler-tech/kyverno-policies
 
 # Maintain: Kyverno policy library (shared library)
 
+- **Serves:** the platform repositories (`platform`, `platform-template`) that consume the catalog · **Outcome:** one tested source of policy behaviour, so their copies cannot drift apart ([README](https://github.com/devantler-tech/kyverno-policies#readme))
+- **Constraints:** a policy is inert until a consumer pins and references it; each consumer adopts a catalog revision in a separate, validated change
+- **Non-goals:** deploying policies: consumer wiring and rollout stay in the consumer repositories (README, below)
+- **Evidence:** UNKNOWN
+
 The reusable **Kyverno policy catalog** for the devantler-tech platforms. Generic admission and
 generation policy behaviour lives here **once**, so consumer copies in
 [`platform`](../platform/SKILL.md) and `platform-template` cannot drift apart. Consumer wiring and

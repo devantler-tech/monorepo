@@ -5,6 +5,11 @@ description: Product card for devantler-tech/aws, the AWS config tenant — desi
 
 # Maintain: AWS config tenant
 
+- **Serves:** the platform's `aws` tenant, which reconciles these manifests · **Outcome:** the suite's AWS resources, today the EKS-based CI cluster, match the reviewed desired state ([README](https://github.com/devantler-tech/aws#readme), root `AGENTS.md` Stack map)
+- **Constraints:** no credential or provider configuration in the repository; authentication is provisioned platform-side
+- **Non-goals:** a general-purpose AWS provisioning CLI, or AWS setups in general (README, Stack map)
+- **Evidence:** UNKNOWN
+
 The canonical maintenance procedure lives in the **`## Maintenance`** section of
 `applications/aws/AGENTS.md` on the submodule's latest `main`:
 <https://github.com/devantler-tech/aws/blob/main/AGENTS.md>.
