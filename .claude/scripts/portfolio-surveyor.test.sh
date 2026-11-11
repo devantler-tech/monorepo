@@ -1353,6 +1353,17 @@ expect_review_required \
   "${agent_plugins_versioned_head}" \
   "${agent_plugins_versioned_files}" \
   "${agent_plugins_versioned_commits}"
+# monorepo#4928: with no per-skill path, a Codex manifest qualifies only for a plugin whose skill changed.
+expect_review_required "agent-plugins update with the changed plugin's Codex manifest" \
+  agent-plugins app/botantler-1 deps/agent-skills-update "chore(deps): update agent skills" \
+  "${agent_plugins_versioned_head}" \
+  "$(jq -c '. + ["plugins/github/.codex-plugin/plugin.json"]' <<<"${agent_plugins_versioned_files}")" \
+  "${agent_plugins_versioned_commits}"
+expect_review_gated "agent-plugins update with an unchanged plugin's Codex manifest" \
+  agent-plugins app/botantler-1 deps/agent-skills-update "chore(deps): update agent skills" \
+  "${agent_plugins_versioned_head}" \
+  "$(jq -c '. + ["plugins/ksail/.codex-plugin/plugin.json"]' <<<"${agent_plugins_versioned_files}")" \
+  "${agent_plugins_versioned_commits}"
 
 # agent-plugins opens one updater PR per skill (agent-plugins#241). This fixture is the shape of
 # agent-plugins#245 before any adaptation: the App-signed sync commit, then the caller's digest
@@ -1431,6 +1442,16 @@ expect_review_gated "combined metadata mixed with a legacy digest" "${per_skill_
 expect_review_gated "combined metadata missing release notes" "${per_skill_args[@]}" "$per_skill_files" "$signed_metadata_commits"
 expect_review_gated "combined metadata with unrelated code" "${per_skill_args[@]}" \
   "$(jq -c '. + ["scripts/unrelated.sh"]' <<< "$signed_metadata_files")" "$signed_metadata_commits"
+# monorepo#4928: the bump also writes the plugin's Codex manifest (agent-plugins#685's file set).
+expect_review_required "combined metadata with the plugin's Codex manifest" "${per_skill_args[@]}" \
+  "$(jq -c '. + ["plugins/agentic-engineering/.codex-plugin/plugin.json"]' <<< "$signed_metadata_files")" \
+  "$signed_metadata_commits"
+expect_review_gated "combined metadata with another plugin's Codex manifest" "${per_skill_args[@]}" \
+  "$(jq -c '. + ["plugins/ksail/.codex-plugin/plugin.json"]' <<< "$signed_metadata_files")" \
+  "$signed_metadata_commits"
+expect_review_gated "combined metadata with a Codex file that is not the manifest" "${per_skill_args[@]}" \
+  "$(jq -c '. + ["plugins/agentic-engineering/.codex-plugin/mcp.json"]' <<< "$signed_metadata_files")" \
+  "$signed_metadata_commits"
 
 expect_review_required "agent-plugins per-skill update" \
   "${per_skill_args[@]}" "${per_skill_files}" "${per_skill_commits_json}"
