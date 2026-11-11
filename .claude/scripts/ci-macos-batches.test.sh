@@ -39,7 +39,6 @@ cat >"$tmp/cases.tsv" <<'CASES'
 2	flow-scorecard
 2	kagent-lane-runs
 3	review-lane-health
-3	plugin-definition-currency
 3	board-archive
 3	disk-preflight
 3	claude-task-live-runs
@@ -177,6 +176,49 @@ for entry in '.claude/scripts/unsigned-commit-report-go/**' '.claude/scripts/go-
   if check_ucr "$tmp/workflow.json" "$tmp/mutated-ucr-filters.json"; then fail "an unsigned-commit-report filter without $entry was accepted"; fi
 done
 
+# plugin-definition-currency left batch 3 because its entrypoint builds Go, which the batches do
+# not set up (monorepo#2851). Its own job keeps the macOS leg the batch gave it, with Go, the GNU
+# timeout the shared build needs, and a filter that sees the Go module and the build helper.
+cat >"$tmp/plugin-definition-currency.jq" <<'CHECK'
+.jobs["test-plugin-definition-currency"] as $j | $filters[0]["plugin-definition-currency"] as $f |
+($j.strategy.matrix.os == ["ubuntu-latest", "macos-latest"]) and
+($j["runs-on"] == "${{ matrix.os }}") and
+any($j.steps[]; ((.uses // "") | startswith("actions/setup-go@")) and
+  .with["go-version-file"] == ".claude/scripts/plugin-definition-currency-go/go.mod") and
+any($j.steps[]; .if == "runner.os == 'macOS'" and .run == "brew install coreutils") and
+any($j.steps[]; .run == "bash .claude/scripts/plugin-definition-currency.test.sh") and
+($f | type == "array" and index(".claude/scripts/plugin-definition-currency-go/**") != null and
+  index(".claude/scripts/go-helper-build.sh") != null)
+CHECK
+# jq -e exits 1 only when the predicate is false; any other non-zero is an evaluation error, which a
+# negative control must not count as a rejection.
+check_pdc() {
+  jq -e --slurpfile filters "${2:-$tmp/filters.json}" -f "$tmp/plugin-definition-currency.jq" "$1" >/dev/null 2>"$tmp/pdc.err"
+}
+expect_pdc_rejects() { # <label> <workflow> [<filters>]
+  local rc=0
+  check_pdc "$2" "${3:-}" || rc=$?
+  [ "$rc" = 1 ] || fail "plugin-definition-currency $1 was not rejected by the predicate (jq status $rc): $(cat "$tmp/pdc.err")"
+}
+check_pdc "$tmp/workflow.json" || fail 'plugin-definition-currency lost its macOS leg, Go setup, GNU timeout or Go-module filter'
+for mutation in \
+  '.jobs["test-plugin-definition-currency"].strategy.matrix.os = ["ubuntu-latest"]' \
+  '.jobs["test-plugin-definition-currency"].steps |= map(select(((.uses // "") | startswith("actions/setup-go@")) | not))' \
+  '.jobs["test-plugin-definition-currency"].steps |= map(select(.run != "brew install coreutils"))' \
+  '.jobs["test-plugin-definition-currency"].steps |= map(select(.run != "bash .claude/scripts/plugin-definition-currency.test.sh"))'; do
+  jq "$mutation" "$tmp/workflow.json" >"$tmp/mutated.json"
+  expect_pdc_rejects "mutation $mutation" "$tmp/mutated.json"
+done
+for entry in '.claude/scripts/plugin-definition-currency-go/**' '.claude/scripts/go-helper-build.sh'; do
+  jq --arg entry "$entry" '.["plugin-definition-currency"] -= [$entry]' "$tmp/filters.json" >"$tmp/mutated-pdc-filters.json"
+  expect_pdc_rejects "filter without $entry" "$tmp/workflow.json" "$tmp/mutated-pdc-filters.json"
+done
+# CONTROL: an evaluation error is not a rejection. A workflow jq cannot read must fail the helper.
+printf 'not json\n' >"$tmp/not-a-workflow.json"
+if (expect_pdc_rejects "control" "$tmp/not-a-workflow.json") 2>/dev/null; then
+  fail "a jq evaluation error counted as the predicate rejecting a mutation"
+fi
+
 # Only the exact programs validated above are executed, in a private fixture tree.
 mkdir -p "$tmp/fixture/.claude/scripts"
 while IFS=$'\t' read -r group name; do
@@ -218,5 +260,5 @@ for group in 1 2 3 4; do
     else diff -u "$tmp/expected" "$tmp/observed" || fail "$job omitted later cases after $mode"; fi
   done
 done
-echo 'ci-macos-batches: OK — 21 cases retain both OSes; four batches run every child and propagate all failures'
+echo 'ci-macos-batches: OK — 20 cases retain both OSes; four batches run every child and propagate all failures'
 finished=1

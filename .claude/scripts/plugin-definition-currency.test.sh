@@ -870,6 +870,18 @@ mkdir -p "${no_jq_runtime_bin}"
 ln -s "$(command -v bash)" "${no_jq_runtime_bin}/bash"
 ln -s "$(command -v git)" "${no_jq_runtime_bin}/git"
 path_without_jq="${no_jq_runtime_bin}${path_without_jq:+:}${path_without_jq}"
+# The entrypoint builds its Go implementation (monorepo#2851), so each reduced PATH keeps the Go
+# toolchain and the tools its bounded build runs (the GNU deadline utility among them), and nothing
+# else: never jq, never codex.
+launcher_bin="${tmp}/launcher-bin"
+mkdir -p "${launcher_bin}"
+for tool in go gtimeout timeout dirname mktemp rm find chmod env; do
+  if command -v "${tool}" >/dev/null 2>&1; then
+    ln -s "$(command -v "${tool}")" "${launcher_bin}/${tool}"
+  fi
+done
+path_without_codex="${launcher_bin}:${path_without_codex}"
+path_without_jq="${launcher_bin}:${path_without_jq}"
 [ -n "${path_without_jq}" ] || fail "could not construct a PATH without jq"
 if PATH="${path_without_jq}" command -v jq >/dev/null 2>&1; then
   fail "the no-jq PATH still resolves jq"
@@ -2087,42 +2099,15 @@ esac
 # function that prints the location is asked directly. It keeps what names the repository (scheme,
 # host and port, path) and drops the rest, and prints any byte that is not printable ASCII as `?`,
 # since the line is copied into reports.
-printable_url_source="$(awk '/^printable_url\(\) \{$/ { on = 1 } on { print } on && /^\}$/ { exit }' "${script}")"
-[ -n "${printable_url_source}" ] || fail "cannot find printable_url in ${script}"
-eval "${printable_url_source}"
-expect_printable() { # <url> <what must be printed> <case name>
-  local got
-  got="$(printable_url "$1")"
-  [ "${got}" = "$2" ] || fail "$3: printed '${got}', want '$2'"
-  case "${got}" in *s3cr3t*) fail "$3: the secret written into the URL was printed: ${got}" ;; esac
-  ok "$3"
-}
-expect_printable 'https://host.example/org/repo.git?token=s3cr3t' 'https://host.example/org/repo.git' \
-  "the pin source leaves out a URL's query"
-expect_printable 'https://host.example/org/repo.git#s3cr3t' 'https://host.example/org/repo.git' \
-  "the pin source leaves out a URL's fragment"
-expect_printable 'https://user:s3cr3t@host.example:8443/org/repo.git?access_token=s3cr3t#s3cr3t' \
-  'https://host.example:8443/org/repo.git' \
-  "the pin source keeps scheme, host, port and path, and nothing else"
-expect_printable 'https://host.example?token=s3cr3t' 'https://host.example' \
-  "the pin source leaves out a query that follows the host directly"
-expect_printable 's3cr3t@host.example:org/repo.git' 'host.example:org/repo.git' \
-  "the pin source leaves out the user of an scp-style location"
-expect_printable '/srv/git/a?b#c.git' '/srv/git/a?b#c.git' \
-  "the pin source prints a plain path whole"
-# git also takes locations that are no URL: an address only a helper program understands, and a
-# whole command line. Nothing of those is known to be safe to print, so only the transport is.
-expect_printable 'ext::auth-proxy --token s3cr3t host.example org/repo' 'ext::<address not shown>' \
-  "the pin source prints only the transport of a command-line location"
-expect_printable 'vault::s3cr3t@host.example/org/repo' 'vault::<address not shown>' \
-  "the pin source prints only the transport of a helper's own address"
-expect_printable 's3cr3t token@host.example:org/repo.git' 'host.example:org/repo.git' \
-  "the pin source prints only the host and path of an scp-style location with an odd user"
-expect_printable 'host name with s3cr3t:org/repo.git' '<location not shown>' \
-  "the pin source prints nothing of a location it cannot read as one of the known forms"
-expect_printable "https://host.example/org/repo.git"$'\n'"pin source      : forged"$'\033'"[2K" \
-  'https://host.example/org/repo.git?pin source      : forged?[2K' \
-  "the pin source prints a line break or an escape byte in a URL as a question mark"
+# The function that prints the location is Go's since monorepo#2851. The cases this suite asked of
+# the Bash printable_url run there as TestPrintableURL, one subtest each, with the same names.
+if go -C "${repo_root}/.claude/scripts/plugin-definition-currency-go" test -count=1 \
+  -run '^TestPrintableURL$' -v ./... >"${tmp}/printable-url.out" 2>&1 &&
+  [ "$(grep -c -- '--- PASS: TestPrintableURL/' "${tmp}/printable-url.out")" -ge 11 ]; then
+  ok "the pin source keeps only scheme, host, port and path, and prints no control byte (TestPrintableURL)"
+else
+  fail "TestPrintableURL did not pass every case: $(cat "${tmp}/printable-url.out")"
+fi
 
 # Anything this checkout wrote itself cannot show what the deployment adopted. Each of these named
 # the working tree's own HEAD and, before they were refused, printed CURRENT with "adopted" beside it.
@@ -2429,40 +2414,25 @@ esac
   fail "the reading of the core rule accepts a rule that names no gitlink"
 ok "the reading of the core rule refuses the bare phrase and a rule with no gitlink"
 
-# ── 16. ONE bounded remote call, in the two scripts that carry it (monorepo#3824) ──
-# worktree-claim.sh and the currency check each bound their remote git calls with the same
-# function. They were two copies, and a fix to one never reached the other: the currency check
-# learned to keep the ssh command a repository configures and to set a connect timeout, and the
-# claim helper went on replacing it with plain `ssh`. The statements must stay identical, so the
-# comparison leaves out only comments and blank lines, where the two explain different callers.
-bounded_statements() {
-  awk '
-    /^bounded_remote\(\) \{$/ { on = 1 }
-    on && !/^[[:space:]]*#/ && !/^[[:space:]]*$/ { print }
-    on && /^\}$/ { closed = 1; exit }
-    END { if (!on || !closed) exit 1 }
-  ' "$1"
-}
-claim_script="${repo_root}/.claude/scripts/worktree-claim.sh"
-currency_copy="$(bounded_statements "${script}")" \
-  || fail "cannot find a complete bounded_remote in ${script}"
-claim_copy="$(bounded_statements "${claim_script}")" \
-  || fail "cannot find a complete bounded_remote in ${claim_script}"
-[ "$(printf '%s\n' "${currency_copy}" | wc -l)" -gt 10 ] \
-  || fail "the bounded_remote read from ${script} is too short to be the function"
-if [ "${currency_copy}" = "${claim_copy}" ]; then
-  ok "the two copies of bounded_remote are the same statements"
-else
-  fail "bounded_remote differs between plugin-definition-currency.sh and worktree-claim.sh — make the same change in both:
-$(diff <(printf '%s\n' "${currency_copy}") <(printf '%s\n' "${claim_copy}") || true)"
+# ── 16. ONE bounded remote call (monorepo#3824, monorepo#2851) ─────────────────────────────────
+# worktree-claim.sh and the currency check bounded their remote git calls with two copies of one
+# Bash function, and a fix to one never reached the other. The currency check is a Go program now,
+# so worktree-claim.sh holds the only Bash copy, and the Go bound carries the same rules: the
+# repository's own ssh command is kept, OpenSSH alone gets BatchMode and a connect timeout, and the
+# whole process group is killed at the bound.
+if grep -q '^bounded_remote() {$' "${script}"; then
+  fail "the currency entrypoint carries a Bash bounded_remote again; the bound lives in its Go program"
 fi
-# The comparison must be able to fail: one changed statement in a copy of either script is seen.
-sed 's/-o BatchMode=yes //' "${claim_script}" > "${tmp}/worktree-claim.changed.sh"
-changed_copy="$(bounded_statements "${tmp}/worktree-claim.changed.sh")" \
-  || fail "cannot find bounded_remote in the changed copy"
-[ "${changed_copy}" != "${currency_copy}" ] \
-  || fail "control: a copy of worktree-claim.sh with one statement changed still compares equal"
-ok "control — a changed statement in one copy is seen"
+grep -q '^bounded_remote() {$' "${repo_root}/.claude/scripts/worktree-claim.sh" \
+  || fail "worktree-claim.sh no longer carries its bounded_remote"
+if go -C "${repo_root}/.claude/scripts/plugin-definition-currency-go" test -count=1 \
+  -run '^TestBoundedRemote' -v ./... >"${tmp}/bounded-remote.out" 2>&1 &&
+  grep -q -- '--- PASS: TestBoundedRemoteKillsTheProcessGroup' "${tmp}/bounded-remote.out" &&
+  grep -q -- '--- PASS: TestBoundedRemoteAddsSSHOptionsOnlyToOpenSSH' "${tmp}/bounded-remote.out"; then
+  ok "the Go bound kills the whole process group and adds OpenSSH options only to OpenSSH"
+else
+  fail "the Go bound's tests did not pass: $(cat "${tmp}/bounded-remote.out")"
+fi
 
 test_run_finished=1
 echo "plugin-definition-currency: ${pass_count} assertions passed"

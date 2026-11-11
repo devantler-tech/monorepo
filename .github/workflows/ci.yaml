@@ -163,21 +163,16 @@ jobs:
             macos-batch-3:
               - '.claude/guides/**'
               - '.claude/guides/cadence.md'
-              - '.claude/loaders/portable-agentic-engineer.md'
               - '.claude/scripts/board-archive.sh'
               - '.claude/scripts/board-archive.test.sh'
               - '.claude/scripts/claude-task-live-runs.sh'
               - '.claude/scripts/claude-task-live-runs.test.sh'
-              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/disk-preflight.sh'
               - '.claude/scripts/disk-preflight.test.sh'
               - '.claude/scripts/graphql-availability.sh'
               - '.claude/scripts/graphql-availability.test.sh'
-              - '.claude/scripts/plugin-definition-currency.sh'
-              - '.claude/scripts/plugin-definition-currency.test.sh'
               - '.claude/scripts/review-lane-health.sh'
               - '.claude/scripts/review-lane-health.test.sh'
-              - '.claude/scripts/worktree-claim.sh'
               - '.github/workflows/ci.yaml'
               - 'AGENTS.md'
             macos-batch-4:
@@ -744,6 +739,8 @@ jobs:
               # from the currency check, must run this job and update the prose in the same change.
               - '.claude/scripts/plugin-definition-refresh.sh'
               - '.claude/scripts/plugin-definition-currency.sh'
+              - '.claude/scripts/plugin-definition-currency-go/**'
+              - '.claude/scripts/go-helper-build.sh'
               # Assertion 4b reads the run procedure overlay, which must name the refresh for a
               # Claude DRIFT just as the every-run bullet does (monorepo#3926).
               - '.claude/skills/portfolio-maintenance/SKILL.md'
@@ -779,7 +776,10 @@ jobs:
               - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/plugin-definition-currency.sh'
               - '.claude/scripts/plugin-definition-currency.test.sh'
-              # The test compares this script's bounded remote call with the claim helper's copy.
+              # The entrypoint builds the Go implementation through the shared bounded build.
+              - '.claude/scripts/plugin-definition-currency-go/**'
+              - '.claude/scripts/go-helper-build.sh'
+              # The test checks that the claim helper keeps the only Bash bounded remote call.
               - '.claude/scripts/worktree-claim.sh'
               - '.github/workflows/ci.yaml'
             run-affected-tests:
@@ -798,6 +798,8 @@ jobs:
               # The refresh script's DEFAULT post-apply verifier. Its exit codes are the verdict, so
               # a change there changes this script's behaviour without touching either file above.
               - '.claude/scripts/plugin-definition-currency.sh'
+              - '.claude/scripts/plugin-definition-currency-go/**'
+              - '.claude/scripts/go-helper-build.sh'
               - '.github/workflows/ci.yaml'
             codex-lane-liveness:
               - 'AGENTS.md'
@@ -2399,6 +2401,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/plugin-definition-currency-go/go.mod
+          cache: false
       - name: Verify the drifted lane escalation contract
         run: bash .claude/scripts/drifted-lane-escalation-contract.test.sh
 
@@ -2681,7 +2688,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -2690,8 +2697,19 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Both OSes are required: scheduled runs execute on macOS, where BSD awk rejects a literal
-      # newline in `-v`, while the Linux runner's GNU awk accepts the same input.
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/plugin-definition-currency-go/go.mod
+          cache: false
+      - name: Install GNU build deadline utility
+        if: runner.os == 'macOS'
+        run: brew install coreutils
+      # Both OSes are required: scheduled runs execute on macOS. This job has its own macOS leg
+      - name: Run the Go tests of the currency check
+        run: go -C .claude/scripts/plugin-definition-currency-go test ./...
+      # rather than a macOS batch slot because the entrypoint builds Go (monorepo#2851), which the
+      # batches do not set up.
       - name: Verify the plugin definition currency check
         run: bash .claude/scripts/plugin-definition-currency.test.sh
 
@@ -2993,6 +3011,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/plugin-definition-currency-go/go.mod
+          cache: false
       - name: Verify the gated plugin definition refresh
         run: bash .claude/scripts/plugin-definition-refresh.test.sh
 
@@ -3551,7 +3574,6 @@ jobs:
         run: |
           batch_status=0
           bash .claude/scripts/review-lane-health.test.sh || batch_status=1
-          bash .claude/scripts/plugin-definition-currency.test.sh || batch_status=1
           bash .claude/scripts/board-archive.test.sh || batch_status=1
           bash .claude/scripts/disk-preflight.test.sh || batch_status=1
           bash .claude/scripts/claude-task-live-runs.test.sh || batch_status=1
