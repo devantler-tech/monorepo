@@ -1387,6 +1387,30 @@ expect_session_refusal() {
 expect_session_refusal 'a session-path classifier with no payload cwd' '' "${session_wt_cls}"
 expect_session_refusal 'a classifier in a DIFFERENT repository named by the payload cwd' \
   "${session_other}" "${session_other}/.claude/scripts/pr-unresolved-threads.sh"
+# A linked scripts directory would declare a path outside the session checkout even
+# when the classifiers it reaches are byte-identical, so none of them is declared.
+mv "${session_wt}/.claude/scripts" "${hook_tmp}/linked-session-scripts"
+ln -s "${hook_tmp}/linked-session-scripts" "${session_wt}/.claude/scripts"
+expect_session_refusal 'a classifier reached through a linked session scripts directory' \
+  "${session_wt}" "${session_wt_cls}"
+rm -f "${session_wt}/.claude/scripts"
+mv "${hook_tmp}/linked-session-scripts" "${session_wt}/.claude/scripts"
+session_hook "${session_wt}" "${session_wt_cls}" >/dev/null ||
+  fail "restoring the session scripts directory did not restore the session classifier declaration"
+
+# A failed stdin read is refused, never classified as an empty payload.
+set +e
+stdin_failure_output="$(CLAUDE_CONFIG_DIR="${hook_config}" GH_TELEMETRY=0 \
+  "${session_main}/.claude/scripts/portfolio-surveyor-forge-hook.sh" 2>&1 </)"
+stdin_failure_status=$?
+set -e
+[ "${stdin_failure_status}" -eq 2 ] ||
+  fail "surveyor hook did not refuse a failed hook-input read (exit ${stdin_failure_status})"
+case "${stdin_failure_output}" in
+  *'cannot read the hook input'*) ;;
+  *) fail "failed hook-input read was refused for the wrong reason: ${stdin_failure_output}" ;;
+esac
+
 printf '\n# diverged\n' >> "${session_wt_cls}"
 expect_session_refusal 'a session-worktree classifier whose bytes differ from the declared copy' \
   "${session_wt}" "${session_wt_cls}"

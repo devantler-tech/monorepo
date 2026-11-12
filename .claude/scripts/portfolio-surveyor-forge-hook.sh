@@ -159,7 +159,8 @@ verify_install() {
 repo_git() {
   env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git "$@"
 }
-hook_input=$(cat 2>/dev/null || true)
+# A failed read is not an empty payload: refuse rather than classify a partial one.
+hook_input=$(cat 2>/dev/null) || die "cannot read the hook input"
 session_cwd=$(printf '%s' "${hook_input}" |
   jq -r 'if (.cwd | type) == "string" then .cwd else "" end' 2>/dev/null || true)
 session_root=''
@@ -334,7 +335,13 @@ done
 # it is a regular executable byte-identical to the REPO_ROOT copy declared above.
 # Anything else — no payload cwd, another repository, a diverged or missing copy —
 # declares nothing extra, and the REPO_ROOT declaration stands alone exactly as before.
+# The scripts directory itself must be reached at its own real path, so a linked
+# directory cannot declare a path outside the session checkout.
+session_scripts_real=''
 if [ "${session_same_repo}" = true ]; then
+  session_scripts_real=$(CDPATH='' cd -- "${session_root}/.claude/scripts" 2>/dev/null && pwd -P || true)
+fi
+if [ "${session_same_repo}" = true ] && [ "${session_scripts_real}" = "${session_root}/.claude/scripts" ]; then
   for classifier_name in ${classifier_names}; do
     session_classifier="${session_root}/.claude/scripts/${classifier_name}"
     case "${session_classifier}" in *:*) continue ;; esac
