@@ -1394,6 +1394,33 @@ if [ "$rc" -eq 2 ] && grep -q 'names 2 distinct installs' <<<"$out"; then
   ok "E9f two distinct user installs are UNKNOWN (exit 2)"
 else bad "E9f two distinct user installs are UNKNOWN (exit 2)" "exit $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 cleanup
+# E9g — an updated user scope whose record has no usable install path is UNKNOWN, even though this
+# checkout's own install verifies.
+make_fixture
+set_gitlink "$MK_NEW"
+registry_with "{\"scope\":\"user\"},{\"scope\":\"project\",\"projectPath\":\"$CONSUMER\",\"installPath\":\"$INSTALLED\"}"
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && grep -q 'names no usable user install' <<<"$out"; then
+  ok "E9g an updated user scope with no usable install path is UNKNOWN (exit 2)"
+else bad "E9g an updated user scope with no usable install path is UNKNOWN (exit 2)" "exit $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+# E9h — the currency check runs for the updated user install too (it also checks file modes), and a
+# user install it rejects is exit 1 naming that install.
+make_fixture
+set_gitlink "$MK_NEW"
+registry_with "{\"scope\":\"user\",\"installPath\":\"$INSTALLED\"},{\"scope\":\"project\",\"projectPath\":\"$CONSUMER\",\"installPath\":\"$INSTALLED\"}"
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(grep -c -- '' "$VERIFY_LOG")" -eq 2 ] \
+  && ! head -1 "$VERIFY_LOG" | grep -q -- '--installed' \
+  && sed -n 2p "$VERIFY_LOG" | grep -qF -- "--installed $INSTALLED"; then
+  ok "E9h the currency check runs for this checkout and then for the updated user install"
+else bad "E9h the currency check runs for this checkout and then for the updated user install" "exit $rc, verify=$(tr '\n' '|' < "$VERIFY_LOG")"; fi
+printf '#!/usr/bin/env bash\ncase " $* " in *" --installed "*) exit 1 ;; esac\nexit 0\n' > "$BIN/verify-user-bad"; chmod +x "$BIN/verify-user-bad"
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" CLAUDE_CLI="$BIN/claude" "$SCRIPT" --repo-root "$CONSUMER" --plugins-root "$PLUGINS" --verify-cmd "$BIN/verify-user-bad" 2>&1)"; rc=$?
+if [ "$rc" -eq 1 ] && grep -q 'user-scope install new sessions inherit' <<<"$out"; then
+  ok "E9h a user install the currency check rejects is exit 1, named"
+else bad "E9h a user install the currency check rejects is exit 1, named" "exit $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
 # E9b — only a user record (no record for this checkout): the user scope alone; other worktrees'
 # project records are never updated from here.
 make_fixture

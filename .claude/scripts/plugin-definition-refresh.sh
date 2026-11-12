@@ -682,21 +682,44 @@ head_after="$(git -C "$MARKETPLACE_DIR" rev-parse HEAD 2>/dev/null)" || head_aft
 # behind: 326 records naming 6 directories on 2026-11-11. Walking all of them held the lock for over
 # 15 minutes and compared stale installs this checkout never loads, so every apply read as NOT the
 # gated revision (monorepo#4957). Two distinct paths in the deciding tier are still UNKNOWN.
-# When the apply also updated the user scope (monorepo#4959), the user install is compared as well:
-# new sessions inherit it, so an ungated revision there must not go unreported. Each tier is
-# checked for ambiguity on its own; the currency check below still reads only this checkout.
-updated_user=0
-grep -qx user <<< "$update_scopes" && updated_user=1
-install_paths="$(jq -r --arg id "$PLUGIN_ID" --arg root "$REPO_ROOT" --arg uu "$updated_user" '
+install_paths="$(jq -r --arg id "$PLUGIN_ID" --arg root "$REPO_ROOT" '
   [.plugins[$id][]?
     | select(type == "object" and (.installPath | type) == "string" and (.installPath | length) > 0)]
   | ([.[] | select((.scope == "project" or .scope == "local")
         and ((.projectPath // "") | sub("/+$"; "")) == ($root | sub("/+$"; "")))
       | .installPath] | unique) as $project
   | ([.[] | select(.scope == null or .scope == "user") | .installPath] | unique) as $user
-  | (if ($project | length) > 0 then [$project, (if $uu == "1" then $user else [] end)] else [$user] end)
-  | if any(.[]; length > 1) then "AMBIGUOUS \(map(length) | max)" else (add | unique | .[]) end
+  | (if ($project | length) > 0 then $project else $user end)
+  | if length > 1 then "AMBIGUOUS \(length)" else .[] end
 ' "$registry" 2>/dev/null)" || install_paths=""
+# When the apply also updated the user scope (monorepo#4959), that install is checked as well — the
+# whole-tree comparison and the currency check below — because new sessions inherit it, so an
+# ungated or incomplete user install must not go unreported behind a correct checkout install. An
+# updated user scope with no usable install path, or with two, is UNKNOWN.
+user_install=""
+if grep -qx user <<< "$update_scopes"; then
+  user_install="$(jq -r --arg id "$PLUGIN_ID" '
+    [.plugins[$id][]?
+      | select(type == "object" and (.scope == null or .scope == "user")
+          and (.installPath | type) == "string" and (.installPath | length) > 0)
+      | .installPath] | unique
+    | if length == 1 then .[0] elif length == 0 then "NONE" else "AMBIGUOUS \(length)" end
+  ' "$registry" 2>/dev/null)" || user_install="NONE"
+  case "$user_install" in
+    NONE|"")
+      say ""
+      say "APPLIED, BUT UNVERIFIED — the user scope of '$PLUGIN_ID' was updated, but the registry"
+      say "  '$registry' names no usable user install to compare with $candidate. The apply happened;"
+      say "  the verdict is UNKNOWN, never 0."
+      exit 2 ;;
+    "AMBIGUOUS "*) install_paths="$user_install" ;;
+    *)
+      case "$install_paths" in
+        "AMBIGUOUS "*) : ;;
+        *) install_paths="$(printf '%s\n%s\n' "$install_paths" "$user_install" | awk 'NF && !seen[$0]++')" ;;
+      esac ;;
+  esac
+fi
 case "$install_paths" in
   "AMBIGUOUS "*)
     say ""
@@ -834,8 +857,15 @@ fi
 # that could even validate coincidentally matching files. PLUGIN_NAME is derived above, at the gate.
 verify_pin=(--gitlink "$GITLINK")
 if [ -n "$ADOPTED_COMMIT" ]; then verify_pin=(--adopted-ref "$ADOPTED_COMMIT"); fi
+# This checkout's install first, then the updated user install, named with --installed, which the
+# currency check also verifies for file modes the whole-tree comparison above does not compare.
+verify_targets=("")
+[ -z "$user_install" ] || verify_targets+=("$user_install")
+for verify_target in "${verify_targets[@]}"; do
+verify_extra=()
+[ -z "$verify_target" ] || verify_extra=(--installed "$verify_target")
 "$VERIFY_CMD" --repo-root "$REPO_ROOT" --plugins-root "$PLUGINS_ROOT" --plugin-id "$PLUGIN_ID" \
-  --plugin-name "$PLUGIN_NAME" "${verify_pin[@]}" --submodule-path "$SUBMODULE_PATH" >/dev/null 2>&1 && vrc=0 || vrc=$?
+  --plugin-name "$PLUGIN_NAME" "${verify_pin[@]}" --submodule-path "$SUBMODULE_PATH" ${verify_extra[@]+"${verify_extra[@]}"} >/dev/null 2>&1 && vrc=0 || vrc=$?
 # `if ! cmd` would collapse the verifier's own UNKNOWN into the drift branch, turning "I could not
 # check" into "the install is not on the pin" — the exact conflation this script's own exit contract
 # forbids, and it would point the caller at the wrong remedy.
@@ -853,9 +883,11 @@ case "$vrc" in
     say "APPLIED, BUT STILL NOT ON THE PIN — the post-apply currency check does not report CURRENT."
     say "  'plugin update' exited 0 without bringing the install to $GITLINK, so the drift persists."
     say "  Re-run plugin-definition-currency.sh for the per-file detail and report it."
+    [ -z "$verify_target" ] || say "  The install that failed is the user-scope install new sessions inherit: $verify_target"
     exit 1
     ;;
 esac
+done
 
 say ""
 say "APPLIED — the runtime install now points at the pinned revision $GITLINK."
