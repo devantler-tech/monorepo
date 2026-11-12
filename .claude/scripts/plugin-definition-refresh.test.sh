@@ -1411,8 +1411,8 @@ set_gitlink "$MK_NEW"
 registry_with "{\"scope\":\"user\",\"installPath\":\"$INSTALLED\"},{\"scope\":\"project\",\"projectPath\":\"$CONSUMER\",\"installPath\":\"$INSTALLED\"}"
 out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ] && [ "$(grep -c -- '' "$VERIFY_LOG")" -eq 2 ] \
-  && ! head -1 "$VERIFY_LOG" | grep -q -- '--installed' \
-  && sed -n 2p "$VERIFY_LOG" | grep -qF -- "--installed $INSTALLED"; then
+  && ! grep -q -- '--installed' <<<"$(head -1 "$VERIFY_LOG")" \
+  && grep -qF -- "--installed $INSTALLED" <<<"$(sed -n 2p "$VERIFY_LOG")"; then
   ok "E9h the currency check runs for this checkout and then for the updated user install"
 else bad "E9h the currency check runs for this checkout and then for the updated user install" "exit $rc, verify=$(tr '\n' '|' < "$VERIFY_LOG")"; fi
 printf '#!/usr/bin/env bash\ncase " $* " in *" --installed "*) exit 1 ;; esac\nexit 0\n' > "$BIN/verify-user-bad"; chmod +x "$BIN/verify-user-bad"
