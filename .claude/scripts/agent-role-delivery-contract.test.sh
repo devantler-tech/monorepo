@@ -1936,6 +1936,68 @@ case "${fallback_link_output}" in
   *) fail "symlinked checkout was refused for the wrong reason: ${fallback_link_output}" ;;
 esac
 rm -f "${fixture_checkout}"
+
+# The runtime resolves "$CLAUDE_PROJECT_DIR" to the SHARED main checkout for a
+# scheduled worktree session, so the hook's own root is that checkout, whose
+# submodule sits off the pin. The session worktree named by the payload `cwd` holds
+# the pinned bytes. After #4970, 3 of 4 surveyor dispatches on 2026-11-12 were still
+# refused for this (monorepo#4974). The session checkout is a second fallback, held
+# to the same repository, real-path and digest checks as the first.
+mkdir -p "$(dirname "${fixture_checkout}")"
+cp -R "${plugin_root}" "${fixture_checkout}"
+printf '\n# off-pin shared checkout\n' >> "${fixture_checkout}/scripts/classify-default-branch-ci-runs.sh"
+session_checkout="${session_wt}/libraries/agent-plugins/plugins/agentic-engineering"
+mkdir -p "$(dirname "${session_checkout}")"
+cp -R "${plugin_root}" "${session_checkout}"
+session_payload() {
+  jq -nc --arg cwd "$1" --arg command "$2" '{cwd: $cwd, tool_input: {command: $command}}'
+}
+run_surveyor_hook "$(session_payload "${session_wt}" 'gh pr list --repo devantler-tech/monorepo --state open')" >/dev/null ||
+  fail "consumer surveyor hook did not fall back to the session worktree's reviewed checkout when the shared checkout is off the pin (monorepo#4974)"
+set +e
+session_write_output="$(run_surveyor_hook "$(session_payload "${session_wt}" 'gh pr merge 1 --repo devantler-tech/monorepo')" 2>&1)"
+session_write_status=$?
+set -e
+[ "${session_write_status}" -eq 2 ] ||
+  fail "session checkout fallback ran the drifted installed adapter instead of the reviewed guard (exit ${session_write_status})"
+case "${session_write_output}" in
+  *'gh pr merge is not a read verb'*) ;;
+  *) fail "session checkout fallback blocked a write without the reviewed guard's reason: ${session_write_output}" ;;
+esac
+# Without a payload cwd, or with a cwd in another repository, there is no session
+# checkout to trust, so the off-pin shared checkout's refusal stands.
+other_checkout="${session_other}/libraries/agent-plugins/plugins/agentic-engineering"
+mkdir -p "$(dirname "${other_checkout}")"
+cp -R "${plugin_root}" "${other_checkout}"
+for session_case in '' "${session_other}"; do
+  set +e
+  if [ -z "${session_case}" ]; then
+    session_refusal="$(run_surveyor_hook "${safe_payload}" 2>&1)"
+  else
+    session_refusal="$(run_surveyor_hook "$(session_payload "${session_case}" 'gh pr list --repo devantler-tech/monorepo --state open')" 2>&1)"
+  fi
+  session_refusal_status=$?
+  set -e
+  [ "${session_refusal_status}" -eq 2 ] ||
+    fail "surveyor hook trusted a checkout outside this repository's session worktree (cwd '${session_case}', exit ${session_refusal_status})"
+  case "${session_refusal}" in
+    *'reviewed checkout fallback: runtime asset scripts/classify-default-branch-ci-runs.sh sha256 does not match desired state'*) ;;
+    *) fail "surveyor hook refused cwd '${session_case}' without the shared checkout's digest reason: ${session_refusal}" ;;
+  esac
+done
+# A drifted session checkout is refused too, and the refusal names the path it checked.
+printf '\n# unreviewed drift\n' >> "${session_checkout}/scripts/forge-readonly-guard.sh"
+set +e
+session_drift_output="$(run_surveyor_hook "$(session_payload "${session_wt}" 'gh pr list --repo devantler-tech/monorepo --state open')" 2>&1)"
+session_drift_status=$?
+set -e
+[ "${session_drift_status}" -eq 2 ] ||
+  fail "surveyor hook trusted a session checkout whose bytes differ from desired state (exit ${session_drift_status})"
+case "${session_drift_output}" in
+  *"session checkout fallback (${session_checkout}): runtime asset scripts/forge-readonly-guard.sh sha256 does not match desired state"*) ;;
+  *) fail "drifted session checkout was refused without naming its path and digest failure: ${session_drift_output}" ;;
+esac
+rm -rf "${session_wt}/libraries" "${session_other}/libraries" "${session_main}/libraries"
 surveyor_hook_resolver="${real_surveyor_hook_resolver}"
 write_hook_registry "${plugin_root}"
 

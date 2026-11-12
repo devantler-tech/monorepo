@@ -136,23 +136,75 @@ verify_install() {
 # gated refresh installs only the pin, so it cannot catch up until the next pin
 # bump. From the 2026-11-11 bump, 5 of 6 surveyor dispatches were refused that way
 # (monorepo#4969). On drift the contract follows the reviewed definition at the
-# gitlink, so the reviewed checkout in THIS checkout is the one fallback. It is held
+# gitlink, so the reviewed checkout in THIS checkout is the first fallback. It is held
 # to the same digests, and is used only at its own real path, never through a link.
+#
+# The session root comes from the runtime's own hook payload (`cwd`), never from the
+# surveyor's text, and counts only when it is a checkout of the SAME repository (one
+# git common dir). It is resolved here because it serves two purposes: the second
+# reviewed-checkout fallback below, and the classifier declarations further down.
+hook_input=$(cat 2>/dev/null || true)
+session_cwd=$(printf '%s' "${hook_input}" |
+  jq -r 'if (.cwd | type) == "string" then .cwd else "" end' 2>/dev/null || true)
+session_root=''
+if [ -n "${session_cwd}" ] && [ -d "${session_cwd}" ]; then
+  session_root=$(git -C "${session_cwd}" rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -n "${session_root}" ]; then
+    session_root=$(CDPATH='' cd -- "${session_root}" 2>/dev/null && pwd -P || true)
+  fi
+fi
+session_same_repo=false
+if [ -n "${session_root}" ] && [ "${session_root}" != "${REPO_ROOT}" ]; then
+  repo_common=$(git -C "${REPO_ROOT}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  session_common=$(git -C "${session_root}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  [ -z "${repo_common}" ] || repo_common=$(CDPATH='' cd -- "${repo_common}" 2>/dev/null && pwd -P || true)
+  [ -z "${session_common}" ] || session_common=$(CDPATH='' cd -- "${session_common}" 2>/dev/null && pwd -P || true)
+  if [ -n "${repo_common}" ] && [ "${repo_common}" = "${session_common}" ]; then
+    session_same_repo=true
+  fi
+fi
+
+# Sets checkout_failure and returns 1 unless the reviewed copy below <root> is
+# populated, reached at its own real path, and matches every pinned digest.
+checkout_failure=''
+verify_reviewed_checkout() {
+  local checkout="$1/libraries/agent-plugins/plugins/agentic-engineering" real=''
+  if [ -d "${checkout}" ]; then
+    real=$(CDPATH='' cd -- "${checkout}" 2>/dev/null && pwd -P || true)
+  fi
+  if [ -z "${real}" ]; then
+    checkout_failure="libraries/agent-plugins is not populated"
+  elif [ "${real}" != "${checkout}" ]; then
+    checkout_failure="libraries/agent-plugins resolves through a symlink"
+  elif ! verify_install "${checkout}"; then
+    checkout_failure="${asset_failure}"
+  else
+    return 0
+  fi
+  return 1
+}
+
+# For a scheduled worktree session the runtime resolves "$CLAUDE_PROJECT_DIR", and
+# so REPO_ROOT, to the SHARED main checkout, whose submodule sits off the pin. That
+# left 3 of 4 surveyor dispatches refused after the first fallback shipped
+# (monorepo#4974). The session worktree holds the pinned bytes, so it is the second
+# fallback, held to exactly the same checks.
 if ! verify_install "${install_path}"; then
   installed_failure="${asset_failure}"
-  reviewed_checkout="${REPO_ROOT}/libraries/agent-plugins/plugins/agentic-engineering"
-  reviewed_real=''
-  if [ -d "${reviewed_checkout}" ]; then
-    reviewed_real=$(CDPATH='' cd -- "${reviewed_checkout}" 2>/dev/null && pwd -P || true)
+  if verify_reviewed_checkout "${REPO_ROOT}"; then
+    install_path="${REPO_ROOT}/libraries/agent-plugins/plugins/agentic-engineering"
+  else
+    refusal="${installed_failure}; reviewed checkout fallback: ${checkout_failure}"
+    if [ "${session_same_repo}" = true ]; then
+      if verify_reviewed_checkout "${session_root}"; then
+        install_path="${session_root}/libraries/agent-plugins/plugins/agentic-engineering"
+        refusal=''
+      else
+        refusal="${refusal}; session checkout fallback (${session_root}/libraries/agent-plugins/plugins/agentic-engineering): ${checkout_failure}"
+      fi
+    fi
+    [ -z "${refusal}" ] || die "${refusal}"
   fi
-  if [ -z "${reviewed_real}" ]; then
-    die "${installed_failure}; reviewed checkout fallback: libraries/agent-plugins is not populated"
-  elif [ "${reviewed_real}" != "${reviewed_checkout}" ]; then
-    die "${installed_failure}; reviewed checkout fallback: libraries/agent-plugins resolves through a symlink"
-  elif ! verify_install "${reviewed_checkout}"; then
-    die "${installed_failure}; reviewed checkout fallback: ${asset_failure}"
-  fi
-  install_path="${reviewed_checkout}"
 fi
 
 # The reviewed plugin admits a CONSUMING deployment's own classifier only when
@@ -261,39 +313,21 @@ done
 # admitted on 72 of 75 the day before, and the surveyor fell back to the
 # hand-derivation these classifiers exist to replace.
 #
-# This adds no program the guard did not already trust. The session root comes
-# from the runtime's own hook payload (`cwd`), never from the surveyor's text; it
-# must be a checkout of the SAME repository (one git common dir); and a copy is
-# declared there only when it is a regular executable byte-identical to the
-# REPO_ROOT copy declared above. Anything else — no payload cwd, another
-# repository, a diverged or missing copy — declares nothing extra, and the
-# REPO_ROOT declaration stands alone exactly as before.
-hook_input=$(cat 2>/dev/null || true)
-session_cwd=$(printf '%s' "${hook_input}" |
-  jq -r 'if (.cwd | type) == "string" then .cwd else "" end' 2>/dev/null || true)
-session_root=''
-if [ -n "${session_cwd}" ] && [ -d "${session_cwd}" ]; then
-  session_root=$(git -C "${session_cwd}" rev-parse --show-toplevel 2>/dev/null || true)
-  if [ -n "${session_root}" ]; then
-    session_root=$(CDPATH='' cd -- "${session_root}" 2>/dev/null && pwd -P || true)
-  fi
-fi
-if [ -n "${session_root}" ] && [ "${session_root}" != "${REPO_ROOT}" ]; then
-  repo_common=$(git -C "${REPO_ROOT}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
-  session_common=$(git -C "${session_root}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
-  [ -z "${repo_common}" ] || repo_common=$(CDPATH='' cd -- "${repo_common}" 2>/dev/null && pwd -P || true)
-  [ -z "${session_common}" ] || session_common=$(CDPATH='' cd -- "${session_common}" 2>/dev/null && pwd -P || true)
-  if [ -n "${repo_common}" ] && [ "${repo_common}" = "${session_common}" ]; then
-    for classifier_name in ${classifier_names}; do
-      session_classifier="${session_root}/.claude/scripts/${classifier_name}"
-      case "${session_classifier}" in *:*) continue ;; esac
-      if [ -f "${session_classifier}" ] && [ -x "${session_classifier}" ] &&
-        [ ! -L "${session_classifier}" ] &&
-        cmp -s "${session_classifier}" "${REPO_ROOT}/.claude/scripts/${classifier_name}"; then
-        consumer_classifiers="${consumer_classifiers}:${session_classifier}"
-      fi
-    done
-  fi
+# This adds no program the guard did not already trust. The session root (resolved
+# above from the payload `cwd`, same repository only) gets a copy declared only when
+# it is a regular executable byte-identical to the REPO_ROOT copy declared above.
+# Anything else — no payload cwd, another repository, a diverged or missing copy —
+# declares nothing extra, and the REPO_ROOT declaration stands alone exactly as before.
+if [ "${session_same_repo}" = true ]; then
+  for classifier_name in ${classifier_names}; do
+    session_classifier="${session_root}/.claude/scripts/${classifier_name}"
+    case "${session_classifier}" in *:*) continue ;; esac
+    if [ -f "${session_classifier}" ] && [ -x "${session_classifier}" ] &&
+      [ ! -L "${session_classifier}" ] &&
+      cmp -s "${session_classifier}" "${REPO_ROOT}/.claude/scripts/${classifier_name}"; then
+      consumer_classifiers="${consumer_classifiers}:${session_classifier}"
+    fi
+  done
 fi
 
 # The frontmatter hook is already scoped to portfolio-surveyor. Clear the
