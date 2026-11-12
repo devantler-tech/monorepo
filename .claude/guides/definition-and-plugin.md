@@ -342,7 +342,9 @@ the run: fall back to the forge read, which needs no working tree.
 Refresh only through the runtime's own control plane — the `/plugin` marketplace update flow
 interactively, or, in an unattended run, that same control plane driven by
 [`.claude/scripts/plugin-definition-refresh.sh`](../scripts/plugin-definition-refresh.sh)
-through the resolved Claude CLI (`--cli`, `$CLAUDE_CLI`, `PATH`, then the app bundle). **Never edit
+through the resolved Claude CLI (`--cli`, `$CLAUDE_CLI`, `PATH`, then the app bundle). It updates
+the user-scope install that new sessions inherit, then this checkout's own project or local install,
+never another worktree's (monorepo#4959). **Never edit
 the plugin cache**; it is read-only evidence (see
 *Agent definition locations*). It exits `0` only once the install is on the pin **and an independent
 blob-identity check confirms it** — never on `plugin update`'s own exit status, which can report

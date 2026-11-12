@@ -640,8 +640,28 @@ head_now="$(git -C "$MARKETPLACE_DIR" rev-parse HEAD 2>/dev/null)" \
 [ "$head_now" = "$candidate" ] \
   || die "the marketplace clone moved from $candidate to $head_now after the gate — refusing to apply a revision this run never gated on"
 
-"$CLI" plugin update "$PLUGIN_ID" >/dev/null 2>&1 \
-  || die "'plugin update $PLUGIN_ID' failed after the gate passed — install state is unchanged or partial; re-run and check plugin-definition-currency.sh"
+# Which installs to update. Without `--scope`, `plugin update` updates only this checkout's record,
+# but a new session's record is seeded from the USER-scope record, so a pin bump reached one worktree
+# and every later session started on the old plugin (monorepo#4959). So the user scope is updated
+# first when it has a record, then this checkout's own project or local scope when it has one.
+# Other worktrees' records are never touched from here. With neither, or an unreadable registry, the
+# unscoped update runs as before; the comparison below decides the verdict either way.
+update_scopes="$(jq -r --arg id "$PLUGIN_ID" --arg root "$REPO_ROOT" '
+  [.plugins[$id][]? | select(type == "object")] as $r
+  | (if any($r[]; .scope == null or .scope == "user") then "user" else empty end),
+    ([$r[] | select((.scope == "project" or .scope == "local")
+        and ((.projectPath // "") | sub("/+$"; "")) == ($root | sub("/+$"; "")))
+      | .scope] | unique | .[])
+' "$registry" 2>/dev/null)" || update_scopes=""
+if [ -z "$update_scopes" ]; then
+  "$CLI" plugin update "$PLUGIN_ID" >/dev/null 2>&1 \
+    || die "'plugin update $PLUGIN_ID' failed after the gate passed — install state is unchanged or partial; re-run and check plugin-definition-currency.sh"
+else
+  while IFS= read -r scope; do
+    "$CLI" plugin update "$PLUGIN_ID" --scope "$scope" >/dev/null 2>&1 \
+      || die "'plugin update $PLUGIN_ID --scope $scope' failed after the gate passed — install state is unchanged or partial; re-run and check plugin-definition-currency.sh"
+  done <<< "$update_scopes"
+fi
 
 # ── what was ACTUALLY installed must be the gated revision's plugin tree ───────
 # The CLI may by now have installed a revision other than `candidate` (see above), and this script
