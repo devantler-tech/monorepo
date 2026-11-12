@@ -1421,6 +1421,14 @@ if [ "$rc" -eq 1 ] && grep -q 'user-scope install new sessions inherit' <<<"$out
   ok "E9h a user install the currency check rejects is exit 1, named"
 else bad "E9h a user install the currency check rejects is exit 1, named" "exit $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 cleanup
+# E9i — a relative --cli path still reaches the CLI after the update changes directory.
+make_fixture
+set_gitlink "$MK_NEW"
+out="$(cd "$ROOT" && STUB_MARKETPLACE_TARGET="$MK_NEW" "$SCRIPT" --cli ./bin/claude --repo-root "$CONSUMER" --plugins-root "$PLUGINS" --verify-cmd "$VERIFY" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -e "$ROOT/APPLIED" ]; then
+  ok "E9i a relative --cli path still applies from this checkout"
+else bad "E9i a relative --cli path still applies from this checkout" "exit $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
 # E9b — only a user record (no record for this checkout): the user scope alone; other worktrees'
 # project records are never updated from here.
 make_fixture

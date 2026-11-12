@@ -654,7 +654,9 @@ update_scopes="$(jq -r --arg id "$PLUGIN_ID" --arg root "$REPO_ROOT" '
       | .scope] | unique | .[])
 ' "$registry" 2>/dev/null)" || update_scopes=""
 # The CLI resolves a project or local scope from its working directory, so it runs from REPO_ROOT,
-# the checkout whose record was selected, whatever directory this script was started from.
+# the checkout whose record was selected, whatever directory this script was started from. A
+# relative CLI path is made absolute first, or the change of directory would resolve it elsewhere.
+case "$CLI" in /*) : ;; */*) CLI="$PWD/$CLI" ;; esac
 if [ -z "$update_scopes" ]; then
   (cd "$REPO_ROOT" && "$CLI" plugin update "$PLUGIN_ID") >/dev/null 2>&1 \
     || die "'plugin update $PLUGIN_ID' failed after the gate passed — install state is unchanged or partial; re-run and check plugin-definition-currency.sh"
