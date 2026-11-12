@@ -11,8 +11,10 @@
 #
 # WHAT IT CHECKS (In Progress issue cards only; no titles or bodies are printed)
 #   missing-first-started   the card has no First started value
-#   missing-blocked-since   the issue has an open blocking dependency and no Blocked since value
-#   stale-blocked-since     every blocker is closed but Blocked since is still set
+#   missing-blocked-since   the issue is blocked and has no Blocked since value
+#   stale-blocked-since     the issue is not blocked but Blocked since is still set
+#   An issue is blocked when it has an open native blocking dependency OR the `blocked` label, which
+#   the board guide reserves for upstream, outcome and authority blockers a dependency cannot express.
 #
 # EXIT CODES
 #   0  every In Progress card has the fields it needs
@@ -29,7 +31,8 @@
 #   BOARD_FLOW_FIXTURE  file: {"total": N, "options": ["<Status>", ...], "items": [<item node>, ...]}
 #                       where an item node has the GraphQL shape this script queries
 #                       ({isArchived, fs:{date}|null, bs:{date}|null, content:{number, repository:{name},
-#                       issueDependenciesSummary:{blockedBy}}}). When set, gh is never invoked.
+#                       issueDependenciesSummary:{blockedBy}, labels:{totalCount, nodes:[{name}]}}}).
+#                       When set, gh is never invoked.
 set -euo pipefail
 
 STATUS='🏃🏻‍♂️ In Progress'
@@ -38,7 +41,7 @@ SUMMARY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --summary) SUMMARY=1; shift ;;
-    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,35p' "$0"; exit 0 ;;
     *) echo "board-flow-fields: unknown argument (value not echoed)" >&2; exit 2 ;;
   esac
 done
@@ -71,9 +74,14 @@ else
           isArchived
           fs:fieldValueByName(name:"First started"){... on ProjectV2ItemFieldDateValue{date}}
           bs:fieldValueByName(name:"Blocked since"){... on ProjectV2ItemFieldDateValue{date}}
-          content{... on Issue{number repository{name} issueDependenciesSummary{blockedBy}}}}}}}}' \
+          content{... on Issue{number repository{name} issueDependenciesSummary{blockedBy}
+            labels(first:100){totalCount nodes{name}}}}}}}}}' \
     --jq '.data.organization.projectV2.items.nodes') || unknown "In Progress item read failed"
-  items=$(printf '%s\n' "$pages" | jq -s 'add // []') || unknown "In Progress pages did not parse"
+  # Every page must be an array, and there must be at least one: an empty or null page is a read
+  # that returned nothing, not an empty column. A valid empty column is one `[]` page.
+  items=$(printf '%s\n' "$pages" | jq -s '
+    if length == 0 or any(.[]; type != "array") then error("a page is missing or not an array")
+    else add end') || unknown "In Progress pages are missing, null or did not parse"
   data=$(jq -n --argjson m "$meta" --argjson i "$items" '$m + {items: $i}') ||
     unknown "could not assemble the board read"
 fi
@@ -90,8 +98,10 @@ printf '%s' "$data" | jq -e --arg s "$STATUS" '.options | index($s) != null' >/d
 printf '%s' "$data" | jq -e '
   all(.items[]; (.content.number | type == "number")
                 and (.content.repository.name | type == "string")
-                and (.content.issueDependenciesSummary.blockedBy | type == "number"))' \
-  >/dev/null || unknown "an In Progress card lacks its issue number, repository or dependency summary"
+                and (.content.issueDependenciesSummary.blockedBy | type == "number")
+                and (.content.labels.nodes | type == "array")
+                and (.content.labels.totalCount == (.content.labels.nodes | length)))' \
+  >/dev/null || unknown "an In Progress card lacks its issue number, repository, dependency summary or full label list"
 
 # An archived card is off the board, so it is neither counted nor reported.
 data=$(printf '%s' "$data" | jq -c '.items |= map(select(.isArchived != true))') ||
@@ -101,10 +111,11 @@ findings=$(printf '%s' "$data" | jq -r '
   .items[]
   | (.content.repository.name + "#" + (.content.number | tostring)) as $id
   | (.fs.date // null) as $fs | (.bs.date // null) as $bs
-  | .content.issueDependenciesSummary.blockedBy as $open
+  | ((.content.issueDependenciesSummary.blockedBy > 0)
+     or any(.content.labels.nodes[]; .name == "blocked")) as $blocked
   | (if $fs == null then "missing-first-started \($id)" else empty end),
-    (if $open > 0 and $bs == null then "missing-blocked-since \($id)" else empty end),
-    (if $open == 0 and $bs != null then "stale-blocked-since \($id)" else empty end)' |
+    (if $blocked and $bs == null then "missing-blocked-since \($id)" else empty end),
+    (if ($blocked | not) and $bs != null then "stale-blocked-since \($id)" else empty end)' |
   LC_ALL=C sort) || unknown "could not evaluate the cards"
 
 total=$(printf '%s' "$data" | jq '.items | length')

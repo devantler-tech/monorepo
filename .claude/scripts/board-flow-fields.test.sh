@@ -46,12 +46,14 @@ check() { # check <name> <expected-exit> <actual-exit> <output> [needle] [absent
   pass=$((pass + 1))
 }
 
-# item <repo> <number> <first-started|""> <blocked-since|""> <open-blockers>
+# item <repo> <number> <first-started|""> <blocked-since|""> <open-blockers> [comma-separated labels]
 item() {
-  jq -nc --arg r "$1" --argjson n "$2" --arg fs "$3" --arg bs "$4" --argjson o "$5" '
-    {fs: (if $fs == "" then null else {date: $fs} end),
-     bs: (if $bs == "" then null else {date: $bs} end),
-     content: {number: $n, repository: {name: $r}, issueDependenciesSummary: {blockedBy: $o}}}'
+  jq -nc --arg r "$1" --argjson n "$2" --arg fs "$3" --arg bs "$4" --argjson o "$5" --arg l "${6:-}" '
+    ($l | if . == "" then [] else split(",") | map({name: .}) end) as $labels
+    | {fs: (if $fs == "" then null else {date: $fs} end),
+       bs: (if $bs == "" then null else {date: $bs} end),
+       content: {number: $n, repository: {name: $r}, issueDependenciesSummary: {blockedBy: $o},
+                 labels: {totalCount: ($labels | length), nodes: $labels}}}'
 }
 
 fixture() { # fixture <file> <total> <options-json> <item>...
@@ -95,6 +97,20 @@ archived=$(item platform 9 "" "" 1 | jq -c '. + {isArchived: true}')
 fixture "$tmp/archived.json" 10 "$opts" "$(item ksail 1 2026-11-01 "" 0)" "$archived"
 run "$tmp/archived.json"
 check "an archived card is ignored" 0 "$rc" "$out" "in_progress=1 missing-first-started=0" "platform#9"
+
+# 3c. The `blocked` label marks a blocker a native dependency cannot express, so it counts as blocked.
+fixture "$tmp/label-blocked.json" 10 "$opts" \
+  "$(item platform 5 2026-11-01 "" 0 "area,blocked")" "$(item ksail 6 2026-11-01 2026-11-02 0 blocked)" \
+  "$(item monorepo 7 2026-11-01 2026-11-02 0 area)"
+run "$tmp/label-blocked.json"
+check "a label-blocked card without Blocked since is a finding" 1 "$rc" "$out" "missing-blocked-since platform#5"
+check "a label-blocked card with Blocked since is not stale" 1 "$rc" "$out" "stale-blocked-since monorepo#7" "ksail#6"
+
+# 3d. A label list cut short could hide the `blocked` label, so it is UNKNOWN.
+cut_labels=$(item ksail 8 2026-11-01 "" 0 area | jq -c '.content.labels.totalCount = 120')
+fixture "$tmp/cut-labels.json" 10 "$opts" "$cut_labels"
+run "$tmp/cut-labels.json"
+check "a truncated label list is UNKNOWN" 2 "$rc" "$out" "full label list"
 
 # 4. An empty In Progress column on a readable board is a real, clean answer.
 fixture "$tmp/empty-column.json" 10 "$opts"
@@ -161,9 +177,20 @@ query_args=$(cat "$tmp/args.log" 2>/dev/null || true)
 # shellcheck disable=SC2016 # The needles are literal GraphQL text, not shell expansions.
 for needle in "q=status:\"${STATUS}\" is:open is:issue" 'after:$endCursor' \
   'pageInfo{hasNextPage endCursor}' 'name:"First started"' 'name:"Blocked since"' \
-  'isArchived' 'issueDependenciesSummary{blockedBy}'; do
+  'isArchived' 'issueDependenciesSummary{blockedBy}' 'labels(first:100){totalCount nodes{name}}'; do
   check "the live item query carries ${needle}" 0 0 "$query_args" "$needle"
 done
+
+# A read that printed nothing, or a null page among real ones, examined nothing: never clean.
+: > "$tmp/no-pages.json"
+live env FAKE_PAGES="$tmp/no-pages.json"
+check "an item read with no pages is UNKNOWN" 2 "$rc" "$out" "pages are missing, null"
+{ jq -nc --argjson a "$(item ksail 1 2026-11-01 "" 0)" '[$a]'; echo null; } > "$tmp/null-page.json"
+live env FAKE_PAGES="$tmp/null-page.json"
+check "a null page is UNKNOWN, not dropped" 2 "$rc" "$out" "pages are missing, null"
+echo '[]' > "$tmp/empty-page.json"
+live env FAKE_PAGES="$tmp/empty-page.json"
+check "one empty page is a real empty column" 0 "$rc" "$out" "in_progress=0"
 live env FAKE_META_FAIL=1
 check "a failed control read is UNKNOWN" 2 "$rc" "$out" "board control read failed"
 live env FAKE_ITEMS_FAIL=1
