@@ -1775,6 +1775,17 @@ case "${telemetry_output}" in
   *) fail "consumer surveyor hook refused missing telemetry without the reviewed guard's reason" ;;
 esac
 
+# The digest refusals below run the resolver from the session fixture, which has no
+# reviewed `libraries/agent-plugins` checkout. In this repository that checkout is
+# populated, and the resolver may fall back to it (monorepo#4969), so a refusal here
+# would prove nothing about a drifted install with no reviewed copy to fall back to.
+real_surveyor_hook_resolver="${surveyor_hook_resolver}"
+surveyor_hook_resolver="${session_main}/.claude/scripts/portfolio-surveyor-forge-hook.sh"
+cp "${real_surveyor_hook_resolver}" "${surveyor_hook_resolver}"
+fixture_checkout="${session_main}/libraries/agent-plugins/plugins/agentic-engineering"
+[ ! -e "${session_main}/libraries" ] ||
+  fail "session fixture already holds a reviewed checkout, so the digest refusals below cannot prove anything"
+
 # Finding an executable at the registered path is insufficient: the runtime tree is
 # independently mutable and can drift from the reviewed bytes. A changed adapter must
 # fail before use even when its executable bit remains set.
@@ -1854,6 +1865,63 @@ case "${tampered_library_output}" in
   *'scripts/json-stream.lib.sh sha256 does not match desired state'*) ;;
   *) fail "consumer surveyor hook refused a drifted sourced library without an actionable digest reason" ;;
 esac
+
+# The installed plugin lags the pin whenever the marketplace has moved past it, and a
+# gated refresh cannot install a revision that is not the pin. From the 2026-11-11 pin
+# bump, 5 of 6 surveyor dispatches were refused this way (monorepo#4969). The contract
+# says to follow the reviewed definition at the gitlink on drift, so the resolver falls
+# back to that checkout, but only when every pinned asset there matches its digest.
+# The registered adapter below admits everything: if it ran, the write would pass.
+mkdir -p "$(dirname "${fixture_checkout}")"
+cp -R "${plugin_root}" "${fixture_checkout}"
+admit_all_plugin="${hook_tmp}/admit-all-plugin"
+cp -R "${plugin_root}" "${admit_all_plugin}"
+printf '%s\n' '#!/usr/bin/env bash' 'cat >/dev/null' 'exit 0' \
+  > "${admit_all_plugin}/scripts/surveyor-forge-readonly.sh"
+chmod +x "${admit_all_plugin}/scripts/surveyor-forge-readonly.sh"
+write_hook_registry "${admit_all_plugin}"
+run_surveyor_hook "${safe_payload}" >/dev/null ||
+  fail "consumer surveyor hook did not fall back to the reviewed checkout when the installed plugin drifted (monorepo#4969)"
+set +e
+fallback_write_output="$(run_surveyor_hook "${write_payload}" 2>&1)"
+fallback_write_status=$?
+set -e
+[ "${fallback_write_status}" -eq 2 ] ||
+  fail "consumer surveyor hook ran the drifted installed adapter instead of the reviewed checkout (exit ${fallback_write_status})"
+case "${fallback_write_output}" in
+  *'gh pr merge is not a read verb'*) ;;
+  *) fail "fallback blocked a write without the reviewed guard's reason: ${fallback_write_output}" ;;
+esac
+
+# The fallback is held to the same digests: a drifted checkout is refused too.
+printf '\n# unreviewed drift\n' >> "${fixture_checkout}/scripts/classify-default-branch-ci-runs.sh"
+set +e
+fallback_drift_output="$(run_surveyor_hook "${safe_payload}" 2>&1)"
+fallback_drift_status=$?
+set -e
+[ "${fallback_drift_status}" -eq 2 ] ||
+  fail "consumer surveyor hook trusted a reviewed checkout whose bytes differ from desired state (exit ${fallback_drift_status})"
+case "${fallback_drift_output}" in
+  *'sha256 does not match desired state'*) ;;
+  *) fail "drifted checkout was refused without an actionable digest reason: ${fallback_drift_output}" ;;
+esac
+
+# A symlinked checkout can point anywhere, so it is never a fallback.
+rm -rf "${fixture_checkout}"
+ln -s "${plugin_root}" "${fixture_checkout}"
+set +e
+fallback_link_output="$(run_surveyor_hook "${safe_payload}" 2>&1)"
+fallback_link_status=$?
+set -e
+[ "${fallback_link_status}" -eq 2 ] ||
+  fail "consumer surveyor hook fell back to a symlinked checkout (exit ${fallback_link_status})"
+case "${fallback_link_output}" in
+  *'sha256 does not match desired state'*) ;;
+  *) fail "symlinked checkout was refused for the wrong reason: ${fallback_link_output}" ;;
+esac
+rm -f "${fixture_checkout}"
+surveyor_hook_resolver="${real_surveyor_hook_resolver}"
+write_hook_registry "${plugin_root}"
 
 jq -e '
   .spec.guardrails | index(
