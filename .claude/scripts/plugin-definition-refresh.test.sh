@@ -121,17 +121,21 @@ if [ "\${1:-}" = plugin ] && [ "\${2:-}" = marketplace ] && [ "\${3:-}" = update
   [ -n "\${STUB_REFRESH_SLEEP:-}" ] && sleep "\$STUB_REFRESH_SLEEP"
 fi
 if [ "\${1:-}" = plugin ] && [ "\${2:-}" = update ]; then
+  printf '%s\n' "\$PWD" >> "$ROOT/cli.pwd"
   # What the real command does: install the plugin directory of whatever the clone holds NOW. It
   # refreshes the marketplace from its remote first, which STUB_APPLY_MOVE stands in for by moving
   # the clone to another commit before the copy.
   if [ -n "\${STUB_APPLY_MOVE:-}" ]; then git -C "$MK" checkout -q "\$STUB_APPLY_MOVE" || exit 1; fi
+  # A user-scope update lands in STUB_USER_INSTALL when a test names a separate user install.
+  target="$INSTALLED"
+  case " \$* " in *" --scope user "*) [ -n "\${STUB_USER_INSTALL:-}" ] && target="\$STUB_USER_INSTALL" ;; esac
   if [ -z "\${STUB_APPLY_NOOP:-}" ]; then
-    rm -rf "$INSTALLED"
-    cp -R "$MK/plugins/agentic-engineering" "$INSTALLED" || exit 1
+    rm -rf "\$target"
+    cp -R "$MK/plugins/agentic-engineering" "\$target" || exit 1
     # The runtime's own bookkeeping marker, present on every real install.
-    mkdir -p "$INSTALLED/.in_use" && : > "$INSTALLED/.in_use/4242"
+    mkdir -p "\$target/.in_use" && : > "\$target/.in_use/4242"
     if [ -n "\${STUB_APPLY_EXTRA:-}" ]; then
-      mkdir -p "$INSTALLED/\$(dirname "\$STUB_APPLY_EXTRA")" && : > "$INSTALLED/\$STUB_APPLY_EXTRA"
+      mkdir -p "\$target/\$(dirname "\$STUB_APPLY_EXTRA")" && : > "\$target/\$STUB_APPLY_EXTRA"
     fi
   fi
   touch "$ROOT/APPLIED"
@@ -1320,11 +1324,12 @@ if [ "$rc" -eq 0 ] && ! grep -q 'differ from' <<<"$out"; then
   ok "E8 compares only the install that applies to this checkout, not other worktrees' stale records"
 else bad "E8 compares only the install that applies to this checkout, not other worktrees' stale records" "exit was $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 cleanup
-# E8b — this checkout's project record outranks the user record.
+# E8b — this checkout's project record outranks the user record (the user install, updated by the
+# same apply, is compared as well; monorepo#4959).
 make_fixture; stale_install
 set_gitlink "$MK_NEW"
 registry_with "{\"scope\":\"user\",\"installPath\":\"$ROOT/stale\"},{\"scope\":\"project\",\"projectPath\":\"$CONSUMER/\",\"installPath\":\"$INSTALLED\"}"
-out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+out="$(STUB_USER_INSTALL="$ROOT/stale" STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ]; then ok "E8b this checkout's project record outranks the user-scope record"
 else bad "E8b this checkout's project record outranks the user-scope record" "exit was $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 cleanup
@@ -1362,12 +1367,32 @@ update_lines() { grep '^plugin update ' "$CLI_LOG" | tr '\n' '|'; }
 # E9 — a project record for this checkout: the user scope first, then this checkout's scope.
 make_fixture
 set_gitlink "$MK_NEW"
+registry_with "{\"scope\":\"user\",\"installPath\":\"$INSTALLED\"},{\"scope\":\"project\",\"projectPath\":\"$CONSUMER\",\"installPath\":\"$INSTALLED\"}"
+out="$(cd "$ROOT" && STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+pwds="$(sort -u "$ROOT/cli.pwd" 2>/dev/null | tr '\n' '|')"
+want="plugin update agentic-engineering@devantler-plugins --scope user|plugin update agentic-engineering@devantler-plugins --scope project|"
+if [ "$rc" -eq 0 ] && [ "$(update_lines)" = "$want" ] && [ "$pwds" = "$CONSUMER|" ]; then
+  ok "E9 the apply updates the user scope and then this checkout's project scope"
+else bad "E9 the apply updates the user scope and then this checkout's project scope" "exit $rc, updates=$(update_lines), pwds=$pwds, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+# E9e — the user install the apply updated is compared too: one that is not the gated revision is
+# exit 1 even when this checkout's own install matches.
+make_fixture; stale_install
+set_gitlink "$MK_NEW"
 registry_with "{\"scope\":\"user\",\"installPath\":\"$ROOT/stale\"},{\"scope\":\"project\",\"projectPath\":\"$CONSUMER\",\"installPath\":\"$INSTALLED\"}"
 out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
-want="plugin update agentic-engineering@devantler-plugins --scope user|plugin update agentic-engineering@devantler-plugins --scope project|"
-if [ "$rc" -eq 0 ] && [ "$(update_lines)" = "$want" ]; then
-  ok "E9 the apply updates the user scope and then this checkout's project scope"
-else bad "E9 the apply updates the user scope and then this checkout's project scope" "exit $rc, updates=$(update_lines), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+if [ "$rc" -eq 1 ] && grep -qF 'changed  agents/a.md' <<<"$out"; then
+  ok "E9e an updated user install that is not the gated revision is exit 1"
+else bad "E9e an updated user install that is not the gated revision is exit 1" "exit $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+# E9f — two distinct user installs beside this checkout's record are UNKNOWN, never compared as one.
+make_fixture; stale_install
+set_gitlink "$MK_NEW"
+registry_with "{\"scope\":\"user\",\"installPath\":\"$INSTALLED\"},{\"scope\":\"user\",\"installPath\":\"$ROOT/stale\"},{\"scope\":\"project\",\"projectPath\":\"$CONSUMER\",\"installPath\":\"$INSTALLED\"}"
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && grep -q 'names 2 distinct installs' <<<"$out"; then
+  ok "E9f two distinct user installs are UNKNOWN (exit 2)"
+else bad "E9f two distinct user installs are UNKNOWN (exit 2)" "exit $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 cleanup
 # E9b — only a user record (no record for this checkout): the user scope alone; other worktrees'
 # project records are never updated from here.

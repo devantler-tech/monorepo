@@ -653,12 +653,14 @@ update_scopes="$(jq -r --arg id "$PLUGIN_ID" --arg root "$REPO_ROOT" '
         and ((.projectPath // "") | sub("/+$"; "")) == ($root | sub("/+$"; "")))
       | .scope] | unique | .[])
 ' "$registry" 2>/dev/null)" || update_scopes=""
+# The CLI resolves a project or local scope from its working directory, so it runs from REPO_ROOT,
+# the checkout whose record was selected, whatever directory this script was started from.
 if [ -z "$update_scopes" ]; then
-  "$CLI" plugin update "$PLUGIN_ID" >/dev/null 2>&1 \
+  (cd "$REPO_ROOT" && "$CLI" plugin update "$PLUGIN_ID") >/dev/null 2>&1 \
     || die "'plugin update $PLUGIN_ID' failed after the gate passed — install state is unchanged or partial; re-run and check plugin-definition-currency.sh"
 else
   while IFS= read -r scope; do
-    "$CLI" plugin update "$PLUGIN_ID" --scope "$scope" >/dev/null 2>&1 \
+    (cd "$REPO_ROOT" && "$CLI" plugin update "$PLUGIN_ID" --scope "$scope") >/dev/null 2>&1 \
       || die "'plugin update $PLUGIN_ID --scope $scope' failed after the gate passed — install state is unchanged or partial; re-run and check plugin-definition-currency.sh"
   done <<< "$update_scopes"
 fi
@@ -680,15 +682,20 @@ head_after="$(git -C "$MARKETPLACE_DIR" rev-parse HEAD 2>/dev/null)" || head_aft
 # behind: 326 records naming 6 directories on 2026-11-11. Walking all of them held the lock for over
 # 15 minutes and compared stale installs this checkout never loads, so every apply read as NOT the
 # gated revision (monorepo#4957). Two distinct paths in the deciding tier are still UNKNOWN.
-install_paths="$(jq -r --arg id "$PLUGIN_ID" --arg root "$REPO_ROOT" '
+# When the apply also updated the user scope (monorepo#4959), the user install is compared as well:
+# new sessions inherit it, so an ungated revision there must not go unreported. Each tier is
+# checked for ambiguity on its own; the currency check below still reads only this checkout.
+updated_user=0
+grep -qx user <<< "$update_scopes" && updated_user=1
+install_paths="$(jq -r --arg id "$PLUGIN_ID" --arg root "$REPO_ROOT" --arg uu "$updated_user" '
   [.plugins[$id][]?
     | select(type == "object" and (.installPath | type) == "string" and (.installPath | length) > 0)]
   | ([.[] | select((.scope == "project" or .scope == "local")
         and ((.projectPath // "") | sub("/+$"; "")) == ($root | sub("/+$"; "")))
       | .installPath] | unique) as $project
   | ([.[] | select(.scope == null or .scope == "user") | .installPath] | unique) as $user
-  | (if ($project | length) > 0 then $project else $user end)
-  | if length > 1 then "AMBIGUOUS \(length)" else .[] end
+  | (if ($project | length) > 0 then [$project, (if $uu == "1" then $user else [] end)] else [$user] end)
+  | if any(.[]; length > 1) then "AMBIGUOUS \(map(length) | max)" else (add | unique | .[]) end
 ' "$registry" 2>/dev/null)" || install_paths=""
 case "$install_paths" in
   "AMBIGUOUS "*)
