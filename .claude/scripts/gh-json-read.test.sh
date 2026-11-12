@@ -97,6 +97,8 @@ check "error body is not passed on" '[ -z "$OUT" ]'
 # 5. Exit 0 with nothing printed is not "zero results".
 run 0 "" "" api repos/x/y/pulls
 check "silent success is UNKNOWN" '[ "$RC" -eq 2 ] && grep -Fq "empty-output" <<<"$ERR"'
+run 0 $' \n\t \n' "" api repos/x/y/pulls
+check "whitespace-only success is UNKNOWN" '[ "$RC" -eq 2 ] && grep -Fq "empty-output" <<<"$ERR"'
 
 # 6. Exit 0 with a truncated payload is not JSON.
 run 0 '[{"number":1},{"numb' "" api repos/x/y/pulls

@@ -375,13 +375,22 @@ fixture_fails "repos/devantler-tech/stray/git/refs?per_page=100" 'gh: Git Reposi
 expect "empty repository accepted" 0 '^WOULD-DELETE devantler-tech/stray \(private, created [^,]+, 0 commit' --repo stray --issue 4289
 
 # --- The contract the guard reads must be intact, or nothing is judged ---------------------------
-for broken in 'stack-map-heading' 'trusted-authors'; do
+for broken in 'stack-map-heading' 'stack-map-rows' 'trusted-authors'; do
   scenario
   # Each break must be refused for its own reason, before any gh call: a bare '^UNKNOWN ' would
   # also pass on a missing tool or an unreadable contract file.
   case "${broken}" in
     stack-map-heading)
       sed 's/^## Stack map$/## Stack list/' "${tree}/AGENTS.md" >"${tmp}/agents.md"
+      want="^UNKNOWN AGENTS.md has no 'Stack map' section to check against$"
+      ;;
+    stack-map-rows)
+      # The heading stays, but the section holds only whitespace: still nothing to check against.
+      awk '
+        /^## Stack map$/ { print; print ""; printf " \t \n"; print ""; skip = 1; next }
+        skip && /^## / { skip = 0 }
+        !skip { print }
+      ' "${tree}/AGENTS.md" >"${tmp}/agents.md"
       want="^UNKNOWN AGENTS.md has no 'Stack map' section to check against$"
       ;;
     trusted-authors)

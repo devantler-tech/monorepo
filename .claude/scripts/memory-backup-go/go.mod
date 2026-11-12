@@ -1,6 +1,6 @@
 module github.com/devantler-tech/monorepo/memory-backup
 
-go 1.24.0
+go 1.26.11
 
 require golang.org/x/sys v0.37.0
 

@@ -1,3 +1,3 @@
 module github.com/devantler-tech/monorepo/merge-confirmation-read
 
-go 1.27.2
+go 1.26.11

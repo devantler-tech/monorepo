@@ -1,6 +1,6 @@
 module github.com/devantler-tech/monorepo/issue-body-references
 
-go 1.27.2
+go 1.26.11
 
 require (
 	github.com/yuin/goldmark v1.7.17

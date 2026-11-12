@@ -12,7 +12,7 @@ not a public issue or PR.
 ## Make a first documentation change
 
 You need Git, Bash, `jq`, [Mike Farah's `yq` v4](https://github.com/mikefarah/yq), and Go to run the
-selected checks. The guard module declares Go 1.24.0 as its minimum; use a compatible Go toolchain.
+selected checks. The guard modules declare Go 1.26.11 as their minimum; use a compatible Go toolchain.
 A cold Go cache needs network access to download its public dependencies. The Go helper launchers
 also require GNU `timeout` (normally `timeout` on Linux, or `gtimeout` from Homebrew's `coreutils`
 on macOS) to bound compilation and retry with isolated caches. The unrelated Python
