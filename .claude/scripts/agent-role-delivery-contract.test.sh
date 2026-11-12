@@ -2050,6 +2050,65 @@ case "${session_drift_output}" in
   *) fail "drifted session checkout was refused without naming its path and digest failure: ${session_drift_output}" ;;
 esac
 rm -rf "${session_wt}/libraries" "${session_other}/libraries" "${session_main}/libraries"
+
+# The registry record that decides is the dispatching session's own. The shared
+# checkout keeps a project-scope record of its own, and on 2026-11-12 that record
+# still named a months-old install after the user and session records reached the
+# pin, so every surveyor dispatch from a worktree session was refused (monorepo#4974).
+# With no reviewed checkout anywhere, only the session's record can admit the read,
+# and the drifted shared-checkout install must never run.
+jq -n --arg shared "${session_main}" --arg session "${session_wt}" \
+  --arg drifted "${admit_all_plugin}" --arg reviewed "${plugin_root}" '
+  {version: 2, plugins: {"agentic-engineering@devantler-plugins": [
+    {scope: "user", installPath: $drifted},
+    {scope: "project", projectPath: $shared, installPath: $drifted},
+    {scope: "project", projectPath: $session, installPath: $reviewed}]}}' > "${hook_registry}"
+run_surveyor_hook "$(session_payload "${session_wt}" 'gh pr list --repo devantler-tech/monorepo --state open')" >/dev/null ||
+  fail "surveyor hook did not decide on the session worktree's own registry record (monorepo#4974)"
+set +e
+session_scope_write="$(run_surveyor_hook "$(session_payload "${session_wt}" 'gh pr merge 1 --repo devantler-tech/monorepo')" 2>&1)"
+session_scope_write_status=$?
+set -e
+[ "${session_scope_write_status}" -eq 2 ] ||
+  fail "session-scope resolution ran the drifted shared-checkout install (exit ${session_scope_write_status})"
+case "${session_scope_write}" in
+  *'gh pr merge is not a read verb'*) ;;
+  *) fail "session-scope resolution blocked a write without the reviewed guard's reason: ${session_scope_write}" ;;
+esac
+# Without a payload cwd, or with one in another repository, the session record does
+# not apply, so the shared checkout's drifted record decides and is refused.
+for session_case in '' "${session_other}"; do
+  set +e
+  if [ -z "${session_case}" ]; then
+    session_scope_refusal="$(run_surveyor_hook "${safe_payload}" 2>&1)"
+  else
+    session_scope_refusal="$(run_surveyor_hook "$(session_payload "${session_case}" 'gh pr list --repo devantler-tech/monorepo --state open')" 2>&1)"
+  fi
+  session_scope_status=$?
+  set -e
+  [ "${session_scope_status}" -eq 2 ] ||
+    fail "surveyor hook used a session record outside this repository (cwd '${session_case}', exit ${session_scope_status})"
+  case "${session_scope_refusal}" in
+    *'surveyor-forge-readonly.sh sha256 does not match desired state; reviewed checkout fallback'*) ;;
+    *) fail "cwd '${session_case}' was refused without the shared record's digest reason: ${session_scope_refusal}" ;;
+  esac
+done
+# A session record that is itself drifted is still refused: the session decides which
+# install is checked, never whether it is checked.
+jq -n --arg session "${session_wt}" --arg drifted "${admit_all_plugin}" --arg reviewed "${plugin_root}" '
+  {version: 2, plugins: {"agentic-engineering@devantler-plugins": [
+    {scope: "user", installPath: $reviewed},
+    {scope: "project", projectPath: $session, installPath: $drifted}]}}' > "${hook_registry}"
+set +e
+session_scope_drift="$(run_surveyor_hook "$(session_payload "${session_wt}" 'gh pr list --repo devantler-tech/monorepo --state open')" 2>&1)"
+session_scope_drift_status=$?
+set -e
+[ "${session_scope_drift_status}" -eq 2 ] ||
+  fail "surveyor hook accepted a drifted install named by the session's own record (exit ${session_scope_drift_status})"
+case "${session_scope_drift}" in
+  *'surveyor-forge-readonly.sh sha256 does not match desired state'*) ;;
+  *) fail "drifted session record was refused for the wrong reason: ${session_scope_drift}" ;;
+esac
 surveyor_hook_resolver="${real_surveyor_hook_resolver}"
 write_hook_registry "${plugin_root}"
 

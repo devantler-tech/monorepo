@@ -41,23 +41,66 @@ registry="${plugins_root}/installed_plugins.json"
 [ -r "${registry}" ] ||
   die "cannot read runtime plugin registry: ${registry}"
 
+# The session root comes from the runtime's own hook payload (`cwd`), never from the
+# surveyor's text, and counts only when it is a checkout of the SAME repository (one
+# git common dir). It is resolved first because it serves three purposes: choosing
+# the registry record below, the second reviewed-checkout fallback, and the
+# classifier declarations further down.
+# Repository identity is read from the named directory alone: an inherited GIT_DIR,
+# GIT_COMMON_DIR or GIT_WORK_TREE would make every directory answer with the same
+# repository, so another repository's checkout would pass as this one's.
+repo_git() {
+  env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git "$@"
+}
+# A failed read is not an empty payload: refuse rather than classify a partial one.
+hook_input=$(cat 2>/dev/null) || die "cannot read the hook input"
+session_cwd=$(printf '%s' "${hook_input}" |
+  jq -r 'if (.cwd | type) == "string" then .cwd else "" end' 2>/dev/null || true)
+session_root=''
+if [ -n "${session_cwd}" ] && [ -d "${session_cwd}" ]; then
+  session_root=$(repo_git -C "${session_cwd}" rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -n "${session_root}" ]; then
+    session_root=$(CDPATH='' cd -- "${session_root}" 2>/dev/null && pwd -P || true)
+  fi
+fi
+session_same_repo=false
+if [ -n "${session_root}" ] && [ "${session_root}" != "${REPO_ROOT}" ]; then
+  repo_common=$(repo_git -C "${REPO_ROOT}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  session_common=$(repo_git -C "${session_root}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  [ -z "${repo_common}" ] || repo_common=$(CDPATH='' cd -- "${repo_common}" 2>/dev/null && pwd -P || true)
+  [ -z "${session_common}" ] || session_common=$(CDPATH='' cd -- "${session_common}" 2>/dev/null && pwd -P || true)
+  if [ -n "${repo_common}" ] && [ "${repo_common}" = "${session_common}" ]; then
+    session_same_repo=true
+  fi
+fi
+
 # The registry holds one record per install SCOPE: every session worktree adds a
 # project-scope record keyed by its `projectPath`, and records for removed
 # worktrees stay behind. Requiring exactly one record therefore refused every
 # surveyor call from 2026-11-04 (14 of 14 dispatches; 178 records naming 5 cache
 # versions on 2026-11-08, monorepo#4835). Only records that apply to THIS
-# project count: a project- or local-scope record for REPO_ROOT or the
-# runtime's CLAUDE_PROJECT_DIR (the more specific scope), else the user-scope
-# record (no scope reads as user). Identical paths are one path; two distinct
-# paths in the deciding tier are still refused. Whichever path resolves, every
-# asset below must still match its pinned digest before anything runs.
-install_path="$(jq -er --arg id "${PLUGIN_ID}" \
-  --arg root "${REPO_ROOT}" --arg project_dir "${CLAUDE_PROJECT_DIR:-}" '
+# project count: a project- or local-scope record for the dispatching session
+# (the more specific scope), else the user-scope record (no scope reads as user).
+# The session is the same-repository worktree named by the payload `cwd` when there
+# is one, else REPO_ROOT or the runtime's CLAUDE_PROJECT_DIR. A scheduled worktree
+# session runs this hook from the SHARED checkout, whose own record still named a
+# 6.8.1 install on 2026-11-12 after the user and session records reached the pin,
+# so every survey dispatch was refused (monorepo#4974). Identical paths are one
+# path; two distinct paths in the deciding tier are still refused. Whichever path
+# resolves, every asset below must still match its pinned digest before anything runs.
+if [ "${session_same_repo}" = true ]; then
+  record_roots="${session_root}"
+  record_scope="${session_root}"
+else
+  record_roots="${REPO_ROOT}"$'\n'"${CLAUDE_PROJECT_DIR:-}"
+  record_scope="${REPO_ROOT}"
+fi
+install_path="$(jq -er --arg id "${PLUGIN_ID}" --arg roots "${record_roots}" '
   def trimmed: sub("/+$"; "");
   [.plugins[$id][]?
     | select(type == "object" and (.installPath | type) == "string"
         and (.installPath | length) > 0)] as $all
-  | ([$root, $project_dir] | map(select(length > 0) | trimmed)) as $roots
+  | ($roots | split("\n") | map(select(length > 0) | trimmed)) as $roots
   | ([$all[] | select((.scope == "project" or .scope == "local")
         and (((.projectPath // "") | trimmed) as $p | any($roots[]; . == $p)))
       | .installPath] | unique) as $project
@@ -67,10 +110,9 @@ install_path="$(jq -er --arg id "${PLUGIN_ID}" \
   | select(length == 1)
   | .[0]
 ' "${registry}" 2>/dev/null)" ||
-  die "runtime registry must name exactly one install path for ${PLUGIN_ID} that applies to ${REPO_ROOT}"
+  die "runtime registry must name exactly one install path for ${PLUGIN_ID} that applies to ${record_scope}"
 [ -d "${install_path}" ] ||
   die "registered plugin install path does not exist: ${install_path}"
-
 asset_failure=''
 verify_asset() {
   local root="$1" relative_path="$2"
@@ -148,38 +190,6 @@ verify_install() {
 # (monorepo#4969). On drift the contract follows the reviewed definition at the
 # gitlink, so the reviewed checkout in THIS checkout is the first fallback. It is held
 # to the same digests, and is used only at its own real path, never through a link.
-#
-# The session root comes from the runtime's own hook payload (`cwd`), never from the
-# surveyor's text, and counts only when it is a checkout of the SAME repository (one
-# git common dir). It is resolved here because it serves two purposes: the second
-# reviewed-checkout fallback below, and the classifier declarations further down.
-# Repository identity is read from the named directory alone: an inherited GIT_DIR,
-# GIT_COMMON_DIR or GIT_WORK_TREE would make every directory answer with the same
-# repository, so another repository's checkout would pass as this one's.
-repo_git() {
-  env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git "$@"
-}
-# A failed read is not an empty payload: refuse rather than classify a partial one.
-hook_input=$(cat 2>/dev/null) || die "cannot read the hook input"
-session_cwd=$(printf '%s' "${hook_input}" |
-  jq -r 'if (.cwd | type) == "string" then .cwd else "" end' 2>/dev/null || true)
-session_root=''
-if [ -n "${session_cwd}" ] && [ -d "${session_cwd}" ]; then
-  session_root=$(repo_git -C "${session_cwd}" rev-parse --show-toplevel 2>/dev/null || true)
-  if [ -n "${session_root}" ]; then
-    session_root=$(CDPATH='' cd -- "${session_root}" 2>/dev/null && pwd -P || true)
-  fi
-fi
-session_same_repo=false
-if [ -n "${session_root}" ] && [ "${session_root}" != "${REPO_ROOT}" ]; then
-  repo_common=$(repo_git -C "${REPO_ROOT}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
-  session_common=$(repo_git -C "${session_root}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
-  [ -z "${repo_common}" ] || repo_common=$(CDPATH='' cd -- "${repo_common}" 2>/dev/null && pwd -P || true)
-  [ -z "${session_common}" ] || session_common=$(CDPATH='' cd -- "${session_common}" 2>/dev/null && pwd -P || true)
-  if [ -n "${repo_common}" ] && [ "${repo_common}" = "${session_common}" ]; then
-    session_same_repo=true
-  fi
-fi
 
 # Sets checkout_failure and returns 1 unless the reviewed copy below <root> is
 # populated, reached at its own real path, and matches every pinned digest.
