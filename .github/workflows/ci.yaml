@@ -1338,7 +1338,11 @@ jobs:
     name: Test board flow fields
     needs: changes
     if: needs.changes.outputs.board-flow-fields == 'true'
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     steps:
