@@ -64,7 +64,11 @@ if [ "${rc}" -ne 0 ]; then
   exit 2
 fi
 
-if [ -z "${out//[[:space:]]/}" ]; then
+# Output with no visible character is empty. Test for one visible character rather than stripping
+# whitespace with ${out//[[:space:]]/}: the bash 3.2 that macOS ships takes seconds to strip a few
+# thousand characters, and far longer for a paginated read (#4394).
+nonblank='[^[:space:]]'
+if ! [[ ${out} =~ ${nonblank} ]]; then
   echo "UNKNOWN empty-output" >&2
   exit 2
 fi
