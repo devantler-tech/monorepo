@@ -6181,6 +6181,33 @@ t_salvage_keeps_submodule_work_that_borrows_from_elsewhere() {
        && (cd "$root/subsrc/.git/objects" && /bin/pwd -P) > "$a/objects/info/alternates"'
 }
 
+t_salvage_carries_submodule_work_with_a_derived_info_refs() {
+  # `git update-server-info` (run by repack and gc) writes info/refs: a listing of the
+  # repository's own refs, never the only record of anything (#2831).
+  carries_submodule_work "salvage carries submodule work whose repository holds only a derived info/refs" carryinforefs \
+    'echo dirty >> "$wt/sub/f" && git -C "$wt/sub" update-server-info \
+       && [ -s "$(git -C "$wt/sub" rev-parse --absolute-git-dir)/info/refs" ]' \
+    '[ "$(git --git-dir="$d" show "$base/worktree:f" | tail -1)" = dirty ]'
+}
+
+t_salvage_keeps_submodule_work_whose_info_refs_names_a_local_only_commit() {
+  # A stale line can name a commit no ref here holds any more and the remote never had: the
+  # listing is then the only pointer to it, so the repository is not spent.
+  keeps_uncarried "salvage KEEPs submodule work whose info/refs names a commit the remote lacks" inforefslocal \
+    'modules/sub: it holds info/refs' \
+    'a=$(git -C "$wt/sub" rev-parse --absolute-git-dir) \
+       && c=$(git -C "$wt/sub" commit-tree -m orphan "$(git -C "$wt/sub" rev-parse "HEAD^{tree}")") \
+       && mkdir -p "$a/info" && printf "%s\trefs/heads/gone\n" "$c" >> "$a/info/refs" \
+       && touch -t 202001010000 "$a/info/refs"'
+}
+
+t_salvage_keeps_submodule_work_whose_info_refs_is_malformed() {
+  keeps_uncarried "salvage KEEPs submodule work whose info/refs is not a ref listing" inforefsbad \
+    'modules/sub: it holds info/refs' \
+    'a=$(git -C "$wt/sub" rev-parse --absolute-git-dir) && mkdir -p "$a/info" && echo "not a listing" > "$a/info/refs" \
+       && touch -t 202001010000 "$a/info/refs"'
+}
+
 t_salvage_keeps_submodule_work_that_borrows_from_the_main_checkout_and_elsewhere() {
   # The main checkout's store is one entry of two: the other still holds objects the removal
   # would not lose but nothing here vouches for, so the whole file is refused.
@@ -7165,6 +7192,9 @@ t_salvage_keeps_submodule_work_when_the_main_checkout_repository_is_a_symlink
 t_salvage_keeps_submodule_work_when_the_main_checkout_repository_borrows_objects
 t_salvage_carries_submodule_work_that_borrows_from_the_main_checkout
 t_salvage_keeps_submodule_work_that_borrows_from_elsewhere
+t_salvage_carries_submodule_work_with_a_derived_info_refs
+t_salvage_keeps_submodule_work_whose_info_refs_names_a_local_only_commit
+t_salvage_keeps_submodule_work_whose_info_refs_is_malformed
 t_salvage_keeps_submodule_work_that_borrows_from_the_main_checkout_and_elsewhere
 t_salvage_keeps_submodule_work_when_the_main_checkout_repository_is_read_only
 t_salvage_keeps_submodule_work_when_the_copy_fails

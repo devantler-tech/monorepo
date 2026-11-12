@@ -2167,6 +2167,31 @@ borrows_only_from_main_checkout() {
   done
   return 0
 }
+# info_refs_spent <git-dir> — exit 0 when <git-dir>'s info/refs is a plain file that names
+# nothing the removal could lose. git writes that file itself (`git update-server-info`, run
+# by repack and gc): it is a derived listing of the repository's refs, one
+# `<object-id><TAB><refname>` per line, and is never the only record of anything. 4 of the
+# host's 10 salvage-blocked worktrees were refused for it alone (2026-11-12, #2831).
+# Every listed object must be a ref's current value here (or that ref's peeled tag target),
+# which the checks below examine for work the remote lacks, or be reachable from a
+# remote-tracking ref. A stale line naming an object only this repository holds, a malformed
+# line, a missing object or any failed read is exit 1. Read-only.
+info_refs_spent() {
+  local g=$1 f ids current left out
+  f="$g/info/refs"
+  [ -f "$f" ] && [ ! -L "$f" ] && [ -r "$f" ] || return 1
+  ids=$(awk -F'\t' '
+    NF == 2 && ($1 ~ /^[0-9a-f]+$/) && (length($1) == 40 || length($1) == 64) && $2 ~ /^refs\// { print $1; next }
+    { bad = 1 }
+    END { exit bad }' "$f") || return 1
+  [ -n "$ids" ] || return 0
+  current=$(git --git-dir="$g" for-each-ref --format='%(objectname)%0a%(*objectname)') || return 1
+  left=$({ printf '%s\n' "$current"; printf '%s\n' '--'; printf '%s\n' "$ids"; } \
+    | awk '$0 == "--" { s = 1; next } !s { if (length($0)) c[$0] = 1; next } !($0 in c)' | sort -u) || return 1
+  [ -n "$left" ] || return 0
+  out=$(printf '%s\n' "$left" | git --git-dir="$g" rev-list --stdin --not --remotes 2>/dev/null) || return 1
+  [ -z "$out" ]
+}
 module_repository_pristine() {
   local g=$1 wt_real=$2 entry name co out ids rc line carry=0 carry_ids=""
   [ "${4:-}" != carry ] || carry=1
@@ -2207,6 +2232,10 @@ module_repository_pristine() {
   done
   for entry in "$g/info"/* "$g/info"/.[!.]* "$g/info"/..?*; do
     [ -e "$entry" ] || [ -L "$entry" ] || continue
+    if [ "${entry##*/}" = refs ]; then
+      info_refs_spent "$g" || { MODULE_NOTE="it holds info/refs"; return 1; }
+      continue
+    fi
     if [ "${entry##*/}" != exclude ] || [ ! -f "$entry" ] || [ -L "$entry" ]; then
       MODULE_NOTE="it holds info/${entry##*/}"; return 1
     fi
