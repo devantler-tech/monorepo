@@ -103,6 +103,35 @@ func TestCodexStateQueryThatAnswersStillResolves(t *testing.T) {
 	}
 }
 
+// An unavailable unrelated marketplace must not prevent checking the requested plugin. The
+// native CLI returns the selected marketplace immediately but can stall on an unscoped list
+// (monorepo#4968). This boundary fixture keeps that external failure deterministic.
+func TestCodexStateQueryIgnoresUnavailableUnrelatedMarketplaces(t *testing.T) {
+	for _, marketplace := range []string{"devantler-plugins", "another-marketplace"} {
+		t.Run(marketplace, func(t *testing.T) {
+			c, _ := codexFixture(t, "1")
+			c.o.pluginID = "agentic-engineering@" + marketplace
+			install := filepath.Join(c.o.codexHome, "plugins", "cache", marketplace, "agentic-engineering", "9.9.9")
+			if err := os.MkdirAll(install, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			fakeCodex(t, `case "$*" in
+  "plugin list --marketplace `+marketplace+` --json")
+    printf '%s\n' '{"installed":[{"pluginId":"`+c.o.pluginID+`","enabled":true}],"available":[]}' ;;
+  "plugin list --json") sleep 60 ;;
+  *) echo 'unexpected runtime query' >&2; exit 1 ;;
+esac
+`)
+			if err := c.resolveInstalled(); err != nil {
+				t.Fatalf("an unavailable unrelated marketplace blocked the requested plugin: %v", err)
+			}
+			if c.o.installed != install {
+				t.Fatalf("resolved %q, want the selected marketplace's install %q", c.o.installed, install)
+			}
+		})
+	}
+}
+
 // A runtime that exits non-zero is still a failed query, and malformed output still UNKNOWN,
 // under the bound.
 func TestCodexStateQueryFailuresStayUnknown(t *testing.T) {

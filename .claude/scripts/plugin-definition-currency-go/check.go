@@ -202,7 +202,13 @@ func (c *check) resolveInstalled() error {
 		if convErr != nil || seconds < 1 {
 			return die("the Codex runtime state query has no valid deadline ('%s')", c.runtimeTimeout)
 		}
-		raw, err := bounded(seconds, []string{"CODEX_HOME=" + o.codexHome}, "codex", "plugin", "list", "--json")
+		_, marketplace, found := strings.Cut(o.pluginID, "@")
+		if !found || marketplace == "" {
+			return die("Codex plugin id '%s' has no marketplace suffix", o.pluginID)
+		}
+		// Listing unrelated marketplaces can stall even when this marketplace answers at once
+		// (monorepo#4968). Keep the runtime query scoped to the same marketplace as the cache.
+		raw, err := bounded(seconds, []string{"CODEX_HOME=" + o.codexHome}, "codex", "plugin", "list", "--marketplace", marketplace, "--json")
 		switch {
 		case errors.Is(err, errStopped):
 			return die("the check was stopped while the Codex runtime state query ran for %s — cannot establish effective plugin state", o.codexHome)
@@ -223,10 +229,6 @@ func (c *check) resolveInstalled() error {
 		}
 		if enabled != "true" {
 			return die("plugin '%s' is not enabled according to the Codex runtime state query", o.pluginID)
-		}
-		_, marketplace, found := strings.Cut(o.pluginID, "@")
-		if !found {
-			return die("Codex plugin id '%s' has no marketplace suffix", o.pluginID)
 		}
 		cache := o.codexHome + "/plugins/cache/" + marketplace + "/" + o.pluginName
 		if info, err := os.Stat(cache); err != nil || !info.IsDir() {
