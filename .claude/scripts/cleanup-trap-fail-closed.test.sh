@@ -284,6 +284,7 @@ branch-op-lock.sh|run $tmp/converted/lockrepo -- true
 agent-issue-board-sweep.sh|--author cleanup-trap-test
 board-add.test.sh|
 board-archive.test.sh|
+board-flow-fields.test.sh|
 branch-cleanup.test.sh|
 ci-aggregate-contract.test.sh|
 flow-scorecard.test.sh|
