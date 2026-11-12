@@ -1902,8 +1902,24 @@ set -e
 [ "${fallback_drift_status}" -eq 2 ] ||
   fail "consumer surveyor hook trusted a reviewed checkout whose bytes differ from desired state (exit ${fallback_drift_status})"
 case "${fallback_drift_output}" in
-  *'sha256 does not match desired state'*) ;;
-  *) fail "drifted checkout was refused without an actionable digest reason: ${fallback_drift_output}" ;;
+  *'reviewed checkout fallback: runtime asset scripts/classify-default-branch-ci-runs.sh sha256 does not match desired state'*) ;;
+  *) fail "drifted checkout was refused without naming the checkout's own digest failure: ${fallback_drift_output}" ;;
+esac
+
+# Every asset the desired state pins counts, not only the ones the guard names:
+# a checkout with a drifted routing evaluator is refused as well.
+cp "${plugin_root}/scripts/classify-default-branch-ci-runs.sh" \
+  "${fixture_checkout}/scripts/classify-default-branch-ci-runs.sh"
+printf '\n# unreviewed drift\n' >> "${fixture_checkout}/scripts/evaluate-inference-routing.sh"
+set +e
+fallback_extra_output="$(run_surveyor_hook "${safe_payload}" 2>&1)"
+fallback_extra_status=$?
+set -e
+[ "${fallback_extra_status}" -eq 2 ] ||
+  fail "consumer surveyor hook accepted a reviewed checkout with a drifted pinned asset outside the guard's set (exit ${fallback_extra_status})"
+case "${fallback_extra_output}" in
+  *'reviewed checkout fallback: runtime asset scripts/evaluate-inference-routing.sh sha256 does not match desired state'*) ;;
+  *) fail "checkout with a drifted routing evaluator was refused for the wrong reason: ${fallback_extra_output}" ;;
 esac
 
 # A symlinked checkout can point anywhere, so it is never a fallback.
@@ -1916,7 +1932,7 @@ set -e
 [ "${fallback_link_status}" -eq 2 ] ||
   fail "consumer surveyor hook fell back to a symlinked checkout (exit ${fallback_link_status})"
 case "${fallback_link_output}" in
-  *'sha256 does not match desired state'*) ;;
+  *'reviewed checkout fallback: libraries/agent-plugins resolves through a symlink'*) ;;
   *) fail "symlinked checkout was refused for the wrong reason: ${fallback_link_output}" ;;
 esac
 rm -f "${fixture_checkout}"

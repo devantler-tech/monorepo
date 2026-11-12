@@ -94,7 +94,12 @@ verify_asset() {
     | .[0]
   ' "${DESIRED_STATE}" 2>/dev/null)" ||
     die "desired state does not declare one executable digest for ${relative_path}"
-  actual="$(sha256_file "${asset}")"
+  # Called from a condition, errexit is off here: a failed read must not pass
+  # as a hash, and must not be reported as a mismatch either.
+  if ! actual="$(sha256_file "${asset}")" || [ -z "${actual}" ]; then
+    asset_failure="cannot read runtime asset ${relative_path} to hash it"
+    return 1
+  fi
   if [ "${actual}" != "${expected}" ]; then
     asset_failure="runtime asset ${relative_path} sha256 does not match desired state"
     return 1
@@ -108,13 +113,23 @@ thread_counter_relative="scripts/count-unresolved-review-threads.sh"
 # Every asset the guard can run is verified. The guard admits the bundled thread
 # counter by its installed path, so the surveyor may run it. From 6.0.0 the
 # classifier and the thread counter source json-stream.lib.sh from their own
-# directory, so its bytes run inside two admitted programs: pin it too.
+# directory, so its bytes run inside two admitted programs: pin it too. Every
+# other asset the desired state pins is verified as well, so an install is only
+# ever accepted whole.
+all_assets="$(jq -er --arg a "${classifier_relative}" --arg b "${guard_relative}" \
+  --arg c "${adapter_relative}" --arg d "${thread_counter_relative}" \
+  --arg e "scripts/json-stream.lib.sh" '
+  [$a, $b, $c, $d, $e] as $named
+  | [.spec.source.requiredRuntimeAssets[]? | .path | select(type == "string" and length > 0)]
+  | $named + (map(select(. as $p | $named | index($p) | not)) | unique)
+  | .[]
+' "${DESIRED_STATE}" 2>/dev/null)" ||
+  die "desired state does not list its required runtime assets"
 verify_install() {
   local root="$1" relative_path
-  for relative_path in "${classifier_relative}" "${guard_relative}" \
-    "${adapter_relative}" "${thread_counter_relative}" "scripts/json-stream.lib.sh"; do
+  while IFS= read -r relative_path; do
     verify_asset "${root}" "${relative_path}" || return 1
-  done
+  done <<<"${all_assets}"
 }
 
 # The installed plugin lags the pin whenever the marketplace has moved past it: a
@@ -130,12 +145,14 @@ if ! verify_install "${install_path}"; then
   if [ -d "${reviewed_checkout}" ]; then
     reviewed_real=$(CDPATH='' cd -- "${reviewed_checkout}" 2>/dev/null && pwd -P || true)
   fi
-  if [ -n "${reviewed_real}" ] && [ "${reviewed_real}" = "${reviewed_checkout}" ] &&
-    verify_install "${reviewed_checkout}"; then
-    install_path="${reviewed_checkout}"
-  else
-    die "${installed_failure}; the reviewed checkout at libraries/agent-plugins is not populated at the pin either"
+  if [ -z "${reviewed_real}" ]; then
+    die "${installed_failure}; reviewed checkout fallback: libraries/agent-plugins is not populated"
+  elif [ "${reviewed_real}" != "${reviewed_checkout}" ]; then
+    die "${installed_failure}; reviewed checkout fallback: libraries/agent-plugins resolves through a symlink"
+  elif ! verify_install "${reviewed_checkout}"; then
+    die "${installed_failure}; reviewed checkout fallback: ${asset_failure}"
   fi
+  install_path="${reviewed_checkout}"
 fi
 
 # The reviewed plugin admits a CONSUMING deployment's own classifier only when
