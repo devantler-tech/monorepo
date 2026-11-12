@@ -71,13 +71,15 @@ install_path="$(jq -er --arg id "${PLUGIN_ID}" \
 [ -d "${install_path}" ] ||
   die "registered plugin install path does not exist: ${install_path}"
 
+asset_failure=''
 verify_asset() {
-  local relative_path="$1"
-  local asset="${install_path}/${relative_path}"
+  local root="$1" relative_path="$2"
+  local asset="${root}/${relative_path}"
   local expected actual
 
   if [ ! -f "${asset}" ] || [ ! -x "${asset}" ] || [ -L "${asset}" ]; then
-    die "runtime asset is not a regular executable: ${relative_path}"
+    asset_failure="runtime asset is not a regular executable: ${relative_path}"
+    return 1
   fi
   expected="$(jq -er --arg path "${relative_path}" '
     [.spec.source.requiredRuntimeAssets[]?
@@ -92,24 +94,66 @@ verify_asset() {
     | .[0]
   ' "${DESIRED_STATE}" 2>/dev/null)" ||
     die "desired state does not declare one executable digest for ${relative_path}"
-  actual="$(sha256_file "${asset}")"
-  [ "${actual}" = "${expected}" ] ||
-    die "runtime asset ${relative_path} sha256 does not match desired state"
+  # Called from a condition, errexit is off here: a failed read must not pass
+  # as a hash, and must not be reported as a mismatch either.
+  if ! actual="$(sha256_file "${asset}")" || [ -z "${actual}" ]; then
+    asset_failure="cannot read runtime asset ${relative_path} to hash it"
+    return 1
+  fi
+  if [ "${actual}" != "${expected}" ]; then
+    asset_failure="runtime asset ${relative_path} sha256 does not match desired state"
+    return 1
+  fi
 }
 
 classifier_relative="scripts/classify-default-branch-ci-runs.sh"
 guard_relative="scripts/forge-readonly-guard.sh"
 adapter_relative="scripts/surveyor-forge-readonly.sh"
 thread_counter_relative="scripts/count-unresolved-review-threads.sh"
-verify_asset "${classifier_relative}"
-verify_asset "${guard_relative}"
-verify_asset "${adapter_relative}"
-# The guard admits the bundled thread counter by its installed path, so the
-# surveyor may run it: verify its pinned bytes like every other admitted asset.
-verify_asset "${thread_counter_relative}"
-# From 6.0.0 the classifier and the thread counter source this library from
-# their own directory, so its bytes run inside two admitted programs: pin it too.
-verify_asset "scripts/json-stream.lib.sh"
+# Every asset the guard can run is verified. The guard admits the bundled thread
+# counter by its installed path, so the surveyor may run it. From 6.0.0 the
+# classifier and the thread counter source json-stream.lib.sh from their own
+# directory, so its bytes run inside two admitted programs: pin it too. Every
+# other asset the desired state pins is verified as well, so an install is only
+# ever accepted whole.
+all_assets="$(jq -er --arg a "${classifier_relative}" --arg b "${guard_relative}" \
+  --arg c "${adapter_relative}" --arg d "${thread_counter_relative}" \
+  --arg e "scripts/json-stream.lib.sh" '
+  [$a, $b, $c, $d, $e] as $named
+  | [.spec.source.requiredRuntimeAssets[]? | .path | select(type == "string" and length > 0)]
+  | $named + (map(select(. as $p | $named | index($p) | not)) | unique)
+  | .[]
+' "${DESIRED_STATE}" 2>/dev/null)" ||
+  die "desired state does not list its required runtime assets"
+verify_install() {
+  local root="$1" relative_path
+  while IFS= read -r relative_path; do
+    verify_asset "${root}" "${relative_path}" || return 1
+  done <<<"${all_assets}"
+}
+
+# The installed plugin lags the pin whenever the marketplace has moved past it: a
+# gated refresh installs only the pin, so it cannot catch up until the next pin
+# bump. From the 2026-11-11 bump, 5 of 6 surveyor dispatches were refused that way
+# (monorepo#4969). On drift the contract follows the reviewed definition at the
+# gitlink, so the reviewed checkout in THIS checkout is the one fallback. It is held
+# to the same digests, and is used only at its own real path, never through a link.
+if ! verify_install "${install_path}"; then
+  installed_failure="${asset_failure}"
+  reviewed_checkout="${REPO_ROOT}/libraries/agent-plugins/plugins/agentic-engineering"
+  reviewed_real=''
+  if [ -d "${reviewed_checkout}" ]; then
+    reviewed_real=$(CDPATH='' cd -- "${reviewed_checkout}" 2>/dev/null && pwd -P || true)
+  fi
+  if [ -z "${reviewed_real}" ]; then
+    die "${installed_failure}; reviewed checkout fallback: libraries/agent-plugins is not populated"
+  elif [ "${reviewed_real}" != "${reviewed_checkout}" ]; then
+    die "${installed_failure}; reviewed checkout fallback: libraries/agent-plugins resolves through a symlink"
+  elif ! verify_install "${reviewed_checkout}"; then
+    die "${installed_failure}; reviewed checkout fallback: ${asset_failure}"
+  fi
+  install_path="${reviewed_checkout}"
+fi
 
 # The reviewed plugin admits a CONSUMING deployment's own classifier only when
 # that deployment DECLARES it, as an absolute path, in the hook environment.
