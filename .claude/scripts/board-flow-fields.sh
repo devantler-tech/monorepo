@@ -28,7 +28,7 @@
 # TEST SEAM
 #   BOARD_FLOW_FIXTURE  file: {"total": N, "options": ["<Status>", ...], "items": [<item node>, ...]}
 #                       where an item node has the GraphQL shape this script queries
-#                       ({fs:{date}|null, bs:{date}|null, content:{number, repository:{name},
+#                       ({isArchived, fs:{date}|null, bs:{date}|null, content:{number, repository:{name},
 #                       issueDependenciesSummary:{blockedBy}}}). When set, gh is never invoked.
 set -euo pipefail
 
@@ -68,6 +68,7 @@ else
       items(first:100, after:$endCursor, query:$q){
         pageInfo{hasNextPage endCursor}
         nodes{
+          isArchived
           fs:fieldValueByName(name:"First started"){... on ProjectV2ItemFieldDateValue{date}}
           bs:fieldValueByName(name:"Blocked since"){... on ProjectV2ItemFieldDateValue{date}}
           content{... on Issue{number repository{name} issueDependenciesSummary{blockedBy}}}}}}}}' \
@@ -91,6 +92,10 @@ printf '%s' "$data" | jq -e '
                 and (.content.repository.name | type == "string")
                 and (.content.issueDependenciesSummary.blockedBy | type == "number"))' \
   >/dev/null || unknown "an In Progress card lacks its issue number, repository or dependency summary"
+
+# An archived card is off the board, so it is neither counted nor reported.
+data=$(printf '%s' "$data" | jq -c '.items |= map(select(.isArchived != true))') ||
+  unknown "could not drop archived cards"
 
 findings=$(printf '%s' "$data" | jq -r '
   .items[]

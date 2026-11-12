@@ -143,10 +143,10 @@ jobs:
             macos-batch-2:
               - '.claude/guides/issues-and-board.md'
               - '.claude/plugin-consumption/agent-instances.json'
-              - '.claude/scripts/finops-snapshot.sh'
-              - '.claude/scripts/flow-scorecard.sh'
               - '.claude/scripts/board-flow-fields.sh'
               - '.claude/scripts/board-flow-fields.test.sh'
+              - '.claude/scripts/finops-snapshot.sh'
+              - '.claude/scripts/flow-scorecard.sh'
               - '.claude/scripts/flow-scorecard.test.sh'
               - '.claude/scripts/kagent-lane-runs.sh'
               - '.claude/scripts/kagent-lane-runs.test.sh'

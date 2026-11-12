@@ -90,6 +90,12 @@ check "counts match the findings" 1 "$rc" "$out" "in_progress=4 missing-first-st
 run "$tmp/findings.json" --summary
 check "--summary prints counts only" 1 "$rc" "$out" "missing-first-started=1" "ksail#1"
 
+# 3b. An archived card is off the board: neither counted nor reported.
+archived=$(item platform 9 "" "" 1 | jq -c '. + {isArchived: true}')
+fixture "$tmp/archived.json" 10 "$opts" "$(item ksail 1 2026-11-01 "" 0)" "$archived"
+run "$tmp/archived.json"
+check "an archived card is ignored" 0 "$rc" "$out" "in_progress=1 missing-first-started=0" "platform#9"
+
 # 4. An empty In Progress column on a readable board is a real, clean answer.
 fixture "$tmp/empty-column.json" 10 "$opts"
 run "$tmp/empty-column.json"
@@ -126,6 +132,7 @@ cat > "$tmp/bin/gh" <<'STUB'
 args="$*"
 case "$args" in
   *--paginate*)
+    printf '%s\n' "$args" > "$FAKE_ARGS_LOG"
     [ "${FAKE_ITEMS_FAIL:-0}" = 1 ] && exit 1
     cat "$FAKE_PAGES" ;;
   *)
@@ -140,12 +147,23 @@ jq -nc --argjson o "$opts" '{total: 10, options: $o}' > "$tmp/meta.json"
 
 live() {
   set +e
-  out=$(PATH="$tmp/bin:$PATH" FAKE_META="$tmp/meta.json" FAKE_PAGES="$tmp/pages.json" "$@" bash "$script" 2>&1)
+  out=$(PATH="$tmp/bin:$PATH" FAKE_META="$tmp/meta.json" FAKE_PAGES="$tmp/pages.json" \
+    FAKE_ARGS_LOG="$tmp/args.log" "$@" bash "$script" 2>&1)
   rc=$?
   set -e
 }
 live env
 check "live pages are combined" 1 "$rc" "$out" "in_progress=2 missing-first-started=1 missing-blocked-since=1"
+
+# The stub answers any query, so pin the parts of the live query a silent edit would break:
+# the exact status filter, pagination through `$endCursor`, and the fields the checks read.
+query_args=$(cat "$tmp/args.log" 2>/dev/null || true)
+# shellcheck disable=SC2016 # The needles are literal GraphQL text, not shell expansions.
+for needle in "q=status:\"${STATUS}\" is:open is:issue" 'after:$endCursor' \
+  'pageInfo{hasNextPage endCursor}' 'name:"First started"' 'name:"Blocked since"' \
+  'isArchived' 'issueDependenciesSummary{blockedBy}'; do
+  check "the live item query carries ${needle}" 0 0 "$query_args" "$needle"
+done
 live env FAKE_META_FAIL=1
 check "a failed control read is UNKNOWN" 2 "$rc" "$out" "board control read failed"
 live env FAKE_ITEMS_FAIL=1
