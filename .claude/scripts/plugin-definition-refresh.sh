@@ -640,8 +640,32 @@ head_now="$(git -C "$MARKETPLACE_DIR" rev-parse HEAD 2>/dev/null)" \
 [ "$head_now" = "$candidate" ] \
   || die "the marketplace clone moved from $candidate to $head_now after the gate — refusing to apply a revision this run never gated on"
 
-"$CLI" plugin update "$PLUGIN_ID" >/dev/null 2>&1 \
-  || die "'plugin update $PLUGIN_ID' failed after the gate passed — install state is unchanged or partial; re-run and check plugin-definition-currency.sh"
+# Which installs to update. Without `--scope`, `plugin update` updates only this checkout's record,
+# but a new session's record is seeded from the USER-scope record, so a pin bump reached one worktree
+# and every later session started on the old plugin (monorepo#4959). So the user scope is updated
+# first when it has a record, then this checkout's own project or local scope when it has one.
+# Other worktrees' records are never touched from here. With neither, or an unreadable registry, the
+# unscoped update runs as before; the comparison below decides the verdict either way.
+update_scopes="$(jq -r --arg id "$PLUGIN_ID" --arg root "$REPO_ROOT" '
+  [.plugins[$id][]? | select(type == "object")] as $r
+  | (if any($r[]; .scope == null or .scope == "user") then "user" else empty end),
+    ([$r[] | select((.scope == "project" or .scope == "local")
+        and ((.projectPath // "") | sub("/+$"; "")) == ($root | sub("/+$"; "")))
+      | .scope] | unique | .[])
+' "$registry" 2>/dev/null)" || update_scopes=""
+# The CLI resolves a project or local scope from its working directory, so it runs from REPO_ROOT,
+# the checkout whose record was selected, whatever directory this script was started from. A
+# relative CLI path is made absolute first, or the change of directory would resolve it elsewhere.
+case "$CLI" in /*) : ;; */*) CLI="$PWD/$CLI" ;; esac
+if [ -z "$update_scopes" ]; then
+  (cd "$REPO_ROOT" && "$CLI" plugin update "$PLUGIN_ID") >/dev/null 2>&1 \
+    || die "'plugin update $PLUGIN_ID' failed after the gate passed — install state is unchanged or partial; re-run and check plugin-definition-currency.sh"
+else
+  while IFS= read -r scope; do
+    (cd "$REPO_ROOT" && "$CLI" plugin update "$PLUGIN_ID" --scope "$scope") >/dev/null 2>&1 \
+      || die "'plugin update $PLUGIN_ID --scope $scope' failed after the gate passed — install state is unchanged or partial; re-run and check plugin-definition-currency.sh"
+  done <<< "$update_scopes"
+fi
 
 # ── what was ACTUALLY installed must be the gated revision's plugin tree ───────
 # The CLI may by now have installed a revision other than `candidate` (see above), and this script
@@ -670,6 +694,34 @@ install_paths="$(jq -r --arg id "$PLUGIN_ID" --arg root "$REPO_ROOT" '
   | (if ($project | length) > 0 then $project else $user end)
   | if length > 1 then "AMBIGUOUS \(length)" else .[] end
 ' "$registry" 2>/dev/null)" || install_paths=""
+# When the apply also updated the user scope (monorepo#4959), that install is checked as well — the
+# whole-tree comparison and the currency check below — because new sessions inherit it, so an
+# ungated or incomplete user install must not go unreported behind a correct checkout install. An
+# updated user scope with no usable install path, or with two, is UNKNOWN.
+user_install=""
+if grep -qx user <<< "$update_scopes"; then
+  user_install="$(jq -r --arg id "$PLUGIN_ID" '
+    [.plugins[$id][]?
+      | select(type == "object" and (.scope == null or .scope == "user")
+          and (.installPath | type) == "string" and (.installPath | length) > 0)
+      | .installPath] | unique
+    | if length == 1 then .[0] elif length == 0 then "NONE" else "AMBIGUOUS \(length)" end
+  ' "$registry" 2>/dev/null)" || user_install="NONE"
+  case "$user_install" in
+    NONE|"")
+      say ""
+      say "APPLIED, BUT UNVERIFIED — the user scope of '$PLUGIN_ID' was updated, but the registry"
+      say "  '$registry' names no usable user install to compare with $candidate. The apply happened;"
+      say "  the verdict is UNKNOWN, never 0."
+      exit 2 ;;
+    "AMBIGUOUS "*) install_paths="$user_install" ;;
+    *)
+      case "$install_paths" in
+        "AMBIGUOUS "*) : ;;
+        *) install_paths="$(printf '%s\n%s\n' "$install_paths" "$user_install" | awk 'NF && !seen[$0]++')" ;;
+      esac ;;
+  esac
+fi
 case "$install_paths" in
   "AMBIGUOUS "*)
     say ""
@@ -807,8 +859,15 @@ fi
 # that could even validate coincidentally matching files. PLUGIN_NAME is derived above, at the gate.
 verify_pin=(--gitlink "$GITLINK")
 if [ -n "$ADOPTED_COMMIT" ]; then verify_pin=(--adopted-ref "$ADOPTED_COMMIT"); fi
+# This checkout's install first, then the updated user install, named with --installed, which the
+# currency check also verifies for file modes the whole-tree comparison above does not compare.
+verify_targets=("")
+[ -z "$user_install" ] || verify_targets+=("$user_install")
+for verify_target in "${verify_targets[@]}"; do
+verify_extra=()
+[ -z "$verify_target" ] || verify_extra=(--installed "$verify_target")
 "$VERIFY_CMD" --repo-root "$REPO_ROOT" --plugins-root "$PLUGINS_ROOT" --plugin-id "$PLUGIN_ID" \
-  --plugin-name "$PLUGIN_NAME" "${verify_pin[@]}" --submodule-path "$SUBMODULE_PATH" >/dev/null 2>&1 && vrc=0 || vrc=$?
+  --plugin-name "$PLUGIN_NAME" "${verify_pin[@]}" --submodule-path "$SUBMODULE_PATH" ${verify_extra[@]+"${verify_extra[@]}"} >/dev/null 2>&1 && vrc=0 || vrc=$?
 # `if ! cmd` would collapse the verifier's own UNKNOWN into the drift branch, turning "I could not
 # check" into "the install is not on the pin" — the exact conflation this script's own exit contract
 # forbids, and it would point the caller at the wrong remedy.
@@ -826,9 +885,11 @@ case "$vrc" in
     say "APPLIED, BUT STILL NOT ON THE PIN — the post-apply currency check does not report CURRENT."
     say "  'plugin update' exited 0 without bringing the install to $GITLINK, so the drift persists."
     say "  Re-run plugin-definition-currency.sh for the per-file detail and report it."
+    [ -z "$verify_target" ] || say "  The install that failed is the user-scope install new sessions inherit: $verify_target"
     exit 1
     ;;
 esac
+done
 
 say ""
 say "APPLIED — the runtime install now points at the pinned revision $GITLINK."
