@@ -178,45 +178,6 @@ expect() {
   fi
 }
 
-# TEMPORARY measurement for monorepo#4394, removed before this change is reviewed: one CI run
-# showed process starts cost 2-10 ms on the macOS runner, so the ~3 s a refused case takes there
-# (0.1 s on a Mac) is spent elsewhere. Time each remaining operation the cases repeat.
-probe_now() { perl -MTime::HiRes=time -e 'printf "%.6f", time'; }
-probe_case() { # probe_case <label> <body run 20 times through eval, with $i set>
-  local label=$1 body=$2 t0 t1 i
-  t0=$(probe_now)
-  # shellcheck disable=SC2034 # the loop counter is read by each eval body
-  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do eval "${body}"; done
-  t1=$(probe_now)
-  perl -e 'printf "probe: %-62s %8.1f ms each\n", $ARGV[0], ($ARGV[2] - $ARGV[1]) * 1000 / 20' \
-    "${label}" "${t0}" "${t1}"
-}
-probe_saved_tmpdir=${TMPDIR-}
-echo "probe: TMPDIR=${TMPDIR-<unset>} RUNNER_TEMP=${RUNNER_TEMP-<unset>} bash=${BASH_VERSION}"
-for probe_root in "${TMPDIR:-/tmp}" /tmp "${RUNNER_TEMP:-/tmp}" "${HOME}"; do
-  probe_dir=$(mktemp -d "${probe_root%/}/probe.XXXXXX")
-  export TMPDIR="${probe_dir}"
-  probe_case "create a file under ${probe_root}" 'printf x >"${probe_dir}/f${i}"'
-  probe_case "append to a file under ${probe_root}" 'printf x >>"${probe_dir}/f1"'
-  probe_case "here-string with TMPDIR under ${probe_root}" 'read -r _ <<<x'
-  probe_case "command substitution of a builtin" 'probe_x=$(printf a)'
-  probe_case "mkdir then rm -rf under ${probe_root}" 'mkdir "${probe_dir}/d${i}"; rm -rf "${probe_dir}/d${i}"'
-  rm -rf "${probe_dir}"
-done
-if [ -n "${probe_saved_tmpdir}" ]; then export TMPDIR="${probe_saved_tmpdir}"; else unset TMPDIR; fi
-probe_case "scenario setup for a Portfolio map product" 'scenario ksail'
-probe_case "guard run that the Portfolio map refuses" 'run_guard --repo ksail --issue 4289'
-scenario
-probe_case "guard dry run of a stray repository" 'run_guard --repo stray --issue 4289'
-# The slowest lines of one traced dry run (EPOCHREALTIME needs bash 5; bash 3.2 prints none).
-scenario
-PS4='+ ${EPOCHREALTIME:-0} ${LINENO}: ' PATH="${tmp}/bin:${PATH}" FAKE_DIR="${fake}" \
-  FAKE_TRACE="${tmp}/trace" FAKE_REPO="${FAKE_REPO}" \
-  bash -x "${guard}" --repo stray --issue 4289 >/dev/null 2>"${tmp}/probe-trace" || true
-perl -ne 'if (/^\++ (\d+\.\d+) (\d+): (.*)$/) { printf "%.1f ms line %s: %s\n", ($1 - $p) * 1000, $pl, substr($pt, 0, 90) if defined $p; ($p, $pl, $pt) = ($1, $2, $3) }' \
-  "${tmp}/probe-trace" | sort -rn | head -n 12 | sed 's/^/probe: trace /'
-echo "probe: trace has $(wc -l <"${tmp}/probe-trace") lines; total gh calls $(grep -c '^+* [0-9.]* [0-9]*: gh ' "${tmp}/probe-trace")"
-
 # --- Happy path: a dry run names what it would delete and deletes nothing ---------------------
 scenario
 expect "dry run of a stray repository" 0 '^WOULD-DELETE devantler-tech/stray \(private, created 2026-10-17T18:14:58Z, 1 commit\(s\), 0 issue\(s\)' \
@@ -414,13 +375,22 @@ fixture_fails "repos/devantler-tech/stray/git/refs?per_page=100" 'gh: Git Reposi
 expect "empty repository accepted" 0 '^WOULD-DELETE devantler-tech/stray \(private, created [^,]+, 0 commit' --repo stray --issue 4289
 
 # --- The contract the guard reads must be intact, or nothing is judged ---------------------------
-for broken in 'stack-map-heading' 'trusted-authors'; do
+for broken in 'stack-map-heading' 'stack-map-rows' 'trusted-authors'; do
   scenario
   # Each break must be refused for its own reason, before any gh call: a bare '^UNKNOWN ' would
   # also pass on a missing tool or an unreadable contract file.
   case "${broken}" in
     stack-map-heading)
       sed 's/^## Stack map$/## Stack list/' "${tree}/AGENTS.md" >"${tmp}/agents.md"
+      want="^UNKNOWN AGENTS.md has no 'Stack map' section to check against$"
+      ;;
+    stack-map-rows)
+      # The heading stays, but the section holds only whitespace: still nothing to check against.
+      awk '
+        /^## Stack map$/ { print; print ""; printf " \t \n"; print ""; skip = 1; next }
+        skip && /^## / { skip = 0 }
+        !skip { print }
+      ' "${tree}/AGENTS.md" >"${tmp}/agents.md"
       want="^UNKNOWN AGENTS.md has no 'Stack map' section to check against$"
       ;;
     trusted-authors)

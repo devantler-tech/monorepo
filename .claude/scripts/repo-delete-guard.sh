@@ -152,8 +152,12 @@ section() {
     END { if (!seen) exit 3 }
   ' "$contract"
 }
+# A section with no visible character counts as empty. Test for one visible character rather than
+# stripping whitespace with ${text//[[:space:]]/}: the bash 3.2 that macOS ships takes seconds to
+# strip a section of a few thousand characters, and longer as the maps grow (#4394).
+nonblank='[^[:space:]]'
 for heading in '## Portfolio map' '## Stack map'; do
-  if ! text=$(section "$heading") || [ -z "${text//[[:space:]]/}" ]; then
+  if ! text=$(section "$heading") || ! [[ $text =~ $nonblank ]]; then
     unknown "AGENTS.md has no '${heading#\#\# }' section to check against"
   fi
   # A map names a repository as `devantler-tech/<name>` or, in a cell listing several, as a bare
