@@ -106,3 +106,4 @@ MP-096	dependency-automation-and-programmed-bot-prs	Never infer it from the titl
 MP-097	dependency-automation-and-programmed-bot-prs	🔴 **The exemption proves provenance, never ripeness:	computational	.claude/scripts/release-cask-ripeness.sh	NOT-RIPE release
 MP-098	dependency-automation-and-programmed-bot-prs	On a 404, `gh api` still prints the error body on	none	-	-
 MP-099	dependency-automation-and-programmed-bot-prs	So a cask PR is the exception to "qualifying PRs	none	-	-
+MP-100	dependency-automation-and-programmed-bot-prs	`RIPE` is necessary, not sufficient	none	-	-

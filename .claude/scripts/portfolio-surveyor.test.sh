@@ -2195,7 +2195,7 @@ expect_exempt \
 # never whether its release is published (monorepo#4104, homebrew-tap#1936). Stdout stays empty and
 # the exit status is the one the cases above already pin. The ksail plugin release above is the
 # control for the other repositories: its exempt verdict writes no stderr at all.
-cask_reminder='programmed-bot-review-exemption: exit 0 proves who made this cask pull request, not that its release is published; before promoting a draft, check its release with .claude/scripts/release-cask-ripeness.sh (merge-policy guide) and promote only on RIPE'
+cask_reminder='programmed-bot-review-exemption: exit 0 proves who made this cask pull request, not that its release is published; before promoting a draft, check its release with .claude/scripts/release-cask-ripeness.sh (merge-policy guide) and promote only on RIPE while no CD run for that product is queued or in progress'
 expect_cask_reminder() { # expect_cask_reminder <name> <stdin payload>
   local out err rc=0
   err="$("${classifier}" --input - 2>&1 >/dev/null <<<"$2")" || rc=$?

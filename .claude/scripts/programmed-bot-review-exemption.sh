@@ -661,7 +661,7 @@ fi
 # from this call, so the reminder is printed where the decision is made. Stdout stays empty and the
 # exit status is unchanged, so no caller's verdict moves.
 cask_exempt() {
-  printf '%s\n' "programmed-bot-review-exemption: exit 0 proves who made this cask pull request, not that its release is published; before promoting a draft, check its release with .claude/scripts/release-cask-ripeness.sh (merge-policy guide) and promote only on RIPE" >&2
+  printf '%s\n' "programmed-bot-review-exemption: exit 0 proves who made this cask pull request, not that its release is published; before promoting a draft, check its release with .claude/scripts/release-cask-ripeness.sh (merge-policy guide) and promote only on RIPE while no CD run for that product is queued or in progress" >&2
   exit 0
 }
 
