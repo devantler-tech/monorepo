@@ -10,31 +10,6 @@
 # is copied into a fixture tree whose AGENTS.md is the real one plus one synthetic Stack map row.
 set -euo pipefail
 
-# TEMPORARY measurement for monorepo#4394: removed before this change is reviewed.
-# Times one process start with TZ unset and with TZ=UTC, so one CI run shows where the
-# macOS runner's ~12 seconds per case go.
-probe_dir=$(mktemp -d)
-printf '#!/usr/bin/env bash\n:\n' >"${probe_dir}/fresh"
-chmod +x "${probe_dir}/fresh"
-PROBE_FRESH="${probe_dir}/fresh" perl -MTime::HiRes=time -e '
-  printf "probe: TZ is %s on %s\n", (exists $ENV{TZ} ? "set to $ENV{TZ}" : "unset"), $^O;
-  open(my $out, ">&", \*STDOUT) or die; open(STDOUT, ">", "/dev/null") or die;
-  open(STDERR, ">", "/dev/null") or die;
-  for my $tz (undef, "UTC") {
-    if (defined $tz) { $ENV{TZ} = $tz } else { delete $ENV{TZ} }
-    for my $cmd (["/usr/bin/true"], ["bash", "-c", ":"], ["bash", "-c", "x=\$(printf a | sed s/a/b/)"],
-                 ["env", "bash", "-c", ":"], [$ENV{PROBE_FRESH}], ["jq", "-n", "1"],
-                 ["sed", "-n", "1p", "/dev/null"], ["awk", "BEGIN { }"], ["date", "+%s"]) {
-      my $t0 = time; system(@$cmd) for 1 .. 20; my $ms = (time - $t0) * 1000 / 20;
-      printf {$out} "probe: TZ=%-7s %-40s %7.1f ms per start\n", ($tz // "<unset>"), join(" ", @$cmd), $ms;
-    }
-  }' || echo "probe: failed"
-rm -rf "${probe_dir}"
-
-# A macOS process left with TZ unset can stall registering for time-zone change notifications on a
-# CI runner (#4394). Nothing here reads a clock, so pin the zone, as agent-telemetry.test.sh does.
-export TZ=UTC
-
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "${here}/../.." && pwd)"
 tmp="$(mktemp -d)"
@@ -202,6 +177,45 @@ expect() {
     pass "${name}"
   fi
 }
+
+# TEMPORARY measurement for monorepo#4394, removed before this change is reviewed: one CI run
+# showed process starts cost 2-10 ms on the macOS runner, so the ~3 s a refused case takes there
+# (0.1 s on a Mac) is spent elsewhere. Time each remaining operation the cases repeat.
+probe_now() { perl -MTime::HiRes=time -e 'printf "%.6f", time'; }
+probe_case() { # probe_case <label> <body run 20 times through eval, with $i set>
+  local label=$1 body=$2 t0 t1 i
+  t0=$(probe_now)
+  # shellcheck disable=SC2034 # the loop counter is read by each eval body
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do eval "${body}"; done
+  t1=$(probe_now)
+  perl -e 'printf "probe: %-62s %8.1f ms each\n", $ARGV[0], ($ARGV[2] - $ARGV[1]) * 1000 / 20' \
+    "${label}" "${t0}" "${t1}"
+}
+probe_saved_tmpdir=${TMPDIR-}
+echo "probe: TMPDIR=${TMPDIR-<unset>} RUNNER_TEMP=${RUNNER_TEMP-<unset>} bash=${BASH_VERSION}"
+for probe_root in "${TMPDIR:-/tmp}" /tmp "${RUNNER_TEMP:-/tmp}" "${HOME}"; do
+  probe_dir=$(mktemp -d "${probe_root%/}/probe.XXXXXX")
+  export TMPDIR="${probe_dir}"
+  probe_case "create a file under ${probe_root}" 'printf x >"${probe_dir}/f${i}"'
+  probe_case "append to a file under ${probe_root}" 'printf x >>"${probe_dir}/f1"'
+  probe_case "here-string with TMPDIR under ${probe_root}" 'read -r _ <<<x'
+  probe_case "command substitution of a builtin" 'probe_x=$(printf a)'
+  probe_case "mkdir then rm -rf under ${probe_root}" 'mkdir "${probe_dir}/d${i}"; rm -rf "${probe_dir}/d${i}"'
+  rm -rf "${probe_dir}"
+done
+if [ -n "${probe_saved_tmpdir}" ]; then export TMPDIR="${probe_saved_tmpdir}"; else unset TMPDIR; fi
+probe_case "scenario setup for a Portfolio map product" 'scenario ksail'
+probe_case "guard run that the Portfolio map refuses" 'run_guard --repo ksail --issue 4289'
+scenario
+probe_case "guard dry run of a stray repository" 'run_guard --repo stray --issue 4289'
+# The slowest lines of one traced dry run (EPOCHREALTIME needs bash 5; bash 3.2 prints none).
+scenario
+PS4='+ ${EPOCHREALTIME:-0} ${LINENO}: ' PATH="${tmp}/bin:${PATH}" FAKE_DIR="${fake}" \
+  FAKE_TRACE="${tmp}/trace" FAKE_REPO="${FAKE_REPO}" \
+  bash -x "${guard}" --repo stray --issue 4289 >/dev/null 2>"${tmp}/probe-trace" || true
+perl -ne 'if (/^\++ (\d+\.\d+) (\d+): (.*)$/) { printf "%.1f ms line %s: %s\n", ($1 - $p) * 1000, $pl, substr($pt, 0, 90) if defined $p; ($p, $pl, $pt) = ($1, $2, $3) }' \
+  "${tmp}/probe-trace" | sort -rn | head -n 12 | sed 's/^/probe: trace /'
+echo "probe: trace has $(wc -l <"${tmp}/probe-trace") lines; total gh calls $(grep -c '^+* [0-9.]* [0-9]*: gh ' "${tmp}/probe-trace")"
 
 # --- Happy path: a dry run names what it would delete and deletes nothing ---------------------
 scenario
