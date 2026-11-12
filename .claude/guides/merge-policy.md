@@ -965,6 +965,25 @@ pinned `sha256` equals the digest GitHub records for that asset. On exit **1** k
 the PR on the release; on exit **2** keep the draft and report it UNKNOWN. The CD run's conclusion is
 not the test: a published release can sit behind a CD run reported `cancelled`.
 
+🔴 **`RIPE` is necessary, not sufficient: the product's CD hands off its own cask PR, so never promote
+one while a run of that product's CD workflow is queued or in progress** (monorepo#4980). The CD
+promotes its cask PR itself minutes after the release publishes, and it adds the labels its hand-off
+checks only while it promotes a draft. On 2026-11-12 an agent promoted `homebrew-tap#2528` 28 seconds
+before KSail's CD reached that step, the CD refused the already-ready PR, and the run went red. So an
+agent's promotion is the fallback for a cask PR the CD left a draft after its run ended. Before
+promoting, read the product's CD runs (`cd.yaml` for KSail and World at Ruin):
+
+```sh
+for state in requested waiting pending queued in_progress; do
+  n=$(gh api "repos/devantler-tech/<repo>/actions/workflows/cd.yaml/runs?status=$state&per_page=1" \
+    --jq .total_count) || { echo "CD run read FAILED — UNKNOWN" >&2; exit 2; }
+  [ "$n" = 0 ] || { echo "CD run $state — leave the draft to the CD" >&2; exit 1; }
+done
+```
+
+Promote only when every read succeeds and counts zero. Otherwise keep the draft: the running CD
+hands it off, or its next run re-drafts it at a newer release.
+
 **Ripeness belongs to a head, not to the PR.** The CD reuses one `goreleaser/<name>` branch, so the
 next release force-pushes a newer, possibly still-draft version into a cask PR that is already
 promoted. On 2026-10-01 this happened twice: `homebrew-tap#1767` was promoted RIPE at v7.198.8 and
