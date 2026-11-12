@@ -10,6 +10,31 @@
 # is copied into a fixture tree whose AGENTS.md is the real one plus one synthetic Stack map row.
 set -euo pipefail
 
+# TEMPORARY measurement for monorepo#4394: removed before this change is reviewed.
+# Times one process start with TZ unset and with TZ=UTC, so one CI run shows where the
+# macOS runner's ~12 seconds per case go.
+probe_dir=$(mktemp -d)
+printf '#!/usr/bin/env bash\n:\n' >"${probe_dir}/fresh"
+chmod +x "${probe_dir}/fresh"
+PROBE_FRESH="${probe_dir}/fresh" perl -MTime::HiRes=time -e '
+  printf "probe: TZ is %s on %s\n", (exists $ENV{TZ} ? "set to $ENV{TZ}" : "unset"), $^O;
+  open(my $out, ">&", \*STDOUT) or die; open(STDOUT, ">", "/dev/null") or die;
+  open(STDERR, ">", "/dev/null") or die;
+  for my $tz (undef, "UTC") {
+    if (defined $tz) { $ENV{TZ} = $tz } else { delete $ENV{TZ} }
+    for my $cmd (["/usr/bin/true"], ["bash", "-c", ":"], ["bash", "-c", "x=\$(printf a | sed s/a/b/)"],
+                 ["env", "bash", "-c", ":"], [$ENV{PROBE_FRESH}], ["jq", "-n", "1"],
+                 ["sed", "-n", "1p", "/dev/null"], ["awk", "BEGIN { }"], ["date", "+%s"]) {
+      my $t0 = time; system(@$cmd) for 1 .. 20; my $ms = (time - $t0) * 1000 / 20;
+      printf {$out} "probe: TZ=%-7s %-40s %7.1f ms per start\n", ($tz // "<unset>"), join(" ", @$cmd), $ms;
+    }
+  }' || echo "probe: failed"
+rm -rf "${probe_dir}"
+
+# A macOS process left with TZ unset can stall registering for time-zone change notifications on a
+# CI runner (#4394). Nothing here reads a clock, so pin the zone, as agent-telemetry.test.sh does.
+export TZ=UTC
+
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "${here}/../.." && pwd)"
 tmp="$(mktemp -d)"
