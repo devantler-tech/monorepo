@@ -1902,7 +1902,7 @@ set -e
 [ "${fallback_drift_status}" -eq 2 ] ||
   fail "consumer surveyor hook trusted a reviewed checkout whose bytes differ from desired state (exit ${fallback_drift_status})"
 case "${fallback_drift_output}" in
-  *'reviewed checkout fallback: runtime asset scripts/classify-default-branch-ci-runs.sh sha256 does not match desired state'*) ;;
+  *"reviewed checkout fallback (${fixture_checkout}): runtime asset scripts/classify-default-branch-ci-runs.sh sha256 does not match desired state"*) ;;
   *) fail "drifted checkout was refused without naming the checkout's own digest failure: ${fallback_drift_output}" ;;
 esac
 
@@ -1918,7 +1918,7 @@ set -e
 [ "${fallback_extra_status}" -eq 2 ] ||
   fail "consumer surveyor hook accepted a reviewed checkout with a drifted pinned asset outside the guard's set (exit ${fallback_extra_status})"
 case "${fallback_extra_output}" in
-  *'reviewed checkout fallback: runtime asset scripts/evaluate-inference-routing.sh sha256 does not match desired state'*) ;;
+  *"reviewed checkout fallback (${fixture_checkout}): runtime asset scripts/evaluate-inference-routing.sh sha256 does not match desired state"*) ;;
   *) fail "checkout with a drifted routing evaluator was refused for the wrong reason: ${fallback_extra_output}" ;;
 esac
 
@@ -1932,7 +1932,7 @@ set -e
 [ "${fallback_link_status}" -eq 2 ] ||
   fail "consumer surveyor hook fell back to a symlinked checkout (exit ${fallback_link_status})"
 case "${fallback_link_output}" in
-  *'reviewed checkout fallback: libraries/agent-plugins resolves through a symlink'*) ;;
+  *"reviewed checkout fallback (${fixture_checkout}): libraries/agent-plugins resolves through a symlink"*) ;;
   *) fail "symlinked checkout was refused for the wrong reason: ${fallback_link_output}" ;;
 esac
 rm -f "${fixture_checkout}"
@@ -1981,10 +1981,38 @@ for session_case in '' "${session_other}"; do
   [ "${session_refusal_status}" -eq 2 ] ||
     fail "surveyor hook trusted a checkout outside this repository's session worktree (cwd '${session_case}', exit ${session_refusal_status})"
   case "${session_refusal}" in
-    *'reviewed checkout fallback: runtime asset scripts/classify-default-branch-ci-runs.sh sha256 does not match desired state'*) ;;
+    *"reviewed checkout fallback (${fixture_checkout}): runtime asset scripts/classify-default-branch-ci-runs.sh sha256 does not match desired state"*) ;;
     *) fail "surveyor hook refused cwd '${session_case}' without the shared checkout's digest reason: ${session_refusal}" ;;
   esac
 done
+# An inherited GIT_DIR makes every directory answer as one repository; the identity
+# probes ignore it, so the other repository's checkout is still not trusted.
+set +e
+gitdir_refusal="$(GIT_DIR="${session_main}/.git" run_surveyor_hook "$(session_payload "${session_other}" 'gh pr list --repo devantler-tech/monorepo --state open')" 2>&1)"
+gitdir_refusal_status=$?
+set -e
+[ "${gitdir_refusal_status}" -eq 2 ] ||
+  fail "an inherited GIT_DIR made another repository's checkout pass as the session checkout (exit ${gitdir_refusal_status})"
+case "${gitdir_refusal}" in
+  *"reviewed checkout fallback (${fixture_checkout}): runtime asset scripts/classify-default-branch-ci-runs.sh sha256 does not match desired state"*) ;;
+  *) fail "inherited GIT_DIR case was refused for the wrong reason: ${gitdir_refusal}" ;;
+esac
+# A linked directory inside a checkout reaches bytes outside the verified tree, so it
+# is refused even when every byte it reaches matches its digest.
+mv "${session_checkout}/scripts" "${hook_tmp}/linked-scripts"
+ln -s "${hook_tmp}/linked-scripts" "${session_checkout}/scripts"
+set +e
+linked_dir_output="$(run_surveyor_hook "$(session_payload "${session_wt}" 'gh pr list --repo devantler-tech/monorepo --state open')" 2>&1)"
+linked_dir_status=$?
+set -e
+[ "${linked_dir_status}" -eq 2 ] ||
+  fail "surveyor hook trusted a session checkout whose scripts directory is a link (exit ${linked_dir_status})"
+case "${linked_dir_output}" in
+  *"session checkout fallback (${session_checkout}): runtime asset scripts/classify-default-branch-ci-runs.sh resolves through a linked directory"*) ;;
+  *) fail "linked scripts directory was refused for the wrong reason: ${linked_dir_output}" ;;
+esac
+rm -f "${session_checkout}/scripts"
+mv "${hook_tmp}/linked-scripts" "${session_checkout}/scripts"
 # A drifted session checkout is refused too, and the refusal names the path it checked.
 printf '\n# unreviewed drift\n' >> "${session_checkout}/scripts/forge-readonly-guard.sh"
 set +e

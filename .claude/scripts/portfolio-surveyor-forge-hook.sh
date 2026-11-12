@@ -81,6 +81,16 @@ verify_asset() {
     asset_failure="runtime asset is not a regular executable: ${relative_path}"
     return 1
   fi
+  # A linked directory between the root and the asset reaches bytes outside the
+  # tree being verified, so its real path must be the root's real path plus the
+  # asset's relative directory.
+  local root_real asset_dir_real
+  root_real=$(CDPATH='' cd -- "${root}" 2>/dev/null && pwd -P || true)
+  asset_dir_real=$(CDPATH='' cd -- "$(dirname -- "${asset}")" 2>/dev/null && pwd -P || true)
+  if [ -z "${root_real}" ] || [ "${asset_dir_real}" != "${root_real}/$(dirname -- "${relative_path}")" ]; then
+    asset_failure="runtime asset ${relative_path} resolves through a linked directory"
+    return 1
+  fi
   expected="$(jq -er --arg path "${relative_path}" '
     [.spec.source.requiredRuntimeAssets[]?
       | select(
@@ -143,20 +153,26 @@ verify_install() {
 # surveyor's text, and counts only when it is a checkout of the SAME repository (one
 # git common dir). It is resolved here because it serves two purposes: the second
 # reviewed-checkout fallback below, and the classifier declarations further down.
+# Repository identity is read from the named directory alone: an inherited GIT_DIR,
+# GIT_COMMON_DIR or GIT_WORK_TREE would make every directory answer with the same
+# repository, so another repository's checkout would pass as this one's.
+repo_git() {
+  env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git "$@"
+}
 hook_input=$(cat 2>/dev/null || true)
 session_cwd=$(printf '%s' "${hook_input}" |
   jq -r 'if (.cwd | type) == "string" then .cwd else "" end' 2>/dev/null || true)
 session_root=''
 if [ -n "${session_cwd}" ] && [ -d "${session_cwd}" ]; then
-  session_root=$(git -C "${session_cwd}" rev-parse --show-toplevel 2>/dev/null || true)
+  session_root=$(repo_git -C "${session_cwd}" rev-parse --show-toplevel 2>/dev/null || true)
   if [ -n "${session_root}" ]; then
     session_root=$(CDPATH='' cd -- "${session_root}" 2>/dev/null && pwd -P || true)
   fi
 fi
 session_same_repo=false
 if [ -n "${session_root}" ] && [ "${session_root}" != "${REPO_ROOT}" ]; then
-  repo_common=$(git -C "${REPO_ROOT}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
-  session_common=$(git -C "${session_root}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  repo_common=$(repo_git -C "${REPO_ROOT}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  session_common=$(repo_git -C "${session_root}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
   [ -z "${repo_common}" ] || repo_common=$(CDPATH='' cd -- "${repo_common}" 2>/dev/null && pwd -P || true)
   [ -z "${session_common}" ] || session_common=$(CDPATH='' cd -- "${session_common}" 2>/dev/null && pwd -P || true)
   if [ -n "${repo_common}" ] && [ "${repo_common}" = "${session_common}" ]; then
@@ -194,7 +210,7 @@ if ! verify_install "${install_path}"; then
   if verify_reviewed_checkout "${REPO_ROOT}"; then
     install_path="${REPO_ROOT}/libraries/agent-plugins/plugins/agentic-engineering"
   else
-    refusal="${installed_failure}; reviewed checkout fallback: ${checkout_failure}"
+    refusal="${installed_failure}; reviewed checkout fallback (${REPO_ROOT}/libraries/agent-plugins/plugins/agentic-engineering): ${checkout_failure}"
     if [ "${session_same_repo}" = true ]; then
       if verify_reviewed_checkout "${session_root}"; then
         install_path="${session_root}/libraries/agent-plugins/plugins/agentic-engineering"
