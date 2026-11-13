@@ -428,16 +428,20 @@ If it still exits `1`, or exits
 work such as reviews, triage and merges can go on — record it in `needs_attention`, and escalate per
 *Maintainer channels* when it persists after you have tried to resolve it.
 
-**Then check that the shared checkout is not frozen behind `main`** (#3331). A dispatch worktree is
-created from the shared checkout's local `HEAD`, so a shared checkout that stops advancing hands
-every later dispatch an old contract, and nothing else reports it:
+**Then check that the shared checkout is not frozen behind `main`** (#3331). Project hooks run from
+the shared checkout (`$CLAUDE_PROJECT_DIR`), and older dispatch paths start from its local `HEAD`,
+so a shared checkout that stops advancing leaves every merged hook inert and can hand a dispatch an
+old contract. Nothing else advances it:
 
 ```sh
 .claude/scripts/shared-checkout-freshness.sh   # 0 CURRENT · 1 a finding · 2 UNKNOWN
 ```
 
 It reads only, and it judges the repository's main worktree whichever worktree it is called from.
-On `BEHIND` it prints the fast-forward that would succeed. On `FROZEN` it names the locally changed
+**On `BEHIND`, run the fast-forward it prints, once**, then re-run the check. The command is
+`--ff-only`, so git refuses anything but a clean fast-forward and the submodule-pointer drift is
+untouched. If the isolation guard refuses it, record the line in `needs_attention` instead
+(#5014). On `FROZEN` it names the locally changed
 paths that make git refuse the fast-forward: **never discard, stash or reset them** — they belong to
 whoever made them. Record the line in `needs_attention`, name it in the run report, and keep reading
 the definition at `origin/main` until the owner resolves the edit. `OFF-BRANCH`, `AHEAD` and
