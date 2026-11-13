@@ -46,8 +46,8 @@ verdict=$(printf '%s\n' "${cmd}" | awk '
   hd != "" { if ($0 == hd || $0 ~ "^\t*" hd "$") hd = ""; next }
   {
     line = $0
-    if (match(line, /<<-?[[:space:]]*["\047]?[A-Za-z_][A-Za-z0-9_]*["\047]?/)) {
-      tag = substr(line, RSTART, RLENGTH); sub(/^<<-?[[:space:]]*/, "", tag); gsub(/["\047]/, "", tag)
+    if (match(line, /(^|[^<])<<-?[[:space:]]*["\047]?[A-Za-z_][A-Za-z0-9_]*["\047]?/)) {
+      tag = substr(line, RSTART, RLENGTH); sub(/^[^<]?<<-?[[:space:]]*/, "", tag); gsub(/["\047]/, "", tag)
       hd = tag
     }
     text = text " ; " line
@@ -72,11 +72,11 @@ verdict=$(printf '%s\n' "${cmd}" | awk '
             k = j + 1; if (t[k] == "-C") k += 2
             if (t[k] == "ls-remote" || t[k] == "fetch") r = 1
           }
-          cp = (x == ";" || x == "do" || x == "then" || x == "else" || x == "!" || x ~ /=["\047]?\$$/ || x ~ /^["\047]?\$$/ || x == "[" || x == "[[")
+          cp = (x == ";" || x == "do" || x == "then" || x == "else" || x == "if" || x == "elif" || x == "while" || x == "until" || x == "!" || x ~ /=["\047]?\$$/ || x ~ /^["\047]?\$$/ || x == "[" || x == "[[")
         }
         if (s && r) found = 1
       }
-      cmdpos = (w == ";" || w == "do" || w == "then" || w == "else" || w == "!" || w ~ /=["\047]?\$$/ || w ~ /^["\047]?\$$/)
+      cmdpos = (w == ";" || w == "do" || w == "then" || w == "else" || w == "if" || w == "elif" || w == "!" || w ~ /=["\047]?\$$/ || w ~ /^["\047]?\$$/)
     }
     print (found ? "deny" : "allow")
   }

@@ -80,6 +80,12 @@ do
   sleep 15
 done'
   expect_deny git-dash-c 'while ! git -C /x fetch -q origin main; do sleep 5; done'
+  # A here-string is not a heredoc: the poll loop on the next line must still be judged.
+  expect_deny here-string 'read -r state <<<pending
+until gh pr checks 1; do sleep 30; done'
+  # A remote read in an `if` (or `elif`) condition inside the body is still a poll.
+  expect_deny if-in-body 'for i in $(seq 1 20); do if gh pr view 1 --json state -q .state | grep -q MERGED; then break; fi; sleep 30; done'
+  expect_deny elif-in-body 'while true; do if false; then :; elif kubectl get ns x; then break; fi; sleep 10; done'
 }
 
 # --- Admitted: what the guard must leave alone -----------------------------------------------
