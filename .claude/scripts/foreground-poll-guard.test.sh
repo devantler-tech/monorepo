@@ -41,11 +41,13 @@ if [ ! -f "${guard}" ] || [ ! -x "${guard}" ] || [ -L "${guard}" ]; then
   exit 1
 fi
 
-# run <name> <command> [background]: sets rc and err for the call.
+# run <name> <command> [background] [monitor]: sets rc and err for the call.
 run() {
-  local name=$1 cmd=$2 bg=${3:-false} payload
-  payload=$(jq -cn --arg c "${cmd}" --argjson b "${bg}" \
-    '{tool_name: "Bash", tool_input: ({command: $c} + (if $b then {run_in_background: true} else {} end))}')
+  local name=$1 cmd=$2 bg=${3:-false} mon=${4:-} payload
+  payload=$(jq -cn --arg c "${cmd}" --argjson b "${bg}" --arg m "${mon}" \
+    '{tool_name: "Bash", tool_input: ({command: $c}
+      + (if $b then {run_in_background: true} else {} end)
+      + (if $m != "" then {description: "watch", timeout_ms: 600000} else {} end))}')
   set +e
   printf '%s' "${payload}" | "${guard}" >"${tmp}/${name}.out" 2>"${tmp}/${name}.err"
   rc=$?
@@ -63,7 +65,7 @@ expect_deny() {
 }
 
 expect_allow() {
-  run "$1" "$2" "${3:-false}"
+  run "$1" "$2" "${3:-false}" "${4:-}"
   [ "${rc}" -eq 0 ] || fail_case "$1: expected admission (exit 0), got exit ${rc}: ${err}"
 }
 
@@ -92,6 +94,8 @@ until gh pr checks 1; do sleep 30; done'
 # shellcheck disable=SC2016
 {
   expect_allow backgrounded 'until [ "$(gh pr checks 1 --json bucket -q length)" = 0 ]; do sleep 30; done' true
+  # The runtime runs Bash hooks for Monitor too, as a Bash call with Monitor's own input (#5016).
+  expect_allow monitor 'until [ "$(gh pr checks 1 --json bucket -q length)" = 0 ]; do sleep 30; done' false monitor
   expect_allow local-process 'while kill -0 123 2>/dev/null; do sleep 2; done; gh pr view 1'
   expect_allow sampling 'for i in $(seq 1 12); do curl -s -o /dev/null https://example.invalid/; sleep 2; done'
   expect_allow list-loop 'for r in ksail platform; do gh api repos/devantler-tech/$r --jq .name; sleep 5; done'
