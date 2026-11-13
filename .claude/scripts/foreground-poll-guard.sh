@@ -49,17 +49,25 @@ fields=$(printf '%s' "${input}" | jq -r '
 cmd=${fields#*$'\n'}
 
 verdict=$(printf '%s\n' "${cmd}" | awk '
-  # Drop heredoc bodies: a script written to a file is not executed by this call.
-  hd != "" { if ($0 == hd || $0 ~ "^\t*" hd "$") hd = ""; next }
+  # Drop heredoc bodies: a script written to a file is not executed by this call. A heredoc
+  # fed to a shell interpreter IS executed, so its body is kept (hdx).
+  hd != "" {
+    if ($0 == hd || $0 ~ "^\t*" hd "$") { hd = ""; next }
+    if (hdx) text = text " ; " $0
+    next
+  }
   {
     line = $0
     if (match(line, /(^|[^<])<<-?[[:space:]]*["\047]?[A-Za-z_][A-Za-z0-9_]*["\047]?/)) {
+      pre = substr(line, 1, RSTART)
       tag = substr(line, RSTART, RLENGTH); sub(/^[^<]?<<-?[[:space:]]*/, "", tag); gsub(/["\047]/, "", tag)
       hd = tag
+      hdx = (pre ~ /(^|[;&|[:space:]])(bash|sh|zsh|dash|ksh)([[:space:]]+-[A-Za-z]+)*[[:space:]]*.?$/)
     }
     text = text " ; " line
   }
   END {
+    text = unquote(text)
     gsub(/&&|\|\||[;|(){}`]/, " ; ", text)
     n = split(text, t, /[[:space:]]+/)
     found = 0; cmdpos = 1
@@ -79,13 +87,46 @@ verdict=$(printf '%s\n' "${cmd}" | awk '
             k = j + 1; if (t[k] == "-C") k += 2
             if (t[k] == "ls-remote" || t[k] == "fetch") r = 1
           }
-          cp = (x == ";" || (cp && (x == "do" || x == "then" || x == "else" || x == "if" || x == "elif" || x == "while" || x == "until" || x == "!" || x == "[" || x == "[[")) || x ~ /=["\047]?\$$/ || x ~ /^["\047]?\$$/ )
+          cp = (x == ";" || (cp && (x == "do" || x == "then" || x == "else" || x == "if" || x == "elif" || x == "while" || x == "until" || x == "!" || x == "[" || x == "[[" || x ~ /^[A-Za-z_][A-Za-z0-9_]*=/)) || x ~ /=["\047]?\$$/ || x ~ /^["\047]?\$$/ )
         }
         if (s && r) found = 1
       }
-      cmdpos = (w == ";" || (cmdpos && (w == "do" || w == "then" || w == "else" || w == "if" || w == "elif" || w == "!")) || w ~ /=["\047]?\$$/ || w ~ /^["\047]?\$$/)
+      cmdpos = (w == ";" || (cmdpos && (w == "do" || w == "then" || w == "else" || w == "if" || w == "elif" || w == "!" || w ~ /^[A-Za-z_][A-Za-z0-9_]*=/)) || w ~ /=["\047]?\$$/ || w ~ /^["\047]?\$$/)
     }
     print (found ? "deny" : "allow")
+  }
+  # Quoted text is an argument, never a command: drop single-quoted text, and keep only the
+  # command substitutions ($(...) and backticks) inside double quotes, which the shell runs.
+  # The one exception is the script argument of `<shell> -c`, which IS run: it is kept whole.
+  function unquote(s,   out, i, c, q, d, b, x) {
+    out = ""; q = ""; d = 0; b = 0; x = 0
+    for (i = 1; i <= length(s); i++) {
+      c = substr(s, i, 1)
+      if (x) { if (c == q) { q = ""; x = 0; out = out " ; " } else out = out c; continue }
+      if (q == "\047") { if (c == "\047") q = ""; continue }
+      if (q == "\"") {
+        if (c == "\\") { i++; continue }
+        if (d > 0) {
+          out = out c
+          if (c == "(") d++
+          else if (c == ")") d--
+          continue
+        }
+        if (b) { out = out c; if (c == "`") b = 0; continue }
+        if (c == "$" && substr(s, i + 1, 1) == "(") { out = out "$("; i++; d = 1; continue }
+        if (c == "`") { out = out c; b = 1; continue }
+        if (c == "\"") { q = ""; continue }
+        continue
+      }
+      if (c == "\\") { out = out c substr(s, i + 1, 1); i++; continue }
+      if (c == "\047" || c == "\"") {
+        q = c
+        if (out ~ /(^|[^A-Za-z0-9_])(bash|sh|zsh|dash|ksh)([[:space:]]+-[A-Za-z]+)*[[:space:]]+-[A-Za-z]*c[[:space:]]+$/) { x = 1; out = out " ; " }
+        continue
+      }
+      out = out c
+    }
+    return out
   }
   function counted(i,   j) {
     for (j = i + 1; j <= n && t[j] != "do"; j++)

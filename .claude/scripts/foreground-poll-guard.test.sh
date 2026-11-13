@@ -74,6 +74,14 @@ expect_allow() {
 {
   expect_deny until-checks 'until [ "$(gh pr checks 7932 --repo devantler-tech/ksail --json bucket -q length)" = 0 ]; do sleep 30; done; echo done'
   expect_deny until-assign 'until c=$(gh run view 1 --repo devantler-tech/go-template --json status -q .status) && [ "$c" != queued ]; do sleep 20; done'
+  # An environment assignment prefix keeps the command position (#5029 review).
+  expect_deny env-prefix 'while true; do GH_PAGER=cat gh pr checks 1; sleep 30; done'
+  # The quoted script of `bash -c` IS executed, although other quoted text is not.
+  expect_deny shell-c 'bash -c '"'"'until gh pr checks 1; do sleep 30; done'"'"
+  # A heredoc fed to a shell IS executed, unlike one written to a file (#5029 review).
+  expect_deny shell-heredoc 'bash <<'"'"'EOF'"'"'
+until gh pr checks 1; do sleep 30; done
+EOF'
   expect_deny for-seq 'for i in $(seq 1 18); do r=$(gh api repos/devantler-tech/platform/pulls/1/reviews --jq length); [ "$r" -gt 0 ] && break; sleep 30; done'
   expect_deny for-brace 'for i in {1..10}; do kubectl get pods -n x | grep -q Running && break; sleep 10; done'
   expect_deny while-counter 'i=0; while [ $i -lt 100 ]; do s=$(gh pr view 5 --json state -q .state); [ "$s" = MERGED ] && break; sleep 10; i=$((i+10)); done'
@@ -108,6 +116,9 @@ chmod +x /tmp/w.sh'
   expect_allow no-loop 'gh pr checks 1'
   # A control word inside an argument is not a command position.
   expect_allow quoted-if 'for i in {1..3}; do echo "check if gh is available"; sleep 5; done'
+  # A separator inside a quoted argument is text, not a new command (#5029 review).
+  expect_allow quoted-separator 'for i in {1..3}; do printf '"'"'%s\n'"'"' '"'"'example; gh pr checks 1'"'"'; sleep 5; done'
+  expect_allow dquoted-separator 'for i in {1..3}; do echo "example; gh pr checks 1"; sleep 5; done'
 }
 
 printf '%s' '{"tool_name":"Edit","tool_input":{"command":"until gh x; do sleep 30; done"}}' | "${guard}" >/dev/null 2>&1 ||
