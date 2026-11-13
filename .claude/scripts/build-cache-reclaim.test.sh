@@ -3350,16 +3350,20 @@ else
     fail '29f: the unreadable registry entry was not reported as UNKNOWN'
 fi
 chmod 600 "$s_unread_entry" && rm -f -- "$s_unread_entry"
-# 29g. a `ps` that cannot even report this process cannot prove a session ended: UNKNOWN.
-s_ps_stub=$(mktemp -d) || fail 'fixture: 29g ps stub'
-printf '#!/bin/sh\nexit 1\n' > "${s_ps_stub}/ps" || fail 'fixture: 29g ps stub'
-chmod +x "${s_ps_stub}/ps" || fail 'fixture: 29g ps stub mode'
-out=$(PATH="${s_ps_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
-[ -e "$s_noreg" ] || fail "29g: a session folder was reaped while ps could not report processes: $s_noreg"
-grep -qF "UNKNOWN (session liveness unknown, registry ${CLAUDE_SESSIONS_FIXTURE}, tree not examined) ${s_noreg}" <<<"$out" ||
-  fail '29g: the failing ps was not reported as UNKNOWN'
-rm -rf -- "$s_ps_stub"
-# Ablation partner for 29d/29f/29g: with a readable registry and a working ps, it IS reaped.
+# 29g. a session whose pid exists but cannot be signalled by this user (EPERM, here pid 1)
+# is still running: the folder is kept as live, never read as an ended session.
+if [ "$(id -u)" -ne 0 ]; then
+  printf '{"pid":1,"sessionId":"55555555-noreg"}\n' > "${CLAUDE_SESSIONS_FIXTURE}/1.json" ||
+    fail 'fixture: 29g registry entry'
+  out=$(run apply 3 "$NEVER_CLEAN_BUDGET")
+  [ -e "$s_noreg" ] || fail "29g: the folder of a session whose pid this user cannot signal was reaped: $s_noreg"
+  grep -qF "KEEP  (session still running) ${s_noreg}" <<<"$out" ||
+    fail '29g: a pid that exists under another user was not read as a running session'
+  rm -f -- "${CLAUDE_SESSIONS_FIXTURE}/1.json"
+else
+  printf 'note: 29g skipped -- root can signal every pid\n' >&2
+fi
+# Ablation partner for 29d/29f/29g: with a readable registry and no live entry, it IS reaped.
 run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
 [ -e "$s_noreg" ] && fail "29d: the session folder kept as UNKNOWN was not reaped once the registry was readable: $s_noreg"
 rm -rf -- "$s_noreg"

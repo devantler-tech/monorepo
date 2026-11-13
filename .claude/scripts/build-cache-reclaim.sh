@@ -801,14 +801,26 @@ own_session_tree() {
 # directory, and removes the file when the process exits. A session is live when a registry
 # file names it and that pid is running.
 #   0 live, 1 not live, 2 unknown: no readable registry, an entry that cannot be read, a file
-#   name that is not a pid, or a `ps` that cannot even see this process.
+#   name that is not a pid, or a pid whose state the probe cannot establish.
 # Unknown keeps the folder: the same fail-closed direction as every other rule here.
+#
+# The pid is probed with the `kill -0` builtin, never an external `ps`: only ESRCH ("No such
+# process") proves the process is gone. Success, or EPERM (it exists under another user), is
+# live; any other outcome is unknown. A failing `ps` read exactly like an absent process.
+pid_state() {
+  local msg
+  msg=$(LC_ALL=C kill -0 "$1" 2>&1) && return 0
+  case "$msg" in
+    *'No such process'*) return 1 ;;
+    *'Operation not permitted'*) return 0 ;;
+    *) return 2 ;;
+  esac
+}
+
 claude_session_live() {
   local id=$1 entry pid rc
   [ -n "$id" ] && [ -d "$CLAUDE_SESSIONS_DIR" ] && [ -r "$CLAUDE_SESSIONS_DIR" ] &&
     [ -x "$CLAUDE_SESSIONS_DIR" ] || return 2
-  # Control: a `ps` that does not report this very process cannot tell a dead pid either.
-  ps -p "$$" > /dev/null 2>&1 || return 2
   for entry in "$CLAUDE_SESSIONS_DIR"/*.json; do
     [ -e "$entry" ] || [ -L "$entry" ] || continue
     [ -f "$entry" ] && [ -r "$entry" ] || return 2
@@ -824,7 +836,12 @@ claude_session_live() {
     case "$pid" in
       '' | *[!0-9]*) return 2 ;;
     esac
-    ps -p "$pid" > /dev/null 2>&1 && return 0
+    pid_state "$pid"
+    case "$?" in
+      0) return 0 ;;
+      1) ;;
+      *) return 2 ;;
+    esac
   done
   return 1
 }
