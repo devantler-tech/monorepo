@@ -327,7 +327,6 @@ self-review-contract.test.sh|
 sibling-lane-watch.test.sh|
 squash-closing-keywords.test.sh|
 surveyor-hook-dispatch.test.sh|
-foreground-poll-guard.test.sh|
 work-priority-ladder.test.sh|
 bot-pr-adaptation-push.test.sh|
 disclosure-drift-sweep.test.sh|
