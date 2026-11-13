@@ -168,9 +168,15 @@ EXPECTED_DISPATCH="${expected}" jq -e '
   fail_case "settings.json does not attach surveyor-hook-dispatch.sh as a Bash PreToolUse command hook"
 
 # A project-wide hook that forwarded EVERYTHING would deny the engineer's write lane; the
-# only project-level Bash hook may be this dispatch, which scopes by agent_type.
-jq -e '[.hooks.PreToolUse[]? | select(.matcher == "Bash") | .hooks[]] | length == 1' "${settings}" >/dev/null ||
-  fail_case "settings.json carries more than one project-level Bash PreToolUse hook"
+# only project-level hooks on a matcher naming Bash may be this dispatch, which scopes by agent_type, and the
+# foreground poll-loop guard (monorepo#5010), which denies one loop shape and nothing else.
+# shellcheck disable=SC2016
+allowed='["\"$CLAUDE_PROJECT_DIR\"/.claude/scripts/surveyor-hook-dispatch.sh","\"$CLAUDE_PROJECT_DIR\"/.claude/scripts/foreground-poll-guard.sh"]'
+jq -e --argjson allowed "${allowed}" '
+  [.hooks.PreToolUse[]? | select((.matcher // "") | split("|") | index("Bash")) | .hooks[] | .command] as $c
+  | ($c | length) == ($c | unique | length) and all($c[]; . as $x | $allowed | index($x))
+' "${settings}" >/dev/null ||
+  fail_case "settings.json carries a project-level Bash PreToolUse hook other than the dispatch and the poll-loop guard"
 
 if [ ! -f "${dispatch}" ] || [ ! -x "${dispatch}" ] || [ -L "${dispatch}" ]; then
   fail_case "surveyor-hook-dispatch.sh is not a regular executable"

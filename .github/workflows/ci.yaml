@@ -1083,6 +1083,9 @@ jobs:
               - '.claude/scripts/surveyor-hook-dispatch.sh'
               - '.claude/scripts/surveyor-hook-dispatch.test.sh'
               - '.claude/settings.json'
+              # The foreground poll-loop guard shares that settings.json wiring (monorepo#5010).
+              - '.claude/scripts/foreground-poll-guard.sh'
+              - '.claude/scripts/foreground-poll-guard.test.sh'
               # The overlay reads a Kata's measurement date only through this helper
               # (monorepo#2838), so a change to it or its test re-runs this job.
               - '.claude/scripts/kata-measure-date.sh'
@@ -3415,6 +3418,12 @@ jobs:
         run: |
           shellcheck .claude/scripts/surveyor-hook-dispatch.sh .claude/scripts/surveyor-hook-dispatch.test.sh
           bash .claude/scripts/surveyor-hook-dispatch.test.sh
+      # The second project-level Bash hook denies a foreground remote poll loop and
+      # admits every other shape (monorepo#5010); hermetic, no API call.
+      - name: Verify the foreground poll-loop guard
+        run: |
+          shellcheck .claude/scripts/foreground-poll-guard.sh .claude/scripts/foreground-poll-guard.test.sh
+          bash .claude/scripts/foreground-poll-guard.test.sh
       # Hermetic: judges synthetic Kata bodies, no API call (monorepo#2838).
       - name: Verify the Kata measurement-date classifier
         run: |
