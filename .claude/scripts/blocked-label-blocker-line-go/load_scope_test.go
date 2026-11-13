@@ -34,7 +34,7 @@ func TestParkedDigestDoesNotReadUnrelatedIssues(t *testing.T) {
 				case "repos/o/platform/issues/900/comments?per_page=100":
 					return []byte("[" + record + "]"), nil
 				case "repos/o/ksail/issues/7":
-					return []byte(`{"number":7,"state":"open"}`), nil
+					return []byte(`{"number":7,"state":"open","labels":[{"name":"blocked"}]}`), nil
 				default:
 					return nil, errors.New("unexpected read: " + endpoint)
 				}

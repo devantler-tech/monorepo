@@ -939,7 +939,9 @@ func TestCLIComposerDigestAndContract(t *testing.T) {
 	// CONTRACT: the merge policy and the run procedure tell a run to read the
 	// digest and what each row means.
 	if parkRule != "" {
-		for _, token := range []string{"blocked-label-blocker-line.sh --org devantler-tech --parked-digest", "`PARKED <repo>#<n>  [<note>]  <blocker>`", "`ACTIONABLE <repo>#<n>", "`record=BLOCKER-CLOSED`", "`BLOCKER-SELF`", "never reads an authority blocker", "do not count it against `nothing_on_fire`", "`2` is UNKNOWN", "Only this digest makes a PR parked"} {
+		for _, token := range []string{"blocked-label-blocker-line.sh --org devantler-tech --parked-digest", "`PARKED <repo>#<n>  [<note>]  <blocker>`", "`ACTIONABLE <repo>#<n>", "`record=BLOCKER-CLOSED`", "`BLOCKER-SELF`", "never reads an authority blocker", "do not count it against `nothing_on_fire`", "`2` is UNKNOWN", "Only this digest makes a PR parked",
+			// A park is owned work, never a resting place (devantler-tech/agent-plugins#699).
+			"`STRANDED <repo>#<n>  reason=<reason>  age=<n>d  <blocker>`", "`reason=UNCLAIMED`", "`reason=NO-DECISION`", "`reason=DECISION-LAPSED`", "`reason=ESCALATE`", "`awaits <the exact upstream event>`", "`re-check <YYYY-MM-DD>`", "**A park is never a resting place**", "Its blocker is still owned work", "Raising the limit alone hides the stall", "**A mis-park is unparked and driven.**"} {
 			assert(t, "the parked-PR rule states: "+token, strings.Contains(parkRule, token), "not found in the rule paragraph")
 		}
 		for _, token := range []string{"--parked-digest", "BLOCKER-CLOSED", "CHECKED"} {
@@ -948,6 +950,8 @@ func TestCLIComposerDigestAndContract(t *testing.T) {
 	}
 	assert(t, "the run procedure runs the parked digest after the survey",
 		strings.Contains(readGuide(t, "skills/portfolio-maintenance/SKILL.md"), "blocked-label-blocker-line.sh --org devantler-tech --parked-digest"), "command not found in the run procedure")
+	assert(t, "the run procedure reads a STRANDED row as rung-1 work",
+		strings.Contains(flat(readGuide(t, "skills/portfolio-maintenance/SKILL.md")), "An `ACTIONABLE` or `STRANDED` row is rung-1 work this run"), "STRANDED is not work in the run procedure")
 }
 
 const (

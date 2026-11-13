@@ -15,7 +15,9 @@ const (
 
 func commentJSON(t *testing.T, login, body string) string {
 	t.Helper()
-	raw, err := json.Marshal(map[string]any{"user": map[string]string{"login": login}, "body": body})
+	// Every record is dated the day the tests take as today, so a dependency
+	// pull request parked by one is a new park unless a test says otherwise.
+	raw, err := json.Marshal(map[string]any{"user": map[string]string{"login": login}, "body": body, "created_at": "2026-09-01T00:00:00Z"})
 	if err != nil {
 		t.Fatal(err)
 	}

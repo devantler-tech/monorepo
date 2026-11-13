@@ -500,9 +500,10 @@ A `CR-DECLINED <repo>#<n>` line names a PR where CodeRabbit refuses our disclose
 skip CodeRabbit on that PR and go to the next lane.
 **Then set the parked pull requests aside** (monorepo#3288): run
 `.claude/scripts/blocked-label-blocker-line.sh --org devantler-tech --parked-digest` once and read it
-as the [merge-policy guide](../../guides/merge-policy.md) says. A `PARKED` row is finished rung-1
-work: drop it from the queue and from `nothing_on_fire`, whatever the surveyor reported for it. An
-`ACTIONABLE` row is rung-1 work this run, and exit `2` parks nothing.
+as the [merge-policy guide](../../guides/merge-policy.md) says. A `PARKED` row needs no work on the
+PR itself: drop it from the queue and from `nothing_on_fire`, whatever the surveyor reported for it.
+Its blocker is still owned work (*A park is never a resting place*). An `ACTIONABLE` or `STRANDED`
+row is rung-1 work this run, and exit `2` parks nothing.
 **Then read the private vulnerability reports** (monorepo#4294): run
 `.claude/scripts/security-advisory-sweep.sh` once and handle each row as the
 [advance-work guide](../../guides/advance-work.md#security-advisories--private-vulnerability-reports)

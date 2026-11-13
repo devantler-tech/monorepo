@@ -265,7 +265,7 @@ func TestParkedDigestReadsTheBlockerOfThisOrganizationFromTheForge(t *testing.T)
 		code                            int
 		want                            string
 	}{
-		{"an open blocker in another repository", "o/ksail#7", "repos/o/ksail/issues/7", `{"number":7,"state":"open"}`, 0, "PARKED     platform#900  [upstream, blocker open]  o/ksail#7\n"},
+		{"an open blocker in another repository", "o/ksail#7", "repos/o/ksail/issues/7", `{"number":7,"state":"open","labels":[{"name":"blocked"}]}`, 0, "PARKED     platform#900  [upstream, blocker open]  o/ksail#7\n"},
 		{"a closed blocker in another repository", "o/ksail#7", "repos/o/ksail/issues/7", `{"number":7,"state":"closed"}`, 1, "ACTIONABLE platform#900  record=BLOCKER-CLOSED  o/ksail#7\n"},
 		{"the organization spelled in another case", "O/ksail#7", "repos/o/ksail/issues/7", `{"number":7,"state":"closed"}`, 1, "record=BLOCKER-CLOSED"},
 		{"a bare reference is in the pull request's own repository", "#7", "repos/o/platform/issues/7", `{"number":7,"state":"closed"}`, 1, "ACTIONABLE platform#900  record=BLOCKER-CLOSED  #7\n"},
@@ -354,7 +354,7 @@ func TestParkedDigestFindsAClosedBlockerInsideALongerBlockerText(t *testing.T) {
 // does not keep the park, in either order.
 func TestParkedDigestReadsEveryBlockerARecordNames(t *testing.T) {
 	states := func(first, second string) map[string]string {
-		return map[string]string{"repos/o/ksail/issues/7": `{"number":7,"state":"` + first + `"}`, "repos/o/ksail/issues/8": `{"number":8,"state":"` + second + `"}`}
+		return map[string]string{"repos/o/ksail/issues/7": `{"number":7,"state":"` + first + `","labels":[{"name":"blocked"}]}`, "repos/o/ksail/issues/8": `{"number":8,"state":"` + second + `","labels":[{"name":"blocked"}]}`}
 	}
 	for name, tc := range map[string]struct {
 		first, second string
