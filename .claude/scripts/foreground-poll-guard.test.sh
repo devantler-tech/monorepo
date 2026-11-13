@@ -102,6 +102,8 @@ EOF
 chmod +x /tmp/w.sh'
   expect_allow clock-only 'until [ "$(date -u +%H%M)" -ge 1200 ]; do sleep 10; done; date -u'
   expect_allow no-loop 'gh pr checks 1'
+  # A control word inside an argument is not a command position.
+  expect_allow quoted-if 'for i in {1..3}; do echo "check if gh is available"; sleep 5; done'
 }
 
 printf '%s' '{"tool_name":"Edit","tool_input":{"command":"until gh x; do sleep 30; done"}}' | "${guard}" >/dev/null 2>&1 ||
