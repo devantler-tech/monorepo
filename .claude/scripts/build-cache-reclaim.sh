@@ -43,6 +43,9 @@
 #      into its cache and reclaimed once nothing was written to them for a threshold counted in HOURS
 #      (2026-09-30: 75 GB). A Go build cache a lane REUSES is never idle, so while it is still
 #      being written to it is emptied only when it exceeds cache_budget_gb (monorepo#3831).
+#   2d. Finished Claude Code sessions' folders (claude-*/<project>/<session>) under the temp
+#      root, by the per-run tree rules; the claude-* root and its project folders are kept
+#      (2026-11-13: 6.7 GB in 169 idle folders, monorepo#5018).
 #   2c. Per-lane fallback module caches (go-mod-*) directly under the temp root, each removed
 #      only when it exceeds cache_budget_gb.
 #   3. The golangci-lint cache, emptied only when it exceeds its own, smaller budget.
@@ -1443,6 +1446,88 @@ EOF
       tr -dc '\000' | wc -c | tr -d ' ') && [ "${run_trees_unsafe:-0}" != 0 ]; then
       log "per-run trees: ${run_trees_unsafe} never considered for a name outside the safe set"
     fi
+    # 2d. Finished Claude Code sessions' folders, <temp root>/claude-*/<project>/<session>
+    # (monorepo#5018). The claude-* root stays on the keep-list above, because some session
+    # under it is always live and the root itself therefore never looks idle. Its session
+    # folders do, once their session ends: on 2026-11-13, 169 of them held 6.7 GB that no
+    # step looked at, and kept every scheduled run below the disk floor. So each session
+    # folder is judged exactly like a per-run tree: the same owner, safe-name, protected-dir,
+    # mount, special-file, idle and open-file rules, then sweep_candidate, which also keeps
+    # the session this process runs in. The root and the project folders are never removed.
+    session_trees_recent=0
+    if ! session_roots=$(find -H "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d \
+      -user "$run_tree_uid" -name 'claude-*' ! -name "*[!${SAFE_NAME_CHARS}]*" 2>/dev/null); then
+      unknown=$((unknown + 1))
+      log "UNKNOWN (scan failed) $TMPDIR_ROOT: session folders not examined"
+      session_roots=''
+    fi
+    while IFS= read -r session_root; do
+      [ -n "$session_root" ] || continue
+      [ "$session_root" = "${TMPDIR_ROOT%/}/${session_root##*/}" ] || continue
+      [ -L "$session_root" ] && continue
+      if ! session_trees=$(find "$session_root" -mindepth 2 -maxdepth 2 -type d \
+        -user "$run_tree_uid" ! -name "*[!${SAFE_NAME_CHARS}]*" \
+        -mmin "+$((RUN_TREE_MIN_AGE_HOURS * 60))" 2>/dev/null); then
+        unknown=$((unknown + 1))
+        log "UNKNOWN (scan failed) $session_root: session folders not examined"
+        continue
+      fi
+      while IFS= read -r tree; do
+        [ -n "$tree" ] || continue
+        # Exactly <root>/<project>/<session>, every part a safe name and neither a symlink.
+        case "${tree#"${session_root}"/}" in
+          */*/* | *[!/${SAFE_NAME_CHARS}]*) continue ;;
+          ?*/?*) ;;
+          *) continue ;;
+        esac
+        [ -L "${tree%/*}" ] && continue
+        [ -L "$tree" ] && continue
+        path_at_or_below "$tree" "$PROTECTED_DIRS"
+        case "$?" in
+          0) continue ;;
+          1) ;;
+          *)
+            unknown=$((unknown + 1))
+            log "UNKNOWN (unresolvable, tree not examined) $tree"
+            continue
+            ;;
+        esac
+        below_protected_cache "$tree"
+        case "$?" in
+          0) continue ;;
+          1) ;;
+          *)
+            unknown=$((unknown + 1))
+            log "UNKNOWN (unresolvable, tree not examined) $tree"
+            continue
+            ;;
+        esac
+        tree_guard "$tree" "$MOUNT_POINTS" "$((RUN_TREE_MIN_AGE_HOURS * 60))"
+        case "$?" in
+          0) ;;
+          1)
+            kept=$((kept + 1))
+            if [ "$TREE_GUARD_WHY" = 'written recently' ]; then
+              session_trees_recent=$((session_trees_recent + 1))
+            else
+              log "KEEP  (${TREE_GUARD_WHY}) $tree"
+            fi
+            continue
+            ;;
+          *)
+            unknown=$((unknown + 1))
+            log "UNKNOWN (${TREE_GUARD_WHY}, tree not examined) $tree"
+            continue
+            ;;
+        esac
+        sweep_candidate "$tree" temp-root run-tree
+      done <<EOF
+$session_trees
+EOF
+    done <<EOF
+$session_roots
+EOF
+    log "session folders: ${session_trees_recent} kept for a write within ${RUN_TREE_MIN_AGE_HOURS} h"
     # 2a. Loose files directly under the temp root, judged by the per-run tree rules
     # (monorepo#4311). The listing above asks only for directories, so built CLI binaries,
     # test binaries, tarballs and large captures left at this level were never reclaimed at

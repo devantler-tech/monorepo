@@ -3259,6 +3259,46 @@ out=$(cd "$nl_cwd" && run_iso "$nl_b_root" "$quiet_ps" apply 3 "$NEVER_CLEAN_BUD
 [ -e "$nl_b_idle" ] && fail '28e: the newline case reaped nothing (the ablation partner did not run)'
 rm -rf -- "$nl_b_root" "$nl_root" "$nl_cwd"
 
+# --- 29. finished sessions' folders under a claude-* root are swept (monorepo#5018) ---
+# The root stays on the keep-list, but each <root>/<project>/<session> folder is judged like a
+# per-run tree. An idle folder is reaped; a folder with a fresh file, and one a live process
+# holds open, are kept by the SAME run; the root and the project folder are never removed.
+s_root="${fixture_root}/claude-5018"
+s_project="${s_root}/-Users-fixture-project"
+s_idle="${s_project}/11111111-idle"
+s_fresh="${s_project}/22222222-fresh"
+s_held="${s_project}/33333333-held"
+mkdir -p "${s_idle}/scratchpad" "${s_fresh}/tasks" "${s_held}/scratchpad" || fail 'fixture: 29 session folders'
+printf 'payload\n' > "${s_idle}/scratchpad/out"
+printf 'payload\n' > "${s_fresh}/tasks/out"
+printf 'payload\n' > "${s_held}/scratchpad/out"
+age_tree "$(stamp_hours_ago 48)" "$s_root" || fail 'fixture: 29 age session root'
+touch "${s_fresh}/tasks/out" || fail 'fixture: 29 fresh file'
+/bin/sh -c "exec 9<'${s_held}/scratchpad/out'; exec sleep 30" &
+s_holder_pid=$!
+sleep 1
+if kill -0 "$s_holder_pid" 2>/dev/null; then
+  out=$(run apply 3 "$NEVER_CLEAN_BUDGET")
+  [ -e "$s_idle" ] && fail "29: an idle session folder was not reaped: $s_idle"
+  grep -qE "^build-cache-reclaim: REAP +[0-9]+ MB +${s_idle}\$" <<<"$out" ||
+    fail '29: the idle session folder was not reported as reaped'
+  [ -e "$s_fresh" ] || fail "29: a session folder with a fresh file was reaped: $s_fresh"
+  [ -e "$s_held" ] || fail "29: a session folder held open by a live process was reaped: $s_held"
+  [ -d "$s_project" ] || fail "29: a session project folder was removed: $s_project"
+  [ -d "$s_root" ] || fail "29: a Claude session root was removed: $s_root"
+  grep -qE 'session folders: [1-9][0-9]* kept for a write within 24 h' <<<"$out" ||
+    fail '29: the session folders kept for a recent write were not counted'
+  kill "$s_holder_pid" 2>/dev/null
+  wait "$s_holder_pid" 2>/dev/null
+else
+  fail 'fixture: 29 holder process did not stay alive; liveness assertion not exercised'
+fi
+# 29b. ablation: with the holder gone, the same held folder IS reaped.
+age_tree "$(stamp_hours_ago 48)" "$s_held" || fail 'fixture: 29b re-age held folder'
+run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$s_held" ] && fail "29b: the released session folder was not reaped (holder ablation): $s_held"
+rm -rf -- "$s_root"
+
 reclaim_test_finished=1
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
