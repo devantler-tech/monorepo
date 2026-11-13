@@ -80,7 +80,8 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   **Push → arm ONE background watcher → immediately start the next item**, and never also poll what
   you armed (a real 744th miss: a watcher was armed *and* the run busy-waited anyway).
   **The waiter is `Monitor` with an until-loop**, which the busy-wait guard's own refusal names. The
-  enforcement hook blocks `sleep N && <poll>` chains, and unchaining does not comply: sessions adapted
+  enforcement hook blocks `sleep N && <poll>` chains, and the project hook `foreground-poll-guard.sh`
+  denies a foreground loop that sleeps while it polls (monorepo#5010). Unchaining does not comply: sessions adapted
   by issuing the bare `sleep N` as its own call instead (**442 standalone sleeps in one day**,
   2026-07-18). A bare `sleep` bounds a local process nothing will report on (e.g. a backgrounded
   windowed render before killing it); it never polls a backgrounded task's output file, whose
