@@ -392,7 +392,10 @@ result at the current head — self-promotion is forbidden before that. Request 
   2026-09-14 → 09-28: 13 of 2,001 request keys were requested twice within 60 seconds, the closest
   4 seconds apart (#2894). Run
   [`review-request-lock.sh acquire --repo <owner>/<repo> --pr <n> --head <headRefOid> --provider <cr|codex|bugbot> --owner <session-owner-token>`](../scripts/review-request-lock.sh)
-  after the marker re-read and before the comment. It creates the ref
+  after the marker re-read and before the comment. `--owner` is required. The token is your lane
+  namespace, a hyphen, then your worktree slug, such as `claude-<slug>` or `codex-<slug>`. It may hold
+  only letters, digits, `.`, `_` and `-`, so never pass a branch name. A token that does not start with
+  a registered lane is recorded as `lane=unregistered` (#5002). The command creates the ref
   `refs/agent-review-lock/<pr>/<head>/<generation>` through the REST API, pointing at an annotated
   tag object on the PR head (no commit is created). The tag records the owner token and the
   registered lane it starts with, because every lock carries the same GitHub login and a race
