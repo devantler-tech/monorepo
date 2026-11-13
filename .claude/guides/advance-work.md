@@ -33,6 +33,27 @@ signals rather than page-view vanity. This does not jump marketing work ahead of
 or important eligible substantive work; it makes value evidence part of shaping and validating all
 of them.
 
+## Simplest solution first — every extra part needs a reason
+Pick the simplest design that meets the maintainer's actual need, and stop there. Each extra part has
+to earn its place:
+- an extra account, service or repository;
+- a mail rule, an abstraction layer, a fallback path or a safeguard;
+- an option he has to choose between.
+
+It earns its place only through a concrete tradeoff **for him**: a real risk it removes, a cost it
+saves, or a requirement he stated. A principle on its own is not that tradeoff when the simple path
+has no real downside for him: least privilege, portability, defence in depth or future flexibility.
+
+- **Start from what he already uses and does.** Change his habits — addresses, tools, steps — only
+  when he asks, or when the simple path cannot work.
+- **Recommend the simple path.** When you propose more, say in one line what the extra part buys him
+  and what it costs him. Recommend it only if that line is convincing.
+- **Don't offer a menu when one option is clearly simplest.** Pick it and say why. Ask only when the
+  options trade off something he values.
+- **Least privilege means the narrowest rights the simple design needs.** It is not a reason to add
+  accounts or rework his setup. This rule never relaxes a non-negotiable or a safety gate; it stops
+  adding parts he gains nothing from.
+
 ## Upstream resources first — vetted tools before building, computer use last
 Maintainer direction, 2026-10-17 (monorepo#4292). When a task is hard, error-prone or unfamiliar,
 look for something that already does it before building it. After careful vetting, installing and
