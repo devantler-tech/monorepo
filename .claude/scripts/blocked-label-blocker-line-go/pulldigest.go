@@ -183,10 +183,30 @@ func blockerState(item issue, blocker string, pulls []issue, claims bool, o opti
 // blocker's own text cannot supply it.
 var (
 	recheckSegmentRE = regexp.MustCompile(`(?i)^re-check ([0-9]{4}-[0-9]{2}-[0-9]{2})\.?$`)
-	// recheckWordRE finds re-check as a word of its own, so "re-checked" or
-	// "re-checking" in ordinary prose is not read as a date written elsewhere.
-	recheckWordRE = regexp.MustCompile(`(^|[^a-z0-9])re-check([^a-z]|$)`)
 )
+
+// recheckWords counts the uses of re-check as a word of its own in lowercase
+// text, so "re-checked" or "re-checking" in ordinary prose is not one. Each
+// occurrence is judged by the characters on either side of it without consuming
+// them, so two uses side by side are both counted.
+func recheckWords(lower string) int {
+	const word = "re-check"
+	n := 0
+	for from := 0; ; {
+		at := strings.Index(lower[from:], word)
+		if at < 0 {
+			return n
+		}
+		at += from
+		before := at == 0 || !(lower[at-1] >= 'a' && lower[at-1] <= 'z' || lower[at-1] >= '0' && lower[at-1] <= '9')
+		end := at + len(word)
+		after := end == len(lower) || !(lower[end] >= 'a' && lower[end] <= 'z')
+		if before && after {
+			n++
+		}
+		from = at + 1
+	}
+}
 
 // hasWord reports whether a segment's value holds a letter or a digit, so a
 // value of punctuation alone is no route.
@@ -239,6 +259,12 @@ func routeReason(line string, today time.Time, bound int64) string {
 	if !found {
 		return "NO-ROUTE"
 	}
+	// The whole result uses re-check as a word exactly once, and that use must
+	// be the re-check segment itself: a date inside a tried: or next: value, or
+	// anywhere else, makes the record no route.
+	if recheckWords(strings.ToLower(result)) != 1 {
+		return "NO-ROUTE"
+	}
 	tried, next := 0, 0
 	var dates []string
 	for _, segment := range strings.Split(result, ";") {
@@ -255,7 +281,7 @@ func routeReason(line string, today time.Time, bound int64) string {
 				return "NO-ROUTE"
 			}
 			next++
-		case recheckWordRE.MatchString(lower):
+		case recheckWords(lower) > 0:
 			date := recheckSegmentRE.FindStringSubmatch(segment)
 			if date == nil {
 				return "NO-ROUTE"

@@ -233,9 +233,10 @@ counts them. Its `actionable=` count includes the `STRANDED` rows:
   into the record's result, after `last-verified`, as `;`-separated segments: exactly one that
   starts `tried: <the route and what it showed>`, one that starts
   `next: <the engineering route you take next>`, and one that is exactly `re-check <YYYY-MM-DD>`,
-  from today up to 14 days ahead. Any other segment that uses re-check as a word makes it no
-  route; "re-checked" in prose does not count. The digest cannot judge what `next:` says. Writing a
-  wait or an ask there still counts as no route.
+  from today up to 14 days ahead. That segment is the only place the result may use re-check as a
+  word: a date inside a `tried:` or `next:` value, or anywhere else, makes it no route, while
+  "re-checked" in prose does not count. The digest cannot judge what `next:` says. Writing a wait
+  or an ask there still counts as no route.
   For example:
   `…: open; tried: pinning vcluster v0.30, still needs k8s 0.36; next: patch the vendored client; re-check 2026-11-20`.
   An authority park needs the route record too: a maintainer ask never pauses the work.
