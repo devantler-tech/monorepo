@@ -3333,8 +3333,35 @@ printf 'payload\n' > "${s_noreg}/out"
 age_tree "$(stamp_hours_ago 48)" "$s_noreg" || fail 'fixture: 29d age session folder'
 out=$(CLAUDE_SESSIONS_OVERRIDE="${fixture_root}/no-such-registry" run apply 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$s_noreg" ] || fail "29d: a session folder was reaped with no readable session registry: $s_noreg"
-grep -qF "UNKNOWN (no readable session registry at ${fixture_root}/no-such-registry, tree not examined) ${s_noreg}" <<<"$out" ||
+grep -qF "UNKNOWN (session liveness unknown, registry ${fixture_root}/no-such-registry, tree not examined) ${s_noreg}" <<<"$out" ||
   fail '29d: the missing session registry was not reported as UNKNOWN'
+grep -qE "session roots: [1-9][0-9]* claude-\* under ${fixture_root}, [1-9][0-9]* examined" <<<"$out" ||
+  fail "29d: the session-root listing did not report its unfiltered control; it said: $(grep -F 'session roots:' <<<"$out")"
+# 29f. a registry entry that cannot be read could be the one naming this session: UNKNOWN.
+s_unread_entry="${CLAUDE_SESSIONS_FIXTURE}/999999.json"
+printf '{"pid":999999,"sessionId":"other"}\n' > "$s_unread_entry" || fail 'fixture: 29f entry'
+chmod 000 "$s_unread_entry" || fail 'fixture: 29f unreadable entry'
+if [ -r "$s_unread_entry" ]; then
+  printf 'note: 29f skipped -- this user can read a mode-000 file (root?)\n' >&2
+else
+  out=$(run apply 3 "$NEVER_CLEAN_BUDGET")
+  [ -e "$s_noreg" ] || fail "29f: a session folder was reaped past an unreadable registry entry: $s_noreg"
+  grep -qF "UNKNOWN (session liveness unknown, registry ${CLAUDE_SESSIONS_FIXTURE}, tree not examined) ${s_noreg}" <<<"$out" ||
+    fail '29f: the unreadable registry entry was not reported as UNKNOWN'
+fi
+chmod 600 "$s_unread_entry" && rm -f -- "$s_unread_entry"
+# 29g. a `ps` that cannot even report this process cannot prove a session ended: UNKNOWN.
+s_ps_stub=$(mktemp -d) || fail 'fixture: 29g ps stub'
+printf '#!/bin/sh\nexit 1\n' > "${s_ps_stub}/ps" || fail 'fixture: 29g ps stub'
+chmod +x "${s_ps_stub}/ps" || fail 'fixture: 29g ps stub mode'
+out=$(PATH="${s_ps_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$s_noreg" ] || fail "29g: a session folder was reaped while ps could not report processes: $s_noreg"
+grep -qF "UNKNOWN (session liveness unknown, registry ${CLAUDE_SESSIONS_FIXTURE}, tree not examined) ${s_noreg}" <<<"$out" ||
+  fail '29g: the failing ps was not reported as UNKNOWN'
+rm -rf -- "$s_ps_stub"
+# Ablation partner for 29d/29f/29g: with a readable registry and a working ps, it IS reaped.
+run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$s_noreg" ] && fail "29d: the session folder kept as UNKNOWN was not reaped once the registry was readable: $s_noreg"
 rm -rf -- "$s_noreg"
 # 29e. a project name with a newline splits its session folder into two lines. The second is
 # relative, so it must never resolve against the working directory and remove a folder there.

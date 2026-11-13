@@ -800,16 +800,25 @@ own_session_tree() {
 # Code registers each running process as <pid>.json, carrying its sessionId, in its sessions
 # directory, and removes the file when the process exits. A session is live when a registry
 # file names it and that pid is running.
-#   0 live, 1 not live, 2 unknown (no readable registry, or a file name that is not a pid).
+#   0 live, 1 not live, 2 unknown: no readable registry, an entry that cannot be read, a file
+#   name that is not a pid, or a `ps` that cannot even see this process.
 # Unknown keeps the folder: the same fail-closed direction as every other rule here.
 claude_session_live() {
-  local id=$1 entry pid
+  local id=$1 entry pid rc
   [ -n "$id" ] && [ -d "$CLAUDE_SESSIONS_DIR" ] && [ -r "$CLAUDE_SESSIONS_DIR" ] &&
     [ -x "$CLAUDE_SESSIONS_DIR" ] || return 2
+  # Control: a `ps` that does not report this very process cannot tell a dead pid either.
+  ps -p "$$" > /dev/null 2>&1 || return 2
   for entry in "$CLAUDE_SESSIONS_DIR"/*.json; do
-    [ -f "$entry" ] || continue
-    grep -qF "$id" "$entry" 2> /dev/null || continue
-    grep -qE "\"sessionId\"[[:space:]]*:[[:space:]]*\"${id}\"" "$entry" 2> /dev/null || continue
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    [ -f "$entry" ] && [ -r "$entry" ] || return 2
+    grep -qE "\"sessionId\"[[:space:]]*:[[:space:]]*\"${id}\"" "$entry" 2> /dev/null
+    rc=$?
+    case "$rc" in
+      0) ;;
+      1) continue ;;
+      *) return 2 ;;
+    esac
     pid=${entry##*/}
     pid=${pid%.json}
     case "$pid" in
@@ -1490,6 +1499,18 @@ EOF
       log "UNKNOWN (scan failed) $TMPDIR_ROOT: session folders not examined"
       session_roots=''
     fi
+    # Unfiltered control for the root listing: every claude-* directory, whoever owns it and
+    # whatever its name, counted beside the roots that are examined.
+    if session_roots_all=$(find -H "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d \
+      -name 'claude-*' -print0 2>/dev/null | tr -dc '\000' | wc -c | tr -d ' '); then
+      session_roots_examined=0
+      [ -z "$session_roots" ] ||
+        session_roots_examined=$(printf '%s\n' "$session_roots" | wc -l | tr -d ' ')
+      log "session roots: ${session_roots_all} claude-* under ${TMPDIR_ROOT}, ${session_roots_examined} examined"
+    else
+      unknown=$((unknown + 1))
+      log "UNKNOWN (control scan failed) $TMPDIR_ROOT: session roots not counted"
+    fi
     while IFS= read -r session_root; do
       [ -n "$session_root" ] || continue
       [ "$session_root" = "${TMPDIR_ROOT%/}/${session_root##*/}" ] || continue
@@ -1512,6 +1533,13 @@ EOF
       session_trees_idle=0
       [ -z "$session_trees" ] || session_trees_idle=$(printf '%s\n' "$session_trees" | wc -l | tr -d ' ')
       log "session folders: ${session_trees_all} under ${session_root}, ${session_trees_idle} idle for ${RUN_TREE_MIN_AGE_HOURS} h"
+      # The idle listing is a subset of the control; more lines than the control saw folders
+      # means the two reads disagree (or a name split across lines), so nothing here is judged.
+      if [ "$session_trees_idle" -gt "$session_trees_all" ]; then
+        unknown=$((unknown + 1))
+        log "UNKNOWN (session listing disagrees with its control) $session_root: session folders not examined"
+        continue
+      fi
       while IFS= read -r tree; do
         [ -n "$tree" ] || continue
         # A project name holding a newline splits one find result into two lines; the second
@@ -1576,7 +1604,7 @@ EOF
           1) ;;
           *)
             unknown=$((unknown + 1))
-            log "UNKNOWN (no readable session registry at ${CLAUDE_SESSIONS_DIR}, tree not examined) $tree"
+            log "UNKNOWN (session liveness unknown, registry ${CLAUDE_SESSIONS_DIR}, tree not examined) $tree"
             continue
             ;;
         esac
