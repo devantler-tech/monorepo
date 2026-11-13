@@ -108,7 +108,7 @@ MP-098	dependency-automation-and-programmed-bot-prs	On a 404, `gh api` still pri
 MP-099	dependency-automation-and-programmed-bot-prs	So a cask PR is the exception to "qualifying PRs	none	-	-
 MP-100	dependency-automation-and-programmed-bot-prs	`RIPE` is necessary, not sufficient	none	-	-
 MP-101	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	A park is that state only while the parked digest reports the PR	computational	.claude/scripts/blocked-label-blocker-line-go/pulldigest.go	"STRANDED"
-MP-102	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Its blocker is still owned work (*A park is never a resting place* below).	computational	.claude/scripts/blocked-label-blocker-line-go/pulldigest.go	"UNCLAIMED"
+MP-102	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Its blocker is still owned work (*A park is never a resting place* below).	none	-	-
 MP-103	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	An authority park needs the route record too	computational	.claude/scripts/blocked-label-blocker-line-go/pulldigest.go	return routeReason(line, o.today, o.strandedMaxAge)
 MP-104	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**A park is never a resting place** (agent-plugins#699	computational	.claude/scripts/blocked-label-blocker-line-go/pulldigest.go	"STRANDED"
 MP-105	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	a parked PR is never merged while it is parked	none	-	-
@@ -119,3 +119,4 @@ MP-109	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	is only 
 MP-110	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	It is never a handoff and never a substitute for the work	computational	.claude/scripts/blocked-label-blocker-line-go/pulldigest.go	return routeReason(line, o.today, o.strandedMaxAge)
 MP-111	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	A blocker that cannot be read, or a record that names none, never justifies unparking	none	-	-
 MP-112	dependency-automation-and-programmed-bot-prs	A `STRANDED` row still counts	computational	.claude/scripts/blocked-label-blocker-line-go/pulldigest.go	labelled > parked
+MP-113	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Closing it otherwise is the separate decision that the release is unwanted	none	-	-

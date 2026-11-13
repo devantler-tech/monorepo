@@ -69,6 +69,16 @@ func TestParkedDigestStrandsALongParkedDependencyPullRequestWithoutARoute(t *tes
 		{"a re-check date with a digit too many", "dependabot[bot]", strings.Replace(decidedLine, "2026-09-05", "2026-09-051", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
 		{"a re-check in a year with no day", "dependabot[bot]", strings.Replace(decidedLine, "2026-09-05", "0000-09-05", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
 		{"tokens in capitals", "dependabot[bot]", strings.NewReplacer("tried:", "TRIED:", "next:", "Next:", "re-check", "RE-CHECK").Replace(decidedLine), "2026-08-17T00:00:00Z", nil, "PARKED     p#5  "},
+		// Only the allowed segment shapes count: a second date hidden after a
+		// space, a comma or a dash, or a re-check inside prose, is no route.
+		{"a second re-check after a space", "dependabot[bot]", decidedLine + " re-check 2026-08-01", "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"a second re-check after a comma", "dependabot[bot]", decidedLine + ",re-check 2026-08-01", "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"a re-check date with a dashed suffix", "dependabot[bot]", strings.Replace(decidedLine, "2026-09-05", "2026-09-05-01", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"a re-check inside prose", "dependabot[bot]", strings.Replace(decidedLine, "; re-check 2026-09-05", "; will re-check 2026-09-05", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"a tried that does not lead its segment", "dependabot[bot]", strings.Replace(decidedLine, "; tried: pinning", ", tried: pinning", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"a tried of punctuation alone", "dependabot[bot]", strings.Replace(decidedLine, "tried: pinning the v1 SDK, still conflicts", "tried: ,", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"two next routes", "dependabot[bot]", strings.Replace(decidedLine, "; re-check", "; next: fork it; re-check", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"a stray re-check beside a valid one", "dependabot[bot]", decidedLine + "; will re-check 2026-08-01 too", "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
 		// No bound hands the work to the maintainer: a park of any age stays the
 		// agent's, held only by a current route record (maintainer, 2026-11-13).
 		{"a current route record long past the bound", "dependabot[bot]", decidedLine, "2026-06-01T00:00:00Z", nil, "PARKED     p#5  "},

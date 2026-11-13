@@ -194,7 +194,7 @@ else's comment can park a PR or clear a finding, and a record written without th
 **A parked PR is settled for the survey only while the digest says so** (monorepo#3288). After the
 survey, run `.claude/scripts/blocked-label-blocker-line.sh --org devantler-tech --parked-digest`. It
 prints one row for every open PR that carries the `blocked` label and a closing `CHECKED` line that
-counts them:
+counts them. Its `actionable=` count includes the `STRANDED` rows:
 
 - `PARKED <repo>#<n>  [<note>]  <blocker>`: the PR has one conforming record, re-verified recently, and
   no blocker it names is known to be closed. The PR itself needs no work this run. Do not diagnose it
@@ -228,10 +228,12 @@ counts them:
   (`--stranded-max-age-days`), whatever the blocker kind, and the record's result does not carry a
   current route record. `reason=ROUTE-LAPSED`: its re-check date has passed. Either way, take the
   next engineering route yourself and record it. The digest only reads a route record written
-  into the record's result, after `last-verified`: `tried: <the route and what it showed>`, then
-  `next: <the engineering route you take next>` and one `re-check <YYYY-MM-DD>`, from today up to
-  14 days ahead. The digest cannot judge what `next:` says. Writing a wait or an ask there still
-  counts as no route. For example:
+  into the record's result, after `last-verified`, as `;`-separated segments: exactly one that
+  starts `tried: <the route and what it showed>`, one that starts
+  `next: <the engineering route you take next>`, and one that is exactly `re-check <YYYY-MM-DD>`,
+  from today up to 14 days ahead. Any other segment that mentions re-check makes it no route. The
+  digest cannot judge what `next:` says. Writing a wait or an ask there still counts as no route.
+  For example:
   `…: open; tried: pinning vcluster v0.30, still needs k8s 0.36; next: patch the vendored client; re-check 2026-11-20`.
   An authority park needs the route record too: a maintainer ask never pauses the work.
   A park date, author or blocker label that cannot be read is UNKNOWN.
@@ -245,7 +247,9 @@ note never does, so nobody else's comment can take a PR out of the sweep.
 **A park is never a resting place** (agent-plugins#699; the `portfolio-maintenance` PR-driving
 procedure holds the portable rule). `PARKED` means only that the PR needs no work on itself this run.
 What blocks it is still owned, and a parked PR is never merged while it is parked: run `unpark` once
-its blocker verifiably clears, then drive it under the normal gates. On 2026-11-12 every open
+its blocker verifiably clears, then drive it under the normal gates. When you park a PR, disable
+its auto-merge request and dequeue it from any merge queue, so the park holds the merge. On
+2026-11-12 every open
 Dependabot PR in the portfolio was parked: nine ksail gomod PRs waited on one issue, the oldest since
 2026-10-05, and they filled that ecosystem's open-PR limit of 10, so no new Go update could open.
 
@@ -262,11 +266,13 @@ Dependabot PR in the portfolio was parked: nine ksail gomod PRs waited on one is
 - **A blocker clears only when its fix is verifiably available to the product**: merged in the
   portfolio, or released in a version the PR can take. An upstream item closed without a released
   fix, or closed as not planned, still holds: when the digest reports `record=BLOCKER-CLOSED` for
-  one, re-park on what really blocks the PR now.
+  one, re-park on what really blocks the PR now. A scope or design decision clears once the
+  decision is recorded in the park record and the change it requires is on the PR or merged.
 - **Past 14 days, waiting is no longer a route.** Take engineering routes yourself, and keep
-  taking them until the PR merges or is closed for a recorded reason. Record each one in the park
-  record (the `STRANDED` reasons above). The `next:` route is engineering you will do, never a wait
-  or an ask.
+  taking them until the PR merges or a newer update supersedes it. Closing it otherwise is the
+  separate decision that the release is unwanted (*Never close a Dependabot PR to retrigger it*),
+  never a way to free a slot or clear the bound. Record each route in the park record (the
+  `STRANDED` reasons above). The `next:` route is engineering you will do, never a wait or an ask.
 - **Ownership stays with the agent** (maintainer direction 2026-11-13: *"You own the code, I do
   not."*). A park never hands work to the maintainer, and no bound or timer in these rules makes
   contacting the maintainer the outcome. A `maintainer-ask` is only for a genuine question of
@@ -902,7 +908,7 @@ conflict, queue, and control joins as other rung-one work and emits `NEEDS-FIX`,
 `ACTIVELY-OWNED`, or `QUERY-UNKNOWN` normally. A stalled bot PR counts against `nothing_on_fire` and
 blocks issue descent until repaired, merged, or parked on a named live blocker — and a PR the
 parked digest above reports `PARKED` is exactly that, so it no longer counts. A `STRANDED` row still
-counts: its park holds, but its blocker or its decision is unowned work (see *A park is never a
+counts: its park holds, but its blocker or its next route is unowned work (see *A park is never a
 resting place*).
 
 Repair the root cause with the least invasive action that can finish the exact head: diagnose before

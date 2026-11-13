@@ -111,13 +111,15 @@ Options: --today <YYYY-MM-DD> (default UTC today)
                        stays owned work: UNCLAIMED when an open issue of
                        this organization its upstream record names is
                        neither parked itself nor referred to by an open
-                       pull request that is not itself parked,
+                       pull request that is neither parked nor a
+                       dependency bot's,
                        NO-ROUTE or ROUTE-LAPSED when it has been parked
                        longer than --stranded-max-age-days, whatever its
                        blocker kind, and the record's result does not say
                        what was "tried:", the "next:" route and one
                        "re-check <YYYY-MM-DD>" from today to
-                       --stranded-max-age-days ahead; a STRANDED row is
+                       --stranded-max-age-days ahead, each as its own
+                       ";"-separated segment; a STRANDED row is
                        actionable, and a park date, author or blocker fact
                        it cannot read is UNKNOWN; then
                        a CHECKED line counting every one read; issue findings

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // The parked digest answers one question for a survey: which open pull
@@ -172,14 +173,20 @@ func blockerState(item issue, blocker string, pulls []issue, claims bool, o opti
 // A parked dependency pull request is not finished work
 // (devantler-tech/agent-plugins#699). Past the bound, waiting is no longer a
 // route: its record keeps, in the result, what was "tried:", the "next:" route
-// and the "re-check <YYYY-MM-DD>" by which the agent looks again. All three are
-// read only from the result, after "last-verified", so a blocker's own text
-// cannot supply them.
-var (
-	triedRE   = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_-])tried:[\t ]*[^\t ;|]`)
-	nextRE    = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_-])next:[\t ]*[^\t ;|]`)
-	recheckRE = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_-])re-check[\t ]+([0-9]{4}-[0-9]{2}-[0-9]{2})(?:$|[^0-9])`)
-)
+// and the "re-check <YYYY-MM-DD>" by which the agent looks again. The result is
+// read as a list of ";"-separated segments, and only these shapes count: a
+// segment that starts with "tried:" or "next:" and carries a word, and a
+// segment that is exactly "re-check <YYYY-MM-DD>". Any other segment that
+// mentions re-check is no route at all, so a date cannot be hidden in prose.
+// All of it is read only from the result, after "last-verified", so a
+// blocker's own text cannot supply it.
+var recheckSegmentRE = regexp.MustCompile(`(?i)^re-check ([0-9]{4}-[0-9]{2}-[0-9]{2})$`)
+
+// hasWord reports whether a segment's value holds a letter or a digit, so a
+// value of punctuation alone is no route.
+func hasWord(value string) bool {
+	return strings.IndexFunc(value, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) >= 0
+}
 
 // civilDays counts whole days from one civil date to another.
 func civilDays(from, to time.Time) int64 {
@@ -211,20 +218,49 @@ func parkAge(item issue, today time.Time) (int64, error) {
 }
 
 // routeReason judges the route record a long-parked record carries: "" when
-// it says what was tried and the next route, and names exactly one re-check
-// date from today to bound days ahead; ROUTE-LAPSED when that date has passed;
-// NO-ROUTE otherwise. A re-check further out than the bound is no record: it
-// would park the pull request past every later look.
+// its result holds exactly one "tried:" segment and one "next:" segment, each
+// with a value, and exactly one "re-check <YYYY-MM-DD>" segment from today to
+// bound days ahead; ROUTE-LAPSED when that date has passed; NO-ROUTE
+// otherwise. A re-check further out than the bound is no record: it would park
+// the pull request past every later look.
 func routeReason(line string, today time.Time, bound int64) string {
 	parts := strings.SplitN(line, " | last-verified ", 2)
-	if len(parts) != 2 || !triedRE.MatchString(parts[1]) || !nextRE.MatchString(parts[1]) {
+	if len(parts) != 2 {
 		return "NO-ROUTE"
 	}
-	dates := recheckRE.FindAllStringSubmatch(parts[1], -1)
-	if len(dates) != 1 {
+	// The result follows "<date>: " and ends where an ask record begins.
+	_, result, found := strings.Cut(strings.SplitN(parts[1], " | asked ", 2)[0], ": ")
+	if !found {
 		return "NO-ROUTE"
 	}
-	recheck, err := civilDate(dates[0][1])
+	tried, next := 0, 0
+	var dates []string
+	for _, segment := range strings.Split(result, ";") {
+		segment = strings.TrimSpace(segment)
+		lower := strings.ToLower(segment)
+		switch {
+		case strings.HasPrefix(lower, "tried:"):
+			if !hasWord(segment[len("tried:"):]) {
+				return "NO-ROUTE"
+			}
+			tried++
+		case strings.HasPrefix(lower, "next:"):
+			if !hasWord(segment[len("next:"):]) {
+				return "NO-ROUTE"
+			}
+			next++
+		case strings.Contains(lower, "re-check"):
+			date := recheckSegmentRE.FindStringSubmatch(segment)
+			if date == nil {
+				return "NO-ROUTE"
+			}
+			dates = append(dates, date[1])
+		}
+	}
+	if tried != 1 || next != 1 || len(dates) != 1 {
+		return "NO-ROUTE"
+	}
+	recheck, err := civilDate(dates[0])
 	if err != nil {
 		return "NO-ROUTE"
 	}
