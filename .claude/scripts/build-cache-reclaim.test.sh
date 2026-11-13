@@ -145,8 +145,16 @@ mkdir -p "$GO_BUILD_FIXTURE" "$GO_MOD_FIXTURE" || {
   exit 2
 }
 
+# The Claude session registry (2d) is a fixture too, so no case depends on the host's sessions.
+CLAUDE_SESSIONS_FIXTURE="$fixture_root/claude-session-registry"
+mkdir -p "$CLAUDE_SESSIONS_FIXTURE" || {
+  printf 'cannot create the Claude session registry fixture\n' >&2
+  exit 2
+}
+
 run() {
-  BUILD_CACHE_RECLAIM_TMPDIR="$fixture_root" \
+  BUILD_CACHE_RECLAIM_CLAUDE_SESSIONS="${CLAUDE_SESSIONS_OVERRIDE:-$CLAUDE_SESSIONS_FIXTURE}" \
+    BUILD_CACHE_RECLAIM_TMPDIR="$fixture_root" \
     GOCACHE="${GOCACHE_OVERRIDE:-$GO_BUILD_FIXTURE}" \
     GOMODCACHE="${GOMODCACHE_OVERRIDE:-$GO_MOD_FIXTURE}" \
     bash "$impl" "$@" 2>&1
@@ -3258,6 +3266,121 @@ out=$(cd "$nl_cwd" && run_iso "$nl_b_root" "$quiet_ps" apply 3 "$NEVER_CLEAN_BUD
 [ -e "${nl_b_profiles}/"$'x\n0123456789abcdef/b001/file' ] || fail '28e: a profile root child with a newline in its name was reaped'
 [ -e "$nl_b_idle" ] && fail '28e: the newline case reaped nothing (the ablation partner did not run)'
 rm -rf -- "$nl_b_root" "$nl_root" "$nl_cwd"
+
+# --- 29. finished sessions' folders under a claude-* root are swept (monorepo#5018) ---
+# The root stays on the keep-list, but each <root>/<project>/<session> folder is judged like a
+# per-run tree. An idle folder is reaped; a folder with a fresh file, and one a live process
+# holds open, are kept by the SAME run; the root and the project folder are never removed.
+s_root="${fixture_root}/claude-5018"
+s_project="${s_root}/-Users-fixture-project"
+s_idle="${s_project}/11111111-idle"
+s_fresh="${s_project}/22222222-fresh"
+s_held="${s_project}/33333333-held"
+mkdir -p "${s_idle}/scratchpad" "${s_fresh}/tasks" "${s_held}/scratchpad" || fail 'fixture: 29 session folders'
+printf 'payload\n' > "${s_idle}/scratchpad/out"
+printf 'payload\n' > "${s_fresh}/tasks/out"
+printf 'payload\n' > "${s_held}/scratchpad/out"
+age_tree "$(stamp_hours_ago 48)" "$s_root" || fail 'fixture: 29 age session root'
+touch "${s_fresh}/tasks/out" || fail 'fixture: 29 fresh file'
+/bin/sh -c "exec 9<'${s_held}/scratchpad/out'; exec sleep 30" &
+s_holder_pid=$!
+sleep 1
+if kill -0 "$s_holder_pid" 2>/dev/null; then
+  out=$(run apply 3 "$NEVER_CLEAN_BUDGET")
+  [ -e "$s_idle" ] && fail "29: an idle session folder was not reaped: $s_idle"
+  grep -qE "^build-cache-reclaim: REAP +[0-9]+ MB +${s_idle}\$" <<<"$out" ||
+    fail '29: the idle session folder was not reported as reaped'
+  [ -e "$s_fresh" ] || fail "29: a session folder with a fresh file was reaped: $s_fresh"
+  [ -e "$s_held" ] || fail "29: a session folder held open by a live process was reaped: $s_held"
+  [ -d "$s_project" ] || fail "29: a session project folder was removed: $s_project"
+  [ -d "$s_root" ] || fail "29: a Claude session root was removed: $s_root"
+  grep -qE 'session folders: [1-9][0-9]* kept for a write within 24 h' <<<"$out" ||
+    fail '29: the session folders kept for a recent write were not counted'
+  kill "$s_holder_pid" 2>/dev/null
+  wait "$s_holder_pid" 2>/dev/null
+else
+  fail 'fixture: 29 holder process did not stay alive; liveness assertion not exercised'
+fi
+# 29b. ablation: with the holder gone, the same held folder IS reaped.
+age_tree "$(stamp_hours_ago 48)" "$s_held" || fail 'fixture: 29b re-age held folder'
+run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$s_held" ] && fail "29b: the released session folder was not reaped (holder ablation): $s_held"
+# 29c. a folder whose session is still running is kept, though it is idle and holds nothing
+# open; once that process is gone, its stale registry entry no longer keeps it (ablation).
+s_live="${s_project}/44444444-live"
+mkdir -p "${s_live}/scratchpad" || fail 'fixture: 29c live session folder'
+printf 'payload\n' > "${s_live}/scratchpad/out"
+age_tree "$(stamp_hours_ago 48)" "$s_live" || fail 'fixture: 29c age live session folder'
+sleep 60 &
+s_live_pid=$!
+printf '{"pid":%s,"sessionId":"44444444-live","status":"idle"}\n' "$s_live_pid" \
+  > "${CLAUDE_SESSIONS_FIXTURE}/${s_live_pid}.json" || fail 'fixture: 29c registry entry'
+out=$(run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$s_live" ] || fail "29c: the folder of a running session was reaped: $s_live"
+grep -qF "KEEP  (session still running) ${s_live}" <<<"$out" ||
+  fail '29c: the running session folder was not reported as kept for its session'
+grep -qE "session folders: [1-9][0-9]* under ${s_root}, [1-9][0-9]* idle for 24 h" <<<"$out" ||
+  fail "29c: the session listing did not report its unfiltered control; it said: $(grep -F 'session folders:' <<<"$out")"
+kill "$s_live_pid" 2>/dev/null
+wait "$s_live_pid" 2>/dev/null
+run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$s_live" ] && fail "29c: a session folder was kept for a registry entry whose process is gone: $s_live"
+rm -f -- "${CLAUDE_SESSIONS_FIXTURE}/${s_live_pid}.json"
+# 29d. without a readable session registry no session folder is removed: it is UNKNOWN.
+s_noreg="${s_project}/55555555-noreg"
+mkdir -p "$s_noreg" || fail 'fixture: 29d session folder'
+printf 'payload\n' > "${s_noreg}/out"
+age_tree "$(stamp_hours_ago 48)" "$s_noreg" || fail 'fixture: 29d age session folder'
+out=$(CLAUDE_SESSIONS_OVERRIDE="${fixture_root}/no-such-registry" run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$s_noreg" ] || fail "29d: a session folder was reaped with no readable session registry: $s_noreg"
+grep -qF "UNKNOWN (session liveness unknown, registry ${fixture_root}/no-such-registry, tree not examined) ${s_noreg}" <<<"$out" ||
+  fail '29d: the missing session registry was not reported as UNKNOWN'
+grep -qE "session roots: [1-9][0-9]* claude-\* under ${fixture_root}, [1-9][0-9]* examined" <<<"$out" ||
+  fail "29d: the session-root listing did not report its unfiltered control; it said: $(grep -F 'session roots:' <<<"$out")"
+# 29f. a registry entry that cannot be read could be the one naming this session: UNKNOWN.
+s_unread_entry="${CLAUDE_SESSIONS_FIXTURE}/999999.json"
+printf '{"pid":999999,"sessionId":"other"}\n' > "$s_unread_entry" || fail 'fixture: 29f entry'
+chmod 000 "$s_unread_entry" || fail 'fixture: 29f unreadable entry'
+if [ -r "$s_unread_entry" ]; then
+  printf 'note: 29f skipped -- this user can read a mode-000 file (root?)\n' >&2
+else
+  out=$(run apply 3 "$NEVER_CLEAN_BUDGET")
+  [ -e "$s_noreg" ] || fail "29f: a session folder was reaped past an unreadable registry entry: $s_noreg"
+  grep -qF "UNKNOWN (session liveness unknown, registry ${CLAUDE_SESSIONS_FIXTURE}, tree not examined) ${s_noreg}" <<<"$out" ||
+    fail '29f: the unreadable registry entry was not reported as UNKNOWN'
+fi
+chmod 600 "$s_unread_entry" && rm -f -- "$s_unread_entry"
+# 29g. a session whose pid exists but cannot be signalled by this user (EPERM, here pid 1)
+# is still running: the folder is kept as live, never read as an ended session.
+if [ "$(id -u)" -ne 0 ]; then
+  printf '{"pid":1,"sessionId":"55555555-noreg"}\n' > "${CLAUDE_SESSIONS_FIXTURE}/1.json" ||
+    fail 'fixture: 29g registry entry'
+  out=$(run apply 3 "$NEVER_CLEAN_BUDGET")
+  [ -e "$s_noreg" ] || fail "29g: the folder of a session whose pid this user cannot signal was reaped: $s_noreg"
+  grep -qF "KEEP  (session still running) ${s_noreg}" <<<"$out" ||
+    fail '29g: a pid that exists under another user was not read as a running session'
+  rm -f -- "${CLAUDE_SESSIONS_FIXTURE}/1.json"
+else
+  printf 'note: 29g skipped -- root can signal every pid\n' >&2
+fi
+# Ablation partner for 29d/29f/29g: with a readable registry and no live entry, it IS reaped.
+run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$s_noreg" ] && fail "29d: the session folder kept as UNKNOWN was not reaped once the registry was readable: $s_noreg"
+rm -rf -- "$s_noreg"
+# 29e. a project name with a newline splits its session folder into two lines. The second is
+# relative, so it must never resolve against the working directory and remove a folder there.
+s_split="${s_root}/"$'proj\nr5019-victim'
+mkdir -p "${s_split}/session" || fail 'fixture: 29e newline project'
+age_tree "$(stamp_hours_ago 48)" "$s_split" || fail 'fixture: 29e age newline project'
+age_tree "$(stamp_hours_ago 48)" "$s_root" || fail 'fixture: 29e re-age session root'
+s_cwd=$(mktemp -d) || fail 'fixture: 29e working directory'
+mkdir -p "${s_cwd}/r5019-victim/session" || fail 'fixture: 29e victim'
+printf 'not temp\n' > "${s_cwd}/r5019-victim/session/keep.txt"
+age_tree "$(stamp_hours_ago 48)" "${s_cwd}/r5019-victim" || fail 'fixture: 29e age victim'
+(cd "$s_cwd" && run apply 3 "$NEVER_CLEAN_BUDGET") > /dev/null
+[ -e "${s_cwd}/r5019-victim/session/keep.txt" ] ||
+  fail '29e: a folder in the working directory was removed through a newline in a project name'
+rm -rf -- "$s_cwd" "$s_root"
 
 reclaim_test_finished=1
 if [ "$failures" -eq 0 ]; then

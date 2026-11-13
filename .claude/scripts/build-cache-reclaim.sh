@@ -43,6 +43,9 @@
 #      into its cache and reclaimed once nothing was written to them for a threshold counted in HOURS
 #      (2026-09-30: 75 GB). A Go build cache a lane REUSES is never idle, so while it is still
 #      being written to it is emptied only when it exceeds cache_budget_gb (monorepo#3831).
+#   2d. Finished Claude Code sessions' folders (claude-*/<project>/<session>) under the temp
+#      root, by the per-run tree rules; the claude-* root and its project folders are kept
+#      (2026-11-13: 6.7 GB in 169 idle folders, monorepo#5018).
 #   2c. Per-lane fallback module caches (go-mod-*) directly under the temp root, each removed
 #      only when it exceeds cache_budget_gb.
 #   3. The golangci-lint cache, emptied only when it exceeds its own, smaller budget.
@@ -255,6 +258,8 @@ GO_CACHE_MARKER='This directory holds cached build artifacts from the Go build s
 LINT_CACHE_MARKER='This directory holds cached build artifacts from golangci-lint.'
 
 TMPDIR_ROOT=${BUILD_CACHE_RECLAIM_TMPDIR:-/private/tmp}
+# Claude Code's registry of running sessions, one <pid>.json per live process (2d).
+CLAUDE_SESSIONS_DIR=${BUILD_CACHE_RECLAIM_CLAUDE_SESSIONS:-${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/sessions}
 
 # resolve_go_tmpdir prints the directory the go command puts its work dirs in.
 #
@@ -783,6 +788,59 @@ own_session_tree() {
     [ -n "$resolved" ] || continue
     case "$resolved/" in
       "$canon"/*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# claude_session_live says whether the Claude Code session with this id is still running (2d).
+#
+# Idle and open-file checks do not prove a session has ended: a session can sit open for a day
+# without writing to, or holding open, anything in its folder (monorepo#5019 review). Claude
+# Code registers each running process as <pid>.json, carrying its sessionId, in its sessions
+# directory, and removes the file when the process exits. A session is live when a registry
+# file names it and that pid is running.
+#   0 live, 1 not live, 2 unknown: no readable registry, an entry that cannot be read, a file
+#   name that is not a pid, or a pid whose state the probe cannot establish.
+# Unknown keeps the folder: the same fail-closed direction as every other rule here.
+#
+# The pid is probed with the `kill -0` builtin, never an external `ps`: only ESRCH ("No such
+# process") proves the process is gone. Success, or EPERM (it exists under another user), is
+# live; any other outcome is unknown. A failing `ps` read exactly like an absent process.
+pid_state() {
+  local msg
+  msg=$(LC_ALL=C kill -0 "$1" 2>&1) && return 0
+  case "$msg" in
+    *'No such process'*) return 1 ;;
+    *'Operation not permitted'*) return 0 ;;
+    *) return 2 ;;
+  esac
+}
+
+claude_session_live() {
+  local id=$1 entry pid rc
+  [ -n "$id" ] && [ -d "$CLAUDE_SESSIONS_DIR" ] && [ -r "$CLAUDE_SESSIONS_DIR" ] &&
+    [ -x "$CLAUDE_SESSIONS_DIR" ] || return 2
+  for entry in "$CLAUDE_SESSIONS_DIR"/*.json; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    [ -f "$entry" ] && [ -r "$entry" ] || return 2
+    grep -qE "\"sessionId\"[[:space:]]*:[[:space:]]*\"${id}\"" "$entry" 2> /dev/null
+    rc=$?
+    case "$rc" in
+      0) ;;
+      1) continue ;;
+      *) return 2 ;;
+    esac
+    pid=${entry##*/}
+    pid=${pid%.json}
+    case "$pid" in
+      '' | *[!0-9]*) return 2 ;;
+    esac
+    pid_state "$pid"
+    case "$?" in
+      0) return 0 ;;
+      1) ;;
+      *) return 2 ;;
     esac
   done
   return 1
@@ -1443,6 +1501,138 @@ EOF
       tr -dc '\000' | wc -c | tr -d ' ') && [ "${run_trees_unsafe:-0}" != 0 ]; then
       log "per-run trees: ${run_trees_unsafe} never considered for a name outside the safe set"
     fi
+    # 2d. Finished Claude Code sessions' folders, <temp root>/claude-*/<project>/<session>
+    # (monorepo#5018). The claude-* root stays on the keep-list above, because some session
+    # under it is always live and the root itself therefore never looks idle. Its session
+    # folders do, once their session ends: on 2026-11-13, 169 of them held 6.7 GB that no
+    # step looked at, and kept every scheduled run below the disk floor. So each session
+    # folder is judged exactly like a per-run tree: the same owner, safe-name, protected-dir,
+    # mount, special-file, idle and open-file rules, then sweep_candidate, which also keeps
+    # the session this process runs in. The root and the project folders are never removed.
+    session_trees_recent=0
+    if ! session_roots=$(find -H "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d \
+      -user "$run_tree_uid" -name 'claude-*' ! -name "*[!${SAFE_NAME_CHARS}]*" 2>/dev/null); then
+      unknown=$((unknown + 1))
+      log "UNKNOWN (scan failed) $TMPDIR_ROOT: session folders not examined"
+      session_roots=''
+    fi
+    # Unfiltered control for the root listing: every claude-* directory, whoever owns it and
+    # whatever its name, counted beside the roots that are examined.
+    if session_roots_all=$(find -H "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d \
+      -name 'claude-*' -print0 2>/dev/null | tr -dc '\000' | wc -c | tr -d ' '); then
+      session_roots_examined=0
+      [ -z "$session_roots" ] ||
+        session_roots_examined=$(printf '%s\n' "$session_roots" | wc -l | tr -d ' ')
+      log "session roots: ${session_roots_all} claude-* under ${TMPDIR_ROOT}, ${session_roots_examined} examined"
+    else
+      unknown=$((unknown + 1))
+      log "UNKNOWN (control scan failed) $TMPDIR_ROOT: session roots not counted"
+    fi
+    while IFS= read -r session_root; do
+      [ -n "$session_root" ] || continue
+      [ "$session_root" = "${TMPDIR_ROOT%/}/${session_root##*/}" ] || continue
+      [ -L "$session_root" ] && continue
+      if ! session_trees=$(find "$session_root" -mindepth 2 -maxdepth 2 -type d \
+        -user "$run_tree_uid" ! -name "*[!${SAFE_NAME_CHARS}]*" \
+        -mmin "+$((RUN_TREE_MIN_AGE_HOURS * 60))" 2>/dev/null); then
+        unknown=$((unknown + 1))
+        log "UNKNOWN (scan failed) $session_root: session folders not examined"
+        continue
+      fi
+      # Unfiltered control: an empty filtered listing is proven only by a read that sees every
+      # session folder under the root, so the two counts are reported side by side.
+      if ! session_trees_all=$(find "$session_root" -mindepth 2 -maxdepth 2 -type d -print0 \
+        2>/dev/null | tr -dc '\000' | wc -c | tr -d ' '); then
+        unknown=$((unknown + 1))
+        log "UNKNOWN (control scan failed) $session_root: session folders not examined"
+        continue
+      fi
+      session_trees_idle=0
+      [ -z "$session_trees" ] || session_trees_idle=$(printf '%s\n' "$session_trees" | wc -l | tr -d ' ')
+      log "session folders: ${session_trees_all} under ${session_root}, ${session_trees_idle} idle for ${RUN_TREE_MIN_AGE_HOURS} h"
+      # The idle listing is a subset of the control; more lines than the control saw folders
+      # means the two reads disagree (or a name split across lines), so nothing here is judged.
+      if [ "$session_trees_idle" -gt "$session_trees_all" ]; then
+        unknown=$((unknown + 1))
+        log "UNKNOWN (session listing disagrees with its control) $session_root: session folders not examined"
+        continue
+      fi
+      while IFS= read -r tree; do
+        [ -n "$tree" ] || continue
+        # A project name holding a newline splits one find result into two lines; the second
+        # does not start with the root, so it is never a candidate.
+        case "$tree" in
+          "${session_root}"/*) ;;
+          *) continue ;;
+        esac
+        # Exactly <root>/<project>/<session>, every part a safe name and neither a symlink.
+        case "${tree#"${session_root}"/}" in
+          */*/* | *[!/${SAFE_NAME_CHARS}]*) continue ;;
+          ?*/?*) ;;
+          *) continue ;;
+        esac
+        [ -L "${tree%/*}" ] && continue
+        [ -L "$tree" ] && continue
+        path_at_or_below "$tree" "$PROTECTED_DIRS"
+        case "$?" in
+          0) continue ;;
+          1) ;;
+          *)
+            unknown=$((unknown + 1))
+            log "UNKNOWN (unresolvable, tree not examined) $tree"
+            continue
+            ;;
+        esac
+        below_protected_cache "$tree"
+        case "$?" in
+          0) continue ;;
+          1) ;;
+          *)
+            unknown=$((unknown + 1))
+            log "UNKNOWN (unresolvable, tree not examined) $tree"
+            continue
+            ;;
+        esac
+        tree_guard "$tree" "$MOUNT_POINTS" "$((RUN_TREE_MIN_AGE_HOURS * 60))"
+        case "$?" in
+          0) ;;
+          1)
+            kept=$((kept + 1))
+            if [ "$TREE_GUARD_WHY" = 'written recently' ]; then
+              session_trees_recent=$((session_trees_recent + 1))
+            else
+              log "KEEP  (${TREE_GUARD_WHY}) $tree"
+            fi
+            continue
+            ;;
+          *)
+            unknown=$((unknown + 1))
+            log "UNKNOWN (${TREE_GUARD_WHY}, tree not examined) $tree"
+            continue
+            ;;
+        esac
+        claude_session_live "${tree##*/}"
+        case "$?" in
+          0)
+            kept=$((kept + 1))
+            log "KEEP  (session still running) $tree"
+            continue
+            ;;
+          1) ;;
+          *)
+            unknown=$((unknown + 1))
+            log "UNKNOWN (session liveness unknown, registry ${CLAUDE_SESSIONS_DIR}, tree not examined) $tree"
+            continue
+            ;;
+        esac
+        sweep_candidate "$tree" temp-root run-tree
+      done <<EOF
+$session_trees
+EOF
+    done <<EOF
+$session_roots
+EOF
+    log "session folders: ${session_trees_recent} kept for a write within ${RUN_TREE_MIN_AGE_HOURS} h"
     # 2a. Loose files directly under the temp root, judged by the per-run tree rules
     # (monorepo#4311). The listing above asks only for directories, so built CLI binaries,
     # test binaries, tarballs and large captures left at this level were never reclaimed at
