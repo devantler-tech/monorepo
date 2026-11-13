@@ -299,6 +299,8 @@ DATE fields have day precision;
 unavailable entry history is a documented first-observed lower bound, not exact continuous waiting.
 Record unblock transitions and accumulated blocked intervals in the issue evidence; a single date
 does not measure cumulative blocked time. Bot comments, parking and re-entry never reset clocks.
+`.claude/scripts/board-flow-fields.sh` lists In Progress cards missing First started, cards with an
+open blocker missing Blocked since, and Blocked since left on unblocked cards; exit `2` is UNKNOWN.
 Keep existing view filters, issue-only cards, hierarchy and reversed finishing-first status order.
 
 ### Kata measurement fields
