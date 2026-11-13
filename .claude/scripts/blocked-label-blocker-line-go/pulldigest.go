@@ -176,11 +176,17 @@ func blockerState(item issue, blocker string, pulls []issue, claims bool, o opti
 // and the "re-check <YYYY-MM-DD>" by which the agent looks again. The result is
 // read as a list of ";"-separated segments, and only these shapes count: a
 // segment that starts with "tried:" or "next:" and carries a word, and a
-// segment that is exactly "re-check <YYYY-MM-DD>". Any other segment that
-// mentions re-check is no route at all, so a date cannot be hidden in prose.
+// segment that is exactly "re-check <YYYY-MM-DD>", optionally ending in a period.
+// Any other segment that uses re-check as a word is no route at all, so a date
+// cannot be hidden in prose.
 // All of it is read only from the result, after "last-verified", so a
 // blocker's own text cannot supply it.
-var recheckSegmentRE = regexp.MustCompile(`(?i)^re-check ([0-9]{4}-[0-9]{2}-[0-9]{2})$`)
+var (
+	recheckSegmentRE = regexp.MustCompile(`(?i)^re-check ([0-9]{4}-[0-9]{2}-[0-9]{2})\.?$`)
+	// recheckWordRE finds re-check as a word of its own, so "re-checked" or
+	// "re-checking" in ordinary prose is not read as a date written elsewhere.
+	recheckWordRE = regexp.MustCompile(`(^|[^a-z0-9])re-check([^a-z]|$)`)
+)
 
 // hasWord reports whether a segment's value holds a letter or a digit, so a
 // value of punctuation alone is no route.
@@ -249,7 +255,7 @@ func routeReason(line string, today time.Time, bound int64) string {
 				return "NO-ROUTE"
 			}
 			next++
-		case strings.Contains(lower, "re-check"):
+		case recheckWordRE.MatchString(lower):
 			date := recheckSegmentRE.FindStringSubmatch(segment)
 			if date == nil {
 				return "NO-ROUTE"

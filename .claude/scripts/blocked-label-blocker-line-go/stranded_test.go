@@ -79,6 +79,8 @@ func TestParkedDigestStrandsALongParkedDependencyPullRequestWithoutARoute(t *tes
 		{"a tried of punctuation alone", "dependabot[bot]", strings.Replace(decidedLine, "tried: pinning the v1 SDK, still conflicts", "tried: ,", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
 		{"two next routes", "dependabot[bot]", strings.Replace(decidedLine, "; re-check", "; next: fork it; re-check", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
 		{"a stray re-check beside a valid one", "dependabot[bot]", decidedLine + "; will re-check 2026-08-01 too", "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"re-checked in prose beside a valid route", "dependabot[bot]", strings.Replace(decidedLine, "open; tried:", "open, re-checked upstream releases; still re-checking v2; tried:", 1), "2026-08-17T00:00:00Z", nil, "PARKED     p#5  "},
+		{"a re-check date ending in a period", "dependabot[bot]", decidedLine + ".", "2026-08-17T00:00:00Z", nil, "PARKED     p#5  "},
 		// No bound hands the work to the maintainer: a park of any age stays the
 		// agent's, held only by a current route record (maintainer, 2026-11-13).
 		{"a current route record long past the bound", "dependabot[bot]", decidedLine, "2026-06-01T00:00:00Z", nil, "PARKED     p#5  "},

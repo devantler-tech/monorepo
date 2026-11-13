@@ -217,11 +217,13 @@ counts them. Its `actionable=` count includes the `STRANDED` rows:
 - `STRANDED <repo>#<n>  reason=<reason>  age=<n>d  <blocker>`: an exact `dependabot[bot]` or
   `renovate[bot]` PR whose park would otherwise hold, but which is still owned rung-1 work this run.
   `age` counts days since its record comment was created, which is the PR's first park: `unpark`
-  keeps that comment and a later `park` reuses it, so a re-park keeps its age. A labelled PR whose
-  author is not named is UNKNOWN. `reason=UNCLAIMED`: an open issue of this organization that an
-  upstream-kind record names is not parked itself, and no open, unparked PR by anyone but a
-  dependency bot references it (as `owner/repo#N`, or `#N` after a word such as Fixes or Part of),
-  so no PR is working on it. A PR parked on that issue does not hold it. The
+  keeps that comment and a later `park` reuses it, so a re-park keeps its age. A record comment
+  removed by hand would reset the age, so park and unpark only through the helper. A labelled PR
+  whose author is not named is UNKNOWN. `reason=UNCLAIMED`: an open issue of this organization that
+  an upstream-kind record names is not parked itself, and no open, unparked PR by anyone but a
+  dependency bot references it (as `owner/repo#N` from anywhere, or as `#N` after a word such as
+  Fixes or Part of from a PR in the issue's own repository), so no PR is working on it. A PR parked
+  on that issue does not hold it, and neither do PRs on its sub-issues. The
   digest does not read `agent-claim/<issue>` tips: check the claim protocol's signals, then claim it
   and work it to a terminal state, or park it on what really blocks it. An assignee does not count
   as holding it. `reason=NO-ROUTE`: parked more than 14 days
@@ -231,8 +233,9 @@ counts them. Its `actionable=` count includes the `STRANDED` rows:
   into the record's result, after `last-verified`, as `;`-separated segments: exactly one that
   starts `tried: <the route and what it showed>`, one that starts
   `next: <the engineering route you take next>`, and one that is exactly `re-check <YYYY-MM-DD>`,
-  from today up to 14 days ahead. Any other segment that mentions re-check makes it no route. The
-  digest cannot judge what `next:` says. Writing a wait or an ask there still counts as no route.
+  from today up to 14 days ahead. Any other segment that uses re-check as a word makes it no
+  route; "re-checked" in prose does not count. The digest cannot judge what `next:` says. Writing a
+  wait or an ask there still counts as no route.
   For example:
   `…: open; tried: pinning vcluster v0.30, still needs k8s 0.36; next: patch the vendored client; re-check 2026-11-20`.
   An authority park needs the route record too: a maintainer ask never pauses the work.
@@ -271,8 +274,10 @@ Dependabot PR in the portfolio was parked: nine ksail gomod PRs waited on one is
 - **Past 14 days, waiting is no longer a route.** Take engineering routes yourself, and keep
   taking them until the PR merges or a newer update supersedes it. Closing it otherwise is the
   separate decision that the release is unwanted (*Never close a Dependabot PR to retrigger it*),
-  never a way to free a slot or clear the bound. Record each route in the park record (the
-  `STRANDED` reasons above). The `next:` route is engineering you will do, never a wait or an ask.
+  never a way to free a slot or clear the bound. On each route, edit the park record in place:
+  its one `tried:` segment names the latest route and what it showed, and its one `next:` segment
+  names the route after it (the `STRANDED` reasons above). The `next:` route is engineering you will
+  do, never a wait or an ask.
 - **Ownership stays with the agent** (maintainer direction 2026-11-13: *"You own the code, I do
   not."*). A park never hands work to the maintainer, and no bound or timer in these rules makes
   contacting the maintainer the outcome. A `maintainer-ask` is only for a genuine question of

@@ -118,8 +118,9 @@ Options: --today <YYYY-MM-DD> (default UTC today)
                        blocker kind, and the record's result does not say
                        what was "tried:", the "next:" route and one
                        "re-check <YYYY-MM-DD>" from today to
-                       --stranded-max-age-days ahead, each as its own
-                       ";"-separated segment; a STRANDED row is
+                       --stranded-max-age-days ahead, exactly one of each
+                       as its own ";"-separated segment, with no other
+                       segment using re-check as a word; a STRANDED row is
                        actionable, and a park date, author or blocker fact
                        it cannot read is UNKNOWN; then
                        a CHECKED line counting every one read; issue findings
@@ -699,7 +700,8 @@ type issue struct {
 	AskState string `json:"ask_state"`
 	// BlockerClaim is, on an --input dependency pull request whose blocker_state
 	// is "open", whether that in-portfolio blocker is "held" (parked itself, a
-	// pull request, or referred to by an open pull request) or "unclaimed". Only
+	// pull request, or referred to by an open pull request that is neither parked
+	// nor a dependency bot's) or "unclaimed". Only
 	// the parked digest reads it; under --org it is read from the forge.
 	BlockerClaim string `json:"blocker_claim"`
 }
