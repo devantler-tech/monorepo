@@ -27,7 +27,7 @@ import (
 // A park is still not a resting place. A dependency pull request whose park
 // holds is STRANDED, and so still work, while an in-portfolio blocker it waits
 // on is held by nobody, or once it has been parked past a bound without a
-// current decision or, later, without becoming a maintainer decision. Parked
+// current record of the engineering route tried and the next one. Parked
 // Dependabot pull requests once filled an ecosystem's open-pull-request limit
 // for weeks while every run read them as finished
 // (devantler-tech/agent-plugins#699).
@@ -169,12 +169,14 @@ func blockerState(item issue, blocker string, pulls []issue, claims bool, o opti
 }
 
 // A parked dependency pull request is not finished work
-// (devantler-tech/agent-plugins#699). Its record
-// keeps its decision in the result: what the pull request "awaits", and the
-// "re-check <YYYY-MM-DD>" by which someone looks again. Both are read only from
-// the result, after "last-verified", so a blocker's own text cannot supply them.
+// (devantler-tech/agent-plugins#699). Past the bound, waiting is no longer a
+// route: its record keeps, in the result, what was "tried:", the "next:" route
+// and the "re-check <YYYY-MM-DD>" by which the agent looks again. All three are
+// read only from the result, after "last-verified", so a blocker's own text
+// cannot supply them.
 var (
-	awaitsRE  = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_-])awaits[\t ]+[^\t ;|]`)
+	triedRE   = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_-])tried:[\t ]*[^\t ;|]`)
+	nextRE    = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_-])next:[\t ]*[^\t ;|]`)
 	recheckRE = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_-])re-check[\t ]+([0-9]{4}-[0-9]{2}-[0-9]{2})(?:$|[^0-9])`)
 )
 
@@ -204,49 +206,46 @@ func parkAge(item issue, today time.Time) (int64, error) {
 	return age, nil
 }
 
-// decisionReason judges the decision a long-parked record carries: "" when it
-// says what it awaits and names exactly one re-check date from today to bound
-// days ahead, DECISION-LAPSED when that date has passed, NO-DECISION otherwise.
-// A re-check further out than the bound is no decision: it would park the pull
-// request past every later look.
-func decisionReason(line string, today time.Time, bound int64) string {
+// routeReason judges the route record a long-parked record carries: "" when
+// it says what was tried and the next route, and names exactly one re-check
+// date from today to bound days ahead; ROUTE-LAPSED when that date has passed;
+// NO-ROUTE otherwise. A re-check further out than the bound is no record: it
+// would park the pull request past every later look.
+func routeReason(line string, today time.Time, bound int64) string {
 	parts := strings.SplitN(line, " | last-verified ", 2)
-	if len(parts) != 2 || !awaitsRE.MatchString(parts[1]) {
-		return "NO-DECISION"
+	if len(parts) != 2 || !triedRE.MatchString(parts[1]) || !nextRE.MatchString(parts[1]) {
+		return "NO-ROUTE"
 	}
 	dates := recheckRE.FindAllStringSubmatch(parts[1], -1)
 	if len(dates) != 1 {
-		return "NO-DECISION"
+		return "NO-ROUTE"
 	}
 	recheck, err := civilDate(dates[0][1])
 	if err != nil {
-		return "NO-DECISION"
+		return "NO-ROUTE"
 	}
 	switch ahead := civilDays(today, recheck); {
 	case ahead < 0:
-		return "DECISION-LAPSED"
+		return "ROUTE-LAPSED"
 	case ahead > bound:
-		return "NO-DECISION"
+		return "NO-ROUTE"
 	}
 	return ""
 }
 
 // strandedReason reports why a dependency pull request whose park otherwise
 // holds is still owned work, or "" when it is parked. An unclaimed
-// in-portfolio blocker comes first: it is work nobody is doing. Then a park
-// older than the escalation bound that is not yet a maintainer decision, and
-// then a park older than the decision bound without a current decision. An
-// authority blocker already waits on the maintainer through its checked ask.
-func strandedReason(kind, line string, unclaimed bool, age int64, o options) string {
+// in-portfolio blocker comes first: it is work nobody is doing. Past the bound
+// every park needs a current route record, whatever its blocker kind: a
+// maintainer ask is a question of direction, never a handoff, so it does not
+// pause the work, and no bound ever makes contacting the maintainer the
+// outcome.
+func strandedReason(line string, unclaimed bool, age int64, o options) string {
 	switch {
 	case unclaimed:
 		return "UNCLAIMED"
-	case kind == "authority":
-		return ""
-	case age > o.escalateMaxAge:
-		return "ESCALATE"
 	case age > o.strandedMaxAge:
-		return decisionReason(line, o.today, o.strandedMaxAge)
+		return routeReason(line, o.today, o.strandedMaxAge)
 	}
 	return ""
 }
@@ -324,7 +323,7 @@ func parkedDigestReport(pulls []issue, o options) (string, bool, error) {
 			if err != nil {
 				return "", false, err
 			}
-			if reason := strandedReason(kind, line, unclaimed, age, o); reason != "" {
+			if reason := strandedReason(line, unclaimed, age, o); reason != "" {
 				_, _ = fmt.Fprintf(&report, "%-10s %s#%d  reason=%s  age=%dd  %s\n", "STRANDED", item.Repo, item.Number, reason, age, snippet(blocker))
 				continue
 			}

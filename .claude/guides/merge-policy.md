@@ -219,15 +219,15 @@ counts them:
   `age` counts days since its record comment was created. `reason=UNCLAIMED`: an open issue of
   this organization that the record names is not parked itself, and no open PR refers to it, so
   nobody is working on it. Claim it and work it to a terminal state, or park it on what really blocks
-  it. An assignee does not count as holding it. `reason=NO-DECISION`: parked more than 14 days
-  (`--stranded-max-age-days`) and the record's result does not carry a current decision.
-  `reason=DECISION-LAPSED`: its re-check date has passed. `reason=ESCALATE`: parked more than 30 days
-  (`--escalate-max-age-days`) on anything but an authority blocker. Re-park it on the maintainer
-  decision it now needs, under *An authority park must enter the maintainer digest*.
-  The digest only reads a decision written into the record's result, after `last-verified`: the
-  route taken or why none exists, then `awaits <the exact upstream event>` and
-  `re-check <YYYY-MM-DD>`, from today up to 14 days ahead. For example:
-  `…: open; no route: the fix is upstream only; awaits Kyverno v1.17.0 release; re-check 2026-11-20`.
+  it. An assignee does not count as holding it. `reason=NO-ROUTE`: parked more than 14 days
+  (`--stranded-max-age-days`), whatever the blocker kind, and the record's result does not carry a
+  current route record. `reason=ROUTE-LAPSED`: its re-check date has passed. Either way, take the
+  next engineering route yourself and record it. The digest only reads a route record written
+  into the record's result, after `last-verified`: `tried: <the route and what it showed>`, then
+  `next: <the route you take next>` and one `re-check <YYYY-MM-DD>`, from today up to 14 days
+  ahead. For example:
+  `…: open; tried: pinning vcluster v0.30, still needs k8s 0.36; next: patch the vendored client; re-check 2026-11-20`.
+  An authority park needs the route record too: a maintainer ask never pauses the work.
   A park date, author or blocker label that cannot be read is UNKNOWN.
 
 Exit `0` means every labelled PR is parked, `1` that at least one is actionable or stranded, and
@@ -245,14 +245,21 @@ ecosystem's open-PR limit of 10, so no new Go update could open.
 - **An in-portfolio blocker is rung-1 finishing work**, ahead of any Ready pull. Claim it under the
   claim protocol and drive it, or park it on its own blocker so the issue sweep checks its record.
 - **An upstream blocker is re-checked against live releases on every record re-verification**, at
-  most 7 days apart. Each check also weighs a route around the wait: adapt to the new version,
-  isolate or replace the conflicting dependency, contribute upstream under the egress rules, or
-  split out or ignore only the blocked part of a grouped update so the rest merges. To ignore part
-  of an update, use the ecosystem's configuration, with the range and the blocker recorded beside
-  it and on the blocker issue, and remove the ignore when the blocker clears. Never close the PR to
-  do it: see *Never close a Dependabot PR to retrigger it*.
-- **Past 14 days a dependency PR's record carries the decision**, and past 30 days it is re-parked
-  as an authority blocker, through the `STRANDED` reasons above.
+  most 7 days apart. Each check also weighs a route around the wait: adapt to the new version, fork
+  or patch the dependency, isolate or replace the conflicting dependency, contribute upstream under
+  the egress rules, or split out or ignore only the blocked part of a grouped update so the rest
+  merges. To ignore part of an update, use the ecosystem's configuration, with the range and the
+  blocker recorded beside it and on the blocker issue, and remove the ignore when the blocker
+  clears. Never close the PR to do it: see *Never close a Dependabot PR to retrigger it*.
+- **Past 14 days, waiting is no longer a route.** Take engineering routes yourself, and keep
+  taking them until the PR merges. Record each one in the park record (the `STRANDED` reasons
+  above).
+- **Ownership stays with the agent** (maintainer direction 2026-11-13: *"You own the code, I do
+  not."*). A park never hands work to the maintainer, and no bound or timer makes contacting the
+  maintainer the outcome. A `maintainer-ask` is only for a genuine question of direction you cannot
+  settle on your own, never about what agents can do themselves. It is never a handoff and never a
+  substitute for the work: its default is what you will do if no answer comes, and the routes
+  continue meanwhile.
 - **An update ecosystem stalls at its open-PR limit.** When parked PRs bring one configuration
   entry's open PRs (one package manager and directory) to its `open-pull-requests-limit` or one
   short of it, new updates stop opening, security fixes included. Treat that as rung-1 finishing

@@ -15,7 +15,7 @@ import (
 
 const (
 	strandedLine = "**Blocker:** owner/repo#7 | upstream | last-verified 2026-09-01: open"
-	decidedLine  = "**Blocker:** owner/repo#7 | upstream | last-verified 2026-09-01: open; no route: the fix is upstream only; awaits owner/repo v2 release; re-check 2026-09-05"
+	decidedLine  = "**Blocker:** owner/repo#7 | upstream | last-verified 2026-09-01: open; tried: pinning the v1 SDK, still conflicts; next: patch the vendored v2 client; re-check 2026-09-05"
 )
 
 // datedRecord is a record comment created at the given time; an empty time
@@ -40,7 +40,7 @@ func botPull(author, extra, record string) string {
 }
 
 // The tests take 2026-09-01 as today, so a record created on 2026-08-17 is 15 days old.
-func TestParkedDigestStrandsALongParkedDependencyPullRequestWithoutADecision(t *testing.T) {
+func TestParkedDigestStrandsALongParkedDependencyPullRequestWithoutARoute(t *testing.T) {
 	for _, tc := range []struct {
 		name, author, line, created string
 		extra                       []string
@@ -48,22 +48,30 @@ func TestParkedDigestStrandsALongParkedDependencyPullRequestWithoutADecision(t *
 	}{
 		{"a new park", "dependabot[bot]", strandedLine, "2026-09-01T09:00:00Z", nil, "PARKED     p#5  "},
 		{"exactly at the bound", "dependabot[bot]", strandedLine, "2026-08-18T23:59:59Z", nil, "PARKED     p#5  "},
-		{"one day past the bound", "dependabot[bot]", strandedLine, "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-DECISION  age=15d  owner/repo#7\n"},
-		{"renovate past the bound", "renovate[bot]", strandedLine, "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-DECISION  age=15d  "},
-		{"a current decision", "dependabot[bot]", decidedLine, "2026-08-17T00:00:00Z", nil, "PARKED     p#5  "},
+		{"one day past the bound", "dependabot[bot]", strandedLine, "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  age=15d  owner/repo#7\n"},
+		{"renovate past the bound", "renovate[bot]", strandedLine, "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  age=15d  "},
+		{"a current route record", "dependabot[bot]", decidedLine, "2026-08-17T00:00:00Z", nil, "PARKED     p#5  "},
 		{"a re-check due today", "dependabot[bot]", strings.Replace(decidedLine, "2026-09-05", "2026-09-01", 1), "2026-08-17T00:00:00Z", nil, "PARKED     p#5  "},
-		{"a lapsed re-check", "dependabot[bot]", strings.Replace(decidedLine, "2026-09-05", "2026-08-31", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=DECISION-LAPSED  age=15d  "},
+		{"a lapsed re-check", "dependabot[bot]", strings.Replace(decidedLine, "2026-09-05", "2026-08-31", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=ROUTE-LAPSED  age=15d  "},
 		{"a re-check at the bound ahead", "dependabot[bot]", strings.Replace(decidedLine, "2026-09-05", "2026-09-15", 1), "2026-08-17T00:00:00Z", nil, "PARKED     p#5  "},
-		{"a re-check past the bound ahead", "dependabot[bot]", strings.Replace(decidedLine, "2026-09-05", "2026-09-16", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-DECISION  "},
-		{"a re-check that is no date", "dependabot[bot]", strings.Replace(decidedLine, "2026-09-05", "2026-02-30", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-DECISION  "},
-		{"a re-check without what it awaits", "dependabot[bot]", strings.Replace(decidedLine, "awaits owner/repo v2 release; ", "", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-DECISION  "},
-		{"two re-check dates", "dependabot[bot]", decidedLine + "; re-check 2026-09-06", "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-DECISION  "},
-		{"a decision written into the blocker, not the result", "dependabot[bot]", "**Blocker:** owner/repo#7 awaits v2; re-check 2026-09-05 | upstream | last-verified 2026-09-01: open", "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-DECISION  "},
-		{"a decision past the escalation bound", "dependabot[bot]", decidedLine, "2026-07-31T00:00:00Z", nil, "STRANDED   p#5  reason=ESCALATE  age=32d  "},
-		{"an outcome wait past the escalation bound", "dependabot[bot]", "**Blocker:** the next v2 release being published | outcome | last-verified 2026-09-01: not yet; awaits v2; re-check 2026-09-05", "2026-07-31T00:00:00Z", nil, "STRANDED   p#5  reason=ESCALATE  "},
-		{"an authority wait past the escalation bound", "dependabot[bot]", "**Blocker:** approve the upgrade | authority | last-verified 2026-09-01: waiting | asked digest o/monorepo#40 2026-08-30", "2026-07-31T00:00:00Z", []string{`"ask_state":"open",`}, "PARKED     p#5  [authority]"},
-		{"a wider decision bound", "dependabot[bot]", strandedLine, "2026-08-17T00:00:00Z", []string{"--stranded-max-age-days", "20"}, "PARKED     p#5  "},
-		{"a narrower escalation bound", "dependabot[bot]", decidedLine, "2026-08-17T00:00:00Z", []string{"--escalate-max-age-days", "10"}, "STRANDED   p#5  reason=ESCALATE  age=15d  "},
+		{"a re-check past the bound ahead", "dependabot[bot]", strings.Replace(decidedLine, "2026-09-05", "2026-09-16", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"a re-check that is no date", "dependabot[bot]", strings.Replace(decidedLine, "2026-09-05", "2026-02-30", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"a record without what was tried", "dependabot[bot]", strings.Replace(decidedLine, "tried: pinning the v1 SDK, still conflicts; ", "", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"a record without the next route", "dependabot[bot]", strings.Replace(decidedLine, "next: patch the vendored v2 client; ", "", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"two re-check dates", "dependabot[bot]", decidedLine + "; re-check 2026-09-06", "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"a route written into the blocker, not the result", "dependabot[bot]", "**Blocker:** owner/repo#7 tried: x; next: y; re-check 2026-09-05 | upstream | last-verified 2026-09-01: open", "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		// No bound hands the work to the maintainer: a park of any age stays the
+		// agent's, held only by a current route record (maintainer, 2026-11-13).
+		{"a current route record long past the bound", "dependabot[bot]", decidedLine, "2026-06-01T00:00:00Z", nil, "PARKED     p#5  "},
+		{"an outcome wait without a route", "dependabot[bot]", "**Blocker:** the next v2 release being published | outcome | last-verified 2026-09-01: not yet; re-check 2026-09-05", "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"an outcome wait with a route", "dependabot[bot]", "**Blocker:** the next v2 release being published | outcome | last-verified 2026-09-01: not yet; tried: the v2 beta, fails CI; next: backport the fix; re-check 2026-09-05", "2026-08-17T00:00:00Z", nil, "PARKED     p#5  [outcome]"},
+		// A maintainer ask is a question of direction, never a handoff, so it
+		// does not pause the work.
+		{"a maintainer ask without a route", "dependabot[bot]", "**Blocker:** approve the upgrade | authority | last-verified 2026-09-01: waiting | asked digest o/monorepo#40 2026-08-30", "2026-08-17T00:00:00Z", []string{`"ask_state":"open",`}, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"a maintainer ask while routes continue", "dependabot[bot]", "**Blocker:** approve the upgrade | authority | last-verified 2026-09-01: waiting; tried: the v2 shim; next: fork the client; re-check 2026-09-05 | asked digest o/monorepo#40 2026-08-30", "2026-08-17T00:00:00Z", []string{`"ask_state":"open",`}, "PARKED     p#5  [authority]"},
+		{"a new maintainer ask", "dependabot[bot]", "**Blocker:** approve the upgrade | authority | last-verified 2026-09-01: waiting | asked digest o/monorepo#40 2026-08-30", "2026-08-25T00:00:00Z", []string{`"ask_state":"open",`}, "PARKED     p#5  [authority]"},
+		{"a wider bound", "dependabot[bot]", strandedLine, "2026-08-17T00:00:00Z", []string{"--stranded-max-age-days", "20"}, "PARKED     p#5  "},
+		{"a narrower bound", "dependabot[bot]", strandedLine, "2026-08-25T00:00:00Z", []string{"--stranded-max-age-days", "3"}, "STRANDED   p#5  reason=NO-ROUTE  age=7d  "},
 		// Only the exact identities are dependency pull requests: anyone else's
 		// park is judged as before, whatever its age.
 		{"the maintainer's pull request", "devantler", strandedLine, "2026-06-01T00:00:00Z", nil, "PARKED     p#5  "},
@@ -222,7 +230,7 @@ func TestParkedDigestReadsWhetherAnInPortfolioBlockerIsHeld(t *testing.T) {
 
 func TestStrandedBoundsAreNonNegativeIntegers(t *testing.T) {
 	for _, value := range []string{"", "-1", "two", "1234567890"} {
-		for _, flag := range []string{"--stranded-max-age-days", "--escalate-max-age-days"} {
+		for _, flag := range []string{"--stranded-max-age-days"} {
 			if code, out := runInput(t, "[]", "--parked-digest", flag, value); code != 2 || strings.Contains(out, "CHECKED") {
 				t.Fatalf("%s %q: code=%d out:\n%s", flag, value, code, out)
 			}
@@ -231,7 +239,7 @@ func TestStrandedBoundsAreNonNegativeIntegers(t *testing.T) {
 }
 
 func TestHelpDescribesTheStrandedVerdict(t *testing.T) {
-	for _, token := range []string{"STRANDED", "UNCLAIMED", "ESCALATE", "NO-DECISION", "DECISION-LAPSED", "--stranded-max-age-days", "--escalate-max-age-days", `"re-check <YYYY-MM-DD>"`, "ACTIONABLE or STRANDED"} {
+	for _, token := range []string{"STRANDED", "UNCLAIMED", "NO-ROUTE", "ROUTE-LAPSED", "--stranded-max-age-days", `"tried:"`, `"next:"`, `"re-check <YYYY-MM-DD>"`, "whatever its", "ACTIONABLE or STRANDED"} {
 		if !strings.Contains(help, token) {
 			t.Fatalf("--help does not state %q", token)
 		}

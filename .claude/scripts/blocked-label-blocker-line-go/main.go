@@ -90,9 +90,7 @@ Options: --today <YYYY-MM-DD> (default UTC today)
                        may stay unstarted before it needs a record)
          --stranded-max-age-days <n> (default 14; how long a dependency
                        pull request may stay parked before its record must
-                       carry a current decision)
-         --escalate-max-age-days <n> (default 30; how long one may stay
-                       parked before it must wait on a maintainer ask)
+                       show the engineering route tried and the next one)
          --quiet (findings only)
          --ask-digest (emit declared authority blockers with missing or stale
                        ask records, oldest first, for verification before
@@ -113,12 +111,11 @@ Options: --today <YYYY-MM-DD> (default UTC today)
                        stays owned work: UNCLAIMED when an open issue of
                        this organization it waits on is neither parked
                        itself nor referred to by an open pull request,
-                       ESCALATE when it has been parked longer than
-                       --escalate-max-age-days on anything but an authority
-                       blocker, NO-DECISION or DECISION-LAPSED when it has
-                       been parked longer than --stranded-max-age-days and
-                       the record's result does not say what it "awaits"
-                       with a "re-check <YYYY-MM-DD>" from today to
+                       NO-ROUTE or ROUTE-LAPSED when it has been parked
+                       longer than --stranded-max-age-days, whatever its
+                       blocker kind, and the record's result does not say
+                       what was "tried:", the "next:" route and one
+                       "re-check <YYYY-MM-DD>" from today to
                        --stranded-max-age-days ahead; a STRANDED row is
                        actionable, and a park date, author or blocker fact
                        it cannot read is UNKNOWN; then
@@ -173,11 +170,10 @@ type options struct {
 	maxAge           int64
 	verifyMaxAge     int64
 	unrecordedMaxAge int64
-	// strandedMaxAge and escalateMaxAge bound how long a dependency pull
-	// request may stay parked before the digest asks for a decision, and then
-	// for the maintainer (see strandedReason).
+	// strandedMaxAge bounds how long a dependency pull request may stay parked
+	// before its record must show the engineering route tried and the next one
+	// (see strandedReason).
 	strandedMaxAge int64
-	escalateMaxAge int64
 	quiet          bool
 	askDigest      bool
 	parkedDigest   bool
@@ -193,7 +189,7 @@ func civilDate(value string) (time.Time, error) {
 // defaultOptions holds the bounds a sweep applies unless told otherwise. The
 // composer reads the same ones, so a record it prints is judged as it was composed.
 func defaultOptions() options {
-	return options{maxAge: 14, verifyMaxAge: 7, unrecordedMaxAge: 7, strandedMaxAge: 14, escalateMaxAge: 30}
+	return options{maxAge: 14, verifyMaxAge: 7, unrecordedMaxAge: 7, strandedMaxAge: 14}
 }
 
 func arguments(args []string) (options, bool, error) {
@@ -210,7 +206,7 @@ func arguments(args []string) (options, bool, error) {
 			o.askDigest = true
 		case "--parked-digest":
 			o.parkedDigest = true
-		case "--org", "--input", "--today", "--ask-max-age-days", "--verify-max-age-days", "--unrecorded-max-age-days", "--stranded-max-age-days", "--escalate-max-age-days":
+		case "--org", "--input", "--today", "--ask-max-age-days", "--verify-max-age-days", "--unrecorded-max-age-days", "--stranded-max-age-days":
 			i++
 			if i == len(args) {
 				return o, false, fmt.Errorf("%s requires a value", arg)
@@ -223,7 +219,7 @@ func arguments(args []string) (options, bool, error) {
 				o.input = value
 			case "--today":
 				today = value
-			case "--ask-max-age-days", "--verify-max-age-days", "--unrecorded-max-age-days", "--stranded-max-age-days", "--escalate-max-age-days":
+			case "--ask-max-age-days", "--verify-max-age-days", "--unrecorded-max-age-days", "--stranded-max-age-days":
 				if len(value) > 9 {
 					return o, false, fmt.Errorf("%s must have at most 9 digits", arg)
 				}
@@ -238,8 +234,6 @@ func arguments(args []string) (options, bool, error) {
 					o.verifyMaxAge = days
 				case "--stranded-max-age-days":
 					o.strandedMaxAge = days
-				case "--escalate-max-age-days":
-					o.escalateMaxAge = days
 				default:
 					o.unrecordedMaxAge = days
 				}
