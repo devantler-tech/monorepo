@@ -10,7 +10,7 @@ import (
 // digestPull is one --input pull request in repo p with the given number,
 // labels fragment and comments.
 func digestPull(number, labels string, comments ...string) string {
-	return `{"repo":"p","number":` + number + `,"pull_request":{},` + labels + `"body":"**Blocker:** body/only#1","comments":[` + strings.Join(comments, ",") + `]}`
+	return `{"repo":"p","number":` + number + `,"pull_request":{},"user":{"login":"devantler"},` + labels + `"body":"**Blocker:** body/only#1","comments":[` + strings.Join(comments, ",") + `]}`
 }
 
 const blockedLabel = `"labels":[{"name":"blocked"}],`

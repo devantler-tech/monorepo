@@ -129,9 +129,9 @@ self-progressing under the evidence-bound rule below; once that evidence fails o
 yours too.
 
 **Three terminal states, and CLOSING is first-class.** A PR is done when it is **merged**, **closed
-with the reason recorded**, or **parked on a named, live-verified blocker**. A park ends the work
-on the PR itself, never the work behind it: its blocker stays owned (see *A park is never a resting
-place* below). Close one when it adds no value, duplicates work already shipped, or conflicts with
+with the reason recorded**, or **parked on a named, live-verified blocker**. A park is that state
+only while the parked digest reports the PR `PARKED`, and even then its blocker stays owned (see
+*A park is never a resting place* below). Close one when it adds no value, duplicates work already shipped, or conflicts with
 where the product is going — re-filing any still-valid finding as an issue first, and stating the
 reason on the PR. A stale draft nobody will
 finish is not neutral: it costs review capacity, ages into conflicts, and hides the work that matters.
@@ -216,10 +216,14 @@ counts them:
   own verdict from the paragraph above: repair the record, or unpark the PR.
 - `STRANDED <repo>#<n>  reason=<reason>  age=<n>d  <blocker>`: an exact `dependabot[bot]` or
   `renovate[bot]` PR whose park would otherwise hold, but which is still owned rung-1 work this run.
-  `age` counts days since its record comment was created. `reason=UNCLAIMED`: an open issue of
-  this organization that the record names is not parked itself, and no open PR refers to it, so
-  nobody is working on it. Claim it and work it to a terminal state, or park it on what really blocks
-  it. An assignee does not count as holding it. `reason=NO-ROUTE`: parked more than 14 days
+  `age` counts days since its record comment was created, which is the PR's first park: `unpark`
+  keeps that comment and a later `park` reuses it, so a re-park keeps its age. A labelled PR whose
+  author is not named is UNKNOWN. `reason=UNCLAIMED`: an open issue of this organization that the
+  record names is not parked itself, and no open PR by anyone but a dependency bot references it
+  (as `owner/repo#N`, or `#N` after a word such as Fixes or Part of), so no PR is working on it. The
+  digest does not read `agent-claim/<issue>` tips: check the claim protocol's signals, then claim it
+  and work it to a terminal state, or park it on what really blocks it. An assignee does not count
+  as holding it. `reason=NO-ROUTE`: parked more than 14 days
   (`--stranded-max-age-days`), whatever the blocker kind, and the record's result does not carry a
   current route record. `reason=ROUTE-LAPSED`: its re-check date has passed. Either way, take the
   next engineering route yourself and record it. The digest only reads a route record written
@@ -262,10 +266,13 @@ ecosystem's open-PR limit of 10, so no new Go update could open.
   continue meanwhile.
 - **An update ecosystem stalls at its open-PR limit.** When parked PRs bring one configuration
   entry's open PRs (one package manager and directory) to its `open-pull-requests-limit` or one
-  short of it, new updates stop opening, security fixes included. Treat that as rung-1 finishing
-  work. Raising the limit alone hides the stall instead of clearing it.
+  short of it, new version updates stop opening (Dependabot's security updates have a separate
+  limit). Treat that as rung-1 finishing work. Raising the limit alone hides the stall instead of
+  clearing it.
 - **A mis-park is unparked and driven.** When the PR does not touch what its blocker names, or the
-  blocker holds only another part of a grouped update, run `unpark` and drive the PR.
+  blocker holds only another part of a grouped update, run `unpark` and drive the PR. A blocker
+  that cannot be read, or a record that names none, never justifies unparking: re-verify or repair
+  the record instead.
 
 **"Is someone actively working on it?" is decided from data, never by asking.** Treat a PR as actively
 owned by someone else — and leave it alone this run — when any of these holds:

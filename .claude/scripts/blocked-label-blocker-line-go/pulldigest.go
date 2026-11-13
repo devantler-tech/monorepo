@@ -154,7 +154,7 @@ func blockerState(item issue, blocker string, pulls []issue, claims bool, o opti
 			return "closed", false, nil
 		}
 		state = "open"
-		if !claims || len(answer.PullRequest) > 0 && string(answer.PullRequest) != "null" {
+		if !claims || (len(answer.PullRequest) > 0 && string(answer.PullRequest) != "null") {
 			continue
 		}
 		if answer.Labels == nil {
@@ -198,7 +198,10 @@ func parkAge(item issue, today time.Time) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("pull request %s#%d record comment carries an unreadable created_at -- UNKNOWN", item.Repo, item.Number)
 	}
-	day, _ := civilDate(at.UTC().Format("2006-01-02"))
+	day, err := civilDate(at.UTC().Format("2006-01-02"))
+	if err != nil {
+		return 0, fmt.Errorf("pull request %s#%d record comment carries an unusable created_at -- UNKNOWN", item.Repo, item.Number)
+	}
 	age := civilDays(day, today)
 	if age < 0 {
 		return 0, fmt.Errorf("pull request %s#%d record comment is dated after today -- UNKNOWN", item.Repo, item.Number)
@@ -266,10 +269,10 @@ func parkedDigestReport(pulls []issue, o options) (string, bool, error) {
 			continue
 		}
 		labelled++
-		// A dependency pull request is matched by its exact author. Under --org the
-		// search names every author, so one it does not name is UNKNOWN: it might
-		// be a dependency pull request.
-		if o.org != "" && item.User.Login == "" {
+		// A dependency pull request is matched by its exact author. A labelled
+		// pull request whose author is not named, under --org or --input, is
+		// UNKNOWN: it might be a dependency pull request.
+		if item.User.Login == "" {
 			return "", false, fmt.Errorf("pull request %s#%d carries no author, so whether it is a dependency pull request is unproven -- UNKNOWN", item.Repo, item.Number)
 		}
 		dependency := dependencyBots[item.User.Login]

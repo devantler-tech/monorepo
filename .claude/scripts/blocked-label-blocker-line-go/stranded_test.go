@@ -245,3 +245,73 @@ func TestHelpDescribesTheStrandedVerdict(t *testing.T) {
 		}
 	}
 }
+
+// A labelled pull request whose author is not named might be a dependency pull
+// request, so it is UNKNOWN under --input as under --org, never PARKED.
+func TestParkedDigestIsUnknownWhenAParkedPullRequestNamesNoAuthor(t *testing.T) {
+	record := datedRecord(t, strandedLine, "2026-06-01T00:00:00Z")
+	for name, user := range map[string]string{"no user": ``, "a null user": `"user":null,`, "an empty user": `"user":{},`, "an empty login": `"user":{"login":""},`} {
+		t.Run(name, func(t *testing.T) {
+			payload := `[{"repo":"p","number":5,"pull_request":{},"labels":[{"name":"blocked"}],` + user + `"body":"bump","comments":[` + record + `]}]`
+			if code, out := runInput(t, payload, "--parked-digest"); code != 2 || !strings.Contains(out, "carries no author") || strings.Contains(out, "CHECKED") {
+				t.Fatalf("code=%d out:\n%s", code, out)
+			}
+		})
+	}
+}
+
+// The park date is the record comment's own: not an earlier comment's, nor a
+// later one's, and taken in UTC whatever offset the forge reports.
+func TestParkAgeIsTheRecordCommentsOwnUTCDate(t *testing.T) {
+	other := func(created string) string {
+		raw, err := json.Marshal(map[string]any{"user": map[string]string{"login": "dependabot[bot]"}, "body": "rebased", "created_at": created})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	for _, tc := range []struct {
+		name, comments, want string
+	}{
+		{"an older comment before the record", other("2026-06-01T00:00:00Z") + "," + datedRecord(t, strandedLine, "2026-08-30T00:00:00Z"), "PARKED     p#5  "},
+		{"a newer comment after the record", datedRecord(t, strandedLine, "2026-08-01T00:00:00Z") + "," + other("2026-08-31T00:00:00Z"), "STRANDED   p#5  reason=NO-ROUTE  age=31d  "},
+		// 01:00 at +02:00 on 2026-08-18 is 23:00 UTC on 2026-08-17: 15 days, not 14.
+		{"an offset that crosses midnight", datedRecord(t, strandedLine, "2026-08-18T01:00:00+02:00"), "STRANDED   p#5  reason=NO-ROUTE  age=15d  "},
+		{"a year the calendar has no day for", datedRecord(t, strandedLine, "0000-01-01T00:00:00Z"), "unusable created_at -- UNKNOWN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := `[{"repo":"p","number":5,"pull_request":{},"labels":[{"name":"blocked"}],"user":{"login":"dependabot[bot]"},"body":"bump","comments":[` + tc.comments + `]}]`
+			if _, out := runInput(t, payload, "--parked-digest"); !strings.Contains(out, tc.want) {
+				t.Fatalf("want %q; out:\n%s", tc.want, out)
+			}
+		})
+	}
+}
+
+// A closed blocker outranks an unclaimed one named before it: the park no
+// longer holds at all, so the pull request is driven, not merely stranded.
+func TestParkedDigestReadsEveryBlockerBeforeStranding(t *testing.T) {
+	record := datedRecord(t, "**Blocker:** o/ksail#7 and o/ksail#8 | upstream | last-verified 2026-09-01: open", "2026-09-01T00:00:00Z")
+	pull := `{"repository_url":"https://api.github.com/repos/o/platform","number":900,"labels":[{"name":"blocked"}],"pull_request":{},"user":{"login":"renovate[bot]"},"title":"bump","body":"bump","comments":99}`
+	original := forgeRead
+	t.Cleanup(func() { forgeRead = original })
+	forgeRead = func(endpoint string) ([]byte, error) {
+		switch endpoint {
+		case pullEndpoint("o"):
+			return []byte(searchPage(pull)), nil
+		case "repos/o/platform/issues/900":
+			return []byte(counted(1)), nil
+		case "repos/o/platform/issues/900/comments?per_page=100":
+			return []byte("[" + record + "]"), nil
+		case "repos/o/ksail/issues/7":
+			return []byte(`{"number":7,"state":"open","labels":[]}`), nil
+		case "repos/o/ksail/issues/8":
+			return []byte(`{"number":8,"state":"closed","labels":[]}`), nil
+		}
+		t.Errorf("unexpected read %q", endpoint)
+		return nil, errors.New("unexpected read")
+	}
+	if code, out := runOrgDigest(t); code != 1 || !strings.Contains(out, "ACTIONABLE platform#900  record=BLOCKER-CLOSED") || strings.Contains(out, "STRANDED") {
+		t.Fatalf("code=%d out:\n%s", code, out)
+	}
+}
