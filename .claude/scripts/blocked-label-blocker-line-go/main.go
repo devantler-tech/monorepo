@@ -109,8 +109,9 @@ Options: --today <YYYY-MM-DD> (default UTC today)
                        STRANDED with the reason when a dependabot[bot] or
                        renovate[bot] pull request would be PARKED but
                        stays owned work: UNCLAIMED when an open issue of
-                       this organization it waits on is neither parked
-                       itself nor referred to by an open pull request,
+                       this organization its upstream record names is
+                       neither parked itself nor referred to by an open
+                       pull request that is not itself parked,
                        NO-ROUTE or ROUTE-LAPSED when it has been parked
                        longer than --stranded-max-age-days, whatever its
                        blocker kind, and the record's result does not say

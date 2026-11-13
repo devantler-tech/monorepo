@@ -218,9 +218,10 @@ counts them:
   `renovate[bot]` PR whose park would otherwise hold, but which is still owned rung-1 work this run.
   `age` counts days since its record comment was created, which is the PR's first park: `unpark`
   keeps that comment and a later `park` reuses it, so a re-park keeps its age. A labelled PR whose
-  author is not named is UNKNOWN. `reason=UNCLAIMED`: an open issue of this organization that the
-  record names is not parked itself, and no open PR by anyone but a dependency bot references it
-  (as `owner/repo#N`, or `#N` after a word such as Fixes or Part of), so no PR is working on it. The
+  author is not named is UNKNOWN. `reason=UNCLAIMED`: an open issue of this organization that an
+  upstream-kind record names is not parked itself, and no open, unparked PR by anyone but a
+  dependency bot references it (as `owner/repo#N`, or `#N` after a word such as Fixes or Part of),
+  so no PR is working on it. A PR parked on that issue does not hold it. The
   digest does not read `agent-claim/<issue>` tips: check the claim protocol's signals, then claim it
   and work it to a terminal state, or park it on what really blocks it. An assignee does not count
   as holding it. `reason=NO-ROUTE`: parked more than 14 days
@@ -228,8 +229,9 @@ counts them:
   current route record. `reason=ROUTE-LAPSED`: its re-check date has passed. Either way, take the
   next engineering route yourself and record it. The digest only reads a route record written
   into the record's result, after `last-verified`: `tried: <the route and what it showed>`, then
-  `next: <the route you take next>` and one `re-check <YYYY-MM-DD>`, from today up to 14 days
-  ahead. For example:
+  `next: <the engineering route you take next>` and one `re-check <YYYY-MM-DD>`, from today up to
+  14 days ahead. The digest cannot judge what `next:` says. Writing a wait or an ask there still
+  counts as no route. For example:
   `…: open; tried: pinning vcluster v0.30, still needs k8s 0.36; next: patch the vendored client; re-check 2026-11-20`.
   An authority park needs the route record too: a maintainer ask never pauses the work.
   A park date, author or blocker label that cannot be read is UNKNOWN.
@@ -242,9 +244,10 @@ note never does, so nobody else's comment can take a PR out of the sweep.
 
 **A park is never a resting place** (agent-plugins#699; the `portfolio-maintenance` PR-driving
 procedure holds the portable rule). `PARKED` means only that the PR needs no work on itself this run.
-What blocks it is still owned. On 2026-11-12 every open Dependabot PR in the portfolio was parked:
-nine ksail gomod PRs waited on one issue, the oldest since 2026-10-05, and they filled that
-ecosystem's open-PR limit of 10, so no new Go update could open.
+What blocks it is still owned, and a parked PR is never merged while it is parked: run `unpark` once
+its blocker verifiably clears, then drive it under the normal gates. On 2026-11-12 every open
+Dependabot PR in the portfolio was parked: nine ksail gomod PRs waited on one issue, the oldest since
+2026-10-05, and they filled that ecosystem's open-PR limit of 10, so no new Go update could open.
 
 - **An in-portfolio blocker is rung-1 finishing work**, ahead of any Ready pull. Claim it under the
   claim protocol and drive it, or park it on its own blocker so the issue sweep checks its record.
@@ -252,23 +255,29 @@ ecosystem's open-PR limit of 10, so no new Go update could open.
   most 7 days apart. Each check also weighs a route around the wait: adapt to the new version, fork
   or patch the dependency, isolate or replace the conflicting dependency, contribute upstream under
   the egress rules, or split out or ignore only the blocked part of a grouped update so the rest
-  merges. To ignore part of an update, use the ecosystem's configuration, with the range and the
-  blocker recorded beside it and on the blocker issue, and remove the ignore when the blocker
+  merges. To ignore part of an update, use the ecosystem's configuration with the range recorded
+  beside it, and track it on an issue in this organization that stays open until the ignore is
+  removed. Do not write about it on the upstream artifact. Remove the ignore when the blocker
   clears. Never close the PR to do it: see *Never close a Dependabot PR to retrigger it*.
+- **A blocker clears only when its fix is verifiably available to the product**: merged in the
+  portfolio, or released in a version the PR can take. An upstream item closed without a released
+  fix, or closed as not planned, still holds: when the digest reports `record=BLOCKER-CLOSED` for
+  one, re-park on what really blocks the PR now.
 - **Past 14 days, waiting is no longer a route.** Take engineering routes yourself, and keep
-  taking them until the PR merges. Record each one in the park record (the `STRANDED` reasons
-  above).
+  taking them until the PR merges or is closed for a recorded reason. Record each one in the park
+  record (the `STRANDED` reasons above). The `next:` route is engineering you will do, never a wait
+  or an ask.
 - **Ownership stays with the agent** (maintainer direction 2026-11-13: *"You own the code, I do
-  not."*). A park never hands work to the maintainer, and no bound or timer makes contacting the
-  maintainer the outcome. A `maintainer-ask` is only for a genuine question of direction you cannot
-  settle on your own, never about what agents can do themselves. It is never a handoff and never a
-  substitute for the work: its default is what you will do if no answer comes, and the routes
-  continue meanwhile.
+  not."*). A park never hands work to the maintainer, and no bound or timer in these rules makes
+  contacting the maintainer the outcome. A `maintainer-ask` is only for a genuine question of
+  direction you cannot settle on your own, never about what agents can do themselves. It is never a
+  handoff and never a substitute for the work: its default is what you will do if no answer comes,
+  and the routes continue meanwhile.
 - **An update ecosystem stalls at its open-PR limit.** When parked PRs bring one configuration
-  entry's open PRs (one package manager and directory) to its `open-pull-requests-limit` or one
-  short of it, new version updates stop opening (Dependabot's security updates have a separate
-  limit). Treat that as rung-1 finishing work. Raising the limit alone hides the stall instead of
-  clearing it.
+  entry's open PRs to its effective `open-pull-requests-limit` (the configured value, or the tool's
+  default when unset), new version updates stop opening. Dependabot's security updates have a
+  separate limit. One short of the limit is the last free slot: treat both as rung-1 finishing work.
+  Raising the limit alone hides the stall instead of clearing it.
 - **A mis-park is unparked and driven.** When the PR does not touch what its blocker names, or the
   blocker holds only another part of a grouped update, run `unpark` and drive the PR. A blocker
   that cannot be read, or a record that names none, never justifies unparking: re-verify or repair

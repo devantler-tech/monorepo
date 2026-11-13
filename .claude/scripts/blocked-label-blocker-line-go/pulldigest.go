@@ -96,7 +96,8 @@ func forgeBlocker(org, repo string, number int64) (blockerRecord, error) {
 // When claims is set, the pull request is a dependency pull request, and
 // unclaimed reports whether an open issue it waits on is held by nobody: not
 // parked itself (its own record is then checked by the issue sweep), and not
-// referred to by any open pull request in pulls. An open pull request is work
+// referred to by any open pull request in pulls, which holds only those not
+// parked themselves. An open pull request is work
 // in flight and always held. An assignee does not hold it, because a claim
 // lapses after about two hours. A label set it cannot read is UNKNOWN. An
 // --input record states the answer in "blocker_claim".
@@ -259,6 +260,15 @@ func strandedReason(line string, unclaimed bool, age int64, o options) string {
 func parkedDigestReport(pulls []issue, o options) (string, bool, error) {
 	var report strings.Builder
 	labelled, parked := 0, 0
+	// Only an open pull request that is not itself parked can hold a blocker:
+	// a parked one is waiting, not working, so one parked on the very issue it
+	// refers to would otherwise hold that issue for every pull request behind it.
+	var working []issue
+	for _, item := range pulls {
+		if item.Labels != nil && !item.parked() {
+			working = append(working, item)
+		}
+	}
 	for _, item := range pulls {
 		// A pull request record with no labels array was never read for the
 		// label, so the digest cannot say it is not parked.
@@ -313,7 +323,7 @@ func parkedDigestReport(pulls []issue, o options) (string, bool, error) {
 		// event, not on the object either may name.
 		if kind == "upstream" {
 			var err error
-			if state, unclaimed, err = blockerState(item, blocker, pulls, dependency, o); err != nil {
+			if state, unclaimed, err = blockerState(item, blocker, working, dependency, o); err != nil {
 				return "", false, err
 			}
 		}

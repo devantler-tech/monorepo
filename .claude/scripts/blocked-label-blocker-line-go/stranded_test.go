@@ -60,6 +60,15 @@ func TestParkedDigestStrandsALongParkedDependencyPullRequestWithoutARoute(t *tes
 		{"a record without the next route", "dependabot[bot]", strings.Replace(decidedLine, "next: patch the vendored v2 client; ", "", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
 		{"two re-check dates", "dependabot[bot]", decidedLine + "; re-check 2026-09-06", "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
 		{"a route written into the blocker, not the result", "dependabot[bot]", "**Blocker:** owner/repo#7 tried: x; next: y; re-check 2026-09-05 | upstream | last-verified 2026-09-01: open", "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		// The tokens are words of their own, each with a value, and the date is a whole date.
+		{"a token that only ends in tried:", "dependabot[bot]", strings.Replace(decidedLine, "tried:", "untried:", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"a token that only ends in next:", "dependabot[bot]", strings.Replace(decidedLine, "next:", "pre-next:", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"an empty next route", "dependabot[bot]", strings.Replace(decidedLine, "next: patch the vendored v2 client;", "next: ;", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"an empty tried route", "dependabot[bot]", strings.Replace(decidedLine, "tried: pinning the v1 SDK, still conflicts;", "tried:;", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"a re-check that only ends in re-check", "dependabot[bot]", strings.Replace(decidedLine, "re-check", "pre-re-check", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"a re-check date with a digit too many", "dependabot[bot]", strings.Replace(decidedLine, "2026-09-05", "2026-09-051", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"a re-check in a year with no day", "dependabot[bot]", strings.Replace(decidedLine, "2026-09-05", "0000-09-05", 1), "2026-08-17T00:00:00Z", nil, "STRANDED   p#5  reason=NO-ROUTE  "},
+		{"tokens in capitals", "dependabot[bot]", strings.NewReplacer("tried:", "TRIED:", "next:", "Next:", "re-check", "RE-CHECK").Replace(decidedLine), "2026-08-17T00:00:00Z", nil, "PARKED     p#5  "},
 		// No bound hands the work to the maintainer: a park of any age stays the
 		// agent's, held only by a current route record (maintainer, 2026-11-13).
 		{"a current route record long past the bound", "dependabot[bot]", decidedLine, "2026-06-01T00:00:00Z", nil, "PARKED     p#5  "},
@@ -147,6 +156,55 @@ func TestParkedDigestStrandsADependencyPullRequestWhoseBlockerNobodyHolds(t *tes
 		t.Run(tc.name, func(t *testing.T) {
 			code, out := runInput(t, botPull(tc.author, tc.extra, record), "--parked-digest")
 			if code != tc.code || !strings.Contains(out, tc.want) || (code == 2) == strings.Contains(out, "CHECKED") {
+				t.Fatalf("code=%d, want %d and %q; out:\n%s", code, tc.code, tc.want, out)
+			}
+		})
+	}
+	// An unclaimed blocker is reported first: a current route record past the
+	// bound does not hide that nobody is working on the in-portfolio blocker.
+	t.Run("an unclaimed blocker outranks a current route record", func(t *testing.T) {
+		code, out := runInput(t, botPull("renovate[bot]", `"blocker_state":"open","blocker_claim":"unclaimed",`, datedRecord(t, decidedLine, "2026-08-17T00:00:00Z")), "--parked-digest")
+		if code != 1 || !strings.Contains(out, "STRANDED   p#5  reason=UNCLAIMED  age=15d  ") {
+			t.Fatalf("code=%d out:\n%s", code, out)
+		}
+	})
+}
+
+// A pull request parked on the very issue it refers to is waiting, not working
+// on it: it does not hold that issue for the dependency pull request behind it.
+func TestParkedDigestDoesNotLetAParkedPullRequestHoldItsBlocker(t *testing.T) {
+	ownRecord := datedRecord(t, "**Blocker:** o/ksail#7 | upstream | last-verified 2026-09-01: open", "2026-09-01T00:00:00Z")
+	for _, tc := range []struct {
+		name, labels string
+		code         int
+		want         string
+	}{
+		{"a parked pull request that refers to the issue", `[{"name":"blocked"}]`, 1, "STRANDED   platform#900  reason=UNCLAIMED  "},
+		{"the same pull request, not parked", `[]`, 0, "PARKED     platform#900  [upstream, blocker open]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pull := `{"repository_url":"https://api.github.com/repos/o/platform","number":900,"labels":[{"name":"blocked"}],"pull_request":{},"user":{"login":"renovate[bot]"},"title":"bump","body":"bump","comments":99}`
+			work := `{"repository_url":"https://api.github.com/repos/o/ksail","number":50,"labels":` + tc.labels + `,"pull_request":{},"user":{"login":"devantler"},"title":"work","body":"Related to #7","comments":99}`
+			original := forgeRead
+			t.Cleanup(func() { forgeRead = original })
+			forgeRead = func(endpoint string) ([]byte, error) {
+				switch endpoint {
+				case pullEndpoint("o"):
+					return []byte(searchPage(pull, work)), nil
+				case "repos/o/platform/issues/900":
+					return []byte(counted(1)), nil
+				case "repos/o/platform/issues/900/comments?per_page=100", "repos/o/ksail/issues/50/comments?per_page=100":
+					return []byte("[" + ownRecord + "]"), nil
+				case "repos/o/ksail/issues/50":
+					return []byte(`{"number":50,"comments":1}`), nil
+				case "repos/o/ksail/issues/7":
+					return []byte(`{"number":7,"state":"open","labels":[]}`), nil
+				}
+				t.Errorf("unexpected read %q", endpoint)
+				return nil, errors.New("unexpected read")
+			}
+			code, out := runOrgDigest(t)
+			if code != tc.code || !strings.Contains(out, tc.want) {
 				t.Fatalf("code=%d, want %d and %q; out:\n%s", code, tc.code, tc.want, out)
 			}
 		})
