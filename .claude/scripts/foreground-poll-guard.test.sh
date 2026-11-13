@@ -57,7 +57,7 @@ expect_deny() {
   run "$1" "$2"
   if [ "${rc}" -ne 2 ]; then
     fail_case "$1: expected a denial (exit 2), got exit ${rc}"
-  elif ! printf '%s' "${err}" | grep -q 'deny: foreground remote poll loop'; then
+  elif ! grep -q 'deny: foreground remote poll loop' <<<"${err}"; then
     fail_case "$1: exit 2 without the guard's own reason: ${err}"
   fi
 }
