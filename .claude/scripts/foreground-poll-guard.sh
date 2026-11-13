@@ -20,6 +20,10 @@
 # loop (sleep under 5 s), a `for` over a list of repositories, a settle `sleep` outside any
 # loop, and every backgrounded call.
 #
+# MONITOR (monorepo#5016). The runtime also runs Bash hooks for a `Monitor` call, as tool_name
+# "Bash" with Monitor's own input and no run_in_background. That call IS the watcher this guard
+# asks for, so a call carrying `timeout_ms` (required by Monitor, absent from Bash) is left alone.
+#
 # CODEX has no entry: a Codex hook needs the operator's trust approval (see
 # surveyor-hook-dispatch.sh), so that lane keeps the prose rule only.
 #
@@ -37,6 +41,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 fields=$(printf '%s' "${input}" | jq -r '
   if (.tool_name // "") != "Bash" then "skip"
   elif (.tool_input.run_in_background // false) == true then "skip"
+  elif (.tool_input | type) == "object" and (.tool_input | has("timeout_ms")) then "skip"
   else "check\n" + (.tool_input.command // "") end' 2>/dev/null || true)
 [ "${fields%%$'\n'*}" = check ] || exit 0
 cmd=${fields#*$'\n'}
