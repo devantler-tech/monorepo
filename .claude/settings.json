@@ -31,10 +31,6 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/scripts/surveyor-hook-dispatch.sh"
-          },
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/scripts/foreground-poll-guard.sh"
           }
         ]
       }
