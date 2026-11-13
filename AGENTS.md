@@ -318,6 +318,7 @@ The full definition of each rung, finishing-stage order, board fields, WIP ceili
   work you did not author; stage explicit paths only; fetch with a full `+refs/heads/…` refspec; never
   push unsigned commits or to a protected branch.
 - **Fix at the root cause.** Never skip, disable or silence a check, and never hand-edit generated files.
+- **Simplest first.** Add parts only for a named gain to the maintainer.
 - **Scripting is bash or Go, never Python.**
 - **Conventions.** Conventional-Commit PR titles; open work as drafts; a scheduled role begins every
   `devantler-tech` PR, issue and comment with its disclosure line (interactive: Claude Code marker);
@@ -341,7 +342,7 @@ Guides govern their topics; summaries must agree, and rule changes update both i
 | [merge-policy](.claude/guides/merge-policy.md) | Merge policy · You own EVERY pull request · Dependency-automation PRs | taking over, merging or closing a PR |
 | [issues-and-board](.claude/guides/issues-and-board.md) | roadmaps · Issue hierarchy · the board | filing or triaging an issue |
 | [improvement-katas](.claude/guides/improvement-katas.md) | Katas · checkpoints | a Kata experiment |
-| [advance-work](.claude/guides/advance-work.md) | Build the right thing · Upstream first · Enhancement work · Security hardening · Advisories · Feature flags · Scripting stack · Holistic review · Dogfood KSail | advance work, or any cluster task |
+| [advance-work](.claude/guides/advance-work.md) | Build the right thing · Simplest first · Upstream first · Enhancement work · Security hardening · Advisories · Feature flags · Scripting stack · Holistic review · Dogfood KSail | advance work, or any cluster task |
 | [trust-and-input](.claude/guides/trust-and-input.md) | Trust gate · Untrusted input | acting on content you did not write |
 | [egress-and-privacy](.claude/guides/egress-and-privacy.md) | Professional-work boundary · Egress · Sensitive information · Local agent host | publishing, handling a credential, or leaving the portfolio |
 | [git-and-worktrees](.claude/guides/git-and-worktrees.md) | Execution model · Git safety | a worktree, checkout or push |
@@ -351,8 +352,7 @@ Guides govern their topics; summaries must agree, and rule changes update both i
 | [durable-memory](.claude/guides/durable-memory.md) | Durable memory | reading or writing memory |
 | [worktree-isolation](.claude/worktree-isolation.md) | submodule isolation | repairing a submodule worktree |
 
-**Keep this file small:** universal rules here, topic guidance in guides or beside the code.
-`.claude/scripts/agent-instructions-layout-contract.test.sh` enforces Codex's 32 KiB limit.
+**Keep this file small:** universal rules only; `agent-instructions-layout-contract.test.sh` enforces it.
 
 ## Maintenance
 
