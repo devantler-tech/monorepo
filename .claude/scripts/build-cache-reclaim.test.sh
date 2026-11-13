@@ -145,8 +145,16 @@ mkdir -p "$GO_BUILD_FIXTURE" "$GO_MOD_FIXTURE" || {
   exit 2
 }
 
+# The Claude session registry (2d) is a fixture too, so no case depends on the host's sessions.
+CLAUDE_SESSIONS_FIXTURE="$fixture_root/claude-session-registry"
+mkdir -p "$CLAUDE_SESSIONS_FIXTURE" || {
+  printf 'cannot create the Claude session registry fixture\n' >&2
+  exit 2
+}
+
 run() {
-  BUILD_CACHE_RECLAIM_TMPDIR="$fixture_root" \
+  BUILD_CACHE_RECLAIM_CLAUDE_SESSIONS="${CLAUDE_SESSIONS_OVERRIDE:-$CLAUDE_SESSIONS_FIXTURE}" \
+    BUILD_CACHE_RECLAIM_TMPDIR="$fixture_root" \
     GOCACHE="${GOCACHE_OVERRIDE:-$GO_BUILD_FIXTURE}" \
     GOMODCACHE="${GOMODCACHE_OVERRIDE:-$GO_MOD_FIXTURE}" \
     bash "$impl" "$@" 2>&1
@@ -3297,7 +3305,51 @@ fi
 age_tree "$(stamp_hours_ago 48)" "$s_held" || fail 'fixture: 29b re-age held folder'
 run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
 [ -e "$s_held" ] && fail "29b: the released session folder was not reaped (holder ablation): $s_held"
-rm -rf -- "$s_root"
+# 29c. a folder whose session is still running is kept, though it is idle and holds nothing
+# open; once that process is gone, its stale registry entry no longer keeps it (ablation).
+s_live="${s_project}/44444444-live"
+mkdir -p "${s_live}/scratchpad" || fail 'fixture: 29c live session folder'
+printf 'payload\n' > "${s_live}/scratchpad/out"
+age_tree "$(stamp_hours_ago 48)" "$s_live" || fail 'fixture: 29c age live session folder'
+sleep 60 &
+s_live_pid=$!
+printf '{"pid":%s,"sessionId":"44444444-live","status":"idle"}\n' "$s_live_pid" \
+  > "${CLAUDE_SESSIONS_FIXTURE}/${s_live_pid}.json" || fail 'fixture: 29c registry entry'
+out=$(run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$s_live" ] || fail "29c: the folder of a running session was reaped: $s_live"
+grep -qF "KEEP  (session still running) ${s_live}" <<<"$out" ||
+  fail '29c: the running session folder was not reported as kept for its session'
+grep -qE "session folders: [1-9][0-9]* under ${s_root}, [1-9][0-9]* idle for 24 h" <<<"$out" ||
+  fail "29c: the session listing did not report its unfiltered control; it said: $(grep -F 'session folders:' <<<"$out")"
+kill "$s_live_pid" 2>/dev/null
+wait "$s_live_pid" 2>/dev/null
+run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$s_live" ] && fail "29c: a session folder was kept for a registry entry whose process is gone: $s_live"
+rm -f -- "${CLAUDE_SESSIONS_FIXTURE}/${s_live_pid}.json"
+# 29d. without a readable session registry no session folder is removed: it is UNKNOWN.
+s_noreg="${s_project}/55555555-noreg"
+mkdir -p "$s_noreg" || fail 'fixture: 29d session folder'
+printf 'payload\n' > "${s_noreg}/out"
+age_tree "$(stamp_hours_ago 48)" "$s_noreg" || fail 'fixture: 29d age session folder'
+out=$(CLAUDE_SESSIONS_OVERRIDE="${fixture_root}/no-such-registry" run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$s_noreg" ] || fail "29d: a session folder was reaped with no readable session registry: $s_noreg"
+grep -qF "UNKNOWN (no readable session registry at ${fixture_root}/no-such-registry, tree not examined) ${s_noreg}" <<<"$out" ||
+  fail '29d: the missing session registry was not reported as UNKNOWN'
+rm -rf -- "$s_noreg"
+# 29e. a project name with a newline splits its session folder into two lines. The second is
+# relative, so it must never resolve against the working directory and remove a folder there.
+s_split="${s_root}/"$'proj\nr5019-victim'
+mkdir -p "${s_split}/session" || fail 'fixture: 29e newline project'
+age_tree "$(stamp_hours_ago 48)" "$s_split" || fail 'fixture: 29e age newline project'
+age_tree "$(stamp_hours_ago 48)" "$s_root" || fail 'fixture: 29e re-age session root'
+s_cwd=$(mktemp -d) || fail 'fixture: 29e working directory'
+mkdir -p "${s_cwd}/r5019-victim/session" || fail 'fixture: 29e victim'
+printf 'not temp\n' > "${s_cwd}/r5019-victim/session/keep.txt"
+age_tree "$(stamp_hours_ago 48)" "${s_cwd}/r5019-victim" || fail 'fixture: 29e age victim'
+(cd "$s_cwd" && run apply 3 "$NEVER_CLEAN_BUDGET") > /dev/null
+[ -e "${s_cwd}/r5019-victim/session/keep.txt" ] ||
+  fail '29e: a folder in the working directory was removed through a newline in a project name'
+rm -rf -- "$s_cwd" "$s_root"
 
 reclaim_test_finished=1
 if [ "$failures" -eq 0 ]; then
