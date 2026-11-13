@@ -41,23 +41,66 @@ registry="${plugins_root}/installed_plugins.json"
 [ -r "${registry}" ] ||
   die "cannot read runtime plugin registry: ${registry}"
 
+# The session root comes from the runtime's own hook payload (`cwd`), never from the
+# surveyor's text, and counts only when it is a checkout of the SAME repository (one
+# git common dir). It is resolved first because it serves three purposes: choosing
+# the registry record below, the second reviewed-checkout fallback, and the
+# classifier declarations further down.
+# Repository identity is read from the named directory alone: an inherited GIT_DIR,
+# GIT_COMMON_DIR or GIT_WORK_TREE would make every directory answer with the same
+# repository, so another repository's checkout would pass as this one's.
+repo_git() {
+  env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git "$@"
+}
+# A failed read is not an empty payload: refuse rather than classify a partial one.
+hook_input=$(cat 2>/dev/null) || die "cannot read the hook input"
+session_cwd=$(printf '%s' "${hook_input}" |
+  jq -r 'if (.cwd | type) == "string" then .cwd else "" end' 2>/dev/null || true)
+session_root=''
+if [ -n "${session_cwd}" ] && [ -d "${session_cwd}" ]; then
+  session_root=$(repo_git -C "${session_cwd}" rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -n "${session_root}" ]; then
+    session_root=$(CDPATH='' cd -- "${session_root}" 2>/dev/null && pwd -P || true)
+  fi
+fi
+session_same_repo=false
+if [ -n "${session_root}" ] && [ "${session_root}" != "${REPO_ROOT}" ]; then
+  repo_common=$(repo_git -C "${REPO_ROOT}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  session_common=$(repo_git -C "${session_root}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  [ -z "${repo_common}" ] || repo_common=$(CDPATH='' cd -- "${repo_common}" 2>/dev/null && pwd -P || true)
+  [ -z "${session_common}" ] || session_common=$(CDPATH='' cd -- "${session_common}" 2>/dev/null && pwd -P || true)
+  if [ -n "${repo_common}" ] && [ "${repo_common}" = "${session_common}" ]; then
+    session_same_repo=true
+  fi
+fi
+
 # The registry holds one record per install SCOPE: every session worktree adds a
 # project-scope record keyed by its `projectPath`, and records for removed
 # worktrees stay behind. Requiring exactly one record therefore refused every
 # surveyor call from 2026-11-04 (14 of 14 dispatches; 178 records naming 5 cache
 # versions on 2026-11-08, monorepo#4835). Only records that apply to THIS
-# project count: a project- or local-scope record for REPO_ROOT or the
-# runtime's CLAUDE_PROJECT_DIR (the more specific scope), else the user-scope
-# record (no scope reads as user). Identical paths are one path; two distinct
-# paths in the deciding tier are still refused. Whichever path resolves, every
-# asset below must still match its pinned digest before anything runs.
-install_path="$(jq -er --arg id "${PLUGIN_ID}" \
-  --arg root "${REPO_ROOT}" --arg project_dir "${CLAUDE_PROJECT_DIR:-}" '
+# project count: a project- or local-scope record for the dispatching session
+# (the more specific scope), else the user-scope record (no scope reads as user).
+# The session is the same-repository worktree named by the payload `cwd` when there
+# is one, else REPO_ROOT or the runtime's CLAUDE_PROJECT_DIR. A scheduled worktree
+# session runs this hook from the SHARED checkout, whose own record still named a
+# 6.8.1 install on 2026-11-12 after the user and session records reached the pin,
+# so every survey dispatch was refused (monorepo#4974). Identical paths are one
+# path; two distinct paths in the deciding tier are still refused. Whichever path
+# resolves, every asset below must still match its pinned digest before anything runs.
+if [ "${session_same_repo}" = true ]; then
+  record_roots="${session_root}"
+  record_scope="${session_root}"
+else
+  record_roots="${REPO_ROOT}"$'\n'"${CLAUDE_PROJECT_DIR:-}"
+  record_scope="${REPO_ROOT}"
+fi
+install_path="$(jq -er --arg id "${PLUGIN_ID}" --arg roots "${record_roots}" '
   def trimmed: sub("/+$"; "");
   [.plugins[$id][]?
     | select(type == "object" and (.installPath | type) == "string"
         and (.installPath | length) > 0)] as $all
-  | ([$root, $project_dir] | map(select(length > 0) | trimmed)) as $roots
+  | ($roots | split("\n") | map(select(length > 0) | trimmed)) as $roots
   | ([$all[] | select((.scope == "project" or .scope == "local")
         and (((.projectPath // "") | trimmed) as $p | any($roots[]; . == $p)))
       | .installPath] | unique) as $project
@@ -67,10 +110,9 @@ install_path="$(jq -er --arg id "${PLUGIN_ID}" \
   | select(length == 1)
   | .[0]
 ' "${registry}" 2>/dev/null)" ||
-  die "runtime registry must name exactly one install path for ${PLUGIN_ID} that applies to ${REPO_ROOT}"
+  die "runtime registry must name exactly one install path for ${PLUGIN_ID} that applies to ${record_scope}"
 [ -d "${install_path}" ] ||
   die "registered plugin install path does not exist: ${install_path}"
-
 asset_failure=''
 verify_asset() {
   local root="$1" relative_path="$2"
@@ -79,6 +121,16 @@ verify_asset() {
 
   if [ ! -f "${asset}" ] || [ ! -x "${asset}" ] || [ -L "${asset}" ]; then
     asset_failure="runtime asset is not a regular executable: ${relative_path}"
+    return 1
+  fi
+  # A linked directory between the root and the asset reaches bytes outside the
+  # tree being verified, so its real path must be the root's real path plus the
+  # asset's relative directory.
+  local root_real asset_dir_real
+  root_real=$(CDPATH='' cd -- "${root}" 2>/dev/null && pwd -P || true)
+  asset_dir_real=$(CDPATH='' cd -- "$(dirname -- "${asset}")" 2>/dev/null && pwd -P || true)
+  if [ -z "${root_real}" ] || [ "${asset_dir_real}" != "${root_real}/$(dirname -- "${relative_path}")" ]; then
+    asset_failure="runtime asset ${relative_path} resolves through a linked directory"
     return 1
   fi
   expected="$(jq -er --arg path "${relative_path}" '
@@ -136,23 +188,50 @@ verify_install() {
 # gated refresh installs only the pin, so it cannot catch up until the next pin
 # bump. From the 2026-11-11 bump, 5 of 6 surveyor dispatches were refused that way
 # (monorepo#4969). On drift the contract follows the reviewed definition at the
-# gitlink, so the reviewed checkout in THIS checkout is the one fallback. It is held
+# gitlink, so the reviewed checkout in THIS checkout is the first fallback. It is held
 # to the same digests, and is used only at its own real path, never through a link.
+
+# Sets checkout_failure and returns 1 unless the reviewed copy below <root> is
+# populated, reached at its own real path, and matches every pinned digest.
+checkout_failure=''
+verify_reviewed_checkout() {
+  local checkout="$1/libraries/agent-plugins/plugins/agentic-engineering" real=''
+  if [ -d "${checkout}" ]; then
+    real=$(CDPATH='' cd -- "${checkout}" 2>/dev/null && pwd -P || true)
+  fi
+  if [ -z "${real}" ]; then
+    checkout_failure="libraries/agent-plugins is not populated"
+  elif [ "${real}" != "${checkout}" ]; then
+    checkout_failure="libraries/agent-plugins resolves through a symlink"
+  elif ! verify_install "${checkout}"; then
+    checkout_failure="${asset_failure}"
+  else
+    return 0
+  fi
+  return 1
+}
+
+# For a scheduled worktree session the runtime resolves "$CLAUDE_PROJECT_DIR", and
+# so REPO_ROOT, to the SHARED main checkout, whose submodule sits off the pin. That
+# left 3 of 4 surveyor dispatches refused after the first fallback shipped
+# (monorepo#4974). The session worktree holds the pinned bytes, so it is the second
+# fallback, held to exactly the same checks.
 if ! verify_install "${install_path}"; then
   installed_failure="${asset_failure}"
-  reviewed_checkout="${REPO_ROOT}/libraries/agent-plugins/plugins/agentic-engineering"
-  reviewed_real=''
-  if [ -d "${reviewed_checkout}" ]; then
-    reviewed_real=$(CDPATH='' cd -- "${reviewed_checkout}" 2>/dev/null && pwd -P || true)
+  if verify_reviewed_checkout "${REPO_ROOT}"; then
+    install_path="${REPO_ROOT}/libraries/agent-plugins/plugins/agentic-engineering"
+  else
+    refusal="${installed_failure}; reviewed checkout fallback (${REPO_ROOT}/libraries/agent-plugins/plugins/agentic-engineering): ${checkout_failure}"
+    if [ "${session_same_repo}" = true ]; then
+      if verify_reviewed_checkout "${session_root}"; then
+        install_path="${session_root}/libraries/agent-plugins/plugins/agentic-engineering"
+        refusal=''
+      else
+        refusal="${refusal}; session checkout fallback (${session_root}/libraries/agent-plugins/plugins/agentic-engineering): ${checkout_failure}"
+      fi
+    fi
+    [ -z "${refusal}" ] || die "${refusal}"
   fi
-  if [ -z "${reviewed_real}" ]; then
-    die "${installed_failure}; reviewed checkout fallback: libraries/agent-plugins is not populated"
-  elif [ "${reviewed_real}" != "${reviewed_checkout}" ]; then
-    die "${installed_failure}; reviewed checkout fallback: libraries/agent-plugins resolves through a symlink"
-  elif ! verify_install "${reviewed_checkout}"; then
-    die "${installed_failure}; reviewed checkout fallback: ${asset_failure}"
-  fi
-  install_path="${reviewed_checkout}"
 fi
 
 # The reviewed plugin admits a CONSUMING deployment's own classifier only when
@@ -261,39 +340,27 @@ done
 # admitted on 72 of 75 the day before, and the surveyor fell back to the
 # hand-derivation these classifiers exist to replace.
 #
-# This adds no program the guard did not already trust. The session root comes
-# from the runtime's own hook payload (`cwd`), never from the surveyor's text; it
-# must be a checkout of the SAME repository (one git common dir); and a copy is
-# declared there only when it is a regular executable byte-identical to the
-# REPO_ROOT copy declared above. Anything else — no payload cwd, another
-# repository, a diverged or missing copy — declares nothing extra, and the
-# REPO_ROOT declaration stands alone exactly as before.
-hook_input=$(cat 2>/dev/null || true)
-session_cwd=$(printf '%s' "${hook_input}" |
-  jq -r 'if (.cwd | type) == "string" then .cwd else "" end' 2>/dev/null || true)
-session_root=''
-if [ -n "${session_cwd}" ] && [ -d "${session_cwd}" ]; then
-  session_root=$(git -C "${session_cwd}" rev-parse --show-toplevel 2>/dev/null || true)
-  if [ -n "${session_root}" ]; then
-    session_root=$(CDPATH='' cd -- "${session_root}" 2>/dev/null && pwd -P || true)
-  fi
+# This adds no program the guard did not already trust. The session root (resolved
+# above from the payload `cwd`, same repository only) gets a copy declared only when
+# it is a regular executable byte-identical to the REPO_ROOT copy declared above.
+# Anything else — no payload cwd, another repository, a diverged or missing copy —
+# declares nothing extra, and the REPO_ROOT declaration stands alone exactly as before.
+# The scripts directory itself must be reached at its own real path, so a linked
+# directory cannot declare a path outside the session checkout.
+session_scripts_real=''
+if [ "${session_same_repo}" = true ]; then
+  session_scripts_real=$(CDPATH='' cd -- "${session_root}/.claude/scripts" 2>/dev/null && pwd -P || true)
 fi
-if [ -n "${session_root}" ] && [ "${session_root}" != "${REPO_ROOT}" ]; then
-  repo_common=$(git -C "${REPO_ROOT}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
-  session_common=$(git -C "${session_root}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
-  [ -z "${repo_common}" ] || repo_common=$(CDPATH='' cd -- "${repo_common}" 2>/dev/null && pwd -P || true)
-  [ -z "${session_common}" ] || session_common=$(CDPATH='' cd -- "${session_common}" 2>/dev/null && pwd -P || true)
-  if [ -n "${repo_common}" ] && [ "${repo_common}" = "${session_common}" ]; then
-    for classifier_name in ${classifier_names}; do
-      session_classifier="${session_root}/.claude/scripts/${classifier_name}"
-      case "${session_classifier}" in *:*) continue ;; esac
-      if [ -f "${session_classifier}" ] && [ -x "${session_classifier}" ] &&
-        [ ! -L "${session_classifier}" ] &&
-        cmp -s "${session_classifier}" "${REPO_ROOT}/.claude/scripts/${classifier_name}"; then
-        consumer_classifiers="${consumer_classifiers}:${session_classifier}"
-      fi
-    done
-  fi
+if [ "${session_same_repo}" = true ] && [ "${session_scripts_real}" = "${session_root}/.claude/scripts" ]; then
+  for classifier_name in ${classifier_names}; do
+    session_classifier="${session_root}/.claude/scripts/${classifier_name}"
+    case "${session_classifier}" in *:*) continue ;; esac
+    if [ -f "${session_classifier}" ] && [ -x "${session_classifier}" ] &&
+      [ ! -L "${session_classifier}" ] &&
+      cmp -s "${session_classifier}" "${REPO_ROOT}/.claude/scripts/${classifier_name}"; then
+      consumer_classifiers="${consumer_classifiers}:${session_classifier}"
+    fi
+  done
 fi
 
 # The frontmatter hook is already scoped to portfolio-surveyor. Clear the

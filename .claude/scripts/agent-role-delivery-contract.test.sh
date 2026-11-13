@@ -1387,6 +1387,30 @@ expect_session_refusal() {
 expect_session_refusal 'a session-path classifier with no payload cwd' '' "${session_wt_cls}"
 expect_session_refusal 'a classifier in a DIFFERENT repository named by the payload cwd' \
   "${session_other}" "${session_other}/.claude/scripts/pr-unresolved-threads.sh"
+# A linked scripts directory would declare a path outside the session checkout even
+# when the classifiers it reaches are byte-identical, so none of them is declared.
+mv "${session_wt}/.claude/scripts" "${hook_tmp}/linked-session-scripts"
+ln -s "${hook_tmp}/linked-session-scripts" "${session_wt}/.claude/scripts"
+expect_session_refusal 'a classifier reached through a linked session scripts directory' \
+  "${session_wt}" "${session_wt_cls}"
+rm -f "${session_wt}/.claude/scripts"
+mv "${hook_tmp}/linked-session-scripts" "${session_wt}/.claude/scripts"
+session_hook "${session_wt}" "${session_wt_cls}" >/dev/null ||
+  fail "restoring the session scripts directory did not restore the session classifier declaration"
+
+# A failed stdin read is refused, never classified as an empty payload.
+set +e
+stdin_failure_output="$(CLAUDE_CONFIG_DIR="${hook_config}" GH_TELEMETRY=0 \
+  "${session_main}/.claude/scripts/portfolio-surveyor-forge-hook.sh" 2>&1 </)"
+stdin_failure_status=$?
+set -e
+[ "${stdin_failure_status}" -eq 2 ] ||
+  fail "surveyor hook did not refuse a failed hook-input read (exit ${stdin_failure_status})"
+case "${stdin_failure_output}" in
+  *'cannot read the hook input'*) ;;
+  *) fail "failed hook-input read was refused for the wrong reason: ${stdin_failure_output}" ;;
+esac
+
 printf '\n# diverged\n' >> "${session_wt_cls}"
 expect_session_refusal 'a session-worktree classifier whose bytes differ from the declared copy' \
   "${session_wt}" "${session_wt_cls}"
@@ -1902,7 +1926,7 @@ set -e
 [ "${fallback_drift_status}" -eq 2 ] ||
   fail "consumer surveyor hook trusted a reviewed checkout whose bytes differ from desired state (exit ${fallback_drift_status})"
 case "${fallback_drift_output}" in
-  *'reviewed checkout fallback: runtime asset scripts/classify-default-branch-ci-runs.sh sha256 does not match desired state'*) ;;
+  *"reviewed checkout fallback (${fixture_checkout}): runtime asset scripts/classify-default-branch-ci-runs.sh sha256 does not match desired state"*) ;;
   *) fail "drifted checkout was refused without naming the checkout's own digest failure: ${fallback_drift_output}" ;;
 esac
 
@@ -1918,7 +1942,7 @@ set -e
 [ "${fallback_extra_status}" -eq 2 ] ||
   fail "consumer surveyor hook accepted a reviewed checkout with a drifted pinned asset outside the guard's set (exit ${fallback_extra_status})"
 case "${fallback_extra_output}" in
-  *'reviewed checkout fallback: runtime asset scripts/evaluate-inference-routing.sh sha256 does not match desired state'*) ;;
+  *"reviewed checkout fallback (${fixture_checkout}): runtime asset scripts/evaluate-inference-routing.sh sha256 does not match desired state"*) ;;
   *) fail "checkout with a drifted routing evaluator was refused for the wrong reason: ${fallback_extra_output}" ;;
 esac
 
@@ -1932,10 +1956,159 @@ set -e
 [ "${fallback_link_status}" -eq 2 ] ||
   fail "consumer surveyor hook fell back to a symlinked checkout (exit ${fallback_link_status})"
 case "${fallback_link_output}" in
-  *'reviewed checkout fallback: libraries/agent-plugins resolves through a symlink'*) ;;
+  *"reviewed checkout fallback (${fixture_checkout}): libraries/agent-plugins resolves through a symlink"*) ;;
   *) fail "symlinked checkout was refused for the wrong reason: ${fallback_link_output}" ;;
 esac
 rm -f "${fixture_checkout}"
+
+# The runtime resolves "$CLAUDE_PROJECT_DIR" to the SHARED main checkout for a
+# scheduled worktree session, so the hook's own root is that checkout, whose
+# submodule sits off the pin. The session worktree named by the payload `cwd` holds
+# the pinned bytes. After #4970, 3 of 4 surveyor dispatches on 2026-11-12 were still
+# refused for this (monorepo#4974). The session checkout is a second fallback, held
+# to the same repository, real-path and digest checks as the first.
+mkdir -p "$(dirname "${fixture_checkout}")"
+cp -R "${plugin_root}" "${fixture_checkout}"
+printf '\n# off-pin shared checkout\n' >> "${fixture_checkout}/scripts/classify-default-branch-ci-runs.sh"
+session_checkout="${session_wt}/libraries/agent-plugins/plugins/agentic-engineering"
+mkdir -p "$(dirname "${session_checkout}")"
+cp -R "${plugin_root}" "${session_checkout}"
+session_payload() {
+  jq -nc --arg cwd "$1" --arg command "$2" '{cwd: $cwd, tool_input: {command: $command}}'
+}
+run_surveyor_hook "$(session_payload "${session_wt}" 'gh pr list --repo devantler-tech/monorepo --state open')" >/dev/null ||
+  fail "consumer surveyor hook did not fall back to the session worktree's reviewed checkout when the shared checkout is off the pin (monorepo#4974)"
+set +e
+session_write_output="$(run_surveyor_hook "$(session_payload "${session_wt}" 'gh pr merge 1 --repo devantler-tech/monorepo')" 2>&1)"
+session_write_status=$?
+set -e
+[ "${session_write_status}" -eq 2 ] ||
+  fail "session checkout fallback ran the drifted installed adapter instead of the reviewed guard (exit ${session_write_status})"
+case "${session_write_output}" in
+  *'gh pr merge is not a read verb'*) ;;
+  *) fail "session checkout fallback blocked a write without the reviewed guard's reason: ${session_write_output}" ;;
+esac
+# Without a payload cwd, or with a cwd in another repository, there is no session
+# checkout to trust, so the off-pin shared checkout's refusal stands.
+other_checkout="${session_other}/libraries/agent-plugins/plugins/agentic-engineering"
+mkdir -p "$(dirname "${other_checkout}")"
+cp -R "${plugin_root}" "${other_checkout}"
+for session_case in '' "${session_other}"; do
+  set +e
+  if [ -z "${session_case}" ]; then
+    session_refusal="$(run_surveyor_hook "${safe_payload}" 2>&1)"
+  else
+    session_refusal="$(run_surveyor_hook "$(session_payload "${session_case}" 'gh pr list --repo devantler-tech/monorepo --state open')" 2>&1)"
+  fi
+  session_refusal_status=$?
+  set -e
+  [ "${session_refusal_status}" -eq 2 ] ||
+    fail "surveyor hook trusted a checkout outside this repository's session worktree (cwd '${session_case}', exit ${session_refusal_status})"
+  case "${session_refusal}" in
+    *"reviewed checkout fallback (${fixture_checkout}): runtime asset scripts/classify-default-branch-ci-runs.sh sha256 does not match desired state"*) ;;
+    *) fail "surveyor hook refused cwd '${session_case}' without the shared checkout's digest reason: ${session_refusal}" ;;
+  esac
+done
+# An inherited GIT_DIR makes every directory answer as one repository; the identity
+# probes ignore it, so the other repository's checkout is still not trusted.
+set +e
+gitdir_refusal="$(GIT_DIR="${session_main}/.git" run_surveyor_hook "$(session_payload "${session_other}" 'gh pr list --repo devantler-tech/monorepo --state open')" 2>&1)"
+gitdir_refusal_status=$?
+set -e
+[ "${gitdir_refusal_status}" -eq 2 ] ||
+  fail "an inherited GIT_DIR made another repository's checkout pass as the session checkout (exit ${gitdir_refusal_status})"
+case "${gitdir_refusal}" in
+  *"reviewed checkout fallback (${fixture_checkout}): runtime asset scripts/classify-default-branch-ci-runs.sh sha256 does not match desired state"*) ;;
+  *) fail "inherited GIT_DIR case was refused for the wrong reason: ${gitdir_refusal}" ;;
+esac
+# A linked directory inside a checkout reaches bytes outside the verified tree, so it
+# is refused even when every byte it reaches matches its digest.
+mv "${session_checkout}/scripts" "${hook_tmp}/linked-scripts"
+ln -s "${hook_tmp}/linked-scripts" "${session_checkout}/scripts"
+set +e
+linked_dir_output="$(run_surveyor_hook "$(session_payload "${session_wt}" 'gh pr list --repo devantler-tech/monorepo --state open')" 2>&1)"
+linked_dir_status=$?
+set -e
+[ "${linked_dir_status}" -eq 2 ] ||
+  fail "surveyor hook trusted a session checkout whose scripts directory is a link (exit ${linked_dir_status})"
+case "${linked_dir_output}" in
+  *"session checkout fallback (${session_checkout}): runtime asset scripts/classify-default-branch-ci-runs.sh resolves through a linked directory"*) ;;
+  *) fail "linked scripts directory was refused for the wrong reason: ${linked_dir_output}" ;;
+esac
+rm -f "${session_checkout}/scripts"
+mv "${hook_tmp}/linked-scripts" "${session_checkout}/scripts"
+# A drifted session checkout is refused too, and the refusal names the path it checked.
+printf '\n# unreviewed drift\n' >> "${session_checkout}/scripts/forge-readonly-guard.sh"
+set +e
+session_drift_output="$(run_surveyor_hook "$(session_payload "${session_wt}" 'gh pr list --repo devantler-tech/monorepo --state open')" 2>&1)"
+session_drift_status=$?
+set -e
+[ "${session_drift_status}" -eq 2 ] ||
+  fail "surveyor hook trusted a session checkout whose bytes differ from desired state (exit ${session_drift_status})"
+case "${session_drift_output}" in
+  *"session checkout fallback (${session_checkout}): runtime asset scripts/forge-readonly-guard.sh sha256 does not match desired state"*) ;;
+  *) fail "drifted session checkout was refused without naming its path and digest failure: ${session_drift_output}" ;;
+esac
+rm -rf "${session_wt}/libraries" "${session_other}/libraries" "${session_main}/libraries"
+
+# The registry record that decides is the dispatching session's own. The shared
+# checkout keeps a project-scope record of its own, and on 2026-11-12 that record
+# still named a months-old install after the user and session records reached the
+# pin, so every surveyor dispatch from a worktree session was refused (monorepo#4974).
+# With no reviewed checkout anywhere, only the session's record can admit the read,
+# and the drifted shared-checkout install must never run.
+jq -n --arg shared "${session_main}" --arg session "${session_wt}" \
+  --arg drifted "${admit_all_plugin}" --arg reviewed "${plugin_root}" '
+  {version: 2, plugins: {"agentic-engineering@devantler-plugins": [
+    {scope: "user", installPath: $drifted},
+    {scope: "project", projectPath: $shared, installPath: $drifted},
+    {scope: "project", projectPath: $session, installPath: $reviewed}]}}' > "${hook_registry}"
+run_surveyor_hook "$(session_payload "${session_wt}" 'gh pr list --repo devantler-tech/monorepo --state open')" >/dev/null ||
+  fail "surveyor hook did not decide on the session worktree's own registry record (monorepo#4974)"
+set +e
+session_scope_write="$(run_surveyor_hook "$(session_payload "${session_wt}" 'gh pr merge 1 --repo devantler-tech/monorepo')" 2>&1)"
+session_scope_write_status=$?
+set -e
+[ "${session_scope_write_status}" -eq 2 ] ||
+  fail "session-scope resolution ran the drifted shared-checkout install (exit ${session_scope_write_status})"
+case "${session_scope_write}" in
+  *'gh pr merge is not a read verb'*) ;;
+  *) fail "session-scope resolution blocked a write without the reviewed guard's reason: ${session_scope_write}" ;;
+esac
+# Without a payload cwd, or with one in another repository, the session record does
+# not apply, so the shared checkout's drifted record decides and is refused.
+for session_case in '' "${session_other}"; do
+  set +e
+  if [ -z "${session_case}" ]; then
+    session_scope_refusal="$(run_surveyor_hook "${safe_payload}" 2>&1)"
+  else
+    session_scope_refusal="$(run_surveyor_hook "$(session_payload "${session_case}" 'gh pr list --repo devantler-tech/monorepo --state open')" 2>&1)"
+  fi
+  session_scope_status=$?
+  set -e
+  [ "${session_scope_status}" -eq 2 ] ||
+    fail "surveyor hook used a session record outside this repository (cwd '${session_case}', exit ${session_scope_status})"
+  case "${session_scope_refusal}" in
+    *'surveyor-forge-readonly.sh sha256 does not match desired state; reviewed checkout fallback'*) ;;
+    *) fail "cwd '${session_case}' was refused without the shared record's digest reason: ${session_scope_refusal}" ;;
+  esac
+done
+# A session record that is itself drifted is still refused: the session decides which
+# install is checked, never whether it is checked.
+jq -n --arg session "${session_wt}" --arg drifted "${admit_all_plugin}" --arg reviewed "${plugin_root}" '
+  {version: 2, plugins: {"agentic-engineering@devantler-plugins": [
+    {scope: "user", installPath: $reviewed},
+    {scope: "project", projectPath: $session, installPath: $drifted}]}}' > "${hook_registry}"
+set +e
+session_scope_drift="$(run_surveyor_hook "$(session_payload "${session_wt}" 'gh pr list --repo devantler-tech/monorepo --state open')" 2>&1)"
+session_scope_drift_status=$?
+set -e
+[ "${session_scope_drift_status}" -eq 2 ] ||
+  fail "surveyor hook accepted a drifted install named by the session's own record (exit ${session_scope_drift_status})"
+case "${session_scope_drift}" in
+  *'surveyor-forge-readonly.sh sha256 does not match desired state'*) ;;
+  *) fail "drifted session record was refused for the wrong reason: ${session_scope_drift}" ;;
+esac
 surveyor_hook_resolver="${real_surveyor_hook_resolver}"
 write_hook_registry "${plugin_root}"
 
