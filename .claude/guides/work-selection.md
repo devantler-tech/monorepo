@@ -487,6 +487,9 @@ immutable PR creation time when the start is unknown. `updatedAt` is activity, n
 A PR reaches a terminal state when it is merged, parked on a named live-verified
 blocker, or—when a stale draft is not worth reviving—closed with every still-valid finding re-filed
 as an issue (an invalid or superseded finding may instead be closed with the reason recorded).
+A park settles the PR, never its blocker: an in-portfolio blocker is finishing work at this rung,
+and a parked dependency PR the parked digest reports `STRANDED` is still this rung's work (see
+*A park is never a resting place* under [*You own EVERY pull request*](merge-policy.md#you-own-every-pull-request-in-the-portfolio--whoever-authored-it)).
 Closing old work creates no intake credit: the lane's total open own-PR count must not rise while the
 oldest cohort drains, and no replacement draft may be opened merely because an old one was disposed
 of.

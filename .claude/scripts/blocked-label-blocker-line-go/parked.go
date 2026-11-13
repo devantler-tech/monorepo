@@ -33,6 +33,10 @@ type comment struct {
 		Login string `json:"login"`
 	} `json:"user"`
 	Body string `json:"body"`
+	// CreatedAt dates the record comment. The record is edited in place, so it is
+	// the day the pull request was first parked; the parked digest reads it as
+	// the park's age for a dependency pull request (see strandedReason).
+	CreatedAt string `json:"created_at"`
 }
 
 // parked reports whether a pull request carries the blocked label. Unlike an
@@ -88,6 +92,21 @@ func parkRecords(comments []comment) []string {
 		}
 	}
 	return records
+}
+
+// recordCreated returns the creation time of the one record comment of a
+// parked pull request whose record parkVerdict accepted. A time that is missing
+// or unreadable is an error: read as today, it would make every old park new.
+func recordCreated(comments []comment) (string, error) {
+	for _, c := range comments {
+		if c.User.Login == recordAuthor && strings.HasPrefix(c.Body, disclosurePrefix) && carriesMarker(c.Body) {
+			if c.CreatedAt == "" {
+				return "", errors.New("record comment carries no created_at -- UNKNOWN")
+			}
+			return c.CreatedAt, nil
+		}
+	}
+	return "", errors.New("no record comment to date -- UNKNOWN")
 }
 
 // inputComments reads the comments an --input record lists for a parked pull

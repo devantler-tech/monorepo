@@ -88,6 +88,9 @@ Options: --today <YYYY-MM-DD> (default UTC today)
                        because skipping a blocked issue needs a live check)
          --unrecorded-max-age-days <n> (default 7; how long a Security issue
                        may stay unstarted before it needs a record)
+         --stranded-max-age-days <n> (default 14; how long a dependency
+                       pull request may stay parked before its record must
+                       show the engineering route tried and the next one)
          --quiet (findings only)
          --ask-digest (emit declared authority blockers with missing or stale
                        ask records, oldest first, for verification before
@@ -102,7 +105,24 @@ Options: --today <YYYY-MM-DD> (default UTC today)
                        names the pull request itself, BLOCKER-UNREADABLE when
                        a reference has no usable number; only this
                        organization's are read, and an authority blocker's
-                       state never is), then
+                       state never is),
+                       STRANDED with the reason when a dependabot[bot] or
+                       renovate[bot] pull request would be PARKED but
+                       stays owned work: UNCLAIMED when an open issue of
+                       this organization its upstream record names is
+                       neither parked itself nor referred to by an open
+                       pull request that is neither parked nor a
+                       dependency bot's,
+                       NO-ROUTE or ROUTE-LAPSED when it has been parked
+                       longer than --stranded-max-age-days, whatever its
+                       blocker kind, and the record's result does not say
+                       what was "tried:", the "next:" route and one
+                       "re-check <YYYY-MM-DD>" from today to
+                       --stranded-max-age-days ahead, exactly one of each
+                       as its own ";"-separated segment, with no other
+                       segment using re-check as a word; a STRANDED row is
+                       actionable, and a park date, author or blocker fact
+                       it cannot read is UNKNOWN; then
                        a CHECKED line counting every one read; issue findings
                        are not part of it and do not change its exit)
 Write a record with the compose subcommand (compose --help), never by hand.
@@ -116,7 +136,7 @@ an orgs/ or repos/ path; nothing is printed unless every endpoint was read.
 Exit: 0 conforms; 1 findings; 2 UNKNOWN (usage, unreadable or incomplete input,
       or an --org read that saw no Security issue at all).
       With --parked-digest: 0 every labelled pull request is parked (or none is
-      labelled); 1 at least one is ACTIONABLE; 2 UNKNOWN.
+      labelled); 1 at least one is ACTIONABLE or STRANDED; 2 UNKNOWN.
 Forge reads other than searches are conditional: each page is kept privately
 under $XDG_CACHE_HOME (default ~/.cache) and reused only when the forge
 confirms it unchanged in this run, which is not charged to the request budget.
@@ -154,9 +174,13 @@ type options struct {
 	maxAge           int64
 	verifyMaxAge     int64
 	unrecordedMaxAge int64
-	quiet            bool
-	askDigest        bool
-	parkedDigest     bool
+	// strandedMaxAge bounds how long a dependency pull request may stay parked
+	// before its record must show the engineering route tried and the next one
+	// (see strandedReason).
+	strandedMaxAge int64
+	quiet          bool
+	askDigest      bool
+	parkedDigest   bool
 }
 
 func civilDate(value string) (time.Time, error) {
@@ -169,7 +193,7 @@ func civilDate(value string) (time.Time, error) {
 // defaultOptions holds the bounds a sweep applies unless told otherwise. The
 // composer reads the same ones, so a record it prints is judged as it was composed.
 func defaultOptions() options {
-	return options{maxAge: 14, verifyMaxAge: 7, unrecordedMaxAge: 7}
+	return options{maxAge: 14, verifyMaxAge: 7, unrecordedMaxAge: 7, strandedMaxAge: 14}
 }
 
 func arguments(args []string) (options, bool, error) {
@@ -186,7 +210,7 @@ func arguments(args []string) (options, bool, error) {
 			o.askDigest = true
 		case "--parked-digest":
 			o.parkedDigest = true
-		case "--org", "--input", "--today", "--ask-max-age-days", "--verify-max-age-days", "--unrecorded-max-age-days":
+		case "--org", "--input", "--today", "--ask-max-age-days", "--verify-max-age-days", "--unrecorded-max-age-days", "--stranded-max-age-days":
 			i++
 			if i == len(args) {
 				return o, false, fmt.Errorf("%s requires a value", arg)
@@ -199,7 +223,7 @@ func arguments(args []string) (options, bool, error) {
 				o.input = value
 			case "--today":
 				today = value
-			case "--ask-max-age-days", "--verify-max-age-days", "--unrecorded-max-age-days":
+			case "--ask-max-age-days", "--verify-max-age-days", "--unrecorded-max-age-days", "--stranded-max-age-days":
 				if len(value) > 9 {
 					return o, false, fmt.Errorf("%s must have at most 9 digits", arg)
 				}
@@ -212,6 +236,8 @@ func arguments(args []string) (options, bool, error) {
 					o.maxAge = days
 				case "--verify-max-age-days":
 					o.verifyMaxAge = days
+				case "--stranded-max-age-days":
+					o.strandedMaxAge = days
 				default:
 					o.unrecordedMaxAge = days
 				}
@@ -672,6 +698,12 @@ type issue struct {
 	BlockerState string `json:"blocker_state"`
 	// AskState is the explicit offline answer for the linked maintainer-ask issue.
 	AskState string `json:"ask_state"`
+	// BlockerClaim is, on an --input dependency pull request whose blocker_state
+	// is "open", whether that in-portfolio blocker is "held" (parked itself, a
+	// pull request, or referred to by an open pull request that is neither parked
+	// nor a dependency bot's) or "unclaimed". Only
+	// the parked digest reads it; under --org it is read from the forge.
+	BlockerClaim string `json:"blocker_claim"`
 }
 
 // unrecordedType is the one issue type read for being unstarted: a Security

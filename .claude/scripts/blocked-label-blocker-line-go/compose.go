@@ -38,7 +38,10 @@ const composeHelp = `Compose a blocker record in the one shape the guard accepts
               outcome: the event in plain words, on one line. An item that
               must move first is an upstream blocker, so a bare reference is
               refused; a reference may appear beside the words.
-  --result    what the live check found today, on one line.
+  --result    what the live check found today, on one line. For a dependency
+              pull request parked past the bound, add ";"-separated segments
+              "tried: <route and what it showed>", "next: <route>" and
+              "re-check <YYYY-MM-DD>", one of each (see --parked-digest).
   --asked     authority only, and required: where and when the maintainer was
               asked. Ask first; a record without a fresh ask is refused.
   --actor     engineer (default) or improver: selects the disclosure line.
