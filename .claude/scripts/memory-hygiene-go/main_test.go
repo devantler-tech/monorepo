@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -692,11 +693,12 @@ func TestRepositoryContracts(t *testing.T) {
 	if start < 0 {
 		t.Fatal("cannot locate memory-hygiene path filter")
 	}
-	end := strings.Index(workflow[start:], "            maintainer-preflight:")
-	if end < 0 {
-		t.Fatal("cannot locate memory-hygiene path filter")
+	// The filter ends at the next filter key, whichever it is.
+	next := regexp.MustCompile(`(?m)^            [a-z0-9-]+:$`).FindStringIndex(workflow[start+1:])
+	if next == nil {
+		t.Fatal("cannot locate the end of the memory-hygiene path filter")
 	}
-	filter := workflow[start : start+end]
+	filter := workflow[start : start+1+next[0]]
 	for _, required := range []string{
 		"- 'AGENTS.md'",
 		"- '.claude/guides/**'",

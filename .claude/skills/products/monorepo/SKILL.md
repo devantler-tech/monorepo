@@ -19,8 +19,7 @@ retain a hit that also names the local issue.
 ## Repo-specific conventions
 
 - **Labels** (apply only from this set): `automation`, `github_actions`, `dependencies`, `submodules`, `question`, `duplicate`, `wontfix`, `needs triage`, `needs investigation`, `repo-assist`, `good first issue`, `help wanted`, `spam`, `blocked`, `next`.
-  Read live taxonomy before applying labels. The label allowlist remains guarded by
-  `.claude/scripts/product-value-contract.test.sh`.
+  Read live taxonomy before applying labels.
 - **Validate:** `.claude/scripts/run-affected-tests.sh`; workflow changes also need `actionlint`.
 - **Ownership:** site source, dependency audits, Site QA, Content Sync and Blog Stewardship belong
   to the [business-site card](../business-site/SKILL.md), not a second monorepo content lane.
