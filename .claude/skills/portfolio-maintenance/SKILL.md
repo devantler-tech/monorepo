@@ -539,7 +539,7 @@ stays private*) — and track it with a `last_host_audit` cursor like the other 
 org-wide `gh search` first, deepen only the candidates — never the old per-repo `gh pr/issue list` loop.)*
 
 Products → cards: [ksail](../products/ksail/SKILL.md) · [khoist](../products/khoist/SKILL.md) · [platform](../products/platform/SKILL.md) · [aws](../products/aws/SKILL.md) · [fleet-gitops](../products/fleet-gitops/SKILL.md) ·
-[cloudflare](../products/cloudflare/SKILL.md) · [monorepo](../products/monorepo/SKILL.md) · [business-site](../products/business-site/SKILL.md) · [templates](../products/templates/SKILL.md) ·
+[cloudflare](../products/cloudflare/SKILL.md) · [bookkeeper](../products/bookkeeper/SKILL.md) · [monorepo](../products/monorepo/SKILL.md) · [business-site](../products/business-site/SKILL.md) · [templates](../products/templates/SKILL.md) ·
 [github-actions](../products/github-actions/SKILL.md) · [agent plugins and skills](../products/agent-plugins/SKILL.md) ·
 [homebrew-tap](../products/homebrew-tap/SKILL.md) · [applications](../products/applications/SKILL.md) ·
 [provider-upjet-unifi](../products/provider-upjet-unifi/SKILL.md) ·

@@ -322,14 +322,11 @@ lane-draft-count.test.sh|
 kagent-lane-runs.sh|
 kagent-lane-runs.test.sh|
 portfolio-surveyor.test.sh|
-product-value-contract.test.sh|
 review-request-comment.test.sh|
-self-review-contract.test.sh|
 sibling-lane-watch.test.sh|
 squash-closing-keywords.test.sh|
 surveyor-hook-dispatch.test.sh|
 foreground-poll-guard.test.sh|
-work-priority-ladder.test.sh|
 bot-pr-adaptation-push.test.sh|
 disclosure-drift-sweep.test.sh|
 disk-preflight.test.sh|
@@ -351,7 +348,6 @@ agent-claim.test.sh|
 agent-issue-board-sweep.test.sh|
 branch-op-lock.test.sh|
 claim-lease-timeline-contract.test.sh|
-dotfile-glob-fanout-contract.test.sh|
 plugin-definition-currency.test.sh|
 submodule-init.test.sh|
 worktree-claim.test.sh|
@@ -370,11 +366,6 @@ required-gate-completeness.test.sh|
 kata-measure-date.test.sh|
 pr-body-contract.test.sh|
 provider-neutral-agents-contract.test.sh|
-claim-pr-findings-contract.test.sh|
-improver-role-disclosure-contract.test.sh|
-merge-preflight-thread-gate.test.sh|
-drifted-lane-escalation-contract.test.sh|
-retired-rule-survivors-contract.test.sh|
 review-provider-loop-contract.test.sh|
 agent-instructions-layout-contract.test.sh|
 worktree-lane-sweep.test.sh|

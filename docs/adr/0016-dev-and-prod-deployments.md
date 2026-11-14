@@ -102,3 +102,34 @@ to work.
 - The platform runs roughly one more small pod per product and one virtual cluster for KHoist.
 - A feature becomes visible to the maintainer when it merges, not when its flag is switched on in
   prod. Switching it on in prod stays a separate, reviewed change.
+
+## Amendments
+
+- **2026-11-14: `deploy/` splits into `base`, `prod` and `dev`.** The maintainer asked that every
+  product getting a dev deployment lays out its manifests as Kustomize `base/`, `prod/` and `dev/`
+  folders, so the two environments share one copy of everything they have in common. This refines
+  decision 2:
+
+  ```text
+  deploy/
+  ├── kustomization.yaml   # includes only prod/
+  ├── base/                # what both environments run, including the app the publisher pins
+  ├── prod/                # base/ + what only prod has
+  └── dev/                 # base/ + patches that turn it into dev
+  ```
+
+  `prod/` adds what belongs to prod alone: public routes, certificates, DNS, disruption budgets,
+  backups, and every secret or integration that touches prod. `dev/` changes `base/` through
+  Kustomize patches and never copies a manifest. The file at the artifact root only includes
+  `prod/`, so the platform keeps reconciling prod at the root and renders exactly what it rendered
+  before, while dev reconciles `./dev`.
+
+  The publish action takes the path of the manifest it pins as an input (`app-manifest`), so it
+  works with any layout. A product switches to signing its own releases
+  ([ADR 0017](0017-products-sign-their-own-releases.md)) in the same change as its restructure, and
+  sets that input to `base/deployment.yaml`. KHoist's controller ships as a Helm chart, not
+  from `deploy/`, so its layout is settled in
+  [khoist#610](https://github.com/devantler-tech/khoist/issues/610).
+- **2026-11-14: dev previews only merged work.** Under ADR 0017 a pre-release is signed only when
+  its tag's commit is on `main`, so the unmerged-work preview in decision 2 no longer applies. Dev
+  still selects the newest version including pre-releases.

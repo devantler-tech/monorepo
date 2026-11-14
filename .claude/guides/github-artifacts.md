@@ -51,31 +51,25 @@
   same repository that tracks the work. It is a statement to the maintainer and to the reviewers (see
   *Review guidelines*), never a heading, and never a way to skip review: a deferral with no open issue
   is not a deferral, and the green-review gate still counts every finding a reviewer reports.
-  **This is an executable write gate for the two routine roles it supports, not prose advice.**
-  Before every Agentic Engineer or Agent Improver PR creation or body edit, run
-  `.claude/scripts/pr-body-contract.sh seed --repo <owner/repo> --output <body-file>
-  --role <agentic-engineer|agent-improver>` from the consumer checkout. It loads the repository's
-  effective GitHub template (repository-local first, then the owner's `.github` default); fill that
-  seeded file without replacing its visible structure, then run
+  **The shape above is guidance the template and review carry; three safety rules are an executable
+  write gate for the two routine roles** (monorepo#5049): the leading disclosure line for the acting
+  role, exactly one issue relationship, and no non-public hostname or private address anywhere in the
+  body, including link targets and comments. Before every Agentic Engineer or Agent Improver PR
+  creation or body edit, run `.claude/scripts/pr-body-contract.sh seed --repo <owner/repo> --output
+  <body-file> --role <agentic-engineer|agent-improver>` from the consumer checkout. It loads the
+  repository's effective GitHub template (repository-local first, then the owner's `.github` default)
+  and, for `devantler-tech` targets, prepends the role disclosure. Fill that file, then run
   `.claude/scripts/pr-body-contract.sh check --repo <owner/repo> --body-file <body-file> --role
-  <agentic-engineer|agent-improver>` using the same acting role. Publish only
-  the passing file with `gh pr create --body-file` or `gh pr edit --body-file` — never bypass the
-  template with an inline `--body`. Immediately read the published body back from GitHub and pipe it
-  through the same `check --body-file -` command before requesting review or continuing the delivery
-  loop. Only the explicit trivial-fix no-issue carve-out (work-selection guide, *Issue-driven*) may replace the seeded issue placeholder
-  with the exact visible line `No issue: trivial fix.` and add `--allow-no-issue` to both checks;
-  ordinary delivery work may not use that flag. The required PR-body CI recognises that exact line so
-  the carve-out remains explicit and auditable after publication. A missing
-  template, failed check, or readback mismatch blocks that PR write; it never becomes a best-effort
-  warning. Existing PRs authored by either routine role that fail this gate are
-  body-hygiene work and are corrected before review, promotion, or merge. Interactive sessions still
-  follow this section's PM-facing body shape and effective template, but keep only their interactive
-  marker and do not invoke a routine role or disclosure through this script. For `devantler-tech`
-  targets, `seed` prepends the routine-role disclosure and `check` enforces this suite's PM-facing
-  `Why`/`What` contract. For a qualifying third-party target, `seed` preserves its effective template
-  without adding suite attribution and `check` preserves its template headings without imposing the
-  suite disclosure or section names; the separately inspected target policy governs any attribution
-  or additional content it requires.
+  <agentic-engineer|agent-improver>` using the same acting role. Publish only the passing file with
+  `gh pr create --body-file` or `gh pr edit --body-file`, then read the published body back from
+  GitHub and pipe it through the same `check --body-file -` command before requesting review. Only
+  the explicit trivial-fix no-issue carve-out (work-selection guide, *Issue-driven*) may replace the
+  seeded issue placeholder with the exact visible line `No issue: trivial fix.` and add
+  `--allow-no-issue` to both checks; the required PR-body CI recognises that exact line. A failed
+  check or readback blocks that PR write; it never becomes a best-effort warning. Interactive
+  sessions keep only their interactive marker and do not run this script. For a qualifying
+  third-party target, `seed` preserves its effective template without suite attribution and `check`
+  applies only the hostname rule; the separately inspected target policy governs the rest.
 - **Third-party upstream contributions — prove necessity, clear the professional boundary, and obey
   project policy** (maintainer direction, interactive session 2026-10-05). Public read-only source
   research needs no separate read approval when it meets the research exception in the privacy guide.

@@ -1510,7 +1510,8 @@ intentional tombstone, never drift.) The list:
 `platform-tenant-template`, `platform-template`, `homebrew-tap`,
 `agent-plugins`, `provider-upjet-unifi`, `kyverno-policies`, `fleet-gitops`, `aws`,
 `cloudflare`, `world-at-ruin`, `wedding-app`, `ascoachingogvaner`, `unifi`, `business-site`,
-`setup-agent-skills-action`, `update-agent-skills-action`, `guard-installed-skill-edits-action`.
+`setup-agent-skills-action`, `update-agent-skills-action`, `guard-installed-skill-edits-action`,
+`bookkeeper`, `client-orders` (private and empty; surveyed, not a product).
 Archived repos (read `.archived` live) are
 read-only: skip them entirely —
 no CI-red pass, no actionable signal (their stale bot PRs are unmergeable by design).
