@@ -87,6 +87,42 @@ index() {
   printf '\t\t\t\t\t</tbody>\n\t\t\t\t</table>\n\t\t\t</div>\n\t\t</main>\n\t</body>\n</html>\n'
 }
 
+# index_v176 <entry>... — the same index from rclone's v1.76.0 template, which the lane store has
+# served since devantler-tech/platform#6220, reduced from a live page to the markup around its
+# entries: the breadcrumb, the summary with the page's own folder and file counts, the "Go up" row,
+# one row per entry (its class carries `dir` and data attributes, its name link starts with ./),
+# and the placeholder row the page's filter shows.
+index_v176() {
+  local e dirs=0 files=0
+  for e in "$@"; do case "$e" in */) dirs=$((dirs + 1)) ;; *) files=$((files + 1)) ;; esac; done
+  printf '<!DOCTYPE html>\n<html>\n\t<head>\n\t\t<title>/</title>\n\t\t<meta charset="utf-8">\n\t</head>\n\t<body>\n'
+  printf '\t\t<header>\n\t\t\t<div class="eyebrow">Folder path</div>\n\t\t\t<h1><a href="../">/</a>\n'
+  printf '\t\t\t\t<a class="zip-root" href="?download=zip" title="Download root as .zip"><svg><use href="#zip-folder"></use></svg></a>\n\t\t\t</h1>\n\t\t</header>\n'
+  printf '\t\t<main>\n\t\t\t<div class="card">\n\t\t\t\t<div id="summary">\n'
+  printf '\t\t\t\t\t<button class="toggle" id="toggle-dirs" aria-pressed="true"><svg><use href="#folder"></use></svg><b id="ndirs">%s</b> directories</button>\n' "$dirs"
+  printf '\t\t\t\t\t<button class="toggle" id="toggle-files" aria-pressed="true"><svg><use href="#file"></use></svg><b id="nfiles">%s</b> files</button>\n' "$files"
+  printf '\t\t\t\t</div>\n\t\t\t\t<div class="listing">\n\t\t\t\t\t<table aria-describedby="summary">\n\t\t\t\t\t\t<thead>\n\t\t\t\t\t\t\t<tr>\n'
+  printf '\t\t\t\t\t\t\t\t<th class="name" data-key="name"><a href="" onclick="return sortBy(this.parentNode)">Name</a></th>\n'
+  printf '\t\t\t\t\t\t\t</tr>\n\t\t\t\t\t\t</thead>\n\t\t\t\t\t\t<tbody>\n'
+  printf '\t\t\t\t\t\t\t<tr class="goup"><td class="name"><a href="..">Go up</a></td><td class="size">&mdash;</td><td class="time">&mdash;</td></tr>\n'
+  for e in "$@"; do
+    case "$e" in
+      */) printf '\t\t\t\t\t\t\t<tr class="file dir" data-size="0" data-time="2026-11-09 03:00:00 +0000 UTC">\n'
+          printf '\t\t\t\t\t\t\t\t<td class="name"><svg><use href="#folder"></use></svg><a href="./%s">%s</a>\n' "$e" "$e"
+          printf '\t\t\t\t\t\t\t\t\t<a class="zip" href="./%s?download=zip" title="Download folder as .zip"><svg><use href="#zip-folder"></use></svg></a>\n' "$e"
+          printf '\t\t\t\t\t\t\t\t</td>\n\t\t\t\t\t\t\t\t<td class="size">&mdash;</td>\n' ;;
+      *) printf '\t\t\t\t\t\t\t<tr class="file" data-size="42" data-time="2026-11-09 03:00:00 +0000 UTC">\n'
+         printf '\t\t\t\t\t\t\t\t<td class="name"><svg><use href="#file"></use></svg><a href="./%s">%s</a>\n' "$e" "$e"
+         printf '\t\t\t\t\t\t\t\t</td>\n\t\t\t\t\t\t\t\t<td class="size"><size>42</size></td>\n' ;;
+    esac
+    printf '\t\t\t\t\t\t\t\t<td class="time"><time datetime="2026-11-09 03:00:00 +0000 UTC">2026-11-09 03:00:00 &#43;0000 UTC</time></td>\n\t\t\t\t\t\t\t</tr>\n'
+  done
+  printf '\t\t\t\t\t\t\t<tr class="empty" hidden=""><td colspan="3"></td></tr>\n'
+  printf '\t\t\t\t\t\t</tbody>\n\t\t\t\t\t</table>\n\t\t\t\t</div>\n\t\t\t</div>\n\t\t</main>\n\t</body>\n</html>\n'
+}
+# The template a scenario's indexes come from: index (v1.75.2) or index_v176.
+index_fn=index
+
 cadence_md() { # <engineer cell> [improver cell] — an AGENTS.md with the lane's cadence row
   printf '# AGENTS.md\n\n### Cadence & focus\n\n| Lane | Agentic Engineer | Agent Improver |\n|---|---|---|\n'
   printf '| **Claude** — `claude/*`, hourly at `:50` | Every hour at `:20` and `:50` | 00:00, 06:00, 12:00, 18:00 |\n'
@@ -98,10 +134,10 @@ scenario() {
   FAKE="$tmp/$1"
   export FAKE
   mkdir -p "$FAKE"
-  index memory/ runs/ >"$FAKE/_root"
-  index 2026-11-09/ 2026-11-08/ >"$FAKE/runs_"
-  index report.md transcript.jsonl >"$FAKE/runs_2026-11-09_"
-  index report.md transcript.jsonl >"$FAKE/runs_2026-11-08_"
+  "$index_fn" memory/ runs/ >"$FAKE/_root"
+  "$index_fn" 2026-11-09/ 2026-11-08/ >"$FAKE/runs_"
+  "$index_fn" report.md transcript.jsonl >"$FAKE/runs_2026-11-09_"
+  "$index_fn" report.md transcript.jsonl >"$FAKE/runs_2026-11-08_"
   printf '# Run report 2026-11-09\nshipped one PR\n' >"$FAKE/runs_2026-11-09_report.md"
   printf '{"type":"user","message":"run"}\n{"type":"assistant","message":"done"}\n' >"$FAKE/runs_2026-11-09_transcript.jsonl"
   printf '# Run report 2026-11-08\n' >"$FAKE/runs_2026-11-08_report.md"
@@ -259,6 +295,66 @@ scenario list-date-as-file
 index 2026-11-09 >"$FAKE/runs_"
 run list
 expect "a run date that is a file, not a folder, is UNKNOWN" 2 - "not-run-folders"
+
+# ── rclone v1.76 index ────────────────────────────────────────────────────────
+# devantler-tech/platform#6220 moved the store to rclone v1.76.0, whose template renamed both markers
+# the earlier reader counted. Both counts fell to 0, matched, and the live store, holding three runs,
+# read as holding none.
+index_fn=index_v176
+scenario v176-list
+run list
+expect "a v1.76 index lists the run dates" 0 "2026-11-08"
+asserts=$((asserts + 1))
+if [ "$out" = "$(printf '2026-11-08\n2026-11-09')" ]; then pass "a v1.76 index lists every run once, without its ./ prefix"
+else note_fail "v1.76 list order or content: $out"; fi
+
+scenario v176-files
+run report 2026-11-09
+expect "a v1.76 run folder serves its report" 0 "shipped one PR"
+live
+expect "a v1.76 store reads as PRODUCING" 0 "KAGENT-LANE=PRODUCING newest=2026-11-09 age_days=1 transcript=present"
+
+scenario v176-empty-runs
+index_v176 >"$FAKE/runs_"
+run list
+expect "an empty v1.76 runs/ index is an empty list" 0 - "holds no run yet"
+no_stdout "an empty v1.76 runs/ index prints no date"
+
+# Without the page's own counts, only the row rule can catch rows the reader does not know.
+scenario v176-unknown-rows
+index_v176 2026-11-09/ 2026-11-08/ | grep -v -e 'id="ndirs"' -e 'id="nfiles"' |
+  sed 's/<tr class="file dir"/<tr class="entry dir"/' >"$FAKE/runs_"
+run list
+expect "entry rows of a shape the reader does not know are UNKNOWN, never an empty list" 2 - "(runs-index-unparseable)"
+no_stdout "rows of an unknown shape print no list"
+
+scenario v176-unknown-root-rows
+index_v176 memory/ runs/ | grep -v -e 'id="ndirs"' -e 'id="nfiles"' |
+  sed 's/<tr class="file dir"/<tr class="entry dir"/' >"$FAKE/_root"
+run list
+expect "a root index of rows the reader does not know is UNKNOWN, never a store with no run" 2 - "(store-index-unparseable)"
+absent "a root index of unknown rows is not reported as empty" "holds no run yet"
+
+scenario v176-count-mismatch
+index_v176 2026-11-09/ 2026-11-08/ | sed 's|<b id="ndirs">2</b>|<b id="ndirs">3</b>|' >"$FAKE/runs_"
+run list
+expect "entries that do not add up to the page's own counts are UNKNOWN" 2 - "(runs-index-unparseable)"
+
+scenario v176-one-count
+index_v176 2026-11-09/ 2026-11-08/ | grep -v 'id="nfiles"' >"$FAKE/runs_"
+run list
+expect "a page stating only one of its two counts is UNKNOWN" 2 - "(runs-index-unparseable)"
+
+scenario v176-second-link
+index_v176 2026-11-09/ | sed 's|<a href="./2026-11-09/">2026-11-09/</a>|&<a href="./2026-11-07/">x</a>|' >"$FAKE/runs_"
+run list
+expect "an entry row with two name links is UNKNOWN" 2 - "(runs-index-unparseable)"
+
+scenario v176-goup-elsewhere
+index_v176 2026-11-09/ | sed 's|<a href="..">Go up</a>|<a href="../memory/">Go up</a>|' >"$FAKE/runs_"
+run list
+expect "a Go up row that links anywhere but .. is UNKNOWN" 2 - "(runs-index-unparseable)"
+index_fn=index
 
 # ── report / transcript ───────────────────────────────────────────────────────
 scenario files
