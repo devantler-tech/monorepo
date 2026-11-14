@@ -16,9 +16,17 @@
 # `sleep <n>` of 5 s or more and a remote read (`gh`, `kubectl`, `flux`, `talosctl`, `curl`,
 # `git ls-remote`, `git fetch`). The loop is found by command position, from its keyword to its
 # matching `done`, and heredoc bodies are dropped first, so a script being WRITTEN to a file is
-# not judged. Everything else exits 0: a loop that waits on a local process, a short sampling
-# loop (sleep under 5 s), a `for` over a list of repositories, a settle `sleep` outside any
-# loop, and every backgrounded call.
+# not judged.
+#
+# It also denies, with its own reason, an `until`/`while` loop that sleeps 5 s or more and whose
+# condition only compares the clock (`until [ "$(date -u +%H%M)" -ge 1130 ]`; a counter beside it
+# is allowed). Runs adapted to the remote-loop denial by waiting for a chosen minute, reading
+# GitHub once, and waiting again: 70 such loops blocked 11,860 s in the 7 days to 2026-11-14,
+# 19 of them in one run right after the runtime refused its `sleep` (monorepo#5043).
+#
+# Everything else exits 0: a loop that waits on a local process (the clock may be its deadline),
+# a short sampling loop (sleep under 5 s), a `for` over a list of repositories, a settle `sleep`
+# outside any loop, and every backgrounded call.
 #
 # MONITOR (monorepo#5028). A `Monitor` call IS the watcher this guard asks for. A hook whose
 # matcher is only `Bash` also receives Monitor calls, as tool_name "Bash" with just `command`
@@ -75,12 +83,21 @@ verdict=$(printf '%s\n' "${cmd}" | awk '
       w = t[i]
       if (w == "") continue
       if (cmdpos && (w == "until" || w == "while" || (w == "for" && counted(i)))) {
-        depth = 0; s = 0; r = 0; cp = 1
+        depth = 0; s = 0; r = 0; cp = 1; c = 0; o = 0; prev = ""
         for (j = i + 1; j <= n; j++) {
           x = t[j]
           if (x == "") continue
           if (cp && x == "do") depth++
           else if (cp && x == "done") { depth--; if (depth <= 0) break }
+          # The loop condition (before its first `do`) is a clock wait when `date` is its only
+          # command: `[`/`test` operands, `$(`/`$var` words and comparison operators are not
+          # commands, and a file test (`[ -f x ]`) or any other command makes it a local wait.
+          if (depth == 0 && cp && x != ";") {
+            if (x == "date") c = 1
+            else if (x != "[" && x != "[[" && x != "test" && x != "!" && x != "]" && x != "]]" && x !~ /^\$/ && x !~ /^-/ && x !~ /^[<>=!]+$/) o = 1
+          }
+          if (depth == 0 && x ~ /^-[A-Za-z]$/ && (prev == "[" || prev == "[[" || prev == "test" || prev == "!")) o = 1
+          prev = x
           if (cp && x == "sleep" && seconds(t[j + 1]) >= 5) s = 1
           if (cp && (x == "gh" || x == "kubectl" || x == "flux" || x == "talosctl" || x == "curl")) r = 1
           if (cp && x == "git") {
@@ -90,10 +107,11 @@ verdict=$(printf '%s\n' "${cmd}" | awk '
           cp = (x == ";" || (cp && (x == "do" || x == "then" || x == "else" || x == "if" || x == "elif" || x == "while" || x == "until" || x == "!" || x == "[" || x == "[[" || x ~ /^[A-Za-z_][A-Za-z0-9_]*=/)) || x ~ /=["\047]?\$$/ || x ~ /^["\047]?\$$/ )
         }
         if (s && r) found = 1
+        if (s && c && !o && w != "for") clock = 1
       }
       cmdpos = (w == ";" || (cmdpos && (w == "do" || w == "then" || w == "else" || w == "if" || w == "elif" || w == "!" || w ~ /^[A-Za-z_][A-Za-z0-9_]*=/)) || w ~ /=["\047]?\$$/ || w ~ /^["\047]?\$$/)
     }
-    print (found ? "deny" : "allow")
+    print (found ? "deny" : clock ? "deny-clock" : "allow")
   }
   # Quoted text is an argument, never a command: drop single-quoted text, and keep only the
   # command substitutions ($(...) and backticks) inside double quotes, which the shell runs.
@@ -159,6 +177,17 @@ the run until it times out (.claude/guides/tool-call-discipline.md, "NEVER foreg
 remote wait"). Arm ONE watcher instead and go do other work: the Monitor tool with this
 until-loop, or the same call with run_in_background. In a delegated run, make one bounded
 read of the condition, or stop and report the state to your parent.
+EOF
+  exit 2
+fi
+if [ "${verdict}" = deny-clock ]; then
+  cat >&2 <<'EOF'
+deny: foreground clock-wait loop. A loop that only sleeps until a clock time blocks the run just
+as a poll loop does (.claude/guides/tool-call-discipline.md, "NEVER foreground-block on a remote
+wait"), and waiting for a minute and then reading GitHub once is the same wait cut into pieces.
+Do other work and arm ONE watcher for the condition itself: the Monitor tool, or the same call
+with run_in_background. In a delegated run with nothing else to do, stop and report the state
+to your parent.
 EOF
   exit 2
 fi

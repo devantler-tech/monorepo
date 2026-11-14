@@ -81,7 +81,9 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   you armed (a real 744th miss: a watcher was armed *and* the run busy-waited anyway).
   **The waiter is `Monitor` with an until-loop**, which the busy-wait guard's own refusal names. The
   enforcement hook blocks `sleep N && <poll>` chains, and the project hook `foreground-poll-guard.sh`
-  denies a foreground loop that sleeps while it polls (monorepo#5010; registered under `Bash|Monitor`, #5028). Unchaining does not comply: sessions adapted
+  denies a foreground loop that sleeps while it polls (monorepo#5010; registered under `Bash|Monitor`, #5028),
+  or that only sleeps until a clock time: waiting for a minute and then reading once is the same wait
+  in pieces (**70 such loops, 3.3 h blocked**, in 7 days to 2026-11-14; #5043). Unchaining does not comply: sessions adapted
   by issuing the bare `sleep N` as its own call instead (**442 standalone sleeps in one day**,
   2026-07-18). A bare `sleep` bounds a local process nothing will report on (e.g. a backgrounded
   windowed render before killing it); it never polls a backgrounded task's output file, whose
