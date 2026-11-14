@@ -85,3 +85,6 @@ staying secure.
 - A product that splits `deploy/` into base, prod and dev
   ([ADR 0016](0016-dev-and-prod-deployments.md)) switches in the same change, and names its app
   manifest through the action's `app-manifest` input.
+- A pre-release is signed only when its tag's commit is on `main`, so dev can no longer preview
+  unmerged work by publishing a pre-release, as ADR 0016 decision 2 allowed. Dev previews what has
+  merged.

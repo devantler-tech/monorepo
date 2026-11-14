@@ -130,3 +130,6 @@ to work.
   sets that input to `base/deployment.yaml`. KHoist's controller ships as a Helm chart, not
   from `deploy/`, so its layout is settled in
   [khoist#610](https://github.com/devantler-tech/khoist/issues/610).
+- **2026-11-14: dev previews only merged work.** Under ADR 0017 a pre-release is signed only when
+  its tag's commit is on `main`, so the unmerged-work preview in decision 2 no longer applies. Dev
+  still selects the newest version including pre-releases.
