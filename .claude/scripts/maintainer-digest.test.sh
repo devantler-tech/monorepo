@@ -631,6 +631,10 @@ phone-number|Call $(printf '%s %s' 0000 0000) when it breaks.
 phone-number|Call $(printf '(%s) %s-%s' 000 000 0000) when it breaks.
 phone-number|Call $(printf '%s-%s-%s' 000 000 0000) when it breaks.
 phone-number|Call $(printf '%s' 0000000000) when it breaks.
+phone-number|Set phone=$(printf '%s' 0000000000) on the form.
+phone-number|Call _$(printf '%s' 0000000000)_ when it breaks.
+phone-number|Call https://example.invalid/call/$(printf '%s' 00000000) when it breaks.
+phone-number|See https://github.com/example-org/example-repo/issues/1?phone=$(printf '%s' 0000000000) for it.
 money|The cluster costs $(printf '%s %s' 120 kr) a month.
 credential|The token is ${token}.
 armoured-block|$(printf '%s%s' '-----' 'BEGIN PGP PRIVATE KEY BLOCK-----')
@@ -703,8 +707,8 @@ expect_rc 0 "a clock time is not mistaken for an IPv6 address"
 run check "$tmp/numeric-identifiers.md"
 expect_rc 0 "an ISO date and an action run identifier are not national phone numbers"
 for link in "https://github.com/example-org/example-repo/issues/1#issuecomment-$(printf '%s' 0000000000)" \
-  "https://example.invalid/item/$(printf '%s' 00000000)" "https://example.invalid/?id=$(printf '%s' 0000000000)" \
-  "job_$(printf '%s' 00000000)"; do
+  "https://github.com/example-org/example-repo/pull/1#discussion_r$(printf '%s' 0000000000)" \
+  "https://github.com/example-org/example-repo/actions/runs/$(printf '%s' 0000000000)/job/$(printf '%s' 00000000)"; do
   { cat "$tmp/shape.md"; printf '\n- Your reply on %s settled it.\n' "$link"; } >"$tmp/link-identifier.md"
   run check "$tmp/link-identifier.md"
   expect_rc 0 "a ten- or eight-digit identifier inside $link is not a national phone number"

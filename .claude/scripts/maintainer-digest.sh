@@ -78,10 +78,8 @@ private_patterns=(
   '(^|[^0-9A-Za-z:])(([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|([0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4}){0,6})?::([0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4}){0,6})?)([^0-9A-Za-z:]|$)'
   '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}'
   # Include common eight- and ten-digit national layouts without matching date fragments or
-  # longer numeric identifiers. Digits that follow "/", "#", "=", "_" or "-" continue a URL or an
-  # identifier, such as a comment link's ten-digit id, so they never start a number (monorepo#5006).
-  # The template still requires the author to exclude private detail.
-  '(tel:|\+[0-9]{1,3}[ .-]?[0-9]{2,4}([ .-]?[0-9]{2,4}){2,}|(^|[^0-9A-Za-z/#=_-])([0-9]{8}|[0-9]{10}|([0-9]{2}[ .-]){3}[0-9]{2}|[0-9]{4}[ .-][0-9]{4}|([0-9]{3}[ .-]|\([0-9]{3}\)[ .-]?)[0-9]{3}[ .-][0-9]{4})([^0-9A-Za-z]|$))'
+  # longer numeric identifiers. The template still requires the author to exclude private detail.
+  '(tel:|\+[0-9]{1,3}[ .-]?[0-9]{2,4}([ .-]?[0-9]{2,4}){2,}|(^|[^0-9A-Za-z])([0-9]{8}|[0-9]{10}|([0-9]{2}[ .-]){3}[0-9]{2}|[0-9]{4}[ .-][0-9]{4}|([0-9]{3}[ .-]|\([0-9]{3}\)[ .-]?)[0-9]{3}[ .-][0-9]{4})([^0-9A-Za-z]|$))'
   '(\$|€|£) ?[0-9]|(^|[^a-z])(kr|dkk|eur|usd|gbp|sek|nok)\.? ?[0-9]|[0-9][0-9.,]* ?(kr|dkk|eur|usd|gbp|sek|nok|kroner|dollars?|euros?)([^a-z]|$)'
   '(^|[^A-Za-z0-9])(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,})'
   # Any armoured block (a key, a certificate, a signature), whatever its label: a digest never needs
@@ -325,13 +323,18 @@ matching_lines() {
 # Reports every private-content marker in file $1 as "<$2>:<line>: private-content: <kind>". Returns 0
 # when there is none, 1 when there is one and 2 when the file cannot be read.
 scan_private() {
-  local i=0 rc lines line any=0
+  local i=0 rc scanned lines line any=0
   # Blanks the template's rule line in a copy, so line numbers still match the file.
   awk -v rule="$template_rule_line" '{ l = $0; sub(/\r$/, "", l); print (l == rule ? "" : $0) }' "$1" >"$tmp/scan.txt" ||
     return 2
+  # The phone-number check reads a copy without github.com link paths and anchors: a comment or run
+  # link carries a long numeric id that fits a national layout (monorepo#5006). Query strings are kept,
+  # and every other kind still reads the full text, so an address inside a link is still caught.
+  sed -E 's#https?://github\.com/[^][:space:]()<>"'"'"'?]*##g' "$tmp/scan.txt" >"$tmp/scan-phone.txt" || return 2
   while [ "$i" -lt "${#private_kinds[@]}" ]; do
-    rc=0
-    lines="$(matching_lines "${private_flags[$i]}" "${private_patterns[$i]}" "$tmp/scan.txt")" || rc=$?
+    rc=0 scanned="$tmp/scan.txt"
+    [ "${private_kinds[$i]}" = phone-number ] && scanned="$tmp/scan-phone.txt"
+    lines="$(matching_lines "${private_flags[$i]}" "${private_patterns[$i]}" "$scanned")" || rc=$?
     case "$rc" in
       0)
         while IFS= read -r line; do
