@@ -70,7 +70,7 @@ filed. Needs matching no row are filed on the **default intake repo** below.
 | Wedding app | THIS suite's existing deployed wedding website only — its guest pages, RSVPs, schedules, photos and practical info (not new wedding sites in general) | `devantler-tech/wedding-app` |
 | AS Coaching site | THIS suite's existing deployed AS Coaching og Vaner business site only — its pages, offerings, prices, booking information (not new coaching/business sites in general) | `devantler-tech/ascoachingogvaner` |
 | App hosting platform | Running an app or service so people can reach it online — deploys, dashboards, alerts, backups | `devantler-tech/platform` |
-| AWS infrastructure | Changing THIS suite's deployed AWS resources — the EKS-based CI cluster and anything else its AWS tenant reconciles via Crossplane (not AWS setups in general) | `devantler-tech/aws` |
+| AWS infrastructure | Changing THIS suite's deployed AWS resources — the EKS CI cluster and anything else its AWS tenant reconciles via Crossplane (not AWS setups in general) | `devantler-tech/aws` |
 | KSail | Command-line tooling for creating and operating Kubernetes clusters and their workloads | `devantler-tech/ksail` |
 | KHoist data products | Creating, composing, publishing, and exploring reusable data products backed by new or existing data sources | `devantler-tech/khoist` |
 | Repo automation | Automatic checks, releases and chores on code repositories | `devantler-tech/.github` |
@@ -82,7 +82,7 @@ filed. Needs matching no row are filed on the **default intake repo** below.
 | Platform template | The starter template new platform repositories are created from | `devantler-tech/platform-template` |
 | UniFi home network | Changing THIS suite's deployed UniFi network — SSIDs, VLANs, firewall rules, device and VPN config | `devantler-tech/unifi` |
 | Managed devices (FleetDM) | Changing how THIS suite's enrolled Macs and other devices are configured and checked — the policies, queries and enrolment settings its FleetDM GitOps repo defines (not device management in general) | `devantler-tech/fleet-gitops` |
-| Cloudflare account resources | Changing THIS suite's Cloudflare resources that must exist before its platform can start — DNS, certificate issuance and backup storage buckets (not their in-cluster use, nor Cloudflare setups in general) | `devantler-tech/cloudflare` |
+| Cloudflare account resources | Changing THIS suite's Cloudflare resources needed before its platform starts — DNS, certificate issuance and backup storage buckets (not their in-cluster use, nor Cloudflare setups in general) | `devantler-tech/cloudflare` |
 | UniFi Crossplane provider | Developing the Crossplane provider library itself (new resource support, codegen, provider bugs) | `devantler-tech/provider-upjet-unifi` |
 | Cluster guardrail policies | Shared rules that check or adjust what may run on the suite's clusters, so every platform inherits the same guardrails | `devantler-tech/kyverno-policies` |
 | Supplier invoices | Sending THIS suite's supplier invoices to Numina (not bookkeeping in general) | `devantler-tech/bookkeeper` |
