@@ -102,3 +102,30 @@ to work.
 - The platform runs roughly one more small pod per product and one virtual cluster for KHoist.
 - A feature becomes visible to the maintainer when it merges, not when its flag is switched on in
   prod. Switching it on in prod stays a separate, reviewed change.
+
+## Amendments
+
+- **2026-11-14: `deploy/` splits into `base`, `prod` and `dev`.** The maintainer asked that every
+  product getting a dev deployment lays out its manifests as Kustomize `base/`, `prod/` and `dev/`
+  folders, so the two environments share one copy of everything they have in common. This refines
+  decision 2:
+
+  ```text
+  deploy/
+  ├── kustomization.yaml   # includes only prod/
+  ├── base/                # what both environments run, including the app the publisher pins
+  ├── prod/                # base/ + what only prod has
+  └── dev/                 # base/ + patches that turn it into dev
+  ```
+
+  `prod/` adds what belongs to prod alone: public routes, certificates, DNS, disruption budgets,
+  backups, and every secret or integration that touches prod. `dev/` changes `base/` through
+  Kustomize patches and never copies a manifest. The file at the artifact root only includes
+  `prod/`, so the platform keeps reconciling prod at the root and renders exactly what it rendered
+  before, while dev reconciles `./dev`.
+
+  The shared publisher pins the image in `deploy/base/` when that folder exists. A product that
+  publishes through it restructures only once its publisher pin carries that change, because the
+  release would otherwise fail before publishing. KHoist's controller ships as a Helm chart, not
+  from `deploy/`, so its layout is settled in
+  [khoist#610](https://github.com/devantler-tech/khoist/issues/610).
