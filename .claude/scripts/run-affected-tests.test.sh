@@ -484,7 +484,7 @@ if [ $? -eq 2 ]; then ok "a zero timeout is rejected"; else bad "a zero timeout 
 
 # --- convention selection (monorepo#5052) --------------------------------------------------
 conv="${tmp}/conv"
-mkdir -p "${conv}/.claude/scripts/z-go" "${conv}/docs" "${conv}/other" "${conv}/.github/workflows"
+mkdir -p "${conv}/.claude/scripts/x-go" "${conv}/.claude/scripts/z-go" "${conv}/docs" "${conv}/other" "${conv}/.github/workflows"
 cd "${conv}" || exit 2
 git init -q -b main
 git config user.email t@example.invalid
@@ -493,25 +493,27 @@ git config commit.gpgsign false
 printf 'on: pull_request\njobs: {}\n' > .github/workflows/ci.yaml
 printf '#!/usr/bin/env bash\n# test-inputs: docs/**\n# test-inputs: other/one.txt\nexit 0\n' > .claude/scripts/x.test.sh
 printf '#!/usr/bin/env bash\nexit 0\n' > .claude/scripts/x.sh
-printf '#!/usr/bin/env bash\necho body\n# test-inputs: other/**\nexit 0\n' > .claude/scripts/y.test.sh
-printf 'module z\n\ngo 1.22\n' > .claude/scripts/z-go/go.mod
-: > docs/a.md; : > other/one.txt; : > other/two.txt
+printf 'module x\n\ngo 1.22\n' > .claude/scripts/x-go/go.mod
+printf 'module z\n\ngo 1.22\n\n// test-inputs: other/two.txt\n' > .claude/scripts/z-go/go.mod
+: > docs/a.md; : > other/one.txt; : > other/two.txt; : > other/three.txt
 git add -A && git commit -q -m base
 conv_list() { "${runner}" --root "${conv}" --base main --convention --list 2>/dev/null | grep -v ': changed=' | tr '\n' ' '; }
 conv_is() { local got; got="$(conv_list)"; if [ "${got}" = "$1" ]; then ok "$2"; else bad "$2 (got: ${got})"; fi; }
 echo x >> .claude/scripts/x.sh
-conv_is ".claude/scripts/x.test.sh " "convention: a sibling script selects its test"
+conv_is ".claude/scripts/x.test.sh go:.claude/scripts/x-go " "convention: a sibling script selects its test and module"
 git checkout -q -- . && echo x >> docs/a.md
-conv_is ".claude/scripts/x.test.sh " "convention: a declared input selects the test"
-git checkout -q -- . && echo x >> other/two.txt
-conv_is "" "convention: a header line after the opening comment is not read"
+conv_is ".claude/scripts/x.test.sh go:.claude/scripts/x-go " "convention: a declared input selects the test and its sibling module"
 git checkout -q -- . && echo x >> other/one.txt
-conv_is ".claude/scripts/x.test.sh " "convention: a second test-inputs line is read"
+conv_is ".claude/scripts/x.test.sh go:.claude/scripts/x-go " "convention: a second test-inputs line is read"
+git checkout -q -- . && echo x >> other/two.txt
+conv_is "go:.claude/scripts/z-go " "convention: a go.mod test-inputs line selects its module"
+git checkout -q -- . && echo x >> other/three.txt
+conv_is "" "convention: an undeclared file selects nothing"
 git checkout -q -- . && printf 'package z\n' > .claude/scripts/z-go/z.go
 conv_is "go:.claude/scripts/z-go " "convention: a Go module change selects its go test"
 json="$("${runner}" --root "${conv}" --base main --convention --list-json 2>/dev/null)"
-if jq -e 'length == 1 and .[0].how == "go" and .[0].path == "go:.claude/scripts/z-go"' <<<"${json}" >/dev/null; then
-  ok "--list-json prints the selection as JSON on stdout"
+if jq -e 'length == 1 and .[0].how == "go" and .[0].path == "go:.claude/scripts/z-go" and .[0].timeout == 900' <<<"${json}" >/dev/null; then
+  ok "--list-json prints the selection as JSON on stdout, with the Go deadline"
 else
   bad "--list-json printed: ${json}"
 fi
@@ -521,6 +523,11 @@ if [ "$("${runner}" --root "${conv}" --base main --convention --all --list 2>/de
 else
   bad "convention --all miscounted"
 fi
+# A test-inputs line below the first command would be ignored, so the whole run refuses it.
+printf '#!/usr/bin/env bash\necho body\n# test-inputs: other/**\nexit 0\n' > .claude/scripts/y.test.sh
+"${runner}" --root "${conv}" --base main --convention --list >/dev/null 2>&1
+if [ $? -eq 2 ]; then ok "convention: a misplaced test-inputs line is exit 2"; else bad "a misplaced test-inputs line was accepted"; fi
+rm -f .claude/scripts/y.test.sh
 "${runner}" --root "${conv}" --base no-such-ref --convention --list >/dev/null 2>&1
 if [ $? -eq 2 ]; then ok "convention: a missing merge base is exit 2"; else bad "convention missing merge base was not exit 2"; fi
 cd "${repo}" || exit 2

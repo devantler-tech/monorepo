@@ -3185,9 +3185,9 @@ jobs:
         with:
           go-version-file: .claude/scripts/memory-hygiene-go/go.mod
           cache: false
-      - name: Install GNU build deadline utility
+      - name: Install the GNU deadline utility and yq
         if: runner.os == 'macOS'
-        run: brew install coreutils
+        run: brew install coreutils yq
       - name: Initialise the submodules the tests read
         env:
           GIT_CONFIG_COUNT: "1"
@@ -3205,6 +3205,8 @@ jobs:
           echo "Only selected by filters:"; comm -23 "$RUNNER_TEMP/filters.txt" "$RUNNER_TEMP/convention.txt" | grep -v ': changed=' || true
           echo "Only selected by convention:"; comm -13 "$RUNNER_TEMP/filters.txt" "$RUNNER_TEMP/convention.txt" | grep -v ': changed=' || true
       - name: Run the convention selection
+        # Runs even when the comparison failed, so a comparison problem never hides the run.
+        if: ${{ !cancelled() }}
         env:
           BASE_REF: ${{ github.base_ref }}
         run: bash .claude/scripts/run-affected-tests.sh --base "origin/${BASE_REF}" --convention

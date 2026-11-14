@@ -73,12 +73,12 @@ while [ "$#" -gt 0 ]; do
       timeout_s="$2"; timeout_explicit=1; shift 2 ;;
     --ci-file) [ "$#" -ge 2 ] || die "--ci-file needs a path"; ci_file="$2"; shift 2 ;;
     --root) [ "$#" -ge 2 ] || die "--root needs a directory"; root="$2"; shift 2 ;;
-    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+    -h|--help) sed -n "2,/^set -uo pipefail/p" "$0" | sed "\$d"; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
 
-command -v yq >/dev/null 2>&1 || die "yq is not installed"
+[ "${convention}" -eq 1 ] || command -v yq >/dev/null 2>&1 || die "yq is not installed"
 command -v jq >/dev/null 2>&1 || die "jq is not installed"
 
 if [ -z "${root}" ]; then
@@ -110,15 +110,27 @@ glob_match() {
 }
 matches() { glob_match "$1" "" "$2"; }
 
-# test_inputs <test> — every glob the test reads, one per line.
+# test_inputs <test> — every glob the test reads, one per line. A `# test-inputs:` line outside the
+# opening comment header would be silently ignored, so it is refused (exit 2) instead.
 test_inputs() {
   local t="$1" name="${1%.test.sh}"
   printf '%s\n%s\n%s\n' "${t}" "${name}.sh" "${name}-go/**"
   awk '
-    /^# test-inputs: / { sub(/^# test-inputs: /, ""); n = split($0, g, /[[:space:]]+/); for (i = 1; i <= n; i++) if (g[i] != "") print g[i]; next }
-    /^[[:space:]]*(#|$)/ { next }
-    { exit }
+    !body && /^# test-inputs: / { sub(/^# test-inputs: /, ""); n = split($0, g, /[[:space:]]+/); for (i = 1; i <= n; i++) if (g[i] != "") print g[i]; next }
+    !body && /^[[:space:]]*(#|$)/ { next }
+    { body = 1 }
+    body && /^[[:space:]]*# test-inputs:/ { print "misplaced test-inputs line " NR > "/dev/stderr"; bad = 1; exit }
+    END { exit bad ? 2 : 0 }
   ' "${t}"
+}
+
+# module_inputs <dir> — every glob a Go module reads: its own files, its sibling test inputs, and
+# any `// test-inputs:` lines in its go.mod.
+module_inputs() {
+  local dir="$1" sibling="${1%-go}.test.sh"
+  printf '%s\n' "${dir}/**"
+  if [ -f "${sibling}" ]; then test_inputs "${sibling}" || return 2; fi
+  awk '/^\/\/ test-inputs: / { sub(/^\/\/ test-inputs: /, ""); n = split($0, g, /[[:space:]]+/); for (i = 1; i <= n; i++) if (g[i] != "") print g[i] }' "${dir}/go.mod"
 }
 
 hit_any() { # hit_any <globs> — 0 when any changed file matches any glob
@@ -142,23 +154,22 @@ if [ "${convention}" -eq 1 ]; then
     || die "cannot list changed files"
   changed_count="$(printf '%s\n' "${changed}" | grep -c . || true)"
   fi
-  tests="$(git ls-files -- '.claude/scripts/*.test.sh')" || die "cannot list the test scripts"
+  # Tracked tests and new ones not yet added, so a local run sees a test that is being written.
+  tests="$( { git ls-files -- '.claude/scripts/*.test.sh' &&
+    git ls-files --others --exclude-standard -- '.claude/scripts/*.test.sh'; } | sort -u)" ||
+    die "cannot list the test scripts"
   selected=""
   hit_filters=""
   while IFS= read -r t; do
     [ -n "${t}" ] || continue
     inputs="$(test_inputs "${t}")" || die "cannot read the inputs of ${t}"
-    if [ "${select_all}" -eq 1 ] || hit_any "${inputs}"; then
-      selected+=".	${t}	bash"$'\n'
-      dir="${t%.test.sh}-go"
-      [ ! -f "${dir}/go.mod" ] || selected+=".	go:${dir}	go"$'\n'
-    fi
+    if [ "${select_all}" -eq 1 ] || hit_any "${inputs}"; then selected+=".	${t}	bash"$'\n'; fi
   done <<<"${tests}"
-  # A Go module with no sibling test still runs when its own files change.
   while IFS= read -r mod; do
     [ -n "${mod}" ] || continue
     dir="${mod%/go.mod}"
-    if [ "${select_all}" -eq 1 ] || hit_any "${dir}/**"; then selected+=".	go:${dir}	go"$'\n'; fi
+    inputs="$(module_inputs "${dir}")" || die "cannot read the inputs of ${dir}"
+    if [ "${select_all}" -eq 1 ] || hit_any "${inputs}"; then selected+=".	go:${dir}	go"$'\n'; fi
   done <<<"$(git ls-files -- '.claude/scripts/*-go/go.mod')"
   selected="$(printf '%s' "${selected}" | awk '!seen[$0]++')"
 else
@@ -237,6 +248,15 @@ selected="$(jq -r --argjson hits "${hits_json}" '
   # first row kept for each script below is the one that says how CI runs it.
   | sort_by(if .[2] == "mention" then 1 else 0 end)[]
   | @tsv' <<<"${jobs_json}")" || die "cannot read the gated jobs in ${ci_file}"
+# Go modules the selected jobs test with `go -C <dir> test`, so both selections list them.
+go_selected="$(jq -r --argjson hits "${hits_json}" '
+  to_entries[] | .value as $job
+  | ([(($job["if"] // "") | tostring) | scan("needs\\.changes\\.outputs\\.([A-Za-z0-9_-]+)") | .[0]]) as $gates
+  | select(($gates | length) == 0 or ($gates | any(. as $f | $hits | index($f))))
+  | $job.steps[]? | (.run // "")
+  | scan("go[ \t]+-C[ \t]+([A-Za-z0-9_./-]+)[ \t]+test") | .[0]
+  | [".", ("go:" + sub("/$"; "")), "go"] | @tsv' <<<"${jobs_json}")" || die "cannot read the Go test steps in ${ci_file}"
+selected="$(printf '%s\n%s\n' "${selected}" "${go_selected}" | awk 'NF && !seen[$0]++')"
 fi
 
 # A measured slow suite may declare "# test-timeout-seconds: N" in its opening
@@ -272,11 +292,14 @@ unrunnable=""
 while IFS=$'\t' read -r wd s how; do
   [ -n "${s}" ] || continue
   if [ "${how}" = go ]; then
-    # A Go module (convention mode): `go -C <dir> test ./...` from the repository root.
+    # A Go module: `go -C <dir> test ./...` from the repository root. A whole module suite runs
+    # longer than one script, so it gets 900 seconds unless --timeout says otherwise.
     [ -f "${s#go:}/go.mod" ] || { missing+="${s} (no go.mod)"$'\n'; continue; }
     case $'\n'"${scripts}" in *$'\n'"${s}"$'\n'*) continue ;; esac
     scripts+="${s}"$'\n'
-    runs+="."$'\t'"${s}"$'\t'"${s}"$'\t'"go"$'\t'"${timeout_s}"$'\n'
+    go_deadline=900
+    [ "${timeout_explicit}" -eq 0 ] || go_deadline="${timeout_s}"
+    runs+="."$'\t'"${s}"$'\t'"${s}"$'\t'"go"$'\t'"${go_deadline}"$'\n'
     continue
   fi
   s="${s#./}"
