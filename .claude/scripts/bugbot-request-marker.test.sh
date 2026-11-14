@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# test-timeout-seconds: 900
 # test-inputs: .claude/guides/** .claude/scripts/comment-disclosure-drift-go/**
 # test-inputs: .claude/scripts/comment-disclosure-drift.sh
 # test-inputs: .claude/scripts/comment-disclosure-drift.test.sh .claude/scripts/contract-text.sh

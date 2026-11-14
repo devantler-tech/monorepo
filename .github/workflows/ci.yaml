@@ -3186,9 +3186,11 @@ jobs:
           go-version-file: .claude/scripts/memory-hygiene-go/go.mod
           cache: false
       - name: Install the GNU deadline utility and yq
+        continue-on-error: true
         if: runner.os == 'macOS'
         run: brew install coreutils yq
       - name: Initialise the submodules the tests read
+        continue-on-error: true
         env:
           GIT_CONFIG_COUNT: "1"
           GIT_CONFIG_KEY_0: url.https://github.com/.insteadOf
@@ -3196,20 +3198,44 @@ jobs:
         run: |
           bash .claude/scripts/submodule-init.sh libraries/agent-plugins
           bash .claude/scripts/submodule-init.sh applications/business-site
+      # Both steps report into the job summary and as warnings but always exit 0: a red check
+      # here would leave every pull request UNSTABLE, and merges wait for CLEAN, so a
+      # "non-blocking" failure would block them all. The week of evidence is the summary.
       - name: Compare the convention selection with the filter selection
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
-          bash .claude/scripts/run-affected-tests.sh --base "origin/${BASE_REF}" --list | sort >"$RUNNER_TEMP/filters.txt"
-          bash .claude/scripts/run-affected-tests.sh --base "origin/${BASE_REF}" --convention --list | sort >"$RUNNER_TEMP/convention.txt"
-          echo "Only selected by filters:"; comm -23 "$RUNNER_TEMP/filters.txt" "$RUNNER_TEMP/convention.txt" | grep -v ': changed=' || true
-          echo "Only selected by convention:"; comm -13 "$RUNNER_TEMP/filters.txt" "$RUNNER_TEMP/convention.txt" | grep -v ': changed=' || true
+          rc=0
+          bash .claude/scripts/run-affected-tests.sh --base "origin/${BASE_REF}" --list >"$RUNNER_TEMP/filters.raw" || rc=$?
+          bash .claude/scripts/run-affected-tests.sh --base "origin/${BASE_REF}" --convention --list >"$RUNNER_TEMP/convention.raw" || rc=$?
+          grep -v ': changed=' "$RUNNER_TEMP/filters.raw" | LC_ALL=C sort >"$RUNNER_TEMP/filters.txt" || true
+          grep -v ': changed=' "$RUNNER_TEMP/convention.raw" | LC_ALL=C sort >"$RUNNER_TEMP/convention.txt" || true
+          only_filters="$(LC_ALL=C comm -23 "$RUNNER_TEMP/filters.txt" "$RUNNER_TEMP/convention.txt")"
+          {
+            echo "### Convention selection (${{ matrix.os }})"
+            echo "Listing exit status: ${rc}"
+            echo "Only selected by filters (must stay empty):"
+            echo '```'; printf '%s\n' "${only_filters:-none}"; echo '```'
+            echo "Only selected by convention:"
+            echo '```'; LC_ALL=C comm -13 "$RUNNER_TEMP/filters.txt" "$RUNNER_TEMP/convention.txt"; echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          if [ "${rc}" -ne 0 ] || [ -n "${only_filters}" ]; then
+            echo "::warning title=Convention selection::listing exit ${rc}; tests only the filters select: ${only_filters:-none}"
+          fi
       - name: Run the convention selection
         # Runs even when the comparison failed, so a comparison problem never hides the run.
         if: ${{ !cancelled() }}
         env:
           BASE_REF: ${{ github.base_ref }}
-        run: bash .claude/scripts/run-affected-tests.sh --base "origin/${BASE_REF}" --convention
+        run: |
+          rc=0
+          bash .claude/scripts/run-affected-tests.sh --base "origin/${BASE_REF}" --convention >"$RUNNER_TEMP/run.txt" 2>&1 || rc=$?
+          cat "$RUNNER_TEMP/run.txt"
+          {
+            echo "### Convention run (${{ matrix.os }}): exit ${rc}"
+            echo '```'; grep -E '^(FAIL|TIMEOUT|UNKNOWN) ' "$RUNNER_TEMP/run.txt" || echo "every selected test passed"; echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          [ "${rc}" -eq 0 ] || echo "::warning title=Convention run::exit ${rc}; see the job summary"
 
   status:
     name: "CI - Required Checks"
