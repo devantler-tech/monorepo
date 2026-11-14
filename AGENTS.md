@@ -47,7 +47,7 @@ Populate a submodule with `.claude/scripts/submodule-init.sh <path>` — never a
 | FleetDM device config | `devantler-tech/fleet-gitops` | `applications/fleet-gitops` | `AGENTS.md` |
 | Cloudflare bootstrap owner | `devantler-tech/cloudflare` | — (not a submodule yet) | `AGENTS.md` |
 | Bookkeeper | `devantler-tech/bookkeeper` | — (not a submodule yet) | `AGENTS.md` |
-| 🌊 Project Board (org project 5) | — (not a repo) | — | [product card](.claude/skills/products/project-board/SKILL.md) |
+| 🌊 Project Board (org project 5) | — (not a repo; board) | — | [product card](.claude/skills/products/project-board/SKILL.md) |
 
 `AGENTS.md` means `<Path>/AGENTS.md`, else its `main` copy on GitHub.
 Read repository visibility (`.private`) and `.archived` live from the GitHub API, never from this
