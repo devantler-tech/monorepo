@@ -387,8 +387,12 @@ check_hostnames() {
     }
     # Never exit early: the input pipe would take SIGPIPE.
     loaded == 0 || found != "" { next }
-    /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
-    fence { scan($0, 1); next }
+    # A fence opens on a line of only ``` or ~~~ (plus an info string without backticks) and
+    # closes only on the same character; anything else on such a line is inline code or prose.
+    fence != "" && $0 ~ ("^[[:space:]]*" fence fence fence "[" fence "]*[[:space:]]*$") { fence = ""; next }
+    fence != "" { scan($0, 1); next }
+    /^[[:space:]]*```[^`]*$/ { fence = "`"; next }
+    /^[[:space:]]*~~~/ { fence = "~"; next }
     {
       # Split the line at backticks: odd pieces are prose, even pieces are inline code.
       n = split($0, piece, "`")
