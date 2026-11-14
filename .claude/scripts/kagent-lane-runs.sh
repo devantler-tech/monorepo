@@ -19,9 +19,10 @@
 #   HTML index; this script reads only the entry links of that index.
 #
 # FAIL CLOSED
-#   An unreachable store, an RBAC refusal, a missing service or an index this script cannot parse is
-#   UNKNOWN (exit 2), never an empty list. An empty list is printed only when the store's own index
-#   shows it: a root index with no `runs/` folder, or an empty `runs/` index. A file is printed only
+#   An unreachable store, an RBAC refusal, a missing service or an index this script cannot parse,
+#   down to one table row of a shape it does not know, is UNKNOWN (exit 2), never an empty list. An
+#   empty list is printed only when the store's own index shows it: a root index with no `runs/`
+#   folder, or an empty `runs/` index. A file is printed only
 #   after the whole read succeeded, so a cut-off download never looks complete. kubectl's error text
 #   is never printed, because it can carry the API server's address; a fixed class is printed
 #   instead (refused, unauthenticated, not-found, unavailable, unreachable or failed).
@@ -252,29 +253,114 @@ store_get() {
   return 1
 }
 
-# index_entries <index file> — the href of every entry in an rclone folder index, one a line.
-# Fails (exit 3) unless the page IS such an index and was read to its end: the listing block and the
-# closing table body are both present, and every entry row carries exactly one entry link. The
-# "Go up", sort, breadcrumb and zip links are outside that entry markup and are never read.
+# index_entries <index file> — the href of every entry in an rclone folder index, one a line, without
+# the leading `./` that rclone v1.76 adds. Fails (exit 3) unless the page IS such an index, read to
+# its end, with one table body, and every row of that body is one of the rows this reader knows:
+# - an entry row: class `file`, alone or with `dir` and data attributes, holding exactly one entry
+#   link, an anchor whose first attribute is its href, and at most the zip link that downloads
+#   that same folder;
+# - the "Go up" row: class `goup` from v1.76, a row without a class before it, holding one anchor,
+#   to `..`;
+# - v1.76's placeholder row: class `empty`, holding no anchor at all.
+# A row of any other shape fails the page, and so do a row tag that is not lowercase and anything
+# but whitespace outside the rows, so a template change can never read as an empty folder.
+# The reader before this one counted two markers, matched them against each other, and both were
+# renamed by v1.76 (devantler-tech/platform#6220): both counts fell to 0 and it reported a store
+# holding three runs as holding none. When the page states its own entry counts (v1.76's `ndirs` and
+# `nfiles`), the entries read must also add up to them.
 index_entries() {
   awk '
-    {
-      if (index($0, "<div class=\"listing\">")) listing = 1
-      if (index($0, "</tbody>")) closed = 1
-      s = $0
-      while ((i = index(s, "<tr class=\"file\">")) > 0) { rows++; s = substr(s, i + 17) }
-      s = $0
-      p = "<span class=\"name\"><a href=\""
-      while ((i = index(s, p)) > 0) {
-        s = substr(s, i + length(p))
-        j = index(s, "\"")
-        if (j == 0) { broken = 1; break }
-        print substr(s, 1, j - 1)
-        names++
-        s = substr(s, j + 1)
-      }
+    { page = page $0 "\n" }
+    # count <id> — N from <b id="<id>">N</b> in the page above its table body, where the counts
+    # live; -1 when that part does not mention the id at all, -2 when it mentions it in any form
+    # this reader cannot read (another quote, spacing, attribute order or case). Entry names, which
+    # live in the table body, are never searched, so a file named after a count changes nothing.
+    function count(id,    i, s, d) {
+      i = index(above, "<b id=\"" id "\">")
+      if (!i) return index(tolower(above), id) ? -2 : -1
+      s = substr(above, i + length(id) + 9)
+      d = ""
+      while (substr(s, 1, 1) ~ /^[0-9]$/) { d = d substr(s, 1, 1); s = substr(s, 2) }
+      if (d == "" || substr(s, 1, 4) != "</b>") return -2
+      return d + 0
     }
-    END { if (!listing || !closed || broken || rows != names) exit 3 }
+    END {
+      if (!index(page, "<div class=\"listing\">")) exit 3
+      # One table body, or rows in a second one would go unread.
+      opens = tolower(page)
+      closes = opens
+      if (gsub(/<tbody/, "", opens) != 1 || gsub(/<\/tbody/, "", closes) != 1) exit 3
+      b = index(page, "<tbody>")
+      e = index(page, "</tbody>")
+      if (!b || e < b) exit 3
+      above = substr(page, 1, b - 1)
+      body = substr(page, b + 7, e - b - 7)
+      # Rows are found by their lowercase tags, so a row tag in any other case would be skipped
+      # unread: the page fails unless every row tag in it is lowercase.
+      exact = body
+      folded = tolower(body)
+      if (gsub(/<\/?tr/, "", exact) != gsub(/<\/?tr/, "", folded)) exit 3
+      n = 0
+      # Between, before and after its rows the table body holds only whitespace, so nothing in it
+      # goes unread.
+      while ((i = index(body, "<tr")) > 0) {
+        if (substr(body, 1, i - 1) ~ /[^ \t\r\n]/) exit 3
+        body = substr(body, i + 3)
+        c = substr(body, 1, 1)
+        if (c != ">" && c != " ") exit 3
+        j = index(body, ">")
+        k = index(body, "</tr>")
+        if (!j || !k || k < j) exit 3
+        tag = substr(body, 1, j - 1)
+        row = substr(body, j + 1, k - j - 1)
+        body = substr(body, k + 5)
+        cls = ""
+        if (match(tag, /class="[^"]*"/)) cls = substr(tag, RSTART + 7, RLENGTH - 8)
+        cls = " " cls " "
+        links = 0
+        href = ""
+        s = row
+        while ((p = index(s, "<a href=\"")) > 0) {
+          s = substr(s, p + 9)
+          q = index(s, "\"")
+          if (!q) exit 3
+          href = substr(s, 1, q - 1)
+          s = substr(s, q + 1)
+          links++
+        }
+        # Every anchor in the row, whatever its attribute order or case: each must be accounted
+        # for, or a link written class-first would hide an entry.
+        low = tolower(row)
+        anchors = gsub(/<a[ \t\n>]/, "&", low)
+        zips = gsub(/<a class="zip" /, "&", low)
+        if (index(cls, " file ")) {
+          if (links != 1 || zips > 1 || anchors != links + zips) exit 3
+          # A zip link downloads the folder its row names, and nothing else.
+          if (zips == 1) {
+            zp = index(row, "<a class=\"zip\" href=\"")
+            if (!zp) exit 3
+            zs = substr(row, zp + 21)
+            zq = index(zs, "\"")
+            if (!zq || substr(zs, 1, zq - 1) != href "?download=zip") exit 3
+          }
+          if (substr(href, 1, 2) == "./") href = substr(href, 3)
+          if (href == "") exit 3
+          entry[++n] = href
+        } else if (index(cls, " goup ") || cls == "  ") {
+          if (anchors != 1 || links != 1 || href != "..") exit 3
+        } else if (index(cls, " empty ")) {
+          if (anchors != 0 || index(low, "<a")) exit 3
+        } else {
+          exit 3
+        }
+      }
+      if (body ~ /[^ \t\r\n]/) exit 3
+      dirs = count("ndirs")
+      files = count("nfiles")
+      if (dirs == -2 || files == -2 || (dirs < 0) != (files < 0)) exit 3
+      if (dirs >= 0 && dirs + files != n) exit 3
+      for (x = 1; x <= n; x++) print entry[x]
+    }
   ' "$1"
 }
 
