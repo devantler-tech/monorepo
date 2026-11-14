@@ -31,7 +31,7 @@ Populate a submodule with `.claude/scripts/submodule-init.sh <path>` — never a
 | Portfolio aggregator | `devantler-tech/monorepo` | repo root | this file |
 | devantler.tech site | `devantler-tech/business-site` | `applications/business-site` | `AGENTS.md` and [product card](.claude/skills/products/business-site/SKILL.md) |
 | Shared automation and organization defaults | `devantler-tech/.github` | `github/devantler-tech/.github-public` | `AGENTS.md` |
-| Application template (Go, .NET, optional tenancy) | `devantler-tech/platform-tenant-template` (becoming `application-template`) | `templates/platform-tenant-template` | `AGENTS.md` |
+| Application template (Go, .NET, optional tenancy; being renamed application-template) | `devantler-tech/platform-tenant-template` | `templates/platform-tenant-template` | `AGENTS.md` |
 | Go template (retiring) | `devantler-tech/go-template` | `templates/go-template` | `AGENTS.md` |
 | .NET template (retiring) | `devantler-tech/dotnet-template` | `templates/dotnet-template` | `AGENTS.md` |
 | Platform template | `devantler-tech/platform-template` | `templates/platform-template` | `AGENTS.md` |
