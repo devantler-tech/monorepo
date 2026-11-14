@@ -44,7 +44,8 @@ number, open state and label, link it as the native *blocked by* issue of the wo
 (work-selection guide, *Every blocker is an issue*). The link is an intake receipt, never a claim
 that a notification arrived. Never record an ask that was not delivered to its stated surface, so never link one as a blocker.
 `blocked-check.sh` reports an ask that has gone 7 days without a check as `STALE`: read replies and
-verify the need; never renew an answered ask or manufacture another notification.
+verify the need, and record the check by editing one check comment in place, because a new comment
+notifies the maintainer. Never renew an answered ask or manufacture another notification.
 
 **Preview a filed ask before the next send.** Run
 `.claude/scripts/maintainer-digest.sh needs-you --repo devantler-tech/monorepo` and find your ask by

@@ -111,17 +111,17 @@ has 'PARKED      o/r#23  o/r#50'
 
 
 # Waits: an open Wait for or maintainer-ask issue needs a trusted check within 7 days.
-wait_issue() { jq -nc --arg r "$1" --argjson n "$2" --argjson age "$3" --argjson c "$4" '{number:$n,title:"Wait for: x",
+wait_issue() { jq -nc --arg r "$1" --argjson n "$2" --argjson age "$3" --argjson c "$4" --arg t "${5:-Wait for: x}" '{number:$n,title:$t,
   createdAt:((now - $age*86400) | strftime("%Y-%m-%dT%H:%M:%SZ")),repository:{nameWithOwner:("o/"+$r)},comments:{nodes:$c}}'; }
 checked() { jq -nc --arg a "$1" --arg b "$2" --argjson d "$3" '{author:{login:$a},body:$b,updatedAt:((now - $d*86400) | strftime("%Y-%m-%dT%H:%M:%SZ"))}'; }
 page 0 '[]' >"${tmp}/issues.json"
 page 0 '[]' >"${tmp}/prs.json"
-page 3 "[$(wait_issue r 60 20 '[]'),$(wait_issue r 61 20 "[$(checked devantler "${D}"$'\n\nChecked: still open.' 2)]"),$(wait_issue r 62 20 "[$(checked someone 'looks shipped' 1)]")]" >"${tmp}/waits.json"
+page 4 "[$(wait_issue r 59 20 '[]' 'perf: pull requests wait for an hour'),$(wait_issue r 60 20 '[]'),$(wait_issue r 61 20 "[$(checked devantler "${D}"$'\n\nChecked: still open.' 2)]"),$(wait_issue r 62 20 "[$(checked someone 'looks shipped' 1)]")]" >"${tmp}/waits.json"
 page 1 "[$(wait_issue monorepo 70 3 '[]')]" >"${tmp}/asks.json"
 [ "$(run)" = 1 ] || fail "a stale wait must exit 1"
 has 'STALE       o/r#60  last checked 20d ago'
 has 'STALE       o/r#62  last checked 20d ago'
-if grep -q 'o/r#61\|o/monorepo#70' "${tmp}/out"; then fail "a freshly checked wait was reported stale"; fi
+if grep -q 'o/r#59\|o/r#61\|o/monorepo#70' "${tmp}/out"; then fail "a freshly checked wait was reported stale"; fi
 rm -f "${tmp}/waits.json" "${tmp}/asks.json"
 
 # A PR cannot be parked on the issue it closes, and the route is read from the record comment itself.
