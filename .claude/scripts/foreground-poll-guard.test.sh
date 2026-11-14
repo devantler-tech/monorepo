@@ -103,7 +103,9 @@ until gh pr checks 1; do sleep 30; done'
 # --- Admitted: what the guard must leave alone -----------------------------------------------
 # shellcheck disable=SC2016
 {
-  expect_allow backgrounded 'until [ "$(gh pr checks 1 --json bucket -q length)" = 0 ]; do sleep 30; done' true
+  # A quoted number glued to another fragment is not the whole operand (#5029 review).
+  expect_allow sleep-glued-fragments 'delay=0.; while true; do gh pr checks 1; sleep "$delay""30"; done'
+  expect_allow backgrounded'until [ "$(gh pr checks 1 --json bucket -q length)" = 0 ]; do sleep 30; done' true
   # Under the `Bash|Monitor` matcher a Monitor call arrives as tool_name "Monitor" (#5028).
   expect_allow monitor 'until [ "$(gh pr checks 1 --json bucket -q length)" = 0 ]; do sleep 30; done' false monitor
   expect_allow local-process 'while kill -0 123 2>/dev/null; do sleep 2; done; gh pr view 1'
