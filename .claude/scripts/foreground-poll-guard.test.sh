@@ -64,6 +64,15 @@ expect_deny() {
   fi
 }
 
+expect_deny_clock() {
+  run "$1" "$2"
+  if [ "${rc}" -ne 2 ]; then
+    fail_case "$1: expected a clock-wait denial (exit 2), got exit ${rc}"
+  elif ! grep -q 'deny: foreground clock-wait loop' <<<"${err}"; then
+    fail_case "$1: exit 2 without the clock-wait reason: ${err}"
+  fi
+}
+
 expect_allow() {
   run "$1" "$2" "${3:-false}" "${4:-}"
   [ "${rc}" -eq 0 ] || fail_case "$1: expected admission (exit 0), got exit ${rc}: ${err}"
@@ -104,6 +113,18 @@ until gh pr checks 1; do sleep 30; done'
   expect_deny elif-in-body 'while true; do if false; then :; elif kubectl get ns x; then break; fi; sleep 10; done'
 }
 
+# --- Denied: a loop that only waits for a clock time (monorepo#5043) --------------------------
+# Runs adapted to the remote-loop denial by waiting for a chosen minute in the foreground, then
+# reading GitHub once, then waiting again: the same blocked run, cut into pieces.
+# shellcheck disable=SC2016
+{
+  expect_deny_clock clock-only 'until [ "$(date -u +%H%M)" -ge 1200 ]; do sleep 10; done; date -u'
+  expect_deny_clock clock-then-read 'until [ "$(date -u +%H%M)" -ge 1134 ]; do sleep 5; done; gh api repos/devantler-tech/platform/issues/1/comments'
+  expect_deny_clock clock-counter 'n=0; until [ "$(date -u +%H%M)" -ge 2108 ] || [ $n -ge 17 ]; do sleep 10; n=$((n+1)); done'
+  expect_deny_clock clock-epoch 'end=$(( $(date +%s) + 300 )); while [ "$(date +%s)" -lt "$end" ]; do sleep 30; done'
+  expect_deny_clock clock-arith 'end=$(( $(date +%s) + 300 )); while (( $(date +%s) < end )); do sleep 30; done'
+}
+
 # --- Admitted: what the guard must leave alone -----------------------------------------------
 # shellcheck disable=SC2016
 {
@@ -120,7 +141,12 @@ until gh pr checks 1; do sleep 30; done'
 until gh pr checks 1; do sleep 30; done
 EOF
 chmod +x /tmp/w.sh'
-  expect_allow clock-only 'until [ "$(date -u +%H%M)" -ge 1200 ]; do sleep 10; done; date -u'
+  # The clock as a DEADLINE beside a local condition is a bounded local wait, not a clock wait.
+  expect_allow clock-deadline 'end=$(( $(date +%s) + 60 )); until [ -f /tmp/done ] || [ "$(date +%s)" -ge "$end" ]; do sleep 5; done'
+  expect_allow clock-sampling 'until [ "$(date -u +%S)" -ge 30 ]; do sleep 1; done'
+  expect_allow clock-backgrounded 'until [ "$(date -u +%H%M)" -ge 1200 ]; do sleep 10; done' true
+  expect_allow clock-monitor 'until [ "$(date -u +%H%M)" -ge 1200 ]; do sleep 10; done' false monitor
+  expect_allow clock-in-body 'while kill -0 123 2>/dev/null; do date -u +%T; sleep 10; done'
   expect_allow no-loop 'gh pr checks 1'
   # A control word inside an argument is not a command position.
   expect_allow quoted-if 'for i in {1..3}; do echo "check if gh is available"; sleep 5; done'
