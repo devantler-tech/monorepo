@@ -431,6 +431,21 @@ run list
 expect "a count-less v1.75 root with entries named nfiles.txt and ndirs/ still lists its runs" 0 "2026-11-08"
 index_fn=index_v176
 
+# Outside its rows the table body holds only whitespace: markup there is not an empty folder.
+scenario v176-markup-between-rows
+index_v176 | grep -v -e 'id="ndirs"' -e 'id="nfiles"' |
+  awk '{ print } /<tr class="goup">/ { print "<td><a href=\"./runs/\">runs/</a></td>" }' >"$FAKE/_root"
+grep -qF '<td><a href="./runs/">runs/</a></td>' "$FAKE/_root" || note_fail "the fixture did not take its stray cell"
+run list
+expect "markup between a root index's rows is UNKNOWN, never a store with no run" 2 - "(store-index-unparseable)"
+absent "markup between rows is not reported as no run" "holds no run yet"
+
+scenario v176-markup-after-rows
+index_v176 2026-11-09/ | awk '/<\/tbody>/ { print "<td><a href=\"./2026-11-08/\">2026-11-08/</a></td>" } { print }' >"$FAKE/runs_"
+run list
+expect "markup after an index's last row is UNKNOWN, never a shorter list" 2 - "(runs-index-unparseable)"
+no_stdout "markup after the last row prints no partial list"
+
 scenario v176-goup-elsewhere
 index_v176 2026-11-09/ | sed 's|<a href="..">Go up</a>|<a href="../memory/">Go up</a>|' >"$FAKE/runs_"
 run list

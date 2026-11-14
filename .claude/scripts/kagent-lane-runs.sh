@@ -262,8 +262,8 @@ store_get() {
 # - the "Go up" row: class `goup` from v1.76, a row without a class before it, holding one anchor,
 #   to `..`;
 # - v1.76's placeholder row: class `empty`, holding no anchor at all.
-# A row of any other shape fails the page, and so does a row tag that is not lowercase, so a
-# template change can never read as an empty folder.
+# A row of any other shape fails the page, and so do a row tag that is not lowercase and anything
+# but whitespace outside the rows, so a template change can never read as an empty folder.
 # The reader before this one counted two markers, matched them against each other, and both were
 # renamed by v1.76 (devantler-tech/platform#6220): both counts fell to 0 and it reported a store
 # holding three runs as holding none. When the page states its own entry counts (v1.76's `ndirs` and
@@ -301,7 +301,10 @@ index_entries() {
       folded = tolower(body)
       if (gsub(/<\/?tr/, "", exact) != gsub(/<\/?tr/, "", folded)) exit 3
       n = 0
+      # Between, before and after its rows the table body holds only whitespace, so nothing in it
+      # goes unread.
       while ((i = index(body, "<tr")) > 0) {
+        if (substr(body, 1, i - 1) ~ /[^ \t\r\n]/) exit 3
         body = substr(body, i + 3)
         c = substr(body, 1, 1)
         if (c != ">" && c != " ") exit 3
@@ -351,6 +354,7 @@ index_entries() {
           exit 3
         }
       }
+      if (body ~ /[^ \t\r\n]/) exit 3
       dirs = count("ndirs")
       files = count("nfiles")
       if (dirs == -2 || files == -2 || (dirs < 0) != (files < 0)) exit 3
