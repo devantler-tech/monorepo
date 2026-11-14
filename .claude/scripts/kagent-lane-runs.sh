@@ -257,8 +257,9 @@ store_get() {
 # the leading `./` that rclone v1.76 adds. Fails (exit 3) unless the page IS such an index, read to
 # its end, with one table body, and every row of that body is one of the rows this reader knows:
 # - an entry row: class `file`, alone or with `dir` and data attributes, holding exactly one entry
-#   link, an anchor whose first attribute is its href (a folder's zip link starts with its class);
-# - the "Go up" row: class `goup` from v1.76, a row without a class before it, linking only `..`;
+#   link, an anchor whose first attribute is its href, and at most a folder's zip link besides;
+# - the "Go up" row: class `goup` from v1.76, a row without a class before it, holding one anchor,
+#   to `..`;
 # - v1.76's placeholder row: class `empty`, holding no anchor at all.
 # A row of any other shape fails the page, and so does a row tag that is not lowercase, so a
 # template change can never read as an empty folder.
@@ -320,15 +321,20 @@ index_entries() {
           s = substr(s, q + 1)
           links++
         }
+        # Every anchor in the row, whatever its attribute order or case: each must be accounted
+        # for, or a link written class-first would hide an entry.
+        low = tolower(row)
+        anchors = gsub(/<a[ \t\n>]/, "&", low)
+        zips = gsub(/<a class="zip" /, "&", low)
         if (index(cls, " file ")) {
-          if (links != 1) exit 3
+          if (links != 1 || zips > 1 || anchors != links + zips) exit 3
           if (substr(href, 1, 2) == "./") href = substr(href, 3)
           if (href == "") exit 3
           entry[++n] = href
         } else if (index(cls, " goup ") || cls == "  ") {
-          if (links != 1 || href != "..") exit 3
+          if (anchors != 1 || links != 1 || href != "..") exit 3
         } else if (index(cls, " empty ")) {
-          if (links != 0 || index(tolower(row), "<a")) exit 3
+          if (anchors != 0 || index(low, "<a")) exit 3
         } else {
           exit 3
         }

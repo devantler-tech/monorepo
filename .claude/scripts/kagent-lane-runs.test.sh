@@ -383,6 +383,24 @@ grep -qF 'a class="name" href="./2026-11-09/"' "$FAKE/runs_" || note_fail "the p
 run list
 expect "a placeholder row holding a link is UNKNOWN, never an empty runs/" 2 - "(runs-index-unparseable)"
 
+# Every anchor in a row is accounted for, whatever its attribute order: one written class-first
+# must not hide an entry where the reader does not look for one.
+scenario v176-link-in-goup
+index_v176 | grep -v -e 'id="ndirs"' -e 'id="nfiles"' |
+  sed 's|<a href="..">Go up</a>|<a href="..">Go up</a><a class="name" href="./runs/">runs/</a>|' >"$FAKE/_root"
+grep -qF '<a class="name" href="./runs/">' "$FAKE/_root" || note_fail "the Go up fixture did not take its second link"
+run list
+expect "a Go up row holding a second, class-first link is UNKNOWN, never a store with no run" 2 - "(store-index-unparseable)"
+absent "a link hidden in the Go up row is not reported as no run" "holds no run yet"
+
+scenario v176-link-beside-entry
+index_v176 2026-11-09/ | grep -v -e 'id="ndirs"' -e 'id="nfiles"' |
+  sed 's|<a href="./2026-11-09/">2026-11-09/</a>|&<a class="name" href="./2026-11-08/">2026-11-08/</a>|' >"$FAKE/runs_"
+grep -qF '<a class="name" href="./2026-11-08/">' "$FAKE/runs_" || note_fail "the entry fixture did not take its second link"
+run list
+expect "an entry row holding a second, class-first link is UNKNOWN, never a shorter list" 2 - "(runs-index-unparseable)"
+no_stdout "an entry row hiding a second link prints no partial list"
+
 scenario v176-goup-elsewhere
 index_v176 2026-11-09/ | sed 's|<a href="..">Go up</a>|<a href="../memory/">Go up</a>|' >"$FAKE/runs_"
 run list
