@@ -91,6 +91,10 @@ do
 done'
   expect_deny git-dash-c 'while ! git -C /x fetch -q origin main; do sleep 5; done'
   expect_deny quoted-sleep-double 'until gh pr checks 1; do sleep "30"; done'
+  expect_deny sleep-minutes 'while true; do gh pr checks 1; sleep 1m; done'
+  expect_deny quoted-sleep-suffix 'until gh pr checks 1; do sleep "0.5m"; done'
+  expect_deny quoted-sleep-redirect 'until gh pr checks 1; do sleep "30">/dev/null; done'
+  expect_deny sleep-redirect 'until gh pr checks 1; do sleep 30>/dev/null; done'
   expect_deny quoted-sleep-single 'until gh pr checks 1; do sleep '"'"'30'"'"'; done'
   # A here-string is not a heredoc: the poll loop on the next line must still be judged.
   expect_deny here-string 'read -r state <<<pending
@@ -105,7 +109,7 @@ until gh pr checks 1; do sleep 30; done'
 {
   # A quoted number glued to another fragment is not the whole operand (#5029 review).
   expect_allow sleep-glued-fragments 'delay=0.; while true; do gh pr checks 1; sleep "$delay""30"; done'
-  expect_allow backgrounded'until [ "$(gh pr checks 1 --json bucket -q length)" = 0 ]; do sleep 30; done' true
+  expect_allow backgrounded 'until [ "$(gh pr checks 1 --json bucket -q length)" = 0 ]; do sleep 30; done' true
   # Under the `Bash|Monitor` matcher a Monitor call arrives as tool_name "Monitor" (#5028).
   expect_allow monitor 'until [ "$(gh pr checks 1 --json bucket -q length)" = 0 ]; do sleep 30; done' false monitor
   expect_allow local-process 'while kill -0 123 2>/dev/null; do sleep 2; done; gh pr view 1'

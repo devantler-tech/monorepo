@@ -81,7 +81,7 @@ verdict=$(printf '%s\n' "${cmd}" | awk '
           if (x == "") continue
           if (cp && x == "do") depth++
           else if (cp && x == "done") { depth--; if (depth <= 0) break }
-          if (cp && x == "sleep" && t[j + 1] ~ /^[0-9]/ && t[j + 1] + 0 >= 5) s = 1
+          if (cp && x == "sleep" && seconds(t[j + 1]) >= 5) s = 1
           if (cp && (x == "gh" || x == "kubectl" || x == "flux" || x == "talosctl" || x == "curl")) r = 1
           if (cp && x == "git") {
             k = j + 1; if (t[k] == "-C") k += 2
@@ -126,7 +126,7 @@ verdict=$(printf '%s\n' "${cmd}" | awk '
         rest = substr(s, i + 1); e = index(rest, c)
         if (e > 1 && substr(rest, 1, e - 1) ~ /^[0-9][0-9.]*[smhd]?$/ &&
             (i == 1 || substr(s, i - 1, 1) ~ /[[:space:];&|(]/) &&
-            (i + e + 1 > length(s) || substr(s, i + e + 1, 1) ~ /[[:space:];&|)]/)) {
+            (i + e + 1 > length(s) || substr(s, i + e + 1, 1) ~ /[[:space:];&|)<>]/)) {
           out = out substr(rest, 1, e - 1); i += e; continue
         }
         q = c
@@ -136,6 +136,14 @@ verdict=$(printf '%s\n' "${cmd}" | awk '
       out = out c
     }
     return out
+  }
+  # A sleep operand in seconds, honouring the s/m/h/d suffix `sleep` accepts (`1m` is 60, not 1).
+  # Anything else is a value this scanner cannot evaluate, so it counts as zero.
+  function seconds(w,   u) {
+    sub(/[<>&].*$/, "", w)   # `sleep 30>/dev/null`: a redirection is not part of the operand
+    if (w !~ /^[0-9][0-9.]*[smhd]?$/) return 0
+    u = substr(w, length(w))
+    return (w + 0) * (u == "m" ? 60 : u == "h" ? 3600 : u == "d" ? 86400 : 1)
   }
   function counted(i,   j) {
     for (j = i + 1; j <= n && t[j] != "do"; j++)
