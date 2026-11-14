@@ -255,7 +255,7 @@ store_get() {
 
 # index_entries <index file> — the href of every entry in an rclone folder index, one a line, without
 # the leading `./` that rclone v1.76 adds. Fails (exit 3) unless the page IS such an index, read to
-# its end, and every row of its table body is one of the rows this reader knows:
+# its end, with one table body, and every row of that body is one of the rows this reader knows:
 # - an entry row: class `file`, alone or with `dir` and data attributes, holding exactly one entry
 #   link, an anchor whose first attribute is its href (a folder's zip link starts with its class);
 # - the "Go up" row: class `goup` from v1.76, a row without a class before it, linking only `..`;
@@ -282,6 +282,10 @@ index_entries() {
     }
     END {
       if (!index(page, "<div class=\"listing\">")) exit 3
+      # One table body, or rows in a second one would go unread.
+      opens = tolower(page)
+      closes = opens
+      if (gsub(/<tbody/, "", opens) != 1 || gsub(/<\/tbody/, "", closes) != 1) exit 3
       b = index(page, "<tbody>")
       e = index(page, "</tbody>")
       if (!b || e < b) exit 3
