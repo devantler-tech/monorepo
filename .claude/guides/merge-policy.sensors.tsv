@@ -16,17 +16,6 @@ MP-008	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	**So the arm
 MP-009	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	Record `<repo>#<n>` with the evaluated `headRefOid`	none	-	-
 MP-010	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	A later run resolves an outstanding entry by reading	none	-	-
 MP-011	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	Keying the check on `mergeCommit` therefore reports	narrative	-	-
-MP-012	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Park with one command, never two hand-made writes:**	computational	.claude/scripts/blocked-label-blocker-line-go/park.go	forgeWrite("POST", path+"/labels"
-MP-013	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	An existing record is edited in place, never joined	computational	.claude/scripts/blocked-label-blocker-line-go/park.go	record comments: retain one marker
-MP-014	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	It refuses a kind other than `upstream`, `authority`	computational	.claude/scripts/blocked-label-blocker-line-go/compose.go	the target cannot be its own blocker
-MP-014	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	It refuses a kind other than `upstream`, `authority`	computational	.claude/scripts/blocked-label-blocker-line-go/compose.go	--kind must be exactly upstream, authority or outcome
-MP-015	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**An authority park must enter the maintainer digest.**	computational	.claude/scripts/blocked-label-blocker-line-go/park.go	authority parking needs a linked digest ask
-MP-016	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Read replies first; never repeat an answered ask.	none	-	-
-MP-017	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The record is intake, never proof of bot notification.	none	-	-
-MP-018	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	On every later run, **re-verify the blocker against	computational	.claude/scripts/blocked-label-blocker-line-go/park.go	forgeWrite("PATCH"
-MP-019	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Never post a second record or a new comment restating	computational	.claude/scripts/blocked-label-blocker-line-go/park.go	record comments: retain one marker
-MP-020	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The record replaces the re-diagnosis, never the re-check.	none	-	-
-MP-021	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	`authority`: the PR waits on a decision, and the	none	-	-
 MP-022	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The label alone, a comment that says so, or an earlier	none	-	-
 MP-023	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**"Is someone actively working on it?" is decided	none	-	-
 MP-024	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**Resolve it from your creation record plus the branch	none	-	-
@@ -107,16 +96,17 @@ MP-097	dependency-automation-and-programmed-bot-prs	🔴 **The exemption proves 
 MP-098	dependency-automation-and-programmed-bot-prs	On a 404, `gh api` still prints the error body on	none	-	-
 MP-099	dependency-automation-and-programmed-bot-prs	So a cask PR is the exception to "qualifying PRs	none	-	-
 MP-100	dependency-automation-and-programmed-bot-prs	`RIPE` is necessary, not sufficient	none	-	-
-MP-101	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	A park is that state only while the parked digest reports the PR	computational	.claude/scripts/blocked-label-blocker-line-go/pulldigest.go	"STRANDED"
+MP-101	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	A park is that state only while `blocked-check.sh` reports the PR	computational	.claude/scripts/blocked-check.sh	PARKED
 MP-102	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Its blocker is still owned work (*A park is never a resting place* below).	none	-	-
-MP-103	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	An authority park needs the route record too	computational	.claude/scripts/blocked-label-blocker-line-go/pulldigest.go	return routeReason(line, o.today, o.strandedMaxAge)
-MP-104	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**A park is never a resting place** (agent-plugins#699	computational	.claude/scripts/blocked-label-blocker-line-go/pulldigest.go	"STRANDED"
+MP-104	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**A park is never a resting place** (agent-plugins#699	computational	.claude/scripts/blocked-check.sh	no current route
 MP-105	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	a parked PR is never merged while it is parked	none	-	-
 MP-106	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Never close the PR to do it	none	-	-
-MP-107	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The `next:` route is engineering you will do	none	-	-
+MP-107	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The `Next:` route is engineering you will do	none	-	-
 MP-108	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	A park never hands work to the maintainer	none	-	-
 MP-109	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	is only for a genuine question of direction you cannot settle	none	-	-
-MP-110	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	It is never a handoff and never a substitute for the work	computational	.claude/scripts/blocked-label-blocker-line-go/pulldigest.go	return routeReason(line, o.today, o.strandedMaxAge)
+MP-110	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	It is never a handoff and never a substitute for the work	none	-	-
 MP-111	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	A blocker that cannot be read, or a record that names none, never justifies unparking	none	-	-
-MP-112	dependency-automation-and-programmed-bot-prs	A `STRANDED` row still counts	computational	.claude/scripts/blocked-label-blocker-line-go/pulldigest.go	labelled > parked
+MP-112	dependency-automation-and-programmed-bot-prs	A `STRANDED` row still counts	computational	.claude/scripts/blocked-check.sh	STRANDED
 MP-113	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Closing it otherwise is the separate decision that the release is unwanted	none	-	-
+MP-114	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The PR itself, its review, CI or evaluation is never its blocker	none	-	-
+MP-115	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Edit it in place on every later run, never post a second	computational	.claude/scripts/blocked-check.sh	DUPLICATE

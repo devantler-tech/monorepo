@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# blocked-check.sh — the residual check behind the `blocked` label (monorepo#5051).
+#
+# Every blocker is an issue in this organisation. A blocked ISSUE records it as a native GitHub
+# "blocked by" dependency, and the open count is the verification: nothing here re-checks dates.
+# Only that COUNT is read, never a blocker's own fields, so no read leaves the portfolio
+# (work-selection guide, skip clause (g)). A wait on something outside the portfolio gets its own
+# "Wait for" issue here first. A PR cannot take a native dependency, so a parked PR carries ONE
+# comment by the maintainer account whose first line is the routine disclosure and which holds the
+# line `Blocked by <org>/<repo>#<n>`, naming an issue in this organisation.
+#
+# A label and its record can still come apart, and a label never expires, so this reports:
+#   PARKED      <item>  <why>   labelled, with an open blocker: settled for this run
+#   STRANDED    <item>  <why>   labelled, but every recorded blocker is closed: verify, then work it
+#   MISSING     <item>          labelled, but no blocker is recorded
+#   DUPLICATE   <item>          a parked PR with more than one record comment
+#   CHECKED issues=<n> prs=<n> parked=<n> actionable=<n>
+#
+# Usage: blocked-check.sh --org ORG
+# Exit: 0 nothing actionable, 1 at least one actionable row, 2 UNKNOWN (a read failed or was partial).
+# BLOCKED_CHECK_GH replaces the gh binary in tests.
+
+# shellcheck disable=SC2016 # GraphQL variables ($owner …) are literal query text, never shell expansions.
+set -euo pipefail
+
+GH="${BLOCKED_CHECK_GH:-gh}"
+usage() {
+  echo "usage: blocked-check.sh --org ORG" >&2
+  exit 2
+}
+org=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --org) [ "$#" -ge 2 ] || usage; org="$2"; shift 2 ;;
+    *) usage ;;
+  esac
+done
+case "${org}" in
+  '' | *[!A-Za-z0-9-]*) usage ;;
+esac
+
+unknown() {
+  echo "blocked-check: UNKNOWN — $*" >&2
+  exit 2
+}
+
+# search <query> <fields> — every node of an organisation-wide search, as one JSON array.
+# The search API stops at 1000 results, so a larger result set is UNKNOWN, never a partial pass.
+search() {
+  local pages
+  pages="$("${GH}" api graphql --paginate -f q="$1" -f query="
+    query(\$q: String!, \$endCursor: String) {
+      search(query: \$q, type: ISSUE, first: 100, after: \$endCursor) {
+        issueCount
+        pageInfo { hasNextPage endCursor }
+        nodes { $2 }
+      }
+    }")" || unknown "search failed: $1"
+  printf '%s\n' "${pages}" | jq -se '
+    select(length > 0 and all(.[]; .data.search.nodes | type == "array"))
+    | (.[0].data.search.issueCount) as $count
+    | [.[].data.search.nodes[]] as $nodes
+    | if $count > 1000 then error("over 1000 results")
+      elif ($nodes | length) != $count then error("short read")
+      else $nodes end' 2>/dev/null || unknown "search result is malformed, partial or over 1000 results: $1"
+}
+
+issues="$(search "org:${org} is:open is:issue label:blocked archived:false" '
+  ... on Issue {
+    number repository { nameWithOwner }
+    issueDependenciesSummary { blockedBy totalBlockedBy }
+  }')"
+prs="$(search "org:${org} is:open is:pr label:blocked archived:false" '
+  ... on PullRequest {
+    number repository { nameWithOwner }
+    author { login }
+    comments(first: 100) { totalCount nodes { author { login } body createdAt } }
+  }')"
+
+rows=()
+add() { rows+=("$1"); }
+
+# Issues: the native dependency counts decide. A missing summary is UNKNOWN, never zero.
+printf '%s' "${issues}" | jq -e 'all(.[];
+  (.issueDependenciesSummary.blockedBy | type == "number") and
+  (.issueDependenciesSummary.totalBlockedBy | type == "number"))' >/dev/null ||
+  unknown "an issue has no readable dependency summary"
+issue_rows="$(printf '%s' "${issues}" | jq -r '.[]
+  | [ "\(.repository.nameWithOwner)#\(.number)",
+      .issueDependenciesSummary.blockedBy, .issueDependenciesSummary.totalBlockedBy ] | @tsv')" ||
+  unknown "issue rows are malformed"
+while IFS=$'\t' read -r item open total; do
+  [ -n "${item}" ] || continue
+  if [ "${open}" -gt 0 ]; then add "PARKED      ${item}  ${open} open native blocker(s)"
+  elif [ "${total}" -gt 0 ]; then add "STRANDED    ${item}  all ${total} native blocker(s) closed"
+  else add "MISSING     ${item}"
+  fi
+done <<<"${issue_rows}"
+
+# Parked PRs: one trusted record comment, naming an issue of this organisation that is still open.
+pr_rows="$(printf '%s' "${prs}" | jq -c '.[]')" || unknown "pull request rows are malformed"
+pr_count=0
+err="${TMPDIR:-/tmp}/blocked-check.$$.err"
+while IFS= read -r pr; do
+  [ -n "${pr}" ] || continue
+  pr_count=$((pr_count + 1))
+  item="$(printf '%s' "${pr}" | jq -r '"\(.repository.nameWithOwner)#\(.number)"')"
+  [ "$(printf '%s' "${pr}" | jq '.comments.totalCount')" -le 100 ] ||
+    unknown "${item} has more than 100 comments; its record cannot be read in one page"
+  records="$(printf '%s' "${pr}" | jq -r --arg org "${org}" '
+    [.comments.nodes[]
+      | select(.author.login == "devantler")
+      | select(.body | startswith("> 🤖 Generated by the "))
+      | [.body | split("\n")[] | sub("\r$"; "")
+         | select(test("^Blocked by " + $org + "/[A-Za-z0-9_.-]+#[1-9][0-9]*$"))
+         | sub("^Blocked by "; "")]
+      | select(length > 0) | .[0]] | .[]')" || unknown "${item} comments are malformed"
+  count="$(printf '%s' "${records}" | grep -c . || true)"
+  if [ "${count}" -eq 0 ]; then add "MISSING     ${item}"; continue; fi
+  if [ "${count}" -gt 1 ]; then add "DUPLICATE   ${item}"; continue; fi
+  blocker="${records}"
+  repo="${blocker%#*}"
+  if state="$("${GH}" api graphql -f owner="${org}" -f name="${repo#*/}" -F number="${blocker##*#}" \
+    -f query='query($owner: String!, $name: String!, $number: Int!) {
+      repository(owner: $owner, name: $name) { issue(number: $number) { state } } }' \
+    --jq '.data.repository.issue.state // "ABSENT"' 2>"${err}")"; then
+    :
+  elif grep -Eq 'Could not resolve to an? (Repository|Issue)' "${err}"; then
+    state=ABSENT
+  else
+    rm -f "${err}"
+    unknown "cannot read ${blocker} for ${item}"
+  fi
+  rm -f "${err}"
+  # A dependency bot's PR parked for more than 14 days stays parked only while its record carries
+  # a current route: a `Re-check YYYY-MM-DD` line from today up to 14 days ahead (no stranded
+  # dependency PRs, maintainer direction 2026-11-13).
+  route="$(printf '%s' "${pr}" | jq -r --arg org "${org}" '
+    def day: strptime("%Y-%m-%d") | mktime;
+    if ((.author.login // "") | test("^(dependabot|renovate)(\\[bot\\])?$")) | not then "ok"
+    else
+      [.comments.nodes[]
+        | select(.author.login == "devantler" and (.body | startswith("> 🤖 Generated by the ")))
+        | select(.body | test("(^|\n)Blocked by " + $org + "/"))][0] as $c
+      | ((now - ($c.createdAt | fromdateiso8601)) / 86400 | floor) as $age
+      | if $age <= 14 then "ok"
+        else ([$c.body | split("\n")[] | sub("\r$"; "")
+               | select(test("^Re-check [0-9]{4}-[0-9]{2}-[0-9]{2}$")) | .[9:] | day] | first) as $re
+          | (now | strftime("%Y-%m-%d") | day) as $today
+          | if $re != null and $re >= $today and $re <= $today + 14 * 86400 then "ok"
+            else "no current route, parked \($age)d" end
+        end
+    end')" || unknown "${item} park age is unreadable"
+  if [ "${state}" = OPEN ] && [ "${route}" != ok ]; then state="NO-ROUTE"; fi
+  case "${state}" in
+    NO-ROUTE) add "STRANDED    ${item}  ${blocker} (${route})" ;;
+    OPEN) add "PARKED      ${item}  ${blocker}" ;;
+    CLOSED) add "STRANDED    ${item}  ${blocker}" ;;
+    *) add "MISSING     ${item}  (record names ${blocker}, which is not an issue)" ;;
+  esac
+done <<<"${pr_rows}"
+
+parked=0
+actionable=0
+for row in ${rows[@]+"${rows[@]}"}; do
+  echo "${row}"
+  case "${row}" in
+    PARKED*) parked=$((parked + 1)) ;;
+    *) actionable=$((actionable + 1)) ;;
+  esac
+done
+echo "CHECKED issues=$(printf '%s' "${issues}" | jq length) prs=${pr_count} parked=${parked} actionable=${actionable}"
+[ "${actionable}" -eq 0 ]

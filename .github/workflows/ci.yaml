@@ -35,7 +35,7 @@ jobs:
       shared-checkout-freshness: ${{ steps.filter.outputs.shared-checkout-freshness }}
       submodule-init: ${{ steps.filter.outputs.submodule-init }}
       submodule-pin-currency: ${{ steps.filter.outputs.submodule-pin-currency }}
-      blocked-label-blocker-line: ${{ steps.filter.outputs.blocked-label-blocker-line }}
+      blocked-check: ${{ steps.filter.outputs.blocked-check }}
       unsigned-commit-report: ${{ steps.filter.outputs.unsigned-commit-report }}
       prod-kube-context: ${{ steps.filter.outputs.prod-kube-context }}
       fix-hint-contract: ${{ steps.filter.outputs.fix-hint-contract }}
@@ -155,8 +155,8 @@ jobs:
             macos-batch-4:
               - '.claude/guides/**'
               - '.claude/guides/durable-memory.md'
-              - '.claude/scripts/blocked-label-blocker-line.sh'
               - '.claude/scripts/contract-text.sh'
+              - '.claude/scripts/forge-read.sh'
               - '.claude/scripts/hypothesis-id-reserve.sh'
               - '.claude/scripts/hypothesis-id-reserve.test.sh'
               - '.claude/scripts/lane-draft-count.sh'
@@ -335,14 +335,12 @@ jobs:
               - '.claude/scripts/submodule-pin-currency.sh'
               - '.claude/scripts/submodule-pin-currency.test.sh'
               - '.github/workflows/ci.yaml'
-            blocked-label-blocker-line:
+            blocked-check:
               - '.claude/scripts/go-helper-build.sh'
-              - '.claude/scripts/blocked-label-blocker-line-go/**'
-              - 'AGENTS.md'
-              - '.claude/guides/**'
-              - '.claude/skills/portfolio-maintenance/SKILL.md'
-              - '.claude/scripts/contract-text.sh'
-              - '.claude/scripts/blocked-label-blocker-line.sh'
+              - '.claude/scripts/forge-read-go/**'
+              - '.claude/scripts/forge-read.sh'
+              - '.claude/scripts/blocked-check.sh'
+              - '.claude/scripts/blocked-check.test.sh'
               - '.github/workflows/ci.yaml'
             unsigned-commit-report:
               - '.claude/plugin-consumption/agent-instances.json'
@@ -735,8 +733,8 @@ jobs:
               - '.claude/guides/**'
               - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/lane-draft-count.sh'
-              # The live path reads through this helper's conditional reader.
-              - '.claude/scripts/blocked-label-blocker-line.sh'
+              # The live path reads through this conditional reader.
+              - '.claude/scripts/forge-read.sh'
               - '.claude/scripts/lane-draft-count.test.sh'
               # The run loop's fail-closed intake check is pinned by this suite.
               - '.claude/skills/portfolio-maintenance/SKILL.md'
@@ -1521,10 +1519,10 @@ jobs:
       - name: Verify the prod kube context resolver
         run: bash .claude/scripts/prod-kube-context.test.sh
 
-  test-blocked-label-blocker-line:
-    name: Test blocked-label blocker line
+  test-blocked-check:
+    name: Test blocked check and forge reader
     needs: changes
-    if: needs.changes.outputs.blocked-label-blocker-line == 'true'
+    if: needs.changes.outputs.blocked-check == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -1540,16 +1538,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: .claude/scripts/blocked-label-blocker-line-go/go.mod
+          go-version-file: .claude/scripts/forge-read-go/go.mod
           cache: false
-      - name: Install GNU build deadline utility
-        if: runner.os == 'macOS'
-        run: brew install coreutils
-      # Hermetic Go and CLI fixtures exercise the same guard on both operating systems: the
-      # compiled CLI, the shell entrypoint and a stubbed `gh`. The entrypoint's bounded build
-      # needs the GNU deadline utility installed above.
-      - name: Verify the blocked-label blocker-line check
-        run: go -C .claude/scripts/blocked-label-blocker-line-go test ./...
+      - name: Verify the conditional forge reader
+        run: go -C .claude/scripts/forge-read-go test ./...
+      - name: Verify the blocked check
+        run: bash .claude/scripts/blocked-check.test.sh
 
   test-unsigned-commit-report:
     name: Test unsigned-commit report
@@ -3198,7 +3192,7 @@ jobs:
       - test-shared-checkout-freshness
       - test-submodule-init
       - test-submodule-pin-currency
-      - test-blocked-label-blocker-line
+      - test-blocked-check
       - test-unsigned-commit-report
       - test-prod-kube-context
       - test-pipefail-grep-guard
@@ -3287,7 +3281,7 @@ jobs:
             ${{ needs.test-shared-checkout-freshness.result }}
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-submodule-pin-currency.result }}
-            ${{ needs.test-blocked-label-blocker-line.result }}
+            ${{ needs.test-blocked-check.result }}
             ${{ needs.test-unsigned-commit-report.result }}
             ${{ needs.test-prod-kube-context.result }}
             ${{ needs.test-pipefail-grep-guard.result }}

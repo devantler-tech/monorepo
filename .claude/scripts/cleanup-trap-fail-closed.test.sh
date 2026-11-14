@@ -272,7 +272,7 @@ pr-ownership-disclosure.sh|--input -
 comment-disclosure-drift.sh|--input -
 python-ban-guard.sh|$repo_root
 board-archive.sh|
-blocked-label-blocker-line.sh|
+forge-read.sh|
 unsigned-commit-report.sh|
 board-add.sh|
 pr-body-contract.sh|check --repo devantler-tech/monorepo --body-file $tmp/converted/memory.md
@@ -292,6 +292,7 @@ memory-backup.test.sh|
 repo-delete-guard.test.sh|
 memory-archive.test.sh|
 memory-rewrite.test.sh|
+blocked-check.test.sh|
 platform-live-health.test.sh|
 python-ban-guard-build-surfaces.test.sh|
 python-ban-guard-command-surfaces.test.sh|

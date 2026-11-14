@@ -130,7 +130,7 @@ T_REGISTRY="$FIX/noauthor.json" check "a registry lane without an author is UNKN
 
 # The live path reads through the conditional reader. A stub stands in for it here, so these cases
 # cover what the script does with the reader's answer: one line of pages per endpoint, in order.
-[ -x "$SCRIPT_DIR/blocked-label-blocker-line.sh" ] \
+[ -x "$SCRIPT_DIR/forge-read.sh" ] \
   || { echo "FAIL: the default conditional reader is missing or not executable" >&2; fail=$((fail + 1)); }
 cat > "$FIX/reader" <<'STUB'
 #!/usr/bin/env bash
