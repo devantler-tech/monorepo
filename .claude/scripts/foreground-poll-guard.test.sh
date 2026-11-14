@@ -90,6 +90,8 @@ do
   sleep 15
 done'
   expect_deny git-dash-c 'while ! git -C /x fetch -q origin main; do sleep 5; done'
+  expect_deny quoted-sleep-double 'until gh pr checks 1; do sleep "30"; done'
+  expect_deny quoted-sleep-single 'until gh pr checks 1; do sleep '"'"'30'"'"'; done'
   # A here-string is not a heredoc: the poll loop on the next line must still be judged.
   expect_deny here-string 'read -r state <<<pending
 until gh pr checks 1; do sleep 30; done'

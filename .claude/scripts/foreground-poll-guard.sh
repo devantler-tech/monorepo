@@ -98,7 +98,7 @@ verdict=$(printf '%s\n' "${cmd}" | awk '
   # Quoted text is an argument, never a command: drop single-quoted text, and keep only the
   # command substitutions ($(...) and backticks) inside double quotes, which the shell runs.
   # The one exception is the script argument of `<shell> -c`, which IS run: it is kept whole.
-  function unquote(s,   out, i, c, q, d, b, x) {
+  function unquote(s,   out, i, c, q, d, b, x, rest, e) {
     out = ""; q = ""; d = 0; b = 0; x = 0
     for (i = 1; i <= length(s); i++) {
       c = substr(s, i, 1)
@@ -120,6 +120,9 @@ verdict=$(printf '%s\n' "${cmd}" | awk '
       }
       if (c == "\\") { out = out c substr(s, i + 1, 1); i++; continue }
       if (c == "\047" || c == "\"") {
+        # A quoted number ("30", "30s", or single-quoted) is still an operand such as a sleep duration: keep it.
+        rest = substr(s, i + 1); e = index(rest, c)
+        if (e > 1 && substr(rest, 1, e - 1) ~ /^[0-9][0-9.]*[smhd]?$/) { out = out substr(rest, 1, e - 1); i += e; continue }
         q = c
         if (out ~ /(^|[^A-Za-z0-9_])(bash|sh|zsh|dash|ksh)([[:space:]]+-[A-Za-z]+)*[[:space:]]+-[A-Za-z]*c[[:space:]]+$/) { x = 1; out = out " ; " }
         continue
