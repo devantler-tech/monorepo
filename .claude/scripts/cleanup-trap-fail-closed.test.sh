@@ -346,6 +346,7 @@ review-request-lock.test.sh|
 agent-claim.test.sh|
 agent-issue-board-sweep.test.sh|
 branch-op-lock.test.sh|
+claim-lease-timeline-contract.test.sh|
 plugin-definition-currency.test.sh|
 submodule-init.test.sh|
 worktree-claim.test.sh|

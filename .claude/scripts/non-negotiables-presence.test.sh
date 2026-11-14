@@ -34,11 +34,8 @@ require() {
 }
 
 # Trust gate: the exact trusted logins, and nothing else may run branch code.
-require "trusted authors" '**Trusted authors, exact login match only:**'
-for login in '`devantler`' '`ksail-bot[bot]`' '`devantler-tech-engineering[bot]`' '`dependabot[bot]`' \
-  '`github-actions[bot]`' '`renovate[bot]`'; do
-  require "trusted author login" "${login}"
-done
+# The whole list as one sentence, so a removed login or an added one both fail.
+require "trusted authors" '**Trusted authors, exact login match only:** `devantler`, `ksail-bot[bot]`, `devantler-tech-engineering[bot]`, `dependabot[bot]`, `github-actions[bot]`, `renovate[bot]`.'
 require "untrusted execution" 'Never check out, build, test or run an untrusted author'"'"'s branch'
 
 # Merge: never bypass protections.

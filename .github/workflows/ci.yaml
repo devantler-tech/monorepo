@@ -410,6 +410,7 @@ jobs:
               - 'AGENTS.md'
               - '.claude/guides/**'
               - '.claude/scripts/contract-text.sh'
+              - '.claude/scripts/claim-lease-timeline-contract.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -2078,8 +2079,8 @@ jobs:
         run: bash .claude/scripts/review-request-lock.test.sh
       # Runs the Claim protocol's prescribed lease-clock read against a fake gh: a failed timeline
       # read must be UNKNOWN, never "unassigned" (monorepo#2798).
-      # Claim protocol rule 6 reserves finding-fix work on an existing PR with agent-claim/<pr-number>;
-      # the test also proves it fails when the rule or its takeover gate is removed (monorepo#2999).
+      - name: Verify the claim-lease timeline read
+        run: bash .claude/scripts/claim-lease-timeline-contract.test.sh
   test-memory-backup:
     name: Test memory backup helper (${{ matrix.os }})
     needs: changes
