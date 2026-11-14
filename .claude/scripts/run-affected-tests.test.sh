@@ -479,6 +479,50 @@ if [ $? -eq 2 ]; then ok "a missing merge base is exit 2"; else bad "missing mer
 "${runner}" --root "${repo}" --timeout 0 --list >/dev/null 2>&1
 if [ $? -eq 2 ]; then ok "a zero timeout is rejected"; else bad "a zero timeout was accepted"; fi
 
+
+# --- convention selection (monorepo#5052) --------------------------------------------------
+conv="${tmp}/conv"
+mkdir -p "${conv}/.claude/scripts/z-go" "${conv}/docs" "${conv}/other" "${conv}/.github/workflows"
+cd "${conv}" || exit 2
+git init -q -b main
+git config user.email t@example.invalid
+git config user.name test
+git config commit.gpgsign false
+printf 'on: pull_request\njobs: {}\n' > .github/workflows/ci.yaml
+printf '#!/usr/bin/env bash\n# test-inputs: docs/**\n# test-inputs: other/one.txt\nexit 0\n' > .claude/scripts/x.test.sh
+printf '#!/usr/bin/env bash\nexit 0\n' > .claude/scripts/x.sh
+printf '#!/usr/bin/env bash\necho body\n# test-inputs: other/**\nexit 0\n' > .claude/scripts/y.test.sh
+printf 'module z\n\ngo 1.22\n' > .claude/scripts/z-go/go.mod
+: > docs/a.md; : > other/one.txt; : > other/two.txt
+git add -A && git commit -q -m base
+conv_list() { "${runner}" --root "${conv}" --base main --convention --list 2>/dev/null | grep -v ': changed=' | tr '\n' ' '; }
+conv_is() { local got; got="$(conv_list)"; if [ "${got}" = "$1" ]; then ok "$2"; else bad "$2 (got: ${got})"; fi; }
+echo x >> .claude/scripts/x.sh
+conv_is ".claude/scripts/x.test.sh " "convention: a sibling script selects its test"
+git checkout -q -- . && echo x >> docs/a.md
+conv_is ".claude/scripts/x.test.sh " "convention: a declared input selects the test"
+git checkout -q -- . && echo x >> other/two.txt
+conv_is "" "convention: a header line after the opening comment is not read"
+git checkout -q -- . && echo x >> other/one.txt
+conv_is ".claude/scripts/x.test.sh " "convention: a second test-inputs line is read"
+git checkout -q -- . && printf 'package z\n' > .claude/scripts/z-go/z.go
+conv_is "go:.claude/scripts/z-go " "convention: a Go module change selects its go test"
+json="$("${runner}" --root "${conv}" --base main --convention --list-json 2>/dev/null)"
+if jq -e 'length == 1 and .[0].how == "go" and .[0].path == "go:.claude/scripts/z-go"' <<<"${json}" >/dev/null; then
+  ok "--list-json prints the selection as JSON on stdout"
+else
+  bad "--list-json printed: ${json}"
+fi
+rm -f .claude/scripts/z-go/z.go
+if [ "$("${runner}" --root "${conv}" --base main --convention --all --list 2>/dev/null | grep -vc ": changed=")" = 3 ]; then
+  ok "convention --all selects every test and module"
+else
+  bad "convention --all miscounted"
+fi
+"${runner}" --root "${conv}" --base no-such-ref --convention --list >/dev/null 2>&1
+if [ $? -eq 2 ]; then ok "convention: a missing merge base is exit 2"; else bad "convention missing merge base was not exit 2"; fi
+cd "${repo}" || exit 2
+
 test_run_completed=1
 if [ "${fails}" -eq 0 ]; then
   echo "PASS: run-affected-tests selects what CI selects, and fails closed"
