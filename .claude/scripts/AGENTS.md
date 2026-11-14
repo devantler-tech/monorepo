@@ -37,6 +37,12 @@ entries. The filter must list every file the test reads — for a contract test 
 `.claude/guides/**`, `contract-text.sh` when it reads the assembled contract, and the test itself.
 `ci-job-wiring.sh` and `contract-test-invocation.sh` verify the wiring; run both after adding a job.
 
+**Also declare what the test reads in its header** (monorepo#5052): one or more
+`# test-inputs: <glob> <glob> …` lines in the opening comment, beyond the test itself, its
+`<name>.sh` and its `<name>-go/**`, which are always read. `run-affected-tests.sh --convention`
+selects by these headers, and a non-blocking CI job per OS runs that selection beside the
+per-script jobs until they are retired.
+
 ## Running the tests
 
 Run `run-affected-tests.sh` (`--list` to preview). It picks the `*.test.sh` scripts CI would run for
