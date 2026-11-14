@@ -702,6 +702,13 @@ expect_rc 0 "a clock time is not mistaken for an IPv6 address"
 { cat "$tmp/shape.md"; printf '\n- The next digest is dated 2026-10-19; run https://github.com/example-org/example-repo/actions/runs/00000000000 records it.\n'; } >"$tmp/numeric-identifiers.md"
 run check "$tmp/numeric-identifiers.md"
 expect_rc 0 "an ISO date and an action run identifier are not national phone numbers"
+for link in "https://github.com/example-org/example-repo/issues/1#issuecomment-$(printf '%s' 0000000000)" \
+  "https://example.invalid/item/$(printf '%s' 00000000)" "https://example.invalid/?id=$(printf '%s' 0000000000)" \
+  "job_$(printf '%s' 00000000)"; do
+  { cat "$tmp/shape.md"; printf '\n- Your reply on %s settled it.\n' "$link"; } >"$tmp/link-identifier.md"
+  run check "$tmp/link-identifier.md"
+  expect_rc 0 "a ten- or eight-digit identifier inside $link is not a national phone number"
+done
 run check "$tmp/absent.md"
 expect_rc 2 "an unreadable file is unknown"
 echo "workflows, and the organization's shared issue forms"
