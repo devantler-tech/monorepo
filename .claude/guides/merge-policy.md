@@ -183,8 +183,9 @@ Dependabot PR in the portfolio was parked: nine ksail gomod PRs waited on one is
 
 - **An in-portfolio blocker is rung-1 finishing work**, ahead of any Ready pull. Claim it under the
   claim protocol and drive it, or park it on its own blocker so the issue sweep checks its record.
-- **An upstream blocker is re-checked against live releases whenever a run reaches the PR**, at
-  most 7 days apart. Each check also weighs a route around the wait: adapt to the new version, fork
+- **An upstream blocker is re-checked against live releases on its Wait for issue**, at most 7
+  days apart (`blocked-check.sh` reports a later one `STALE`), never by diagnosing the parked PR
+  again. Each check also weighs a route around the wait: adapt to the new version, fork
   or patch the dependency, isolate or replace the conflicting dependency, contribute upstream under
   the egress rules, or split out or ignore only the blocked part of a grouped update so the rest
   merges. To ignore part of an update, use the ecosystem's configuration with the range recorded
@@ -193,8 +194,8 @@ Dependabot PR in the portfolio was parked: nine ksail gomod PRs waited on one is
   clears. Never close the PR to do it: see *Never close a Dependabot PR to retrigger it*.
 - **A blocker clears only when its fix is verifiably available to the product**: merged in the
   portfolio, or released in a version the PR can take. An upstream item closed without a released
-  fix, or closed as not planned, still holds: when its Wait for issue closes for
-  one, point the record at what really blocks the PR now. A scope or design decision clears once the
+  fix, or closed as not planned, still holds: keep its Wait for issue open, or, if that issue
+  closed anyway, point the record at what really blocks the PR now. A scope or design decision clears once the
   decision is recorded in the park record and the change it requires is on the PR or merged.
 - **Past 14 days, waiting is no longer a route.** Take engineering routes yourself, and keep
   taking them until the PR merges or a newer update supersedes it. Closing it otherwise is the

@@ -2173,7 +2173,6 @@ for channel_rule in \
   "Never send status messages." \
   "never repeat an answered ask" \
   "Never record an ask that was not delivered" \
-  "The ask must be the last thing" \
   "at most three urgent bot assignments per UTC day" \
   "Closed or relabelled asks still consume the cap" \
   "failed or partial read is UNKNOWN" \
