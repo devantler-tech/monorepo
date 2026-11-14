@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/business-site-ci.test.sh .github/workflows/ci.yaml .gitmodules
+# test-inputs: applications/business-site
 #
 # Self-test for run-affected-tests.sh, against a throwaway git repository whose workflow
 # gates three test scripts behind three paths-filter filters.

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/portfolio-map-exclusions.tsv
+# test-inputs: .claude/scripts/contract-text.sh .github/workflows/ci.yaml .gitmodules AGENTS.md
 # portfolio-map-drift.test.sh — RED/GREEN coverage for the Portfolio map drift check (#2811).
 #
 # The defect this guards against is a FALSE CLEAN: a tracked devantler-tech submodule the Portfolio

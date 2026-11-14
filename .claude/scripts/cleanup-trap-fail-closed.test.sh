@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/** .github/workflows/ci.yaml
 # Proves the canonical cleanup-trap shape fails CLOSED when a script aborts on a
 # parameter-expansion error under `set -u`, and records what the naive shape does
 # on whatever bash is running.

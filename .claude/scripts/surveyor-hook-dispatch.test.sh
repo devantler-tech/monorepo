@@ -1,4 +1,21 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/agents/daily-maintainer.md .claude/agents/platform-security-surveyor.md
+# test-inputs: .claude/agents/portfolio-surveyor.md .claude/guides/**
+# test-inputs: .claude/loaders/portable-agentic-engineer.md
+# test-inputs: .claude/plugin-consumption/agent-instances.json .claude/scripts/contract-text.sh
+# test-inputs: .claude/scripts/foreground-poll-guard.sh
+# test-inputs: .claude/scripts/foreground-poll-guard.test.sh .claude/scripts/kata-measure-date.sh
+# test-inputs: .claude/scripts/kata-measure-date.test.sh .claude/scripts/portfolio-surveyor.test.sh
+# test-inputs: .claude/scripts/pr-ownership-disclosure-go/**
+# test-inputs: .claude/scripts/pr-ownership-disclosure.sh
+# test-inputs: .claude/scripts/pr-ownership-disclosure.test.sh
+# test-inputs: .claude/scripts/pr-worktree-holder.sh .claude/scripts/pr-worktree-holder.test.sh
+# test-inputs: .claude/scripts/programmed-bot-review-exemption.sh
+# test-inputs: .claude/scripts/release-cask-ripeness.sh
+# test-inputs: .claude/scripts/release-cask-ripeness.test.sh .claude/settings.json
+# test-inputs: .claude/skill-ownership-allowlist.tsv .claude/skills/portfolio-maintenance/SKILL.md
+# test-inputs: .claude/skills/product-engineering/SKILL.md .claude/skills/products/**
+# test-inputs: .github/workflows/ci.yaml AGENTS.md
 # Behaviour and wiring tests for .claude/scripts/surveyor-hook-dispatch.sh (monorepo#3057).
 #
 # The dispatch is the deployment-level seam that reaches the PLUGIN surveyor agent type,

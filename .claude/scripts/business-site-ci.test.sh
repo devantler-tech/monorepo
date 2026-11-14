@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/run-affected-tests.sh .claude/scripts/run-affected-tests.test.sh
+# test-inputs: .claude/scripts/submodule-init.sh .github/workflows/ci.yaml .gitmodules
+# test-inputs: applications/business-site docs/** github/devantler-tech/.github-public
+# test-inputs: github/devantler-tech/.github-public/.github/workflows/**
+# test-inputs: github/devantler-tech/.github-public/actions/**
 # Exercise portfolio aggregation selection without a monorepo application build.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

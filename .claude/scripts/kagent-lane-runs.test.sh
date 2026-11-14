@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/issues-and-board.md .claude/plugin-consumption/agent-instances.json
+# test-inputs: .claude/scripts/board-flow-fields.sh .claude/scripts/board-flow-fields.test.sh
+# test-inputs: .claude/scripts/finops-snapshot.sh .claude/scripts/flow-scorecard.sh
+# test-inputs: .claude/scripts/flow-scorecard.test.sh .claude/scripts/platform-live-health.sh
+# test-inputs: .claude/scripts/platform-live-health.test.sh .claude/scripts/prod-kube-context.sh
+# test-inputs: .claude/scripts/prod-kube-context.test.sh .claude/scripts/squash-closing-keywords.sh
+# test-inputs: .claude/scripts/squash-closing-keywords.test.sh .github/workflows/ci.yaml AGENTS.md
 # shellcheck disable=SC2016 # The backticks in the fixtures are literal Markdown, not expansions.
 # kagent-lane-runs.test.sh — RED/GREEN coverage for kagent-lane-runs.sh (monorepo#4870) against a
 # stub kubectl that serves recorded rclone folder indexes. No cluster, no kubeconfig, no network.

@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/guides/git-and-worktrees.md
+# test-inputs: .claude/scripts/contract-text.sh .claude/scripts/security-advisory-sweep.sh
+# test-inputs: .claude/scripts/security-advisory-sweep.test.sh
+# test-inputs: .claude/scripts/shared-checkout-freshness.sh
+# test-inputs: .claude/scripts/shared-checkout-freshness.test.sh
+# test-inputs: .claude/scripts/worktree-lane-sweep.sh .claude/scripts/worktree-lane-sweep.test.sh
+# test-inputs: .claude/skills/portfolio-maintenance/SKILL.md .github/workflows/ci.yaml AGENTS.md
 # shellcheck disable=SC2016,SC2034 # check() evals single-quoted conditions; CONSTITUTION is read there.
 # gh-json-read.test.sh — RED/GREEN coverage for gh-json-read.sh (monorepo#2692).
 #

@@ -1,4 +1,21 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/agents/daily-maintainer.md .claude/agents/portfolio-surveyor.md
+# test-inputs: .claude/guides/** .claude/plugin-consumption/agentic-engineering-surveyor-diff.md
+# test-inputs: .claude/scripts/coderabbit-comment-verdict.sh
+# test-inputs: .claude/scripts/coderabbit-comment-verdict.test.sh
+# test-inputs: .claude/scripts/coderabbit-review-verdict.sh
+# test-inputs: .claude/scripts/coderabbit-review-verdict.test.sh
+# test-inputs: .claude/scripts/coderabbit-summary-verdict.sh
+# test-inputs: .claude/scripts/coderabbit-summary-verdict.test.sh .claude/scripts/contract-text.sh
+# test-inputs: .claude/scripts/fixtures/** .claude/scripts/local-review-payload.sh
+# test-inputs: .claude/scripts/local-review-payload.test.sh .claude/scripts/local-review-verdict.sh
+# test-inputs: .claude/scripts/local-review-verdict.test.sh .claude/scripts/managed-run-streak.sh
+# test-inputs: .claude/scripts/managed-run-streak.test.sh
+# test-inputs: .claude/scripts/required-gate-completeness.sh
+# test-inputs: .claude/scripts/required-gate-completeness.test.sh
+# test-inputs: .claude/scripts/review-no-gate-guard.sh .claude/scripts/review-no-gate-guard.test.sh
+# test-inputs: .claude/scripts/review-provider-loop-contract.test.sh
+# test-inputs: .claude/skills/portfolio-maintenance/SKILL.md .github/workflows/ci.yaml AGENTS.md
 # pr-unresolved-threads.test.sh — hermetic proof for pr-unresolved-threads.sh (monorepo#2670).
 # A stub `gh` on PATH serves canned GraphQL pages, so no token or network is needed. Each
 # property is paired with an ablated copy of the helper that must FAIL the same case.

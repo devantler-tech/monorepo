@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/test-partitions.sh .claude/scripts/test-partitions.test.sh
+# test-inputs: .claude/scripts/worktree-claim-lib.sh .claude/scripts/worktree-cleanup.sh
+# test-inputs: .claude/scripts/worktree-cleanup.test.sh
+# test-inputs: .claude/scripts/worktree-inventory-classify.sh
+# test-inputs: .claude/scripts/worktree-inventory-classify.test.sh
+# test-inputs: .claude/scripts/worktree-inventory-merged-check.sh
+# test-inputs: .claude/scripts/worktree-inventory-merged-check.test.sh
+# test-inputs: .claude/scripts/worktree-inventory-read-verdicts.tsv
+# test-inputs: .claude/scripts/worktree-submodule-inventory.sh
+# test-inputs: .claude/scripts/worktree-submodule-inventory.test.sh .github/workflows/ci.yaml
+# test-inputs: AGENTS.md
 # Contract tests for worktree-cleanup-all.sh — the multi-repo orchestrator.
 #
 # worktree-cleanup.test.sh covers the per-repo safety gates. The orchestrator carries

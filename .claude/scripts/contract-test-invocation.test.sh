@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# test-inputs: **
 # Fixtures for contract-test-invocation.sh (monorepo#2586): a wired test passes, and every way of
 # leaving a test unexecuted — deleting its run step, mentioning it only as another command's
 # argument, adding it unwired, or orphaning the parent that runs it — fails with a named reason.

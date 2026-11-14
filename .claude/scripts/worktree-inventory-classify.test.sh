@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/test-partitions.sh .claude/scripts/test-partitions.test.sh
+# test-inputs: .claude/scripts/worktree-claim-lib.sh .claude/scripts/worktree-cleanup-all.sh
+# test-inputs: .claude/scripts/worktree-cleanup-all.test.sh .claude/scripts/worktree-cleanup.sh
+# test-inputs: .claude/scripts/worktree-cleanup.test.sh
+# test-inputs: .claude/scripts/worktree-inventory-merged-check.sh
+# test-inputs: .claude/scripts/worktree-inventory-merged-check.test.sh
+# test-inputs: .claude/scripts/worktree-inventory-read-verdicts.tsv
+# test-inputs: .claude/scripts/worktree-submodule-inventory.sh
+# test-inputs: .claude/scripts/worktree-submodule-inventory.test.sh .github/workflows/ci.yaml
+# test-inputs: AGENTS.md
 # Tests for worktree-inventory-classify.sh — the one class per entry and per worktree read
 # off the inventory and the merged check (monorepo#3072).
 #

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# test-inputs: .github/workflows/ci.yaml
 # RED/GREEN coverage for silent-scheduled-workflows.sh (monorepo#2928) against a stub gh:
 # a dispatch-only workflow with an old failing run is NOT reported, while a scheduled workflow with
 # the same history IS; plus pagination, the manual-disable and missing-file skips, GitHub's

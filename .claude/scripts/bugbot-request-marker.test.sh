@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/scripts/comment-disclosure-drift-go/**
+# test-inputs: .claude/scripts/comment-disclosure-drift.sh
+# test-inputs: .claude/scripts/comment-disclosure-drift.test.sh .claude/scripts/contract-text.sh
+# test-inputs: .claude/scripts/disclosure-drift-sweep.sh
+# test-inputs: .claude/scripts/disclosure-drift-sweep.test.sh .claude/scripts/go-helper-build.sh
+# test-inputs: .claude/scripts/maintainer-comment-candidates.sh
+# test-inputs: .claude/scripts/maintainer-comment-candidates.test.sh
+# test-inputs: .claude/scripts/review-request-comment.sh
+# test-inputs: .claude/scripts/review-request-comment.test.sh .github/workflows/ci.yaml AGENTS.md
 # Hermetic test for bugbot-request-marker.sh (monorepo#2721).
 #
 # Each rule the check enforces has a positive case and a negative control, so a

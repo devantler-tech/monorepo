@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/go-helper-build.sh .claude/scripts/issue-body-references-go/**
+# test-inputs: .github/workflows/ci.yaml
 # delivered-open-candidates.test.sh — RED/GREEN coverage for delivered-open-candidates.sh
 # (monorepo#2967).
 #

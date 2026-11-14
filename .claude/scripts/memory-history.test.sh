@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/go-helper-build.sh .claude/scripts/memory-backup-go/**
+# test-inputs: .claude/scripts/memory-rewrite.sh .claude/scripts/memory-rewrite.test.sh
+# test-inputs: .github/workflows/ci.yaml
 # Behaviour tests for memory-history.sh (monorepo#5050) against throwaway stores.
 
 set -euo pipefail

@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/guides/cadence.md .claude/scripts/claude-task-live-runs.sh
+# test-inputs: .claude/scripts/claude-task-live-runs.test.sh .claude/scripts/disk-preflight.sh
+# test-inputs: .claude/scripts/disk-preflight.test.sh .claude/scripts/graphql-availability.sh
+# test-inputs: .claude/scripts/graphql-availability.test.sh .claude/scripts/review-lane-health.sh
+# test-inputs: .claude/scripts/review-lane-health.test.sh .github/workflows/ci.yaml AGENTS.md
 #
 # Self-test for board-archive.sh. Archiving the wrong item hides live work from
 # the maintainer's board, so the cases that matter are the ones that must STAY:

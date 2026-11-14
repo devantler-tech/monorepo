@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/bundled-skill-ownership.tsv .claude/guides/**
+# test-inputs: .claude/scripts/contract-text.sh .github/workflows/ci.yaml .gitmodules AGENTS.md
+# test-inputs: libraries/agent-plugins
 # Behavioural proof for `skill-owner.sh`.
 #
 # The defect it exists for is not "the command errors" — it is that the command's failure LOOKED

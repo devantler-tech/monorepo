@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/scripts/bugbot-request-marker.sh
+# test-inputs: .claude/scripts/bugbot-request-marker.test.sh
+# test-inputs: .claude/scripts/comment-disclosure-drift-go/**
+# test-inputs: .claude/scripts/comment-disclosure-drift.sh
+# test-inputs: .claude/scripts/comment-disclosure-drift.test.sh .claude/scripts/contract-text.sh
+# test-inputs: .claude/scripts/go-helper-build.sh .claude/scripts/maintainer-comment-candidates.sh
+# test-inputs: .claude/scripts/maintainer-comment-candidates.test.sh
+# test-inputs: .claude/scripts/review-request-comment.sh
+# test-inputs: .claude/scripts/review-request-comment.test.sh .github/workflows/ci.yaml AGENTS.md
 #
 # Pins disclosure-drift-sweep.sh's verdict in all three directions.
 #

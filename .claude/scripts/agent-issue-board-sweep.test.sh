@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/board-add-go/** .claude/scripts/board-add.sh
+# test-inputs: .github/workflows/ci.yaml
 #
 # Self-test for agent-issue-board-sweep.sh.
 #

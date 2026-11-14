@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/issues-and-board.md .claude/plugin-consumption/agent-instances.json
+# test-inputs: .claude/scripts/board-flow-fields.sh .claude/scripts/board-flow-fields.test.sh
+# test-inputs: .claude/scripts/finops-snapshot.sh .claude/scripts/flow-scorecard.sh
+# test-inputs: .claude/scripts/flow-scorecard.test.sh .claude/scripts/kagent-lane-runs.sh
+# test-inputs: .claude/scripts/kagent-lane-runs.test.sh .claude/scripts/platform-live-health.sh
+# test-inputs: .claude/scripts/platform-live-health.test.sh
+# test-inputs: .claude/scripts/squash-closing-keywords.sh
+# test-inputs: .claude/scripts/squash-closing-keywords.test.sh .github/workflows/ci.yaml AGENTS.md
 # prod-kube-context.test.sh — RED/GREEN coverage for the prod kube-context resolver.
 #
 # The defect this guards against is an agent-host definition naming a context that either does not

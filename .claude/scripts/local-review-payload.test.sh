@@ -1,4 +1,21 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/agents/daily-maintainer.md .claude/agents/portfolio-surveyor.md
+# test-inputs: .claude/guides/** .claude/plugin-consumption/agentic-engineering-surveyor-diff.md
+# test-inputs: .claude/scripts/coderabbit-comment-verdict.sh
+# test-inputs: .claude/scripts/coderabbit-comment-verdict.test.sh
+# test-inputs: .claude/scripts/coderabbit-review-verdict.sh
+# test-inputs: .claude/scripts/coderabbit-review-verdict.test.sh
+# test-inputs: .claude/scripts/coderabbit-summary-verdict.sh
+# test-inputs: .claude/scripts/coderabbit-summary-verdict.test.sh .claude/scripts/contract-text.sh
+# test-inputs: .claude/scripts/fixtures/** .claude/scripts/local-review-verdict.sh
+# test-inputs: .claude/scripts/local-review-verdict.test.sh .claude/scripts/managed-run-streak.sh
+# test-inputs: .claude/scripts/managed-run-streak.test.sh .claude/scripts/pr-unresolved-threads.sh
+# test-inputs: .claude/scripts/pr-unresolved-threads.test.sh
+# test-inputs: .claude/scripts/required-gate-completeness.sh
+# test-inputs: .claude/scripts/required-gate-completeness.test.sh
+# test-inputs: .claude/scripts/review-no-gate-guard.sh .claude/scripts/review-no-gate-guard.test.sh
+# test-inputs: .claude/scripts/review-provider-loop-contract.test.sh
+# test-inputs: .claude/skills/portfolio-maintenance/SKILL.md .github/workflows/ci.yaml AGENTS.md
 # local-review-payload.test.sh — round-trip proof for local-review-payload.sh (monorepo#4839).
 # The payload is only worth having if the verdict helper accepts exactly what it produces, so
 # every positive case feeds the helper's output through local-review-verdict.sh the way GitHub
