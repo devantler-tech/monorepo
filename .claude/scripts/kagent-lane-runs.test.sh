@@ -401,6 +401,23 @@ run list
 expect "an entry row holding a second, class-first link is UNKNOWN, never a shorter list" 2 - "(runs-index-unparseable)"
 no_stdout "an entry row hiding a second link prints no partial list"
 
+# A zip link must download the folder its row names: one pointing elsewhere hides an entry.
+scenario v176-zip-elsewhere
+index_v176 memory/ | sed 's|<a class="zip" href="./memory/?download=zip"|<a class="zip" href="./runs/"|' >"$FAKE/_root"
+grep -qF '<a class="zip" href="./runs/"' "$FAKE/_root" || note_fail "the zip fixture did not take its new target"
+run list
+expect "a zip link to another folder is UNKNOWN, never a store with no run" 2 - "(store-index-unparseable)"
+absent "a folder hidden behind a zip link is not reported as no run" "holds no run yet"
+
+# A count the page states in markup the reader does not know is unreadable, not absent.
+scenario v176-count-markup
+index_v176 2026-11-09/ 2026-11-08/ | sed -e 's|<b id="ndirs">2</b>|<b class="total" id="ndirs">3</b>|' \
+  -e 's|<b id="nfiles">0</b>|<b class="total" id="nfiles">0</b>|' >"$FAKE/runs_"
+grep -qF '<b class="total" id="ndirs">3</b>' "$FAKE/runs_" || note_fail "the count fixture did not take its new markup"
+run list
+expect "counts in markup the reader does not know are UNKNOWN, never trusted as absent" 2 - "(runs-index-unparseable)"
+no_stdout "unreadable counts print no list"
+
 scenario v176-goup-elsewhere
 index_v176 2026-11-09/ | sed 's|<a href="..">Go up</a>|<a href="../memory/">Go up</a>|' >"$FAKE/runs_"
 run list

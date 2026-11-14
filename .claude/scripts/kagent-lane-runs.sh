@@ -257,7 +257,8 @@ store_get() {
 # the leading `./` that rclone v1.76 adds. Fails (exit 3) unless the page IS such an index, read to
 # its end, with one table body, and every row of that body is one of the rows this reader knows:
 # - an entry row: class `file`, alone or with `dir` and data attributes, holding exactly one entry
-#   link, an anchor whose first attribute is its href, and at most a folder's zip link besides;
+#   link, an anchor whose first attribute is its href, and at most the zip link that downloads
+#   that same folder;
 # - the "Go up" row: class `goup` from v1.76, a row without a class before it, holding one anchor,
 #   to `..`;
 # - v1.76's placeholder row: class `empty`, holding no anchor at all.
@@ -270,11 +271,11 @@ store_get() {
 index_entries() {
   awk '
     { page = page $0 "\n" }
-    # count <id> — N from <b id="<id>">N</b> on the page; -1 when the page has none, -2 when it has
-    # one this reader cannot read.
+    # count <id> — N from <b id="<id>">N</b> on the page; -1 when the page names no such id, -2
+    # when it names one this reader cannot read.
     function count(id,    i, s, d) {
       i = index(page, "<b id=\"" id "\">")
-      if (!i) return -1
+      if (!i) return index(page, "id=\"" id "\"") ? -2 : -1
       s = substr(page, i + length(id) + 9)
       d = ""
       while (substr(s, 1, 1) ~ /^[0-9]$/) { d = d substr(s, 1, 1); s = substr(s, 2) }
@@ -328,6 +329,14 @@ index_entries() {
         zips = gsub(/<a class="zip" /, "&", low)
         if (index(cls, " file ")) {
           if (links != 1 || zips > 1 || anchors != links + zips) exit 3
+          # A zip link downloads the folder its row names, and nothing else.
+          if (zips == 1) {
+            zp = index(row, "<a class=\"zip\" href=\"")
+            if (!zp) exit 3
+            zs = substr(row, zp + 21)
+            zq = index(zs, "\"")
+            if (!zq || substr(zs, 1, zq - 1) != href "?download=zip") exit 3
+          }
           if (substr(href, 1, 2) == "./") href = substr(href, 3)
           if (href == "") exit 3
           entry[++n] = href
