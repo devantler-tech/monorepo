@@ -67,7 +67,7 @@ tracked="$("${subject}" git --git-dir "${hist}" -- ls-files | sort | tr '\n' ' '
   fail "a caller's GIT_WORK_TREE changed what was committed: ${tracked}"
 [ "$("${subject}" git --git-dir "${hist}" -- log --format=%G? -1)" = 'N' ] || fail "commit was signed"
 : >"${store}/MEMORY.md"
-expect 1 'named files' "${subject}" git --git-dir "${hist}" -- restore MEMORY.md
+expect 1 'only --source' "${subject}" git --git-dir "${hist}" -- restore MEMORY.md
 expect 1 'named files only' "${subject}" git --git-dir "${hist}" -- restore -- .
 "${subject}" git --git-dir "${hist}" -- restore -- MEMORY.md
 [ "$(cat "${store}/MEMORY.md")" = "$(printf 'index\nnew line')" ] || fail "restore did not bring the file back"
@@ -84,6 +84,17 @@ done
 for option in --output=/tmp/x --ext-diff -Ocat --open-files-in-pager=cat; do
   expect 1 'not allowed' "${subject}" git --git-dir "${hist}" -- grep "${option}" index
 done
+# Abbreviated and bundled forms are refused too, and restore never takes a whole tree.
+for option in --open=cat --open-files=cat -nOcat -iOcat; do
+  expect 1 'not allowed' "${subject}" git --git-dir "${hist}" -- grep "${option}" index
+done
+expect 1 'not allowed' "${subject}" git --git-dir "${hist}" -- blame --contents=/etc/hosts MEMORY.md
+expect 1 'only --source' "${subject}" git --git-dir "${hist}" -- restore . -- MEMORY.md
+expect 1 'named files only' "${subject}" git --git-dir "${hist}" -- restore -- "${store}"
+expect 1 'named files only' "${subject}" git --git-dir "${hist}" -- restore -- ./.
+expect 1 'directory' "${subject}" git --git-dir "${hist}" -- restore -- attic
+expect 1 'not a file tracked' "${subject}" git --git-dir "${hist}" -- restore -- nothing-here.md
+expect 0 '' "${subject}" git --git-dir "${hist}" -- log --oneline -1
 # Configuration that could reach the network or run a program is refused outright.
 for key in alias.ship url.https://x.insteadOf core.fsmonitor core.sshCommand include.path diff.external; do
   git --git-dir="${hist}" config "${key}" value

@@ -172,26 +172,45 @@ case "${command_name}" in
       log | diff | show | status | ls-files | blame | grep) ;;
       restore)
         # Only named files: restoring the whole store would overwrite a sibling's live writes.
+        # Each name must be a file the source revision tracks: never a directory, a pattern, an
+        # absolute path or a pathspec before `--`.
         named=0
         past=0
+        source_rev=HEAD
         for arg in "${@:2}"; do
           if [ "${past}" = 1 ]; then
             case "${arg}" in
-              '' | . | ./ | :* | *'*'* | *'?'* | *'['*) refuse "restore takes named files only, not '${arg}'" ;;
+              '' | /* | *..* | ./* | :* | *'*'* | *'?'* | *'['* | *"\\"*)
+                refuse "restore takes named files only, not '${arg}'" ;;
             esac
+            [ ! -d "${store}/${arg}" ] || refuse "restore takes named files only, not the directory '${arg}'"
+            [ -n "$(hgit ls-tree --name-only "${source_rev}" -- "${arg}" 2>/dev/null)" ] ||
+              refuse "'${arg}' is not a file tracked at ${source_rev}"
             named=1
-          elif [ "${arg}" = -- ]; then
-            past=1
+          else
+            case "${arg}" in
+              --) past=1 ;;
+              --source=?*) source_rev="${arg#--source=}" ;;
+              --staged | --worktree | -W | -S | --quiet | -q) ;;
+              *) refuse "restore takes only --source=REV, --staged, --worktree and --quiet before --, not '${arg}'" ;;
+            esac
           fi
         done
         [ "${named}" = 1 ] || refuse "restore needs named files after --"
         ;;
       *) refuse "'${verb}' is not allowed here; use log, diff, show, status, ls-files, blame, grep or restore" ;;
     esac
+    # Git accepts any unique abbreviation of a long option and bundles short ones, so refuse by
+    # prefix: anything that could write a file, run a program, read outside the store or take
+    # pathspecs from a file. In grep, a bundled -O (open in pager) runs a program too.
     for arg in "${@:2}"; do
+      [ "${arg}" != -- ] || break
       case "${arg}" in
-        --output* | --ext-diff | --textconv | --exec* | --upload-pack* | --receive-pack* | --open-files-in-pager* | -O* | --pathspec-from-file*)
+        --output* | --ext* | --tex* | --exe* | --up* | --rec* | --pathspec-f* | --contents* | --no-ind*)
           refuse "option '${arg}' is not allowed here" ;;
+        --o*) [ "${verb}" != grep ] || refuse "option '${arg}' is not allowed here" ;;
+        --*) ;;
+        -*O*) [ "${verb}" != grep ] || refuse "option '${arg}' is not allowed here" ;;
       esac
     done
     hgit "$@"
