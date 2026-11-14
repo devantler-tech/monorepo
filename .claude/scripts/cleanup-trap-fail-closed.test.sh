@@ -293,6 +293,7 @@ repo-delete-guard.test.sh|
 memory-archive.test.sh|
 memory-rewrite.test.sh|
 blocked-check.test.sh|
+memory-history.test.sh|
 platform-live-health.test.sh|
 python-ban-guard-build-surfaces.test.sh|
 python-ban-guard-command-surfaces.test.sh|

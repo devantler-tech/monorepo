@@ -53,6 +53,18 @@ step:
    not a lane outage. If it recurs once both entries run, it is evidence about the Codex cadence
    for the maintainer, never a reason to skip the guard.
 
+   **The host stores have a local-only git history** (monorepo#5050). The Claude project memory and
+   the Codex automation stores each have a repository whose git directory sits outside the store,
+   under `~/.local/state/agent-memory-history/` (`claude-monorepo.git`, `codex-automations.git`),
+   so neither runtime sees a `.git` entry. **It never gets a remote**: the stores hold private data,
+   and [`.claude/scripts/memory-history.sh`](../scripts/memory-history.sh) refuses any repository
+   that has one. **At the end of every run that wrote memory, commit it:**
+   `.claude/scripts/memory-history.sh commit --git-dir <git-dir> --message "<lane> <run id>"`. It
+   commits only a change, waits briefly for a sibling's commit, and never signs or runs hooks. To see
+   or undo a change, use `memory-history.sh git --git-dir <git-dir> -- log|diff|show|restore …`.
+   A failed commit is reported in the run report; it never blocks the run. Until this history has
+   run a week beside the backup helpers below, keep using them as well.
+
    **The kagent lane's memory lives in its in-cluster store, because every run starts in a fresh
    sandbox** (monorepo#4869, maintainer choice 2026-11-10). The store is the `lane-store` WebDAV
    server in the platform cluster's `agentic-engineer` namespace. The sandbox reaches it only
