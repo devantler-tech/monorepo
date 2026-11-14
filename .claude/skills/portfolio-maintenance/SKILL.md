@@ -499,11 +499,11 @@ is currently unavailable, review locally immediately without waiting for quota r
 A `CR-DECLINED <repo>#<n>` line names a PR where CodeRabbit refuses our disclosed requests (#3124):
 skip CodeRabbit on that PR and go to the next lane.
 **Then set the parked pull requests aside** (monorepo#3288): run
-`.claude/scripts/blocked-label-blocker-line.sh --org devantler-tech --parked-digest` once and read it
-as the [merge-policy guide](../../guides/merge-policy.md) says. A `PARKED` row needs no work on the
+`.claude/scripts/blocked-check.sh --org devantler-tech` once and read it as the
+[merge-policy guide](../../guides/merge-policy.md) says. A `PARKED` PR row needs no work on the
 PR itself: drop it from the queue and from `nothing_on_fire`, whatever the surveyor reported for it.
-Its blocker is still owned work (*A park is never a resting place*). An `ACTIONABLE` or `STRANDED`
-row is rung-1 work this run, and exit `2` parks nothing.
+Its blocker is still owned work (*A park is never a resting place*). A `STRANDED`, `MISSING` or
+`DUPLICATE` PR row is rung-1 work this run, and exit `2` parks nothing.
 **Then read the private vulnerability reports** (monorepo#4294): run
 `.claude/scripts/security-advisory-sweep.sh` once and handle each row as the
 [advance-work guide](../../guides/advance-work.md#security-advisories--private-vulnerability-reports)
@@ -899,9 +899,9 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    work), or has an open native blocking-dependency count above zero (contract skip clause (g) — read
    the count on the issue itself, never the blocker nodes' metadata; a closed blocker the issue's own
    record names is re-verified before work builds on it). A `blocked` label or blocker prose
-   is never sufficient: apply the contract's *External-blocker verification* rule before every
-   external-blocker skip, including its structured record and fresh per-run non-repository check. A
-   missing, malformed, or inherited blocker record is not a skip. A **bare `devantler` assignee does
+   is never sufficient: every blocker is an in-portfolio issue linked as a native dependency (the
+   contract's *Every blocker is an issue* rule, including its fresh public-source check of a Wait
+   for issue). A label with no open native blocker is not a skip. A **bare `devantler` assignee does
    *not* reserve** an issue
    **indefinitely** — an `agent-claim/<issue>` tip inside its lease, or a `devantler` assignment plus
    a **pushed lane branch**, is a live claim for ~2h (contract *Claim protocol*), and with neither

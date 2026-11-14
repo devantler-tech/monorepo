@@ -137,7 +137,7 @@ func readPages(endpoint string) ([]byte, error) {
 // It prints nothing unless every endpoint was read in full.
 func readRun(args []string, stdout, stderr io.Writer) int {
 	refuse := func(err error) int {
-		_, _ = fmt.Fprintln(stderr, "blocked-label-blocker-line.sh read:", err, "-- UNKNOWN")
+		_, _ = fmt.Fprintln(stderr, "forge-read.sh read:", err, "-- UNKNOWN")
 		return 2
 	}
 	if len(args) == 0 {

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -131,33 +130,6 @@ func TestReadingAnewFindsAPageAKeptAnswerHides(t *testing.T) {
 	// Reading anew also repairs the kept copy for the next run.
 	if got := mustRead(t, first, true); got != `[{"id":1}][{"id":2}]` {
 		t.Fatalf("the next reused read returned %q", got)
-	}
-}
-
-func TestForgeCommentsRetriesAnewWhenAKeptThreadIsShort(t *testing.T) {
-	var reused, anew int
-	original, originalAnew := forgeRead, forgeReadAnew
-	t.Cleanup(func() { forgeRead, forgeReadAnew = original, originalAnew })
-	forgeRead = func(endpoint string) ([]byte, error) {
-		reused++
-		if strings.HasSuffix(endpoint, "/comments?per_page=100") {
-			return []byte(`[{"id":1}]`), nil
-		}
-		return []byte(`{"number":900,"comments":2}`), nil
-	}
-	forgeReadAnew = func(endpoint string) ([]byte, error) {
-		anew++
-		if strings.HasSuffix(endpoint, "/comments?per_page=100") {
-			return []byte(`[{"id":1}][{"id":2}]`), nil
-		}
-		return []byte(`{"number":900,"comments":2}`), nil
-	}
-	thread, err := forgeComments("o", issue{Repo: "platform", Number: 900})
-	if err != nil || len(thread) != 2 {
-		t.Fatalf("expected the full thread from the second try, got %d comment(s), err %v", len(thread), err)
-	}
-	if reused != 2 || anew != 2 {
-		t.Fatalf("expected one reused try and one anew, got %d reused and %d anew reads", reused, anew)
 	}
 }
 
@@ -360,24 +332,6 @@ func TestConditionalReadKeepsNothingInADirectoryOthersCanEnter(t *testing.T) {
 	mustRead(t, "repos/o/r/issues/1", true)
 	if _, err := os.Stat(keptPagePath(dir, "repos/o/r/issues/1")); err == nil {
 		t.Fatal("no page may be kept in a directory others can enter")
-	}
-}
-
-func TestParkNeverReusesAKeptPage(t *testing.T) {
-	keepPagesIn(t)
-	original := reuseKeptPages
-	t.Cleanup(func() { reuseKeptPages = original })
-	forge := servePages(t, map[string]forgePage{
-		"repos/o/r/issues/1": {status: 200, validator: `W/"a1"`, body: []byte(`{"number":1}`)},
-	})
-	mustRead(t, "repos/o/r/issues/1", true)
-	// Any park invocation switches reuse off before it reads; a usage error is enough.
-	if rc := parkRun([]string{"--no-such-flag"}, io.Discard, io.Discard); rc != 2 {
-		t.Fatalf("expected the usage error, got %d", rc)
-	}
-	mustRead(t, "repos/o/r/issues/1", true)
-	if offered := forge.offered["repos/o/r/issues/1"]; len(offered) != 2 || offered[1] != "" {
-		t.Fatalf("park must read anew, offered %q", offered)
 	}
 }
 

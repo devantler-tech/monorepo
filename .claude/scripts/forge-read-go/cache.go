@@ -203,6 +203,8 @@ func keptPageDir() string {
 		}
 		base = filepath.Join(home, ".cache")
 	}
+	// The directory keeps the retired guard's name on purpose: pages kept before the move to
+	// forge-read (monorepo#5051) stay usable, so the first run after it costs no extra reads.
 	return filepath.Join(base, "blocked-label-blocker-line")
 }
 
