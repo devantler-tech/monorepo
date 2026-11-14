@@ -271,13 +271,14 @@ store_get() {
 index_entries() {
   awk '
     { page = page $0 "\n" }
-    # count <id> — N from <b id="<id>">N</b> on the page; -1 when the page does not mention the id
-    # at all, -2 when it mentions it in any form this reader cannot read (another quote, spacing,
-    # attribute order or case).
+    # count <id> — N from <b id="<id>">N</b> in the page above its table body, where the counts
+    # live; -1 when that part does not mention the id at all, -2 when it mentions it in any form
+    # this reader cannot read (another quote, spacing, attribute order or case). Entry names, which
+    # live in the table body, are never searched, so a file named after a count changes nothing.
     function count(id,    i, s, d) {
-      i = index(page, "<b id=\"" id "\">")
-      if (!i) return index(tolower(page), id) ? -2 : -1
-      s = substr(page, i + length(id) + 9)
+      i = index(above, "<b id=\"" id "\">")
+      if (!i) return index(tolower(above), id) ? -2 : -1
+      s = substr(above, i + length(id) + 9)
       d = ""
       while (substr(s, 1, 1) ~ /^[0-9]$/) { d = d substr(s, 1, 1); s = substr(s, 2) }
       if (d == "" || substr(s, 1, 4) != "</b>") return -2
@@ -292,6 +293,7 @@ index_entries() {
       b = index(page, "<tbody>")
       e = index(page, "</tbody>")
       if (!b || e < b) exit 3
+      above = substr(page, 1, b - 1)
       body = substr(page, b + 7, e - b - 7)
       # Rows are found by their lowercase tags, so a row tag in any other case would be skipped
       # unread: the page fails unless every row tag in it is lowercase.

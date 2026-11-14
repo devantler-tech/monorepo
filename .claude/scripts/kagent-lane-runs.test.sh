@@ -423,6 +423,14 @@ grep -qF "<b id='ndirs'>3</b>" "$FAKE/runs_" || note_fail "the count fixture did
 run list
 expect "counts with single-quoted ids are UNKNOWN, never trusted as absent" 2 - "(runs-index-unparseable)"
 
+# Counts are looked for only above the table body: an entry named after one is just an entry.
+index_fn=index
+scenario count-named-entries
+index memory/ runs/ nfiles.txt ndirs/ >"$FAKE/_root"
+run list
+expect "a count-less v1.75 root with entries named nfiles.txt and ndirs/ still lists its runs" 0 "2026-11-08"
+index_fn=index_v176
+
 scenario v176-goup-elsewhere
 index_v176 2026-11-09/ | sed 's|<a href="..">Go up</a>|<a href="../memory/">Go up</a>|' >"$FAKE/runs_"
 run list
