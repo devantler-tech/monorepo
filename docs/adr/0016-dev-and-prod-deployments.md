@@ -124,8 +124,9 @@ to work.
   `prod/`, so the platform keeps reconciling prod at the root and renders exactly what it rendered
   before, while dev reconciles `./dev`.
 
-  The shared publisher pins the image in `deploy/base/` when that folder exists. A product that
-  publishes through it restructures only once its publisher pin carries that change, because the
-  release would otherwise fail before publishing. KHoist's controller ships as a Helm chart, not
+  The publish action takes the path of the manifest it pins as an input (`app-manifest`), so it
+  works with any layout. A product switches to signing its own releases
+  ([ADR 0017](0017-products-sign-their-own-releases.md)) in the same change as its restructure, and
+  sets that input to `base/deployment.yaml`. KHoist's controller ships as a Helm chart, not
   from `deploy/`, so its layout is settled in
   [khoist#610](https://github.com/devantler-tech/khoist/issues/610).
