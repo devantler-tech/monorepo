@@ -221,7 +221,6 @@ against a URL remote. A plain `git fetch origin main` does not delete the ref ei
 `refs/remotes/origin/main` only through the configured `remote.origin.fetch` mapping. Without that
 mapping it writes only `FETCH_HEAD`, so use the full refspec whenever you read the ref. Measured 2026-09-18 to 2026-09-25:
 13 of 536 Codex sessions deleted `origin/main` this way ([#3596](https://github.com/devantler-tech/monorepo/issues/3596)).
-`drifted-lane-escalation-contract.test.sh` pins the git behaviour.
 
 **The permitted way to put a worktree on a specific commit is
 `git --no-replace-objects -C <wt> checkout --no-overwrite-ignore --detach <sha>`, issued as its OWN
