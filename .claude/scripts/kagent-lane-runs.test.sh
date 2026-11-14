@@ -370,7 +370,7 @@ no_stdout "a page with one uppercase row prints no partial list"
 scenario v176-second-body
 index_v176 memory/ runs/ | grep -v -e 'id="ndirs"' -e 'id="nfiles"' |
   awk '{ print } /<tr class="goup">/ { print "</tbody><tbody>" }' >"$FAKE/_root"
-grep -c '<tbody>' "$FAKE/_root" | grep -qx 2 || note_fail "the two-body fixture does not hold two table bodies"
+[ "$(grep -c '<tbody>' "$FAKE/_root")" = 2 ] || note_fail "the two-body fixture does not hold two table bodies"
 run list
 expect "a root index with a second table body is UNKNOWN, never a store with no run" 2 - "(store-index-unparseable)"
 absent "a second table body is not reported as no run" "holds no run yet"
