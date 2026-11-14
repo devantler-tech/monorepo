@@ -504,6 +504,13 @@ expect_ok "canonical operational note markers" env \
   PATH="${fixture_root}/bin:${PATH}" GH_MODE=repo GH_TEMPLATE_FIXTURE="${fixture_root}/template.md" \
   "${subject}" check --repo devantler-tech/platform --body-file "${fixture_root}/canonical-operational-notes.md"
 
+expect_fail "short role name names the accepted roles" "unsupported --role: engineer (use agentic-engineer or agent-improver)" env \
+  PATH="${fixture_root}/bin:${PATH}" \
+  GH_MODE=repo \
+  GH_TEMPLATE_FIXTURE="${fixture_root}/template.md" \
+  "${subject}" check --repo devantler-tech/platform --body-file "${fixture_root}/part-of.md" \
+  --role engineer
+
 expect_fail "acting role disclosure mismatch" "disclosure does not match --role agentic-engineer" env \
   PATH="${fixture_root}/bin:${PATH}" \
   GH_MODE=repo \
