@@ -350,6 +350,30 @@ index_v176 2026-11-09/ | sed 's|<a href="./2026-11-09/">2026-11-09/</a>|&<a href
 run list
 expect "an entry row with two name links is UNKNOWN" 2 - "(runs-index-unparseable)"
 
+# Rows are found by their lowercase tags: a row tag in another case must fail the page, never be
+# skipped. Without counts, nothing else would notice the row it hides.
+scenario v176-uppercase-only
+index_v176 memory/ runs/ | grep -v -e 'id="ndirs"' -e 'id="nfiles"' |
+  sed 's/<tr class="file dir"/<TR class="file dir"/' >"$FAKE/_root"
+run list
+expect "a root index whose entry rows are uppercase is UNKNOWN, never an empty store" 2 - "(store-index-unparseable)"
+absent "uppercase rows are not reported as no run" "holds no run yet"
+
+scenario v176-uppercase-mixed
+index_v176 2026-11-09/ 2026-11-08/ | grep -v -e 'id="ndirs"' -e 'id="nfiles"' |
+  awk '/<tr class="file dir"/ && ++seen == 2 { sub(/<tr /, "<TR ") } { print }' >"$FAKE/runs_"
+run list
+expect "an uppercase entry row beside a lowercase one is UNKNOWN, never a shorter list" 2 - "(runs-index-unparseable)"
+no_stdout "a page with one uppercase row prints no partial list"
+
+# The placeholder row holds no anchor at all: a link in it, whatever its attribute order, is not
+# an empty folder.
+scenario v176-link-in-placeholder
+index_v176 | sed 's|<tr class="empty" hidden=""><td colspan="3"></td></tr>|<tr class="empty" hidden=""><td colspan="3"><a class="name" href="./2026-11-09/">2026-11-09/</a></td></tr>|' >"$FAKE/runs_"
+grep -qF 'a class="name" href="./2026-11-09/"' "$FAKE/runs_" || note_fail "the placeholder fixture did not take its link"
+run list
+expect "a placeholder row holding a link is UNKNOWN, never an empty runs/" 2 - "(runs-index-unparseable)"
+
 scenario v176-goup-elsewhere
 index_v176 2026-11-09/ | sed 's|<a href="..">Go up</a>|<a href="../memory/">Go up</a>|' >"$FAKE/runs_"
 run list
