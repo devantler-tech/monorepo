@@ -528,6 +528,14 @@ printf '#!/usr/bin/env bash\necho body\n# test-inputs: other/**\nexit 0\n' > .cl
 "${runner}" --root "${conv}" --base main --convention --list >/dev/null 2>&1
 if [ $? -eq 2 ]; then ok "convention: a misplaced test-inputs line is exit 2"; else bad "a misplaced test-inputs line was accepted"; fi
 rm -f .claude/scripts/y.test.sh
+printf '#!/usr/bin/env bash\n# test-inputs:other/**\nexit 0\n' > .claude/scripts/y.test.sh
+"${runner}" --root "${conv}" --base main --convention --list >/dev/null 2>&1
+if [ $? -eq 2 ]; then ok "convention: a malformed test-inputs line is exit 2"; else bad "a malformed test-inputs line was accepted"; fi
+rm -f .claude/scripts/y.test.sh
+cp .claude/scripts/z-go/go.mod "${tmp}/z.mod" && printf '//test-inputs: docs/**\n' >> .claude/scripts/z-go/go.mod
+"${runner}" --root "${conv}" --base main --convention --list >/dev/null 2>&1
+if [ $? -eq 2 ]; then ok "convention: a malformed go.mod test-inputs line is exit 2"; else bad "a malformed go.mod test-inputs line was accepted"; fi
+cp "${tmp}/z.mod" .claude/scripts/z-go/go.mod
 "${runner}" --root "${conv}" --base no-such-ref --convention --list >/dev/null 2>&1
 if [ $? -eq 2 ]; then ok "convention: a missing merge base is exit 2"; else bad "convention missing merge base was not exit 2"; fi
 cd "${repo}" || exit 2

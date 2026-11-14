@@ -116,6 +116,9 @@ test_inputs() {
   local t="$1" name="${1%.test.sh}"
   printf '%s\n%s\n%s\n' "${t}" "${name}.sh" "${name}-go/**"
   awk '
+    /^[[:space:]]*#[[:space:]]*test-inputs/ && !/^# test-inputs: / {
+      print "malformed test-inputs line " NR " (write it as: # test-inputs: <glob> …)" > "/dev/stderr"; bad = 1; exit
+    }
     !body && /^# test-inputs: / { sub(/^# test-inputs: /, ""); n = split($0, g, /[[:space:]]+/); for (i = 1; i <= n; i++) if (g[i] != "") print g[i]; next }
     !body && /^[[:space:]]*(#|$)/ { next }
     { body = 1 }
@@ -130,7 +133,13 @@ module_inputs() {
   local dir="$1" sibling="${1%-go}.test.sh"
   printf '%s\n' "${dir}/**"
   if [ -f "${sibling}" ]; then test_inputs "${sibling}" || return 2; fi
-  awk '/^\/\/ test-inputs: / { sub(/^\/\/ test-inputs: /, ""); n = split($0, g, /[[:space:]]+/); for (i = 1; i <= n; i++) if (g[i] != "") print g[i] }' "${dir}/go.mod"
+  awk '
+    /\/\/[[:space:]]*test-inputs/ && !/^\/\/ test-inputs: / {
+      print FILENAME ": malformed test-inputs line " NR " (write it as: // test-inputs: <glob> …)" > "/dev/stderr"; bad = 1; exit
+    }
+    /^\/\/ test-inputs: / { sub(/^\/\/ test-inputs: /, ""); n = split($0, g, /[[:space:]]+/); for (i = 1; i <= n; i++) if (g[i] != "") print g[i] }
+    END { exit bad ? 2 : 0 }
+  ' "${dir}/go.mod"
 }
 
 hit_any() { # hit_any <globs> — 0 when any changed file matches any glob
