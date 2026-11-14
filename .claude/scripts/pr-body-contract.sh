@@ -348,24 +348,29 @@ check_hostnames() {
           close(public_tld_file)
           n = split("awk bash cfg conf csv env gif go hcl ini jpeg jpg js json jsx lock log mjs mod png proto sql sum svg tf tmpl toml ts tsx txt xml yaml yml zsh", ext, " ")
           for (i = 1; i <= n; i++) { file_ext[ext[i]] = 1 }
-          if (loaded == 0) { print "UNKNOWN: public TLD evidence is empty"; exit }
+          # Never exit early: the upstream grep would take SIGPIPE and abort the pipeline.
+          empty = (loaded == 0)
         }
+        empty || found != "" { next }
         {
           count = split($0, label, ".")
           if (count == 4 && $0 ~ /^[0-9]+([.][0-9]+){3}$/) {
             a = label[1] + 0; b = label[2] + 0
             if (a == 10 || a == 127 || (a == 172 && b >= 16 && b <= 31) || \
                 (a == 192 && b == 168) || (a == 169 && b == 254) || \
-                (a == 100 && b >= 64 && b <= 127)) { print $0; exit }
+                (a == 100 && b >= 64 && b <= 127)) { found = $0 }
             next
           }
           # arpa is a public TLD, but its home. zone is reserved for private networks.
-          if ($0 ~ /(^|[.])home[.]arpa$/) { print $0; exit }
+          if ($0 ~ /(^|[.])home[.]arpa$/) { found = $0; next }
           last = label[count]
           if (last !~ /^[a-z][a-z0-9-]+$/) { next }
           if (last in public || last in file_ext) { next }
-          print $0
-          exit
+          found = $0
+        }
+        END {
+          if (empty) { print "UNKNOWN: public TLD evidence is empty" }
+          else if (found != "") { print found }
         }
       '
   )"
