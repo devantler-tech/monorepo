@@ -56,24 +56,42 @@ expect 1 'outside the store' "${subject}" init --store "${store}" --git-dir "${s
 # Commits only when something changed, and a bad rewrite is recoverable.
 expect 0 'unchanged' "${subject}" commit --git-dir "${hist}"
 printf 'index\nnew line\n' >"${store}/MEMORY.md"
-"${subject}" commit --git-dir "${hist}" --message 'run 1' >"${tmp}/sha"
+# A global config that signs commits and a caller's GIT_* environment are both ignored.
+printf '[commit]\n\tgpgsign = true\n[user]\n\tsigningkey = none\n' >"${tmp}/global.gitconfig"
+mkdir -p "${tmp}/elsewhere" && printf 'secret\n' >"${tmp}/elsewhere/secret"
+GIT_CONFIG_GLOBAL="${tmp}/global.gitconfig" GIT_WORK_TREE="${tmp}/elsewhere" GIT_INDEX_FILE="${tmp}/idx" \
+  "${subject}" commit --git-dir "${hist}" --message 'run 1' >"${tmp}/sha"
 grep -Eq '^[0-9a-f]{40}$' "${tmp}/sha" || fail "commit did not print a sha"
+tracked="$("${subject}" git --git-dir "${hist}" -- ls-files | sort | tr '\n' ' ')"
+[ "${tracked}" = "MEMORY.md attic/old.txt inventory.private.jsonl.gz topic.md " ] ||
+  fail "a caller's GIT_WORK_TREE changed what was committed: ${tracked}"
+[ "$("${subject}" git --git-dir "${hist}" -- log --format=%G? -1)" = 'N' ] || fail "commit was signed"
 : >"${store}/MEMORY.md"
-"${subject}" git --git-dir "${hist}" -- restore MEMORY.md
+expect 1 'named files' "${subject}" git --git-dir "${hist}" -- restore MEMORY.md
+expect 1 'named files only' "${subject}" git --git-dir "${hist}" -- restore -- .
+"${subject}" git --git-dir "${hist}" -- restore -- MEMORY.md
 [ "$(cat "${store}/MEMORY.md")" = "$(printf 'index\nnew line')" ] || fail "restore did not bring the file back"
 [ "$("${subject}" git --git-dir "${hist}" -- log --format=%s -1)" = 'run 1' ] || fail "message not kept"
-# Commits are unsigned and local, whatever the global config says.
-[ "$("${subject}" git --git-dir "${hist}" -- log --format=%G? -1)" = 'N' ] || fail "commit was signed"
 
-# Never a remote: a repository that gained one is refused, and remote commands are refused.
+# Never a remote: a repository that gained one is refused, and only read verbs and restore pass.
 git --git-dir="${hist}" remote add origin https://example.invalid/x.git
 expect 1 'must stay local' "${subject}" commit --git-dir "${hist}"
 git --git-dir="${hist}" remote remove origin
-for verb in push remote fetch pull ls-remote -c; do
+for verb in push remote fetch pull ls-remote send-pack fetch-pack http-push bundle archive daemon \
+  instaweb request-pull config clean reset stash checkout worktree gc -c; do
   expect 1 'not allowed' "${subject}" git --git-dir "${hist}" -- "${verb}" origin
 done
+for option in --output=/tmp/x --ext-diff -Ocat --open-files-in-pager=cat; do
+  expect 1 'not allowed' "${subject}" git --git-dir "${hist}" -- grep "${option}" index
+done
+# Configuration that could reach the network or run a program is refused outright.
+for key in alias.ship url.https://x.insteadOf core.fsmonitor core.sshCommand include.path diff.external; do
+  git --git-dir="${hist}" config "${key}" value
+  expect 1 'unsafe configuration' "${subject}" commit --git-dir "${hist}"
+  git --git-dir="${hist}" config --unset "${key}"
+done
 
-# A Codex-style store: only <automation>/memory.md is tracked.
+# A Codex-style store: only <automation>/memory.md is tracked, and artifacts are never read.
 codex="${tmp}/automations"
 mkdir -p "${codex}/engineer/artifacts" "${codex}/improver"
 printf 'e\n' >"${codex}/engineer/memory.md"
@@ -81,9 +99,16 @@ printf 'big\n' >"${codex}/engineer/artifacts/run.log"
 printf 'cfg\n' >"${codex}/engineer/automation.toml"
 printf 'i\n' >"${codex}/improver/memory.md"
 printf 'salt\n' >"${codex}/.run-jitter-salt"
+chmod 000 "${codex}/engineer/artifacts"
 expect 0 'initialised' "${subject}" init --store "${codex}" --git-dir "${tmp}/history/codex.git" --layout codex
+printf 'e2\n' >"${codex}/engineer/memory.md"
+expect 0 '' "${subject}" commit --git-dir "${tmp}/history/codex.git"
+chmod 700 "${codex}/engineer/artifacts"
 tracked="$("${subject}" git --git-dir "${tmp}/history/codex.git" -- ls-files | sort | tr '\n' ' ')"
 [ "${tracked}" = "engineer/memory.md improver/memory.md " ] || fail "codex layout tracked the wrong files: ${tracked}"
+# A store with nothing to track yet still initialises.
+mkdir -p "${tmp}/empty-codex"
+expect 0 'initialised' "${subject}" init --store "${tmp}/empty-codex" --git-dir "${tmp}/history/empty.git" --layout codex
 
 # Refusals and usage errors.
 mkdir -p "${tmp}/withgit/.git"

@@ -1,31 +1,36 @@
 #!/usr/bin/env bash
 # memory-history.sh — keep a local-only git history of an agent memory store (monorepo#5050).
 #
+# Usage:
+#   memory-history.sh init   --store DIR --git-dir DIR --layout claude|codex
+#   memory-history.sh commit --git-dir DIR [--message TEXT]
+#   memory-history.sh git    --git-dir DIR -- log|diff|show|status|ls-files|blame|grep … | restore [--source REV] -- FILE…
+#
 # The durable memory stores live outside every checkout and had no history, so a bad rewrite was a
 # one-way delete and custom backup tooling grew around that. A plain git repository gives diff,
 # log and restore. Its git directory lives OUTSIDE the store, so the runtimes that read the store
 # never see a `.git` entry; every command passes --git-dir and --work-tree explicitly.
 #
-# The repository must NEVER get a remote: the stores hold private data. Every command refuses a
-# repository that has one. Commits are local, unsigned and run without hooks, so an unattended run
-# never waits on a signing prompt.
-#
-# Usage:
-#   memory-history.sh init   --store DIR --git-dir DIR --layout claude|codex
-#   memory-history.sh commit --git-dir DIR [--message TEXT]
-#   memory-history.sh git    --git-dir DIR -- <git arguments>     (log, diff, show, restore …)
+# The repository must NEVER get a remote: the stores hold private data. So every command refuses a
+# repository with a remote or with configuration that could reach the network or run a program
+# (aliases, url rewrites, includes, filters, fsmonitor, ssh command). The `git` passthrough is an
+# allow-list of read verbs plus `restore` of named files; nothing can push, serve, bundle, clean
+# or reset. Every call ignores the caller's GIT_* environment and the global and system git
+# configuration, runs no hooks and signs nothing, so an unattended run never waits on a prompt
+# and a hook context cannot redirect it.
 #
 # Layouts choose what is tracked:
-#   claude  every file except the backup artifacts the older helpers leave behind;
+#   claude  every file except the backup and swap artifacts the older helpers leave behind;
 #   codex   only <automation>/memory.md, never the large run artifacts beside it.
 #
-# Exit codes: 0 done (commit prints the new sha, or "unchanged"), 1 refused (a remote exists, or the
-# store or git directory is not what the command expects), 2 usage error or a failed git command.
+# Exit codes: 0 done (commit prints the new sha, or "unchanged"), 1 refused (a remote or unsafe
+# configuration exists, or the store or git directory is not what the command expects), 2 usage
+# error or a failed git command.
 
 set -euo pipefail
 
 usage() {
-  sed -n '12,15p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '4,7p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -59,64 +64,82 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "${git_dir}" ] || usage
 
-# Every git call: this repository only, no hooks, no signing, no pager.
+# Drop every GIT_* variable the caller may carry (a hook or rebase context sets several of them).
+while IFS='=' read -r name _; do
+  case "${name}" in GIT_*) unset "${name}" ;; esac
+done < <(env)
+
+# Every git call: this repository and work tree only, no global or system configuration, no hooks,
+# no signing, no fsmonitor, no line-ending or attribute rewriting, no pager.
 hgit() {
-  git --git-dir="${git_dir}" -c core.hooksPath=/dev/null -c commit.gpgsign=false \
-    -c tag.gpgsign=false -c core.pager=cat "$@"
+  local work_tree=()
+  [ -z "${store}" ] || work_tree=(--work-tree="${store}")
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
+    git --git-dir="${git_dir}" ${work_tree[@]+"${work_tree[@]}"} \
+    -c core.hooksPath=/dev/null -c commit.gpgsign=false -c tag.gpgsign=false \
+    -c core.fsmonitor=false -c core.autocrlf=false -c core.excludesFile=/dev/null \
+    -c core.attributesFile=/dev/null -c core.pager=cat "$@"
 }
 
-require_no_remote() {
-  local remotes
-  remotes="$(hgit remote)" || die "cannot list remotes of ${git_dir}"
-  [ -z "${remotes}" ] || refuse "${git_dir} has a remote (${remotes//$'\n'/ }); this history must stay local"
-}
-
+# require_repo — the git directory is an initialised history of an existing store, with no remote
+# and no configuration that could reach the network or run a program. Sets ${store}.
 require_repo() {
+  local unsafe
   if [ ! -d "${git_dir}" ] || ! hgit rev-parse --git-dir >/dev/null 2>&1; then
     refuse "${git_dir} is not an initialised memory history (run init first)"
   fi
-  require_no_remote
-  [ -d "$(hgit config core.worktree)" ] || refuse "the store recorded in ${git_dir} is missing"
+  [ -z "$(hgit remote)" ] || refuse "${git_dir} has a remote; this history must stay local"
+  unsafe="$(hgit config --local --name-only --get-regexp \
+    '^(remote|alias|url|include|includeif|filter|credential|http|submodule)\.|^(diff|pager|gpg)\.|^core\.(fsmonitor|sshcommand|hookspath|pager|editor|askpass)$' \
+    2>/dev/null || true)"
+  [ -z "${unsafe}" ] || refuse "${git_dir} carries unsafe configuration: ${unsafe//$'\n'/ }"
+  store="$(hgit config core.worktree)" || refuse "no store is recorded in ${git_dir}"
+  [ -d "${store}" ] || refuse "the store recorded in ${git_dir} is missing: ${store}"
 }
 
 case "${command_name}" in
   init)
     [ -n "${store}" ] && [ -n "${layout}" ] || usage
+    case "${layout}" in claude | codex) ;; *) usage ;; esac
     [ -d "${store}" ] || refuse "store is not a directory: ${store}"
     store="$(cd "${store}" && pwd -P)"
-    # Compare physical paths, so a symlinked prefix cannot hide a git directory inside the store.
-    mkdir -p "$(dirname "${git_dir}")"
-    git_dir="$(cd "$(dirname "${git_dir}")" && pwd -P)/$(basename "${git_dir}")"
     [ ! -e "${store}/.git" ] || refuse "${store} already holds a .git entry; keep git metadata outside the store"
-    case "${git_dir}" in
-      "${store}" | "${store}"/*) refuse "the git directory must live outside the store" ;;
+    # Compare physical paths, so a symlinked prefix cannot hide a git directory inside the store.
+    parent="$(dirname "${git_dir}")"
+    while [ ! -d "${parent}" ]; do parent="$(dirname "${parent}")"; done
+    physical="$(cd "${parent}" && pwd -P)${git_dir#"${parent}"}"
+    case "${physical}/" in
+      "${store}/"*) refuse "the git directory must live outside the store" ;;
     esac
+    git_dir="${physical}"
     if [ -e "${git_dir}" ]; then
+      wanted="${store}"
       require_repo
-      [ "$(hgit config core.worktree)" = "${store}" ] ||
-        refuse "${git_dir} already tracks another store"
+      [ "${store}" = "${wanted}" ] || refuse "${git_dir} already tracks another store"
       echo "memory-history: already initialised: ${git_dir}"
       exit 0
     fi
     mkdir -p "$(dirname "${git_dir}")"
-    git init -q --bare "${git_dir}" || die "git init failed for ${git_dir}"
+    git_store="${store}"
+    store=''
+    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init -q --bare "${git_dir}" ||
+      die "git init failed for ${git_dir}"
+    store="${git_store}"
     hgit config core.bare false
     hgit config core.worktree "${store}"
     hgit config user.name 'agent memory history'
     hgit config user.email 'agent-memory-history@localhost'
-    hgit config commit.gpgsign false
     case "${layout}" in
       claude)
         printf '%s\n' '/.memory-backups/' '/.memory-archive-backup-*/' '/.memory-rewrite-recovery*' \
-          '*.bak*' >"${git_dir}/info/exclude"
+          '*.bak' '*.bak-*' '*.bak.*' '*.memory-rewrite.*' >"${git_dir}/info/exclude"
         ;;
       codex)
         printf '%s\n' '/*' '!/*/' '/*/*' '!/*/memory.md' >"${git_dir}/info/exclude"
         ;;
-      *) rm -rf "${git_dir}"; usage ;;
     esac
     hgit add -A || die "cannot stage ${store}"
-    hgit commit -q -m "memory-history: initial snapshot" || die "initial commit failed"
+    hgit commit -q --allow-empty -m "memory-history: initial snapshot" || die "initial commit failed"
     echo "memory-history: initialised ${git_dir} for ${store} ($(hgit ls-files | wc -l | tr -d ' ') files)"
     ;;
   commit)
@@ -137,16 +160,40 @@ case "${command_name}" in
       attempt=$((attempt + 1))
       [ "${attempt}" -lt 5 ] || die "commit failed"
       sleep 1
-      hgit diff --cached --quiet && { echo "memory-history: unchanged"; exit 0; }
+      if hgit diff --cached --quiet; then echo "memory-history: unchanged"; exit 0; fi
     done
     hgit rev-parse HEAD
     ;;
   git)
     require_repo
     [ "$#" -gt 0 ] || usage
-    case "$1" in
-      -* | remote | push | fetch | pull | clone | submodule | ls-remote) refuse "network and remote commands are not allowed here" ;;
+    verb="$1"
+    case "${verb}" in
+      log | diff | show | status | ls-files | blame | grep) ;;
+      restore)
+        # Only named files: restoring the whole store would overwrite a sibling's live writes.
+        named=0
+        past=0
+        for arg in "${@:2}"; do
+          if [ "${past}" = 1 ]; then
+            case "${arg}" in
+              '' | . | ./ | :* | *'*'* | *'?'* | *'['*) refuse "restore takes named files only, not '${arg}'" ;;
+            esac
+            named=1
+          elif [ "${arg}" = -- ]; then
+            past=1
+          fi
+        done
+        [ "${named}" = 1 ] || refuse "restore needs named files after --"
+        ;;
+      *) refuse "'${verb}' is not allowed here; use log, diff, show, status, ls-files, blame, grep or restore" ;;
     esac
+    for arg in "${@:2}"; do
+      case "${arg}" in
+        --output* | --ext-diff | --textconv | --exec* | --upload-pack* | --receive-pack* | --open-files-in-pager* | -O* | --pathspec-from-file*)
+          refuse "option '${arg}' is not allowed here" ;;
+      esac
+    done
     hgit "$@"
     ;;
   *) usage ;;
