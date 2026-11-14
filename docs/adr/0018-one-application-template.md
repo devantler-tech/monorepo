@@ -18,8 +18,8 @@ Template-sync follows one source per repository, and all three own the same path
 `ci.yaml`, `cd.yaml`, `release.yaml`, `template-sync.yaml`, `.releaserc`, `CLAUDE.md` and
 `AGENTS.md`. So an application that is both a Go program and a platform tenant can only follow
 one of them. KHoist shows the cost: it syncs from `go-template` but lists 44 paths in its
-`.templatesyncignore`, including every workflow, so it receives almost nothing, and it carries its
-tenant publishing by hand. The two tenants, in turn, got no stack at all.
+`.templatesyncignore`, including its CI, CD and release workflows, so it receives almost nothing,
+and it carries its tenant publishing by hand. The two tenants, in turn, got no stack at all.
 
 On 2026-11-14 the maintainer asked for the templates to be merged, with tenancy included or a
 scaffolder for Go and .NET projects, and then for the result to be called `application-template`,
