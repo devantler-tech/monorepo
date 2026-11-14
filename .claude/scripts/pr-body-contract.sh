@@ -389,10 +389,20 @@ check_hostnames() {
     loaded == 0 || found != "" { next }
     # A fence opens on a line of only ``` or ~~~ (plus an info string without backticks) and
     # closes only on the same character; anything else on such a line is inline code or prose.
-    fence != "" && $0 ~ ("^[[:space:]]*" fence fence fence "[" fence "]*[[:space:]]*$") { fence = ""; next }
+    # The info string on the opening line is scanned too, and a fence closes only on a run of the
+    # same character at least as long as the one that opened it.
+    fence != "" && match($0, "^[[:space:]]*[" fence "]+[[:space:]]*$") {
+      run = $0; gsub(/[^`~]/, "", run)
+      if (length(run) >= fence_len) { fence = ""; next }
+    }
     fence != "" { scan($0, 1); next }
-    /^[[:space:]]*```[^`]*$/ { fence = "`"; next }
-    /^[[:space:]]*~~~/ { fence = "~"; next }
+    match($0, /^[[:space:]]*(```+[^`]*|~~~+.*)$/) {
+      scan($0, 1)
+      run = $0; sub(/^[[:space:]]*/, "", run)
+      fence = substr(run, 1, 1)
+      match(run, "^[" fence "]+"); fence_len = RLENGTH
+      next
+    }
     {
       # Split the line at backticks: odd pieces are prose, even pieces are inline code.
       n = split($0, piece, "`")
