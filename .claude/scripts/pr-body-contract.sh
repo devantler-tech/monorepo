@@ -297,7 +297,7 @@ check_relationship() {
   issue_count="$(grep -Ec '^(Fixes|Part of) #[1-9][0-9]*$' "${visible}" || true)"
   fixes_count="$(grep -Ec '^Fixes #[1-9][0-9]*$' "${visible}" || true)"
   part_of_count="$(grep -Ec '^Part of #[1-9][0-9]*$' "${visible}" || true)"
-  marker_count="$({ grep -Eio '(^|[^[:alnum:]_])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]*(#|[[:alnum:]_.-]+/[[:alnum:]_.-]+#|https?://github[.]com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/)|(^|[^[:alnum:]_])part[[:space:]]+of[[:space:]]*(#|[[:alnum:]_.-]+/[[:alnum:]_.-]+#|https?://github[.]com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/)' \
+  marker_count="$({ grep -Eio '(^|[^[:alnum:]_])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]*:?[[:space:]]*(#|[[:alnum:]_.-]+/[[:alnum:]_.-]+#|https?://github[.]com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/)|(^|[^[:alnum:]_])part[[:space:]]+of[[:space:]]*:?[[:space:]]*(#|[[:alnum:]_.-]+/[[:alnum:]_.-]+#|https?://github[.]com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/)' \
     "${visible}" || [ "$?" -eq 1 ]; } | wc -l | tr -d '[:space:]')"
   no_issue_count="$(grep -Fxc 'No issue: trivial fix.' "${visible}" || true)"
   case "${issue_count}:${fixes_count}:${part_of_count}" in
@@ -324,56 +324,81 @@ check_relationship() {
   esac
 }
 
-# Rule 3: every dotted name must end in a public top-level domain, and no private IPv4
-# address may appear. The raw body is read, so link targets and HTML comments count too.
-# A name ending in a common file extension that is not a TLD (a file name, not a host)
-# is allowed. A name whose last label is one letter or starts with a digit (e.g., i.e.,
-# version numbers, 1.5x) is not a hostname.
+# Rule 3: no non-public host and no private IPv4 address anywhere in the raw body, link targets and
+# HTML comments included. In prose every dotted name must end in a public top-level domain, unless
+# its last label is a common file extension (a file name, not a host); a last label of one letter
+# or starting with a digit (e.g., version numbers, 1.5x) is not a host. Inside code spans and fences
+# a dotted name is usually code (pkg.Func, a YAML path), so there only a private address, a
+# private-network suffix, or a non-public name in host position (after :// or @, or before :port)
+# is refused. Markdown escapes or character references can still disguise a name; this rule
+# catches mistakes, not deliberate evasion, which review covers.
 check_hostnames() {
   local body="$1"
   local public_tlds="${script_dir}/pr-body-public-tlds.txt"
   local finding
 
   [ -r "${public_tlds}" ] || fail "public TLD evidence is missing"
-  finding="$(
-    tr '[:upper:]' '[:lower:]' <"${body}" |
-      { grep -Eo '[[:alnum:]]([[:alnum:]_-]*[[:alnum:]])?([.][[:alnum:]]([[:alnum:]_-]*[[:alnum:]])?)+' ||
-        [ "$?" -eq 1 ]; } |
-      awk -v public_tld_file="${public_tlds}" '
-        BEGIN {
-          while ((getline line < public_tld_file) > 0) {
-            sub(/\r$/, "", line)
-            if (line !~ /^#/ && line != "") { public[tolower(line)] = 1; loaded++ }
-          }
-          close(public_tld_file)
-          n = split("awk bash cfg conf csv env gif go hcl ini jpeg jpg js json jsx lock log mjs mod png proto sql sum svg tf tmpl toml ts tsx txt xml yaml yml zsh", ext, " ")
-          for (i = 1; i <= n; i++) { file_ext[ext[i]] = 1 }
-          # Never exit early: the upstream grep would take SIGPIPE and abort the pipeline.
-          empty = (loaded == 0)
-        }
-        empty || found != "" { next }
-        {
-          count = split($0, label, ".")
-          if (count == 4 && $0 ~ /^[0-9]+([.][0-9]+){3}$/) {
-            a = label[1] + 0; b = label[2] + 0
-            if (a == 10 || a == 127 || (a == 172 && b >= 16 && b <= 31) || \
-                (a == 192 && b == 168) || (a == 169 && b == 254) || \
-                (a == 100 && b >= 64 && b <= 127)) { found = $0 }
-            next
-          }
-          # arpa is a public TLD, but its home. zone is reserved for private networks.
-          if ($0 ~ /(^|[.])home[.]arpa$/) { found = $0; next }
-          last = label[count]
-          if (last !~ /^[a-z][a-z0-9-]+$/) { next }
-          if (last in public || last in file_ext) { next }
-          found = $0
-        }
-        END {
-          if (empty) { print "UNKNOWN: public TLD evidence is empty" }
-          else if (found != "") { print found }
-        }
-      '
-  )"
+  finding="$(tr '[:upper:]' '[:lower:]' <"${body}" | awk -v public_tld_file="${public_tlds}" '
+    BEGIN {
+      while ((getline line < public_tld_file) > 0) {
+        sub(/\r$/, "", line)
+        if (line !~ /^#/ && line != "") { public[tolower(line)] = 1; loaded++ }
+      }
+      close(public_tld_file)
+      n = split("awk bash cfg conf csv env gif go hcl ini jpeg jpg js json jsx lock log mjs mod png proto sql sum svg tf tmpl toml ts tsx txt xml yaml yml zsh", ext, " ")
+      for (i = 1; i <= n; i++) { file_ext[ext[i]] = 1 }
+      n = split("lan local internal intranet corp home localdomain localhost private", priv, " ")
+      for (i = 1; i <= n; i++) { private_suffix[priv[i]] = 1 }
+      tok = "[[:alnum:]]([[:alnum:]_-]*[[:alnum:]])?([.][[:alnum:]]([[:alnum:]_-]*[[:alnum:]])?)+"
+    }
+    # A private IPv4 address anywhere in the token, even behind a host-style prefix.
+    function private_ip(t,   ip, part, a, b) {
+      while (match(t, /[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+/)) {
+        ip = substr(t, RSTART, RLENGTH)
+        t = substr(t, RSTART + RLENGTH)
+        split(ip, part, ".")
+        a = part[1] + 0; b = part[2] + 0
+        if (a == 10 || a == 127 || (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168) ||
+            (a == 169 && b == 254) || (a == 100 && b >= 64 && b <= 127)) { return 1 }
+      }
+      return 0
+    }
+    # judge(token, in_code, host_position): 1 when the token must be refused.
+    function judge(t, code, hostpos,   label, count, last) {
+      if (private_ip(t)) { return 1 }
+      if (t ~ /(^|[.])home[.]arpa$/) { return 1 }
+      count = split(t, label, ".")
+      last = label[count]
+      if (last !~ /^[a-z][a-z0-9-]+$/) { return 0 }
+      if (last in private_suffix) { return 1 }
+      if (last in public) { return 0 }
+      if (code) { return hostpos }
+      return !(last in file_ext)
+    }
+    # scan(text, in_code): judge every dotted token of one stretch of text.
+    function scan(s, code,   t, before, after) {
+      while (found == "" && match(s, tok)) {
+        t = substr(s, RSTART, RLENGTH)
+        before = substr(s, 1, RSTART - 1)
+        after = substr(s, RSTART + RLENGTH)
+        if (judge(t, code, before ~ /(:\/\/|@)$/ || after ~ /^:[0-9]/)) { found = t }
+        s = after
+      }
+    }
+    # Never exit early: the input pipe would take SIGPIPE.
+    loaded == 0 || found != "" { next }
+    /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
+    fence { scan($0, 1); next }
+    {
+      # Split the line at backticks: odd pieces are prose, even pieces are inline code.
+      n = split($0, piece, "`")
+      for (i = 1; i <= n; i++) { scan(piece[i], (i % 2 == 0) && (i < n || n % 2 == 1)) }
+    }
+    END {
+      if (loaded == 0) { print "UNKNOWN: public TLD evidence is empty" }
+      else if (found != "") { print found }
+    }
+  ')"
   case "${finding}" in
     '') ;;
     UNKNOWN:*) echo "pr-body contract: ${finding}" >&2; exit 2 ;;
