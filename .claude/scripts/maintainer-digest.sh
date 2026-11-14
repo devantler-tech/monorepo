@@ -323,13 +323,18 @@ matching_lines() {
 # Reports every private-content marker in file $1 as "<$2>:<line>: private-content: <kind>". Returns 0
 # when there is none, 1 when there is one and 2 when the file cannot be read.
 scan_private() {
-  local i=0 rc lines line any=0
+  local i=0 rc scanned lines line any=0
   # Blanks the template's rule line in a copy, so line numbers still match the file.
   awk -v rule="$template_rule_line" '{ l = $0; sub(/\r$/, "", l); print (l == rule ? "" : $0) }' "$1" >"$tmp/scan.txt" ||
     return 2
+  # The phone-number check reads a copy without github.com link paths and anchors: a comment or run
+  # link carries a long numeric id that fits a national layout (monorepo#5006). Query strings are kept,
+  # and every other kind still reads the full text, so an address inside a link is still caught.
+  sed -E 's#https?://github\.com/[^][:space:]()<>"'"'"'?]*##g' "$tmp/scan.txt" >"$tmp/scan-phone.txt" || return 2
   while [ "$i" -lt "${#private_kinds[@]}" ]; do
-    rc=0
-    lines="$(matching_lines "${private_flags[$i]}" "${private_patterns[$i]}" "$tmp/scan.txt")" || rc=$?
+    rc=0 scanned="$tmp/scan.txt"
+    [ "${private_kinds[$i]}" = phone-number ] && scanned="$tmp/scan-phone.txt"
+    lines="$(matching_lines "${private_flags[$i]}" "${private_patterns[$i]}" "$scanned")" || rc=$?
     case "$rc" in
       0)
         while IFS= read -r line; do
