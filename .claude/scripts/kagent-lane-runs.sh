@@ -271,11 +271,12 @@ store_get() {
 index_entries() {
   awk '
     { page = page $0 "\n" }
-    # count <id> — N from <b id="<id>">N</b> on the page; -1 when the page names no such id, -2
-    # when it names one this reader cannot read.
+    # count <id> — N from <b id="<id>">N</b> on the page; -1 when the page does not mention the id
+    # at all, -2 when it mentions it in any form this reader cannot read (another quote, spacing,
+    # attribute order or case).
     function count(id,    i, s, d) {
       i = index(page, "<b id=\"" id "\">")
-      if (!i) return index(page, "id=\"" id "\"") ? -2 : -1
+      if (!i) return index(tolower(page), id) ? -2 : -1
       s = substr(page, i + length(id) + 9)
       d = ""
       while (substr(s, 1, 1) ~ /^[0-9]$/) { d = d substr(s, 1, 1); s = substr(s, 2) }

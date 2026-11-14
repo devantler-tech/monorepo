@@ -417,6 +417,11 @@ grep -qF '<b class="total" id="ndirs">3</b>' "$FAKE/runs_" || note_fail "the cou
 run list
 expect "counts in markup the reader does not know are UNKNOWN, never trusted as absent" 2 - "(runs-index-unparseable)"
 no_stdout "unreadable counts print no list"
+index_v176 2026-11-09/ 2026-11-08/ | sed -e "s|<b id=\"ndirs\">2</b>|<b id='ndirs'>3</b>|" \
+  -e "s|<b id=\"nfiles\">0</b>|<b id='nfiles'>0</b>|" >"$FAKE/runs_"
+grep -qF "<b id='ndirs'>3</b>" "$FAKE/runs_" || note_fail "the count fixture did not take its single quotes"
+run list
+expect "counts with single-quoted ids are UNKNOWN, never trusted as absent" 2 - "(runs-index-unparseable)"
 
 scenario v176-goup-elsewhere
 index_v176 2026-11-09/ | sed 's|<a href="..">Go up</a>|<a href="../memory/">Go up</a>|' >"$FAKE/runs_"
