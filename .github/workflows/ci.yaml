@@ -447,6 +447,7 @@ jobs:
               # exceptions row stale, so any gitlink change must re-run the check.
               - '.gitmodules'
               - 'applications/**'
+              - 'infrastructure/**'
               - 'libraries/**'
               - 'templates/**'
               - 'github/**'
@@ -474,6 +475,8 @@ jobs:
               - '**/CLAUDE.md'
               - '.claude/**'
               - 'docs/**'
+              # Which submodules are registered decides which missing link targets are skipped.
+              - '.gitmodules'
               - '.github/workflows/ci.yaml'
             maintainer-digest:
               # The self-test reads the template, the workflow and the ask form, and the job

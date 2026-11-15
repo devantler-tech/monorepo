@@ -11,7 +11,7 @@ description: Product card for devantler-tech/aws, the AWS config tenant — desi
 - **Evidence:** UNKNOWN
 
 The canonical maintenance procedure lives in the **`## Maintenance`** section of
-`applications/aws/AGENTS.md` on the submodule's latest `main`:
+`infrastructure/aws/AGENTS.md` on the submodule's latest `main`:
 <https://github.com/devantler-tech/aws/blob/main/AGENTS.md>.
 
 Shared cross-repository rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md). This card is a

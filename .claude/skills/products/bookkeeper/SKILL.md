@@ -15,14 +15,13 @@ runs it as a daily CronJob on the platform. It was created from the Go template 
 
 ## Working on it
 
-It is **not a submodule** of this monorepo, so never run `submodule-init.sh` for it.
+It is the `applications/bookkeeper` submodule (since 2026-11-15).
 
 - **API-only work** (triage, review, comments) needs no checkout.
-- **A code change** gets its own clone: `.claude/scripts/safe-clone.sh devantler-tech/bookkeeper
-  <scratch-dir>`. Acquire the issue claim against that clone
-  (`.claude/scripts/agent-claim.sh acquire <issue> --repo-dir <clone>`), create the claimed work
-  branch there with `.claude/scripts/worktree-claim.sh add <clone> ...`, and open an ordinary draft
-  PR **in that repository**.
+- **A code change** follows the usual product path: populate the submodule with
+  `.claude/scripts/submodule-init.sh applications/bookkeeper`, acquire the issue claim, add the claimed work branch with
+  `.claude/scripts/worktree-claim.sh add applications/bookkeeper ...`, and open an ordinary draft PR **in that
+  repository**.
 
 Its own `AGENTS.md` carries the validate commands and the task menu in `## Maintenance`; follow it.
 

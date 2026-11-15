@@ -18,15 +18,13 @@ bootstraps. The ownership rules and the remaining rollout live on
 
 ## Working on it
 
-It is **not a submodule** of this monorepo, so the usual initialise-the-submodule-then-add-a-worktree
-path cannot reach it — never run `submodule-init.sh` for it.
+It is the `infrastructure/cloudflare` submodule (since 2026-11-15).
 
 - **API-only work** (triage, review, comments) needs no checkout.
-- **A code change** gets its own clone: `.claude/scripts/safe-clone.sh devantler-tech/cloudflare
-  <scratch-dir>`. Acquire the issue claim against that clone
-  (`.claude/scripts/agent-claim.sh acquire <issue> --repo-dir <clone>`), create the claimed work
-  branch there with `.claude/scripts/worktree-claim.sh add <clone> ...`, and open an ordinary draft
-  PR **in that repository**.
+- **A code change** follows the usual product path: populate the submodule with
+  `.claude/scripts/submodule-init.sh infrastructure/cloudflare`, acquire the issue claim, add the claimed work branch with
+  `.claude/scripts/worktree-claim.sh add infrastructure/cloudflare ...`, and open an ordinary draft PR **in that
+  repository**.
 
 ## Visibility decides what may be published
 

@@ -50,12 +50,14 @@
 	path = templates/platform-template
 	url = git@github.com:devantler-tech/platform-template.git
 	branch = main
+# Moved to infrastructure/ (2026-11-15). The name stays, so existing checkouts keep their gitdir.
 [submodule "applications/unifi"]
-	path = applications/unifi
+	path = infrastructure/unifi
 	url = git@github.com:devantler-tech/unifi.git
 	branch = main
+# Moved to infrastructure/ (2026-11-15). The name stays, so existing checkouts keep their gitdir.
 [submodule "applications/fleet-gitops"]
-	path = applications/fleet-gitops
+	path = infrastructure/fleet-gitops
 	url = git@github.com:devantler-tech/fleet-gitops.git
 	branch = main
 [submodule "libraries/provider-upjet-unifi"]
@@ -74,11 +76,18 @@
 	path = applications/khoist
 	url = git@github.com:devantler-tech/khoist.git
 	branch = main
+# Moved to infrastructure/ (2026-11-15). The name stays, so existing checkouts keep their gitdir.
 [submodule "applications/aws"]
-	path = applications/aws
+	path = infrastructure/aws
 	url = git@github.com:devantler-tech/aws.git
 	branch = main
 [submodule "applications/business-site"]
 	path = applications/business-site
 	url = https://github.com/devantler-tech/business-site.git
 	branch = main
+[submodule "applications/bookkeeper"]
+	path = applications/bookkeeper
+	url = git@github.com:devantler-tech/bookkeeper.git
+[submodule "infrastructure/cloudflare"]
+	path = infrastructure/cloudflare
+	url = git@github.com:devantler-tech/cloudflare.git

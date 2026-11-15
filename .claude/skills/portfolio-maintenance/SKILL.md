@@ -542,7 +542,7 @@ Products → cards: [ksail](../products/ksail/SKILL.md) · [khoist](../products/
 [cloudflare](../products/cloudflare/SKILL.md) · [bookkeeper](../products/bookkeeper/SKILL.md) · [monorepo](../products/monorepo/SKILL.md) · [business-site](../products/business-site/SKILL.md) · [templates](../products/templates/SKILL.md) ·
 [github-actions](../products/github-actions/SKILL.md) · [agent plugins and skills](../products/agent-plugins/SKILL.md) ·
 [homebrew-tap](../products/homebrew-tap/SKILL.md) · [applications](../products/applications/SKILL.md) ·
-[provider-upjet-unifi](../products/provider-upjet-unifi/SKILL.md) ·
+[provider-upjet-unifi](../products/provider-upjet-unifi/SKILL.md) · [unifi](../products/unifi/SKILL.md) ·
 [kyverno-policies](../products/kyverno-policies/SKILL.md) ·
 [world-at-ruin](../products/world-at-ruin/SKILL.md) *(game — a first-class product in the normal
 rotation and fairness rules, like every other card; maintainer direction 2026-07-17)* ·

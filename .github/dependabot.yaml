@@ -40,4 +40,4 @@ updates:
           - "*"
         exclude-patterns:
           - "libraries/agent-plugins"
-          - "applications/fleet-gitops"
+          - "infrastructure/fleet-gitops"
