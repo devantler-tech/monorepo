@@ -109,3 +109,13 @@ The maintainer decided on 2026-11-07:
   the deadline is set to ten years to keep the 2026-11-09 amendment. The schedule stays paused until
   every sub-issue of #4866 is done
   ([platform#5999](https://github.com/devantler-tech/platform/pull/5999)).
+- **2026-11-15: the daily run is on for a trial.** Decision 6 kept the schedule suspended until
+  every sub-issue of #4866 was done. Seven manual runs came first, and the last two finished every
+  step on their own. The 2026-11-15 run measured the first full per-run cost, about $3.80 with its
+  survey subagent, so a trial of about half a month costs about $60 at that rate. The maintainer
+  turned the daily run on for that trial while sub-issues stay open, among them the GitHub App's
+  egress injection, the harness tooling, whole-plugin loading, the checkout-based hooks and
+  overlays, Go modules, claim refs and review-request markers. The maintainer would rather the lane
+  did the work it judges important and stopped when that was done. The lane still runs at most once a day,
+  and the workspace spend limit stays its only spend cap
+  ([platform#6340](https://github.com/devantler-tech/platform/pull/6340)).

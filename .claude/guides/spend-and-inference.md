@@ -109,6 +109,12 @@ inference API credential this deployment holds. It is bound by all of these:
 
 - **One model:** `claude-opus-5-5`, fixed in the lane's kagent `ModelConfig`. No fallback model,
   child, advisor, model switch or automatic routing, and No-Fable binds it like every other run.
+  A child here is a routed run with its own model or credential. The subagents the run loop
+  dispatches, such as the portfolio surveyor (definition and plugin guide), run inside the parent
+  run on its model and credential, as on the host Claude lane. They are part of the run and its
+  cost: the run prompt runs them in the foreground and uploads their transcripts
+  ([platform#6262](https://github.com/devantler-tech/platform/pull/6262),
+  [platform#6310](https://github.com/devantler-tech/platform/pull/6310)).
 - **One run a day, with no time limit:** at most one scheduled run a day, and a run goes until the
   agent ends it. Cutting a run off mid-task wastes what it has already spent (maintainer decision
   2026-11-09, which replaced the earlier cap of about $6 a run). An API workspace spend limit equal to
@@ -124,7 +130,8 @@ inference API credential this deployment holds. It is bound by all of these:
 - **In the run, a backstop:** the run stops on what it observes: a model ID other than
   `claude-opus-5-5`, or a billing route other than the credit.
 
-The schedule stays suspended until every sub-issue of #4866 is done.
+The schedule has run daily since 2026-11-15. The maintainer turned it on for a trial of about half
+a month before every sub-issue of #4866 was done (ADR 0014, amendment of 2026-11-15).
 
 **No-Fable is a protected limit:** the entire Fable model family is prohibited in recurring parent
 runs, children, advisors, fallback, retries and experiments, even if a provider describes it as

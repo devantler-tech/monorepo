@@ -64,10 +64,22 @@ The `kagent-cluster` instance is not an accepted subscription route. It is the o
 bound by the *kagent credit lane* rules in `AGENTS.md` **Inference routing** (spend and inference
 guide), maintainer decision 2026-11-07, monorepo#4866. Unlike the host lanes it has pre-inference
 controls by construction: kagent compiles the model fixed in the lane's `ModelConfig` into the
-runtime before any turn, and the API workspace spend limit is enforced by the provider. Neither is
-verified yet. The lane stays suspended until every sub-issue of monorepo#4866 is done and the
-canary run (monorepo#4869) records the effective model, the per-run cost and the maintainer's
-confirmation of the spend limit here.
+runtime before any turn, and the API workspace spend limit is enforced by the provider.
+
+The canary runs (monorepo#4869) record:
+
+- **Effective model:** `claude-opus-5-5` on every assistant message in the main-session transcripts
+  of the 2026-11-14 and 2026-11-15 runs and in the 2026-11-15 run's survey-subagent transcript. The
+  subagent ran inside the parent run on its model and credential, so it is not a routed child (the
+  spend and inference guide's *kagent credit lane*).
+- **Per-run cost:** about $3.80 for the 2026-11-15 run, the first whose subagent transcript reached
+  the lane store. The main session cost about $2.13 and the portfolio-surveyor subagent about
+  $1.67. Each is counted from its transcript's token usage at Opus 5.5 prices, taking each
+  message's largest count, because the first streamed line of a message carries only part of its
+  output tokens.
+- **Spend limit:** the workspace's monthly limit equal to the credit. It has not been reached, so
+  the provider's enforcement of it is not yet observed. The maintainer turned the daily schedule on
+  2026-11-15 for a trial of about half a month (ADR 0014, amendment of 2026-11-15).
 
 ## Native verification procedure
 
