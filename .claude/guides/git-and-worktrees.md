@@ -198,8 +198,10 @@ whose git reads run in its own process. Do not work around a refusal by rewordin
 and report the refusal.
 
 ## Git safety
-Never `git reset --hard`, `git stash`, force-push, or discard changes you did not author. Never
-`git add -A` / `git add .` — stage only files you edited. Never stage submodule-pointer bumps unless
+Never `git reset --hard`, `git stash`, force-push, or discard changes you did not author. Never put
+`git stash` in a command at all, `list` included: the deny rule refuses the whole call, so nothing in
+it runs. To check for a stash, run `git for-each-ref refs/stash` (it prints nothing when there is
+none). Never `git add -A` / `git add .` — stage only files you edited. Never stage submodule-pointer bumps unless
 a task explicitly calls for it. Leave every checkout/worktree clean when done.
 
 🔴 **Never make an unsigned commit on a real branch.** Both known paths were scheduled runs' own tool
