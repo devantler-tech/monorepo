@@ -91,10 +91,13 @@ with tenancy something you scaffold, since not every application needs it.
   SvelteKit, generic workflows, and correct CodeQL, Dependabot, Renovate, CodeRabbit and
   MegaLinter configuration.
 
-  1. **Scope.** Every repository under `applications/`, plus Bookkeeper and Cloudflare: KSail,
-     KHoist, the business site, World at Ruin, the wedding app, AS Coaching, aws, unifi,
-     fleet-gitops, Bookkeeper and Cloudflare. Configuration repositories scaffold with no stack.
-     KSail and World at Ruin start with large ignore lists and shed them over time.
+  1. **Scope.** Every application and infrastructure-configuration repository, from a review of the
+     live organization rather than the monorepo's folders (#5063 corrects those): the applications
+     KSail, KHoist, the business site, World at Ruin, the wedding app, AS Coaching and Bookkeeper,
+     and the infrastructure configuration aws, unifi, Cloudflare and fleet-gitops. Infrastructure
+     repositories scaffold with no stack. KSail and World at Ruin start with large ignore lists and
+     shed them over time. Libraries, actions, the platform, the templates and the organization's
+     shared repositories are not applications and keep their own configuration.
   2. **A shared file, and the application's own overlay.** The template owns one copy of each
      concern, and template-sync keeps it current. Where the tool can layer configuration, the
      application owns an overlay that sync never touches. Where it cannot, the application lists
