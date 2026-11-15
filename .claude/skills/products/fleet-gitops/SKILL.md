@@ -10,13 +10,13 @@ description: Product card for devantler-tech/fleet-gitops, the FleetDM GitOps co
 - **Non-goals:** device management in general (Stack map)
 - **Evidence:** UNKNOWN
 
-`applications/fleet-gitops` is the tracked submodule of `devantler-tech/fleet-gitops`, which holds
+`infrastructure/fleet-gitops` is the tracked submodule of `devantler-tech/fleet-gitops`, which holds
 the FleetDM configuration for the suite's managed devices as GitOps-managed files.
 
 **Read the repository's visibility live before every run touches it** —
 `gh api repos/devantler-tech/fleet-gitops --jq .private` — never from this card or from memory. The
 portfolio map deliberately records no visibility. Then initialise the submodule with the monorepo's
-submodule helper and read `applications/fleet-gitops/AGENTS.md`; that repository contract owns its
+submodule helper and read `infrastructure/fleet-gitops/AGENTS.md`; that repository contract owns its
 validation, apply flow, and protected-file guidance.
 
 While the live read says private, nothing from the repository reaches a public surface. Its issues

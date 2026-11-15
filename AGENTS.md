@@ -15,7 +15,7 @@ The portfolio's products, including **devantler.tech**, are Git submodules in on
 | `.claude/guides/` | the agent guides — the detailed half of this contract | [index](#agent-guides) |
 | `.claude/scripts/` | helpers the engineer runs, and the contract tests that guard the guides | [`.claude/scripts/AGENTS.md`](.claude/scripts/AGENTS.md) |
 | `.claude/skills/`, `.claude/agents/`, `.claude/loaders/` | run procedures, product cards, the surveyor overlay and loaders | [*Agent definition locations*](#agent-definition-locations) |
-| `applications/`, `platform/`, `libraries/`, `templates/`, `github/`, `homebrew-tap/` | product submodules | each submodule's `AGENTS.md` |
+| `applications/`, `infrastructure/`, `platform/`, `libraries/`, `templates/`, `github/`, `homebrew-tap/` | product submodules | each submodule's `AGENTS.md` |
 
 Populate a submodule with `.claude/scripts/submodule-init.sh <path>` — never a bare
 `git submodule update --init`, which breaks worktree isolation.
@@ -27,7 +27,7 @@ Populate a submodule with `.claude/scripts/submodule-init.sh <path>` — never a
 | KSail (Go CLI) | `devantler-tech/ksail` | `applications/ksail` | `AGENTS.md` |
 | KHoist (data products) | `devantler-tech/khoist` | `applications/khoist` | `AGENTS.md` |
 | Platform (GitOps) | `devantler-tech/platform` | `platform` | `AGENTS.md` |
-| AWS config tenant | `devantler-tech/aws` | `applications/aws` | `AGENTS.md` |
+| AWS tenant | `devantler-tech/aws` | `infrastructure/aws` | `AGENTS.md` |
 | Portfolio aggregator | `devantler-tech/monorepo` | repo root | this file |
 | devantler.tech site | `devantler-tech/business-site` | `applications/business-site` | `AGENTS.md` and [product card](.claude/skills/products/business-site/SKILL.md) |
 | Shared automation and organization defaults | `devantler-tech/.github` | `github/devantler-tech/.github-public` | `AGENTS.md` |
@@ -43,10 +43,10 @@ Populate a submodule with `.claude/scripts/submodule-init.sh <path>` — never a
 | World at Ruin (game) | `devantler-tech/world-at-ruin` | `applications/world-at-ruin` | `AGENTS.md` |
 | Wedding app | `devantler-tech/wedding-app` | `applications/wedding-app` | `AGENTS.md` |
 | AS Coaching | `devantler-tech/ascoachingogvaner` | `applications/ascoachingogvaner` | `AGENTS.md` |
-| UniFi network | `devantler-tech/unifi` | `applications/unifi` | `AGENTS.md` |
-| FleetDM device config | `devantler-tech/fleet-gitops` | `applications/fleet-gitops` | `AGENTS.md` |
-| Cloudflare bootstrap owner | `devantler-tech/cloudflare` | — (not a submodule yet) | `AGENTS.md` |
-| Bookkeeper | `devantler-tech/bookkeeper` | — (not a submodule yet) | `AGENTS.md` |
+| UniFi network | `devantler-tech/unifi` | `infrastructure/unifi` | `AGENTS.md` |
+| FleetDM devices | `devantler-tech/fleet-gitops` | `infrastructure/fleet-gitops` | `AGENTS.md` |
+| Cloudflare bootstrap | `devantler-tech/cloudflare` | `infrastructure/cloudflare` | `AGENTS.md` |
+| Bookkeeper | `devantler-tech/bookkeeper` | `applications/bookkeeper` | `AGENTS.md` |
 | 🌊 Project Board (org project 5) | — (not a repo; board) | — | [product card](.claude/skills/products/project-board/SKILL.md) |
 
 `AGENTS.md` means `<Path>/AGENTS.md`, else its `main` copy on GitHub.

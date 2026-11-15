@@ -197,7 +197,7 @@ check_layout() {
       # A link into an unpopulated submodule cannot be checked here; the submodule owns that file.
       if [ ! -e "${root}/${path}" ]; then
         case "${path}" in
-          libraries/* | applications/* | platform/* | templates/* | github/* | homebrew-tap/*) continue ;;
+          libraries/* | applications/* | infrastructure/* | platform/* | templates/* | github/* | homebrew-tap/*) continue ;;
         esac
         echo "${file} links to ${target}, which does not exist"
         return 1
