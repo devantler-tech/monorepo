@@ -274,6 +274,8 @@ case "${cmd}" in
     [[ "${pr}" =~ ^[1-9][0-9]*$ ]] || die "--pr must be a PR number, got '${pr}'"
     [[ "${head}" =~ ^[0-9a-f]{40}$ ]] || die "--head must be a full 40-character lowercase sha, got '${head}'"
     case "${provider}" in cr | codex | bugbot) ;; *) die "--provider must be cr, codex or bugbot, got '${provider}'" ;; esac
+    # Every measured omission left the flag out entirely (#5081), so say what to pass.
+    [ -n "${owner}" ] || die "--owner is required: pass <lane>-<worktree slug>, such as claude-<slug> (#5081)"
     [[ "${owner}" =~ ^[A-Za-z0-9._-]{1,100}$ ]] || die "--owner must match [A-Za-z0-9._-]{1,100}, got '${owner}'"
     [[ "${lease_minutes}" =~ ^[1-9][0-9]*$ ]] || die "--lease-minutes must be a positive integer"
     [ "${apply}" -eq 0 ] || die "--apply applies to sweep only"

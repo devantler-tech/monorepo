@@ -777,8 +777,10 @@ assert_prose "${constitution}" "Take the review-request lock immediately before 
   "the constitution does not require the atomic review-request lock before a request"
 assert_prose "${constitution}" "Exit \`1\` means another instance is requesting that review: do not post" \
   "the constitution does not tell a lock loser to stand down"
-assert_prose "${maintenance_skill}" "taking \`.claude/scripts/review-request-lock.sh acquire\` and standing down on its exit \`1\`" \
-  "the run loop does not take the review-request lock before posting"
+# #5081: every measured lock refusal omitted --owner, and this step is the one runs follow, so it
+# names the full argument form rather than the bare command.
+assert_prose "${maintenance_skill}" "taking \`.claude/scripts/review-request-lock.sh acquire --repo <owner>/<repo> --pr <n> --head <headRefOid> --provider <cr|codex|bugbot> --owner <lane>-<worktree slug>\` and standing down on its exit \`1\`" \
+  "the run loop does not take the review-request lock, with its required --owner, before posting"
 # #3231: a refusal answers the request that drew it, never the head. On platform#3616 a duplicate
 # request's refusal was recorded as the head's `cr:no-gate` 41 seconds after CodeRabbit had submitted
 # a review of that head with two valid findings; Codex and Bugbot were then spent on it and the

@@ -801,7 +801,9 @@ measurement the first valuable slice when evidence is missing. Record `last_valu
    comment whose first nonblank line names the command, including trailing text or a footer,
    ignoring interleaved other-author comments; a command below a disclosure line neither pairs nor closes
    the window), then taking
-   `.claude/scripts/review-request-lock.sh acquire` and standing down on its exit `1` (#2894);
+   `.claude/scripts/review-request-lock.sh acquire --repo <owner>/<repo> --pr <n> --head <headRefOid>
+   --provider <cr|codex|bugbot> --owner <lane>-<worktree slug>` and standing down on its exit `1`
+   (#2894; `--owner` is required, #5081);
    accept markers only from exact author `devantler`
    with the structural agent disclosure; **never post a separate pre-trigger reservation comment** —
    that two-phase step was retired on measurement 2026-07-25, having posted a blank-rendering comment
