@@ -11,8 +11,6 @@
 # test-inputs: .claude/scripts/pr-ownership-disclosure.test.sh
 # test-inputs: .claude/scripts/pr-worktree-holder.sh .claude/scripts/pr-worktree-holder.test.sh
 # test-inputs: .claude/scripts/programmed-bot-review-exemption.sh
-# test-inputs: .claude/scripts/release-cask-ripeness.sh
-# test-inputs: .claude/scripts/release-cask-ripeness.test.sh
 # test-inputs: .claude/scripts/surveyor-hook-dispatch.sh
 # test-inputs: .claude/scripts/surveyor-hook-dispatch.test.sh .claude/settings.json
 # test-inputs: .claude/skill-ownership-allowlist.tsv .claude/skills/portfolio-maintenance/SKILL.md
@@ -291,12 +289,16 @@ grep -Fq '<slug>[bot]' "${surveyor}" ||
   fail "surveyor does not name the REST author spelling that must NOT be passed (monorepo#2991)"
 grep -Fq 'matches no arm' "${surveyor}" ||
   fail "surveyor does not state that the REST spelling is well-formed but matches no classifier arm, so the cost of the mistake is invisible (monorepo#2991)"
-# The App spelling is NOT universal: the classifier's homebrew-tap arms compare a plain `devantler`
-# user login, not an `app/...` identity. Telling the caller that "every arm" uses the App spelling
-# would break the GoReleaser cask PRs in exactly the way this fix exists to prevent — they would
-# exit 1 and consume the metered lanes the carve-out protects. Pin the per-arm distinction.
-grep -Fq 'for the homebrew-tap cask arms' "${surveyor}" ||
-  fail "surveyor generalises the App author spelling across all arms, but the homebrew-tap arms compare a plain devantler login (monorepo#2991)"
+# Every arm compares the App spelling now: the tap's Cask bump PRs are App-authored (homebrew-tap#2568)
+# and the arms that compared a plain `devantler` login for the retired GoReleaser and World at Ruin
+# cask PRs are gone. A surveyor still told to pass `devantler` for the tap would read every bump PR
+# exit 1 and spend the metered lanes the carve-out protects, so pin both the new spelling and the
+# absence of the old instruction.
+grep -Fq "for the platform and agent-plugins updaters and the tap's Cask bump PRs" "${surveyor}" ||
+  fail "surveyor does not tell the caller to pass app/botantler-1 for the tap's Cask bump PRs (homebrew-tap#2568)"
+if grep -Fq 'for the homebrew-tap cask arms' "${surveyor}"; then
+  fail "surveyor still prescribes a plain devantler login for the retired homebrew-tap cask arms (homebrew-tap#2568)"
+fi
 # An empty review object is the container GitHub creates for a reply to an existing
 # review thread. It is authored by the bot, anchored to the current head, and has zero
 # findings — so a green-review test that does not require a substantive body reports a
@@ -1000,79 +1002,12 @@ expect_classifier_error() {
 
 # Every commit the surveyor normalizes carries the author/committer date pair, and the schema
 # requires both (#2291). A commit created in one operation has the same timestamp in each, so that
-# is the default here; only the World at Ruin amend fixtures state a diverging pair, which keeps the
-# date discriminator visible in exactly the tests that exercise it instead of in all nineteen.
+# is the default here.
 with_commit_dates() {
   jq -c 'map(
     .author_date = (.author_date // "2026-07-18T09:14:22Z")
     | .committer_date = (.committer_date // .author_date)
   )'
-}
-
-homebrew_commits_json() {
-  local component="$1"
-  local version="$2"
-  local first_sha="$3"
-  local head_sha="$4"
-
-  jq -cn \
-    --arg component "${component}" \
-    --arg version "${version}" \
-    --arg first_sha "${first_sha}" \
-    --arg head_sha "${head_sha}" \
-    '[
-      {
-        sha: $first_sha,
-        author_login: "goreleaserbot",
-        author_name: "goreleaserbot",
-        author_email: "bot@goreleaser.com",
-        committer_login: "goreleaserbot",
-        committer_name: "goreleaserbot",
-        committer_email: "bot@goreleaser.com",
-        message: "Brew cask update for \($component) version \($version)"
-      },
-      {
-        sha: $head_sha,
-        author_login: "",
-        author_name: "generator-bot",
-        author_email: "generator-bot@users.noreply.github.com",
-        committer_login: "",
-        committer_name: "generator-bot",
-        committer_email: "generator-bot@users.noreply.github.com",
-        message: "style: autocorrect Casks (brew style --fix)"
-      }
-    ]' | with_commit_dates
-}
-
-# Measured from homebrew-tap #1238/#1241/#1242: World at Ruin's cask PRs come from its own CD
-# workflow rather than GoReleaser, so they are a single tap-token commit.
-#
-# The optional third argument sets the committer date independently of the author date. The CD
-# workflow creates the commit in one operation, so the real path leaves it unset and both dates
-# match (verified against homebrew-tap #1324-#1332, 8/8 equal on 2026-07-28). Passing a later
-# committer date reproduces `git commit --amend`, which is what a hand-edited cask body looks like
-# on this arm — every identity field survives the rewrite, so the date pair is the only signal.
-war_cask_commits_json() {
-  local version="$1"
-  local head_sha="$2"
-  local committer_date="${3:-}"
-
-  jq -cn \
-    --arg version "${version}" \
-    --arg head_sha "${head_sha}" \
-    --arg committer_date "${committer_date}" \
-    '[{
-      sha: $head_sha,
-      author_login: "devantler",
-      author_name: "Nikolai Emil Damm",
-      author_email: "ned@devantler.tech",
-      committer_login: "devantler",
-      committer_name: "Nikolai Emil Damm",
-      committer_email: "ned@devantler.tech",
-      message: "chore(cask): update world-at-ruin to \($version)"
-    }
-    | if $committer_date == "" then . else .committer_date = $committer_date end]' \
-    | with_commit_dates
 }
 
 # Historical signed shape from devantler-tech/ksail#7249. KSail#7248 retired this publisher;
@@ -1093,115 +1028,32 @@ ksail_commits="$(jq -cn --arg head "${ksail_head}" '[{
   verified: true
 }]')"
 
-ksail_cask_head="c58256924878560caff669a7c05df0d84c458b38"
-ksail_cask_commits="$(homebrew_commits_json \
-  "ksail" \
-  "v7.172.2" \
-  "c3dfd928eb6ff8fc8a9d2b1520862d45a565b0e8" \
-  "${ksail_cask_head}")"
-desktop_cask_head="e896ab6476c4333292b099af7240d1d61b3795f9"
-desktop_cask_commits="$(homebrew_commits_json \
-  "ksail-desktop" \
-  "v7.172.2" \
-  "5ebaed25a8e3c92f38f2c8c6f938186ebca7ffa5" \
-  "${desktop_cask_head}")"
-war_cask_head="9c1a4f2be1e7c5a0d3f8b6120e4a7d59c8b3f012"
-war_cask_commits="$(war_cask_commits_json "v0.36.0" "${war_cask_head}")"
-
-# Measured from homebrew-tap #1225: the tap's release branches are evergreen, so one open PR can
-# carry several GoReleaser/autocorrect cycles before it is merged.
-multi_cycle_cask_head="4d2e7a1c93b8f605e2a7c4d81f36b9075ea2c318"
-multi_cycle_cask_commits="$(jq -cn \
-  --arg head "${multi_cycle_cask_head}" \
-  '[
-    {sha: "1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
-     author_login: "goreleaserbot", author_name: "goreleaserbot", author_email: "bot@goreleaser.com",
-     committer_login: "goreleaserbot", committer_name: "goreleaserbot", committer_email: "bot@goreleaser.com",
-     message: "Brew cask update for ksail version v7.176.0"},
-    {sha: "2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e",
-     author_login: "", author_name: "generator-bot", author_email: "generator-bot@users.noreply.github.com",
-     committer_login: "", committer_name: "generator-bot", committer_email: "generator-bot@users.noreply.github.com",
-     message: "style: autocorrect Casks (brew style --fix)"},
-    {sha: "3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f",
-     author_login: "goreleaserbot", author_name: "goreleaserbot", author_email: "bot@goreleaser.com",
-     committer_login: "goreleaserbot", committer_name: "goreleaserbot", committer_email: "bot@goreleaser.com",
-     message: "Brew cask update for ksail version v7.176.1"},
-    {sha: $head,
-     author_login: "", author_name: "generator-bot", author_email: "generator-bot@users.noreply.github.com",
-     committer_login: "", committer_name: "generator-bot", committer_email: "generator-bot@users.noreply.github.com",
-     message: "style: autocorrect Casks (brew style --fix)"}
-  ]' | with_commit_dates)"
-
-# An agent adaptation commit takes a cask PR off its programmed path and makes it review-bearing.
-adapted_cask_head="7f6e5d4c3b2a19087f6e5d4c3b2a19087f6e5d4c"
-adapted_cask_commits="$(jq -cn \
-  --arg head "${adapted_cask_head}" \
-  '[
-    {sha: "8a7b6c5d4e3f2109a8b7c6d5e4f3210a9b8c7d6e",
-     author_login: "goreleaserbot", author_name: "goreleaserbot", author_email: "bot@goreleaser.com",
-     committer_login: "goreleaserbot", committer_name: "goreleaserbot", committer_email: "bot@goreleaser.com",
-     message: "Brew cask update for ksail version v7.176.4"},
-    {sha: $head,
-     author_login: "devantler", author_name: "Nikolai Emil Damm", author_email: "ned@devantler.tech",
-     committer_login: "devantler", committer_name: "Nikolai Emil Damm", committer_email: "ned@devantler.tech",
-     message: "fix(cask): correct the sha256 by hand"}
-  ]' | with_commit_dates)"
-
-# Measured from homebrew-tap #1669 (#3547): ksail#6975 set GoReleaser's commit_msg_template to the
-# Conventional subject, so cycles from v7.192.5 on carry it while older cycles on the same evergreen
-# branch still carry GoReleaser's default subject.
-conventional_cask_head="9b8a7c6d5e4f30211b2c3d4e5f60718293a4b5c6"
-conventional_cask_commits="$(jq -cn \
-  --arg head "${conventional_cask_head}" \
-  '[
-    {sha: "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
-     author_login: "goreleaserbot", author_name: "goreleaserbot", author_email: "bot@goreleaser.com",
-     committer_login: "goreleaserbot", committer_name: "goreleaserbot", committer_email: "bot@goreleaser.com",
-     message: "Brew cask update for ksail-desktop version v7.192.4"},
-    {sha: "1b2c3d4e5f60718293a4b5c6d7e8f9012345678a",
-     author_login: "", author_name: "generator-bot", author_email: "generator-bot@users.noreply.github.com",
-     committer_login: "", committer_name: "generator-bot", committer_email: "generator-bot@users.noreply.github.com",
-     message: "style: autocorrect Casks (brew style --fix)"},
-    {sha: "2c3d4e5f60718293a4b5c6d7e8f9012345678a9b",
-     author_login: "goreleaserbot", author_name: "goreleaserbot", author_email: "bot@goreleaser.com",
-     committer_login: "goreleaserbot", committer_name: "goreleaserbot", committer_email: "bot@goreleaser.com",
-     message: "chore(cask): update ksail-desktop to v7.192.7"},
-    {sha: $head,
-     author_login: "", author_name: "generator-bot", author_email: "generator-bot@users.noreply.github.com",
-     committer_login: "", committer_name: "generator-bot", committer_email: "generator-bot@users.noreply.github.com",
-     message: "style: autocorrect Casks (brew style --fix)"}
-  ]' | with_commit_dates)"
-conventional_only_cask_commits="$(jq -c '.[2:]' <<<"${conventional_cask_commits}")"
-wrong_component_cask_commits="$(jq -c '.[2].message = "chore(cask): update ksail to v7.192.7"' <<<"${conventional_cask_commits}")"
-non_semver_cask_commits="$(jq -c '.[2].message = "chore(cask): update ksail-desktop to latest"' <<<"${conventional_cask_commits}")"
-
-# Measured from homebrew-tap #1650 (#3441): ksail's release job won the race against the tap's
-# autocorrect, so its own `brew style --fix` commit follows the GoReleaser commit.
-pipeline_style_cask_head="e340342d0a1b2c3d4e5f60718293a4b5c6d7e8f9"
-pipeline_style_cask_commits="$(jq -cn \
-  --arg head "${pipeline_style_cask_head}" \
-  '[
-    {sha: "fdcdeab01b2c3d4e5f60718293a4b5c6d7e8f901",
-     author_login: "goreleaserbot", author_name: "goreleaserbot", author_email: "bot@goreleaser.com",
-     committer_login: "goreleaserbot", committer_name: "goreleaserbot", committer_email: "bot@goreleaser.com",
-     message: "Brew cask update for ksail version v7.186.2"},
-    {sha: $head,
-     author_login: "github-actions[bot]", author_name: "github-actions[bot]",
-     author_email: "41898282+github-actions[bot]@users.noreply.github.com",
-     committer_login: "github-actions[bot]", committer_name: "github-actions[bot]",
-     committer_email: "41898282+github-actions[bot]@users.noreply.github.com",
-     message: "style: brew style --fix generated cask"}
-  ]' | with_commit_dates)"
-pipeline_style_wrong_identity_commits="$(jq -c '.[1].author_name = "devantler" | .[1].committer_name = "devantler"' <<<"${pipeline_style_cask_commits}")"
-pipeline_style_wrong_login_commits="$(jq -c '.[1].author_login = "devantler"' <<<"${pipeline_style_cask_commits}")"
-pipeline_style_wrong_message_commits="$(jq -c '.[1].message = "style: brew style --fix generated cask and bump sha256"' <<<"${pipeline_style_cask_commits}")"
-
-default_title_cask_head="5a5792bb83bd6b8469f10cd7e00abfe75c7f36be"
-default_title_cask_commits="$(homebrew_commits_json \
-  "ksail" \
-  "v7.172.1" \
-  "a22a9f9f56da9f5cdde4c037ec92eabf30768d72" \
-  "${default_title_cask_head}")"
+# The tap bumps its own Casks (homebrew-tap#2568): its hourly `bump-casks` workflow opens one PR per
+# outdated Cask from `bump-<cask>-<version>`, titled `chore(cask): update <cask> to v<version>`,
+# under the org App's token, and writes ONE commit through the contents API whose message is the
+# title. GitHub signs that commit, so it carries `verified: true`. The survey's commit read reports
+# `parents`; a non-merge commit has one.
+tap_bump_head="5f0c1e2d3b4a59687766554433221100ffeeddcc"
+tap_bump_base="2b1a0f9e8d7c6b5a49382716051f2e3d4c5b6a79"
+# tap_bump_commits <cask> <version> — the workflow's one commit for that bump, ending at the head.
+tap_bump_commits() {
+  jq -cn --arg head "${tap_bump_head}" --arg base "${tap_bump_base}" \
+    --arg m "chore(cask): update $1 to v$2" '[{
+    sha: $head,
+    author_login: "botantler-1[bot]",
+    author_name: "botantler-1[bot]",
+    author_email: "185060876+botantler-1[bot]@users.noreply.github.com",
+    committer_login: "web-flow",
+    committer_name: "GitHub",
+    committer_email: "noreply@github.com",
+    message: $m,
+    verified: true,
+    parents: [$base]
+  }]' | with_commit_dates
+}
+ksail_bump_commits="$(tap_bump_commits ksail 7.213.44)"
+ksail_bump_args=(homebrew-tap app/botantler-1 bump-ksail-7.213.44 "chore(cask): update ksail to v7.213.44"
+  "${tap_bump_head}")
 
 platform_head="1111111111111111111111111111111111111111"
 platform_commits="$(jq -cn --arg head "${platform_head}" '[{
@@ -1229,7 +1081,9 @@ agent_plugins_skills_commits="$(jq -cn --arg head "${agent_plugins_skills_head}"
 }]' | with_commit_dates)"
 
 agent_plugins_versioned_head="b6e8caf3166e0693ddae7159cd88783386af0b75"
-agent_plugins_versioned_files='[".claude-plugin/marketplace.json",".github/plugin/marketplace.json","plugins/github/.claude-plugin/plugin.json","plugins/github/plugin.json","plugins/github/skills/gh-stack/SKILL.md"]'
+# Since agent-plugins#709 the marketplace is `.claude-plugin/marketplace.json` alone and each plugin's
+# Claude manifest is the nested `.claude-plugin/plugin.json`; the second manifest set is gone.
+agent_plugins_versioned_files='[".claude-plugin/marketplace.json","plugins/github/.claude-plugin/plugin.json","plugins/github/skills/gh-stack/SKILL.md"]'
 agent_plugins_versioned_commits="$(jq -cn --arg head "${agent_plugins_versioned_head}" '[
   {
     sha: "af32046fa35e4c954f31ca6ba19d4a0659418af7",
@@ -1327,18 +1181,6 @@ adapted_ksail_commits="$(jq -c --arg head "${adapted_ksail_head}" '. + [{
   message: "fix: adapt generated release"
 }]' <<<"${ksail_commits}" | with_commit_dates)"
 
-adapted_cask_head="3333333333333333333333333333333333333333"
-adapted_cask_commits="$(jq -c --arg head "${adapted_cask_head}" '. + [{
-  sha: $head,
-  author_login: "devantler",
-  author_name: "Nikolai Emil Damm",
-  author_email: "26203420+devantler@users.noreply.github.com",
-  committer_login: "devantler",
-  committer_name: "Nikolai Emil Damm",
-  committer_email: "26203420+devantler@users.noreply.github.com",
-  message: "fix: adapt generated cask"
-}]' <<<"${ksail_cask_commits}" | with_commit_dates)"
-
 ksail_args=("ksail" "app/ksail-bot" "chore/copilot-plugin-v7.192.11"
   "chore(copilot-plugin): release v7.192.11" "${ksail_head}" "${ksail_files}")
 
@@ -1387,13 +1229,14 @@ expect_review_gated "agent-plugins update with an unchanged plugin's Codex manif
 # agent-plugins opens one updater PR per skill (agent-plugins#241). This fixture is the shape of
 # agent-plugins#245 before any adaptation: the App-signed sync commit, then the caller's digest
 # refresh and version bump. It is a genuine updater PR, so it takes the review path (3), never 0.
+# Its file set is the one left after agent-plugins#709 deleted the second manifest set.
 per_skill_path="plugins/agentic-engineering/skills/agent-improvement"
 per_skill_branch="deps/agent-skills-update-agentic-engineering-skills-agent-improvement"
 per_skill_title="chore(deps): update agent skills (${per_skill_path})"
 per_skill_head="7bd0bb68d7090b002e0b01e6e79868e32158f2ca"
 per_skill_files="$(jq -cn --arg p "${per_skill_path}" '[
-  ".claude-plugin/marketplace.json", ".github/plugin/marketplace.json",
-  "plugins/agentic-engineering/.claude-plugin/plugin.json", "plugins/agentic-engineering/plugin.json",
+  ".claude-plugin/marketplace.json",
+  "plugins/agentic-engineering/.claude-plugin/plugin.json",
   "plugins/agentic-engineering/resources/provider-neutral.desired-state.json",
   "\($p)/SKILL.md", "\($p)/references/prioritization-flow.md"
 ]')"
@@ -1549,7 +1392,7 @@ expect_review_required "agent-plugins single-PR update with its own plugin's rel
 # The release-notes bump writes a changelog for EVERY plugin whose skills changed, so a two-plugin
 # batch carrying only one of them is not updater output (a positive control carries both).
 agent_plugins_two_plugin_files="$(jq -c '. + ["plugins/engineering-practices/.claude-plugin/plugin.json",
-  "plugins/engineering-practices/plugin.json", "plugins/engineering-practices/skills/refactor/SKILL.md"]' \
+  "plugins/engineering-practices/skills/refactor/SKILL.md"]' \
   <<<"${agent_plugins_versioned_files}")"
 expect_review_required "agent-plugins single-PR two-plugin update with both plugins' release notes" \
   agent-plugins app/botantler-1 deps/agent-skills-update "chore(deps): update agent skills" \
@@ -1591,6 +1434,41 @@ if files_predicate "${per_skill_path}" \
   "$(jq -c '. + ["plugins/engineering-practices/CHANGELOG.md"]' <<<"${per_skill_files}")"; then
   fail "per-skill file boundary admits another plugin's changelog"
 fi
+# agent-plugins#709 deleted the second manifest set, so the updater no longer writes
+# `.github/plugin/marketplace.json` or a top-level `plugins/<p>/plugin.json`. Each control adds one
+# such file to a fixture the predicate accepts and that reads 3 end to end, so the file boundary
+# alone rejects it; end to end the updater still names itself on stderr, as an unexpected updater.
+files_predicate "${per_skill_path}" "${per_skill_files}" ||
+  fail "per-skill file boundary rejects the post-#709 per-skill file set"
+files_predicate "" "${agent_plugins_versioned_files}" ||
+  fail "single-PR file boundary rejects the post-#709 file set"
+expect_updater_untrusted() { # expect_updater_untrusted <name> <stderr note> <classifier args...>
+  local name="$1" want="$2" err
+  shift 2
+  expect_review_gated "${name}" "$@"
+  err="$("${classifier}" "$@" 2>&1 >/dev/null)" || true
+  [[ "${err}" == "programmed-bot-review-exemption: ${want}" ]] ||
+    fail "${name}: stderr '${err}', want '${want}'"
+}
+for legacy_manifest in ".github/plugin/marketplace.json" "plugins/agentic-engineering/plugin.json"; do
+  legacy_files="$(jq -c --arg f "${legacy_manifest}" '. + [$f]' <<<"${per_skill_files}")"
+  if files_predicate "${per_skill_path}" "${legacy_files}"; then
+    fail "per-skill file boundary admits the deleted ${legacy_manifest} (agent-plugins#709)"
+  fi
+  expect_updater_untrusted "agent-plugins per-skill update writing the deleted ${legacy_manifest}" \
+    "agent-plugins per-skill updater PR with unexpected files or commit provenance; treated as untrusted" \
+    "${per_skill_args[@]}" "${legacy_files}" "${per_skill_commits_json}"
+done
+for legacy_manifest in ".github/plugin/marketplace.json" "plugins/github/plugin.json"; do
+  legacy_files="$(jq -c --arg f "${legacy_manifest}" '. + [$f]' <<<"${agent_plugins_versioned_files}")"
+  if files_predicate "" "${legacy_files}"; then
+    fail "single-PR file boundary admits the deleted ${legacy_manifest} (agent-plugins#709)"
+  fi
+  expect_updater_untrusted "agent-plugins single-PR update writing the deleted ${legacy_manifest}" \
+    "agent-plugins updater PR with unexpected files or commit provenance; treated as untrusted" \
+    agent-plugins app/botantler-1 deps/agent-skills-update "chore(deps): update agent skills" \
+    "${agent_plugins_versioned_head}" "${legacy_files}" "${agent_plugins_versioned_commits}"
+done
 expect_review_gated "agent-plugins per-skill branch naming another skill" \
   agent-plugins app/botantler-1 "deps/agent-skills-update-agentic-engineering-skills-agent-instructions" \
   "${per_skill_title}" "${per_skill_head}" "${per_skill_files}" "${per_skill_commits_json}"
@@ -1605,7 +1483,7 @@ expect_review_gated "agent-plugins per-skill update touching a second skill" \
   "${per_skill_commits_json}"
 expect_review_gated "agent-plugins per-skill update touching another plugin's manifest" \
   "${per_skill_args[@]}" \
-  "$(jq -c '. + ["plugins/github/plugin.json"]' <<<"${per_skill_files}")" "${per_skill_commits_json}"
+  "$(jq -c '. + ["plugins/github/.claude-plugin/plugin.json"]' <<<"${per_skill_files}")" "${per_skill_commits_json}"
 expect_review_gated "agent-plugins per-skill sync commit without the suffixed message" \
   "${per_skill_args[@]}" "${per_skill_files}" \
   "$(printf '%s\n' "$(jq -c '.message = "chore(deps): update agent skills"' <<<"${per_skill_sync}")" \
@@ -1767,7 +1645,7 @@ expect_error_reason "bad date" "commit[0].committer_date is not YYYY-MM-DDTHH:MM
 expect_error_reason "second commit" "commit[1] is missing key sha" "" "${updater_args[@]}" \
   "$(jq -c '. + [.[0] | del(.sha)]' <<<"${platform_signed_commits}")"
 expect_error_reason "stale head" "the last commit in commits-json is not head-oid (stale or partial commit list)" "" \
-  "${updater_args[@]:0:4}" "${ksail_cask_head}" "${allowed_skills_files}" "${platform_signed_commits}"
+  "${updater_args[@]:0:4}" "${tap_bump_head}" "${allowed_skills_files}" "${platform_signed_commits}"
 expect_error_reason "skill owners" "skill-owners-json is not a JSON object of string or null values" "" \
   "${updater_args[@]}" "${platform_signed_commits}" '[]'
 expect_error_reason "foreign owner" "repo must be a bare name or devantler-tech/<name>" "" \
@@ -2135,110 +2013,124 @@ expect_allowlist_rejects "root outside the installed-skill tree" \
 expect_allowlist_rejects "duplicate root" \
   "$(printf 'platform\t.agents/skills/ways-of-working\thttps://github.com/devantler-tech/agent-plugins\nplatform\t.agents/skills/ways-of-working\thttps://github.com/devantler-tech/agent-plugins')"
 
-expect_exempt \
-  "GoReleaser KSail cask" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/ksail" \
-  "chore(cask): update ksail to v7.172.2" \
-  "${ksail_cask_head}" \
-  '["Casks/ksail.rb"]' \
-  "${ksail_cask_commits}"
-
-# The autocorrect commit's author has no GitHub account, so callers must pass its login as "". The
-# same payload with a null login fails the classifier's string schema on every tap cask PR (#2864).
-null_login_cask_commits="$(jq -c 'map(if .author_login == "" then .author_login = null | .committer_login = null else . end)' <<<"${ksail_cask_commits}")"
-expect_classifier_error \
-  "GoReleaser KSail cask whose autocorrect login is null" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/ksail" \
-  "chore(cask): update ksail to v7.172.2" \
-  "${ksail_cask_head}" \
-  '["Casks/ksail.rb"]' \
-  "${null_login_cask_commits}"
-
-expect_exempt \
-  "GoReleaser KSail Desktop cask" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/ksail-desktop" \
-  "chore(cask): update ksail-desktop to v7.172.2" \
-  "${desktop_cask_head}" \
-  '["Casks/ksail-desktop.rb"]' \
-  "${desktop_cask_commits}"
-
-expect_exempt \
-  "GoReleaser default cask title" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/ksail" \
-  "Brew cask update for ksail version v7.172.1" \
-  "${default_title_cask_head}" \
-  '["Casks/ksail.rb"]' \
-  "${default_title_cask_commits}"
-
-expect_exempt \
-  "World at Ruin CD cask" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/world-at-ruin" \
-  "chore(cask): update world-at-ruin to v0.36.0" \
-  "${war_cask_head}" \
-  '["Casks/world-at-ruin.rb"]' \
-  "${war_cask_commits}"
-
-# A caller following the documented recipe adds a boolean `verified` to every commit; the exact
-# release comparisons must still match (#3126).
-expect_exempt \
-  "World at Ruin CD cask with the verified field" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/world-at-ruin" \
-  "chore(cask): update world-at-ruin to v0.36.0" \
-  "${war_cask_head}" \
-  '["Casks/world-at-ruin.rb"]' \
-  "$(jq -c 'map(. + {verified: true})' <<<"${war_cask_commits}")"
-# The survey's commit read also reports `parents` (monorepo#4597); the exact comparison ignores them.
-expect_exempt \
-  "World at Ruin CD cask with the verified and parents fields" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/world-at-ruin" \
-  "chore(cask): update world-at-ruin to v0.36.0" \
-  "${war_cask_head}" \
-  '["Casks/world-at-ruin.rb"]' \
-  "$(jq -c 'map(. + {verified: false, parents: ["7bf550685c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f"]})' <<<"${war_cask_commits}")"
-
-# An exempt tap cask verdict says, on stderr, what it does not prove: exit 0 names who made the PR,
-# never whether its release is published (monorepo#4104, homebrew-tap#1936). Stdout stays empty and
-# the exit status is the one the cases above already pin. The ksail plugin release above is the
-# control for the other repositories: its exempt verdict writes no stderr at all.
-cask_reminder='programmed-bot-review-exemption: exit 0 proves who made this cask pull request, not that its release is published; before promoting a draft, check its release with .claude/scripts/release-cask-ripeness.sh (merge-policy guide) and promote only on RIPE while no CD run for that product is queued or in progress'
-expect_cask_reminder() { # expect_cask_reminder <name> <stdin payload>
-  local out err rc=0
-  err="$("${classifier}" --input - 2>&1 >/dev/null <<<"$2")" || rc=$?
-  out="$("${classifier}" --input - 2>/dev/null <<<"$2")" || true
-  [[ "${rc}" -eq 0 ]] || fail "$1: the reminder fixture was not exempt (exit ${rc})"
-  [[ "${err}" == "${cask_reminder}" ]] || fail "$1: an exempt tap cask verdict did not print the ripeness reminder: '${err}'"
-  [[ -z "${out}" ]] || fail "$1: the ripeness reminder reached stdout: '${out}'"
+# The tap's own Cask bump PRs (homebrew-tap#2568) replace the GoReleaser and World at Ruin CD cask
+# PRs (ksail#8394, world-at-ruin#1713), and their arms are gone. Exit 0 needs the App author, a
+# `bump-<cask>-<version>` branch, the title naming the same Cask and version, exactly that Cask's
+# file, and the one App-signed commit whose message is the title. Every negative control below
+# differs from an exit-0 fixture by one property. A PR that claims to be a bump PR but fails one
+# check says so on stderr, like the updater; one from another author is not a bump PR and is silent.
+tap_bump_note='programmed-bot-review-exemption: homebrew-tap Cask bump PR with an unexpected branch, title, files or commit provenance; treated as untrusted'
+expect_tap_bump() { # expect_tap_bump <name> <want-rc> <want-stderr> <classifier args...>
+  local name="$1" want_rc="$2" want_err="$3" rc err out
+  shift 3
+  if classifier_rc "tap Cask bump: ${name}" "$@"; then rc=0; else rc=$?; fi
+  [[ "${rc}" -eq "${want_rc}" ]] || fail "tap Cask bump ${name}: exit ${rc}, want ${want_rc}"
+  err="$("${classifier}" "$@" 2>&1 >/dev/null)" || true
+  [[ "${err}" == "${want_err}" ]] || fail "tap Cask bump ${name}: stderr '${err}', want '${want_err}'"
+  out="$("${classifier}" "$@" 2>/dev/null)" || true
+  [[ -z "${out}" ]] || fail "tap Cask bump ${name}: wrote stdout '${out}'"
 }
-cask_payload() { # cask_payload <head-ref> <title> <head> <files> <commits>
-  jq -nc --arg head_ref "$1" --arg title "$2" --arg head_oid "$3" --argjson files "$4" --argjson commits "$5" \
-    '{repo: "homebrew-tap", author: "devantler", head_ref: $head_ref, title: $title, head_oid: $head_oid,
-      files: $files, commits: $commits}'
-}
-expect_cask_reminder "GoReleaser KSail cask" "$(cask_payload goreleaser/ksail \
-  "chore(cask): update ksail to v7.172.2" "${ksail_cask_head}" '["Casks/ksail.rb"]' "${ksail_cask_commits}")"
-expect_cask_reminder "World at Ruin CD cask" "$(cask_payload goreleaser/world-at-ruin \
-  "chore(cask): update world-at-ruin to v0.36.0" "${war_cask_head}" '["Casks/world-at-ruin.rb"]' "${war_cask_commits}")"
-# A tap cask PR that is NOT exempt (it changes another file) gets no reminder: exit 0 is what it qualifies.
-if err="$("${classifier}" "homebrew-tap" "devantler" "goreleaser/ksail" "chore(cask): update ksail to v7.172.2" \
-  "${ksail_cask_head}" '["Casks/ksail.rb","README.md"]' "${ksail_cask_commits}" 2>&1 >/dev/null)"; then
-  fail 'a tap cask PR changing a second file was exempt'
-elif [[ "${err}" == *release-cask-ripeness* ]]; then
-  fail "a review-gated tap cask PR printed the ripeness reminder: '${err}'"
-fi
+ksail_cask='["Casks/ksail.rb"]'
+
+expect_tap_bump "ksail" 0 "" "${ksail_bump_args[@]}" "${ksail_cask}" "${ksail_bump_commits}"
+expect_tap_bump "ksail-desktop" 0 "" \
+  homebrew-tap app/botantler-1 bump-ksail-desktop-7.213.44 "chore(cask): update ksail-desktop to v7.213.44" \
+  "${tap_bump_head}" '["Casks/ksail-desktop.rb"]' "$(tap_bump_commits ksail-desktop 7.213.44)"
+expect_tap_bump "world-at-ruin" 0 "" \
+  homebrew-tap app/botantler-1 bump-world-at-ruin-0.172.5 "chore(cask): update world-at-ruin to v0.172.5" \
+  "${tap_bump_head}" '["Casks/world-at-ruin.rb"]' "$(tap_bump_commits world-at-ruin 0.172.5)"
+# GitHub's API default names the authenticated App as committer; only GitHub's signature can make
+# that commit verified, as it does for the `web-flow` form.
+expect_tap_bump "commit the App itself committed" 0 "" "${ksail_bump_args[@]}" "${ksail_cask}" \
+  "$(jq -c '.[0].committer_login = .[0].author_login | .[0].committer_name = .[0].author_name
+    | .[0].committer_email = .[0].author_email' <<<"${ksail_bump_commits}")"
+# A refresh from main through the update-branch API, requested with the same App's token, is judged
+# below like the updater's (monorepo#4597), and the verdict says so.
+tap_refresh_merge="$(refresh_merge "${refresh_head}" "${tap_bump_head}" bump-ksail-7.213.44)"
+expect_tap_bump "refreshed from main by the App" 0 \
+  "programmed-bot-review-exemption: homebrew-tap updater PR judged below 1 trailing base-refresh merge(s) from main" \
+  homebrew-tap app/botantler-1 bump-ksail-7.213.44 "chore(cask): update ksail to v7.213.44" \
+  "${refresh_head}" "${ksail_cask}" "$(refreshed "${ksail_bump_commits}" "${tap_refresh_merge}")"
+
+# Wrong author: the same PR from anyone but the App is not a bump PR at all.
+for tap_author in devantler app/ksail-bot botantler-1 "botantler-1[bot]"; do
+  expect_tap_bump "from ${tap_author}" 1 "" \
+    homebrew-tap "${tap_author}" "${ksail_bump_args[@]:2}" "${ksail_cask}" "${ksail_bump_commits}"
+done
+# Wrong branch/title pairing: the title must name the branch's Cask and version.
+expect_tap_bump "title naming another Cask than its branch" 1 "${tap_bump_note}" \
+  homebrew-tap app/botantler-1 bump-ksail-7.213.44 "chore(cask): update ksail-desktop to v7.213.44" \
+  "${tap_bump_head}" "${ksail_cask}" \
+  "$(jq -c '.[0].message = "chore(cask): update ksail-desktop to v7.213.44"' <<<"${ksail_bump_commits}")"
+expect_tap_bump "title naming another version than its branch" 1 "${tap_bump_note}" \
+  homebrew-tap app/botantler-1 bump-ksail-7.213.44 "chore(cask): update ksail to v7.213.45" \
+  "${tap_bump_head}" "${ksail_cask}" \
+  "$(jq -c '.[0].message = "chore(cask): update ksail to v7.213.45"' <<<"${ksail_bump_commits}")"
+expect_tap_bump "title without the v before its version" 1 "${tap_bump_note}" \
+  homebrew-tap app/botantler-1 bump-ksail-7.213.44 "chore(cask): update ksail to 7.213.44" \
+  "${tap_bump_head}" "${ksail_cask}" \
+  "$(jq -c '.[0].message = "chore(cask): update ksail to 7.213.44"' <<<"${ksail_bump_commits}")"
+expect_tap_bump "bump-shaped title from another branch" 1 "${tap_bump_note}" \
+  homebrew-tap app/botantler-1 feature/ksail "${ksail_bump_args[@]:3}" "${ksail_cask}" "${ksail_bump_commits}"
+expect_tap_bump "branch naming a Cask the tap does not bump" 1 "${tap_bump_note}" \
+  homebrew-tap app/botantler-1 bump-other-7.213.44 "chore(cask): update other to v7.213.44" \
+  "${tap_bump_head}" '["Casks/other.rb"]' \
+  "$(jq -c '.[0].message = "chore(cask): update other to v7.213.44"' <<<"${ksail_bump_commits}")"
+# Files: exactly the branch's Cask.
+expect_tap_bump "an extra file" 1 "${tap_bump_note}" \
+  "${ksail_bump_args[@]}" '["Casks/ksail.rb","README.md"]' "${ksail_bump_commits}"
+expect_tap_bump "another Cask's file" 1 "${tap_bump_note}" \
+  "${ksail_bump_args[@]}" '["Casks/ksail-desktop.rb"]' "${ksail_bump_commits}"
+expect_tap_bump "no file" 1 "${tap_bump_note}" "${ksail_bump_args[@]}" '[]' "${ksail_bump_commits}"
+# Commits: the workflow's one signed commit, and nothing after it but a refresh from main.
+tap_adapted_head="3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b"
+expect_tap_bump "a second, hand-made commit" 1 "${tap_bump_note}" \
+  homebrew-tap app/botantler-1 bump-ksail-7.213.44 "chore(cask): update ksail to v7.213.44" \
+  "${tap_adapted_head}" "${ksail_cask}" \
+  "$(jq -c --arg head "${tap_adapted_head}" '. + [{sha: $head,
+    author_login: "devantler", author_name: "Nikolai Emil Damm", author_email: "26203420+devantler@users.noreply.github.com",
+    author_date: "2026-07-18T09:20:00Z", committer_login: "devantler", committer_name: "Nikolai Emil Damm",
+    committer_email: "26203420+devantler@users.noreply.github.com", committer_date: "2026-07-18T09:20:00Z",
+    message: "fix(cask): correct the sha256 by hand", verified: true, parents: [.[0].sha]}]' <<<"${ksail_bump_commits}")"
+expect_tap_bump "a second commit the App wrote" 1 "${tap_bump_note}" \
+  homebrew-tap app/botantler-1 bump-ksail-7.213.44 "chore(cask): update ksail to v7.213.44" \
+  "${tap_adapted_head}" "${ksail_cask}" \
+  "$(jq -c --arg head "${tap_adapted_head}" '. + [.[0] + {sha: $head, parents: [.[0].sha]}]' <<<"${ksail_bump_commits}")"
+expect_tap_bump "a commit GitHub did not sign" 1 "${tap_bump_note}" \
+  "${ksail_bump_args[@]}" "${ksail_cask}" "$(jq -c '.[0].verified = false' <<<"${ksail_bump_commits}")"
+expect_tap_bump "a commit without a reported signature verdict" 1 "${tap_bump_note}" \
+  "${ksail_bump_args[@]}" "${ksail_cask}" "$(jq -c 'del(.[0].verified)' <<<"${ksail_bump_commits}")"
+expect_tap_bump "a commit whose message is not the title" 1 "${tap_bump_note}" \
+  "${ksail_bump_args[@]}" "${ksail_cask}" \
+  "$(jq -c '.[0].message = "chore(cask): update ksail to v7.213.44 and more"' <<<"${ksail_bump_commits}")"
+for tap_field in author_login author_name author_email committer_login committer_name committer_email; do
+  expect_tap_bump "a commit with another ${tap_field}" 1 "${tap_bump_note}" \
+    "${ksail_bump_args[@]}" "${ksail_cask}" \
+    "$(jq -c --arg f "${tap_field}" '.[0][$f] = "other"' <<<"${ksail_bump_commits}")"
+done
+expect_tap_bump "a commit from the App's login with another numeric ID" 1 "${tap_bump_note}" \
+  "${ksail_bump_args[@]}" "${ksail_cask}" \
+  "$(jq -c '.[0].author_email = "1+botantler-1[bot]@users.noreply.github.com"' <<<"${ksail_bump_commits}")"
+expect_tap_bump "refreshed from main by the maintainer" 1 "${tap_bump_note}" \
+  homebrew-tap app/botantler-1 bump-ksail-7.213.44 "chore(cask): update ksail to v7.213.44" \
+  "${refresh_head}" "${ksail_cask}" \
+  "$(refreshed "${ksail_bump_commits}" "$(refresh_merge "${refresh_head}" "${tap_bump_head}" bump-ksail-7.213.44 \
+    '.author_login = "devantler" | .author_name = "devantler" | .author_email = "26203420+devantler@users.noreply.github.com"')")"
+# Non-semver versions: the workflow refuses anything but digits and dots, so a prerelease, a `v`
+# in the branch, or a word is not its output even when branch, title and commit agree.
+for tap_version in 7.213.44-rc.1 v7.213.44 latest 7.213.; do
+  expect_tap_bump "version ${tap_version}" 1 "${tap_bump_note}" \
+    homebrew-tap app/botantler-1 "bump-ksail-${tap_version}" "chore(cask): update ksail to v${tap_version}" \
+    "${tap_bump_head}" "${ksail_cask}" \
+    "$(jq -c --arg m "chore(cask): update ksail to v${tap_version}" '.[0].message = $m' <<<"${ksail_bump_commits}")"
+done
+
+# Schema, on the bump fixture: a login the caller did not coalesce (#2864) and a commit without its
+# raw date pair (#2291) are invalid input, never a verdict about a PR the arm never examined.
+expect_classifier_error "tap Cask bump commit whose committer login is null" \
+  "${ksail_bump_args[@]}" "${ksail_cask}" "$(jq -c '.[0].committer_login = null' <<<"${ksail_bump_commits}")"
+expect_classifier_error "tap Cask bump payload missing the commit date pair" \
+  "${ksail_bump_args[@]}" "${ksail_cask}" "$(jq -c 'map(del(.author_date, .committer_date))' <<<"${ksail_bump_commits}")"
 
 # These historical identity variants remain untrusted along with the formerly exact signed
 # shape. Retiring the publisher removes the exemption rather than admitting a replacement identity
@@ -2264,42 +2156,9 @@ expect_review_gated "KSail plugin release from the retired devantler-tech-bot id
     | .committer_name = "devantler-tech-bot[bot]"
     | .committer_email = "devantler-tech-bot[bot]@users.noreply.github.com")' <<<"${ksail_commits}")"
 
-# #2291. The tap token commits under the maintainer's own identity, so a `git commit --amend` that
-# rewrites the cask body leaves every login, name, email, message, branch and path identical to a
-# genuine release — the exemption used to survive it. The author/committer date pair is what an
-# amend cannot preserve, so it is what re-gates the PR here.
-war_amended_cask_commits="$(war_cask_commits_json \
-  "v0.36.0" \
-  "${war_cask_head}" \
-  "2026-07-18T09:17:05Z")"
-
-expect_review_gated \
-  "World at Ruin cask whose commit was amended by hand" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/world-at-ruin" \
-  "chore(cask): update world-at-ruin to v0.36.0" \
-  "${war_cask_head}" \
-  '["Casks/world-at-ruin.rb"]' \
-  "${war_amended_cask_commits}"
-
-# A surveyor that has not been updated to send both dates must fail closed rather than silently
-# skipping the discriminator: without this the exemption would quietly widen back to what it was.
-expect_classifier_error \
-  "World at Ruin cask payload missing the commit date pair" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/world-at-ruin" \
-  "chore(cask): update world-at-ruin to v0.36.0" \
-  "${war_cask_head}" \
-  '["Casks/world-at-ruin.rb"]' \
-  "$(jq -c 'map(del(.author_date, .committer_date))' <<<"${war_cask_commits}")"
-
-# The surveyor must be told to carry the pair, or a correct classifier is fed a payload that can
-# never exercise it. Naming the output fields is not enough on its own: the discriminator only works
-# if both values come from the raw commit object, so the source paths are asserted too. Taking
-# either date from the PR-level view instead would still satisfy a field-name-only assertion while
-# silently supplying a value the amend does not move.
+# The schema requires both raw commit dates (#2291), so the surveyor must be told to carry the pair,
+# or every classification it runs fails closed with exit 2. Naming the output fields is not enough on
+# its own: both values must come from the raw commit object, so the source paths are asserted too.
 grep -Fq 'author_date' "${surveyor}" ||
   fail "surveyor commit normalization does not carry author_date"
 grep -Fq 'committer_date' "${surveyor}" ||
@@ -2308,157 +2167,6 @@ grep -Fq '.commit.author.date' "${surveyor}" ||
   fail "surveyor does not source author_date from the raw commit object"
 grep -Fq '.commit.committer.date' "${surveyor}" ||
   fail "surveyor does not source committer_date from the raw commit object"
-
-expect_exempt \
-  "GoReleaser cask carrying several release cycles" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/ksail" \
-  "chore(cask): update ksail to v7.176.1" \
-  "${multi_cycle_cask_head}" \
-  '["Casks/ksail.rb"]' \
-  "${multi_cycle_cask_commits}"
-
-expect_exempt \
-  "GoReleaser cask mixing default and Conventional commit subjects" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/ksail-desktop" \
-  "chore(cask): update ksail-desktop to v7.192.7" \
-  "${conventional_cask_head}" \
-  '["Casks/ksail-desktop.rb"]' \
-  "${conventional_cask_commits}"
-
-expect_exempt \
-  "GoReleaser cask carrying only the Conventional commit subject" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/ksail-desktop" \
-  "chore(cask): update ksail-desktop to v7.192.7" \
-  "${conventional_cask_head}" \
-  '["Casks/ksail-desktop.rb"]' \
-  "${conventional_only_cask_commits}"
-
-expect_exempt \
-  "cask title naming the older default-subject cycle" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/ksail-desktop" \
-  "chore(cask): update ksail-desktop to v7.192.4" \
-  "${conventional_cask_head}" \
-  '["Casks/ksail-desktop.rb"]' \
-  "${conventional_cask_commits}"
-
-expect_review_gated \
-  "Conventional cask commit naming another component" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/ksail-desktop" \
-  "chore(cask): update ksail-desktop to v7.192.4" \
-  "${conventional_cask_head}" \
-  '["Casks/ksail-desktop.rb"]' \
-  "${wrong_component_cask_commits}"
-
-expect_review_gated \
-  "Conventional cask commit naming a non-semver tag" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/ksail-desktop" \
-  "chore(cask): update ksail-desktop to v7.192.4" \
-  "${conventional_cask_head}" \
-  '["Casks/ksail-desktop.rb"]' \
-  "${non_semver_cask_commits}"
-
-expect_review_gated \
-  "Conventional cask title claiming a version no cycle shipped" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/ksail-desktop" \
-  "chore(cask): update ksail-desktop to v7.192.8" \
-  "${conventional_cask_head}" \
-  '["Casks/ksail-desktop.rb"]' \
-  "${conventional_cask_commits}"
-
-expect_review_gated \
-  "cask PR carrying a hand adaptation commit" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/ksail" \
-  "chore(cask): update ksail to v7.176.4" \
-  "${adapted_cask_head}" \
-  '["Casks/ksail.rb"]' \
-  "${adapted_cask_commits}"
-
-expect_exempt \
-  "GoReleaser cask followed by ksail's own brew style commit" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/ksail" \
-  "Brew cask update for ksail version v7.186.2" \
-  "${pipeline_style_cask_head}" \
-  '["Casks/ksail.rb"]' \
-  "${pipeline_style_cask_commits}"
-
-expect_review_gated \
-  "ksail brew style commit under another identity" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/ksail" \
-  "Brew cask update for ksail version v7.186.2" \
-  "${pipeline_style_cask_head}" \
-  '["Casks/ksail.rb"]' \
-  "${pipeline_style_wrong_identity_commits}"
-
-expect_review_gated \
-  "ksail brew style commit under another login" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/ksail" \
-  "Brew cask update for ksail version v7.186.2" \
-  "${pipeline_style_cask_head}" \
-  '["Casks/ksail.rb"]' \
-  "${pipeline_style_wrong_login_commits}"
-
-expect_review_gated \
-  "ksail brew style commit with another message" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/ksail" \
-  "Brew cask update for ksail version v7.186.2" \
-  "${pipeline_style_cask_head}" \
-  '["Casks/ksail.rb"]' \
-  "${pipeline_style_wrong_message_commits}"
-
-expect_review_gated \
-  "ksail brew style commit touching another file" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/ksail" \
-  "Brew cask update for ksail version v7.186.2" \
-  "${pipeline_style_cask_head}" \
-  '["Casks/ksail.rb","Casks/ksail-desktop.rb"]' \
-  "${pipeline_style_cask_commits}"
-
-expect_review_gated \
-  "World at Ruin cask claiming the wrong version in its commit" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/world-at-ruin" \
-  "chore(cask): update world-at-ruin to v0.37.0" \
-  "${war_cask_head}" \
-  '["Casks/world-at-ruin.rb"]' \
-  "${war_cask_commits}"
-
-
-expect_review_gated \
-  "cask title claiming a version no release cycle shipped" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/ksail" \
-  "chore(cask): update ksail to v999.0.0" \
-  "${multi_cycle_cask_head}" \
-  '["Casks/ksail.rb"]' \
-  "${multi_cycle_cask_commits}"
 
 expect_review_gated \
   "agent-skills updater lookalike from the wrong actor" \
@@ -2551,26 +2259,6 @@ expect_review_gated \
   "${ksail_commits}"
 
 expect_review_gated \
-  "GoReleaser cask with an extra file" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/ksail" \
-  "chore(cask): update ksail to v7.172.2" \
-  "${ksail_cask_head}" \
-  '["Casks/ksail.rb","README.md"]' \
-  "${ksail_cask_commits}"
-
-expect_review_gated \
-  "GoReleaser-shaped title from an unowned branch" \
-  "homebrew-tap" \
-  "devantler" \
-  "feature/ksail" \
-  "chore(cask): update ksail to v7.172.2" \
-  "${ksail_cask_head}" \
-  '["Casks/ksail.rb"]' \
-  "${ksail_cask_commits}"
-
-expect_review_gated \
   "KSail release with a human adaptation commit" \
   "ksail" \
   "app/ksail-bot" \
@@ -2579,16 +2267,6 @@ expect_review_gated \
   "${adapted_ksail_head}" \
   "${ksail_files}" \
   "${adapted_ksail_commits}"
-
-expect_review_gated \
-  "GoReleaser cask with a human adaptation commit" \
-  "homebrew-tap" \
-  "devantler" \
-  "goreleaser/ksail" \
-  "chore(cask): update ksail to v7.172.2" \
-  "${adapted_cask_head}" \
-  '["Casks/ksail.rb"]' \
-  "${adapted_cask_commits}"
 
 expect_classifier_error \
   "stale commit list does not reach the supplied head" \

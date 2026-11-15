@@ -11,8 +11,7 @@
 # test-inputs: .claude/scripts/pr-ownership-disclosure.test.sh
 # test-inputs: .claude/scripts/pr-worktree-holder.sh .claude/scripts/pr-worktree-holder.test.sh
 # test-inputs: .claude/scripts/programmed-bot-review-exemption.sh
-# test-inputs: .claude/scripts/release-cask-ripeness.sh
-# test-inputs: .claude/scripts/release-cask-ripeness.test.sh .claude/settings.json
+# test-inputs: .claude/settings.json
 # test-inputs: .claude/skill-ownership-allowlist.tsv .claude/skills/portfolio-maintenance/SKILL.md
 # test-inputs: .claude/skills/product-engineering/SKILL.md .claude/skills/products/**
 # test-inputs: .github/workflows/ci.yaml AGENTS.md

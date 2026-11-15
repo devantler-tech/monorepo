@@ -472,7 +472,7 @@ doing, held to the contract's **two-sided test** (*Security hardening without a 
 - **business-site**: advance = docs/site features, accessibility, performance (bundle/Lighthouse),
   content quality, evidence-led discovery/adoption, and low-priority blog stewardship (see the
   business-site card's Site QA / Content Review / Blog Stewardship).
-- **homebrew-tap**: Casks are machine-generated (`# DO NOT EDIT` — GoReleaser for ksail, World at
-  Ruin's CD for its cask) — advance is limited to CI/tap hygiene; never chase version/sha bumps.
+- **homebrew-tap**: Casks are bumped by the tap's own hourly `bump-casks` workflow (`brew livecheck`
+  and `brew bump-cask-pr`) — advance is limited to CI/tap hygiene; never chase version/sha bumps.
 - **applications** (private, SvelteKit): conservative, extra discretion; coverage/quality/perf within
   the app owner's intent.

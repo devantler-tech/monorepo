@@ -43,9 +43,9 @@ Conventional-Commit title, then **merge with the command that matches the author
   author-scoped list, which is what made the unsafe arming look prescribed.
   For an unconditional author, use
   `gh pr merge <n> --repo devantler-tech/<repo> --auto --squash --match-head-commit <sha>`; for **trusted programmed bot PRs** (exit-0 agent-skills updater PRs,
-  and tap cask PRs — the carve-out below) the review parts are intentionally absent and
+  and the tap's Cask bump PRs — the carve-out below) the review parts are intentionally absent and
   are NOT required — their required checks, zero threads, and no-conflict state alone gate the merge,
-  which for the exit-0 updater is the head-pinned **direct** merge above, never `--auto`;
+  which for the exit-0 updater and a Cask bump PR is the head-pinned **direct** merge above, never `--auto`;
 - a **human-trusted author** (`devantler`, i.e. **every machine-local agent-own PR**) **cannot use `--auto`**
   (auto-merge is bot-only) and merges **directly** with
   `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>` once
@@ -882,9 +882,12 @@ gated by required CI and auto-merge rather than an AI review:
   `chore(deps): update agent skills` title in `platform` and `ksail`, authored by
   those repositories' exact updater App and changing only their generated installed-skill roots —
   **and only where every changed skill is owned by the reviewed suite upstream** (see below).
-- **Programmed release PRs** (maintainer direction 2026-07-13, ksail#6095; widened 2026-07-18):
-  every product's Homebrew-tap cask PR, including World at Ruin's CD-generated
-  `chore(cask): update world-at-ruin to vX.Y.Z` PRs on `goreleaser/world-at-ruin`.
+- **Programmed Cask bump PRs** (homebrew-tap#2568, which replaced the product cask PRs of maintainer
+  directions 2026-07-13 and 2026-07-18): the tap's own hourly `bump-casks` workflow opens one PR per
+  outdated Cask, authored by `app/botantler-1` on `bump-<cask>-<version>` with the title
+  `chore(cask): update <cask> to v<version>`, changing only `Casks/<cask>.rb` in one GitHub-signed
+  commit whose message is the title. KSail's GoReleaser cask pipeline (ksail#8394) and World at
+  Ruin's CD cask job (world-at-ruin#1713) are gone, so no `goreleaser/*` cask PR opens any more.
 
 **`agent-plugins` updater PRs require semantic review.** Bundled skills are executable agent
 instructions sourced from several upstreams, so path and commit provenance prove who produced an
@@ -940,64 +943,20 @@ Never infer it from the title alone. Qualifying PRs run through required CI and 
 request CodeRabbit, Codex, Cursor Bugbot, or a local review, chase ancillary reviewer output, or count
 a missing review as a hygiene gap. Their checks, threads, and conflict state still gate auto-merge.
 Any adaptation commit or out-of-bound file revokes the exemption and restores the normal review gate.
-A cask PR's `brew style --fix` autocorrect commits are **not** adaptations: the tap's
-`generator-bot` commit and KSail's own release-pipeline tidy-up are part of the programmed shape, and
-the classifier recognises each only by its exact author and committer identity and message, inside
-the same cask-file boundary. The tap bot's commit carries no resolvable GitHub login, so its login is
-passed as an empty string (the commit query in the classifier's usage header coalesces it); every
-other extra commit still sends the PR to review.
+A Cask bump PR has no autocorrect commit, because `brew bump-cask-pr` runs `brew style --fix` before
+the workflow commits. Its one commit, plus a trailing base-refresh merge GitHub writes when that same
+App's token asks to update the branch, is the whole programmed shape; any other commit, including a
+second one from the workflow, sends the PR to review.
 
-🔴 **The exemption proves provenance, never ripeness: a cask PR's DRAFT state is the CD's release
-fence, and only the release clears it** (monorepo#2992). A product's CD opens its Homebrew-tap cask PR
-as a draft so the tap cannot merge it while the GitHub release is still a draft, and leaves it a draft
-when its own hand-off fails. Exit 0 plus a clear pentad cannot see either state, so "draft + exempt +
-CLEAN" is **not** "promote me": an agent promoted and merged `homebrew-tap#1496` over exactly that
-fence. Before promoting a draft cask PR, judge its release at the PR head:
-
-```sh
-cask=$(gh api "repos/devantler-tech/homebrew-tap/contents/Casks/<name>.rb?ref=<headRefOid>" \
-  -H "Accept: application/vnd.github.raw") || { echo "cask read FAILED — UNKNOWN" >&2; exit 2; }
-if release=$(gh api repos/devantler-tech/<repo>/releases/tags/v<version> 2>release.err); then :
-elif grep -q '(HTTP 404)' release.err; then release=null   # absent, or still a draft
-else echo "release read FAILED — UNKNOWN" >&2; exit 2; fi
-jq -n --arg cask "$cask" --argjson release "$release" '{cask:$cask, release:$release}' |
-  .claude/scripts/release-cask-ripeness.sh --input -
-```
-
-`release` is `null` only when that read returned **404**: a draft release is not readable by tag, so a
-draft and an absent release both arrive as `null`. On a 404, `gh api` still prints the error body on
-stdout, so never pass its output through unchecked; any other failed read is UNKNOWN. Promote only
-on exit **0** (`RIPE`): the release is published, carries every asset the cask installs, and each
-pinned `sha256` equals the digest GitHub records for that asset. On exit **1** keep the draft and park
-the PR on the release; on exit **2** keep the draft and report it UNKNOWN. The CD run's conclusion is
-not the test: a published release can sit behind a CD run reported `cancelled`.
-
-🔴 **`RIPE` is necessary, not sufficient: the product's CD hands off its own cask PR, so never promote
-one while a run of that product's CD workflow is queued or in progress** (monorepo#4980). The CD
-promotes its cask PR itself minutes after the release publishes, and it adds the labels its hand-off
-checks only while it promotes a draft. On 2026-11-12 an agent promoted `homebrew-tap#2528` 28 seconds
-before KSail's CD reached that step, the CD refused the already-ready PR, and the run went red. So an
-agent's promotion is the fallback for a cask PR the CD left a draft after its run ended. Before
-promoting, read the product's CD runs (`cd.yaml` for KSail and World at Ruin):
-
-```sh
-for state in requested waiting pending queued in_progress; do
-  n=$(gh api "repos/devantler-tech/<repo>/actions/workflows/cd.yaml/runs?status=$state&per_page=1" \
-    --jq .total_count) || { echo "CD run read FAILED — UNKNOWN" >&2; exit 2; }
-  [ "$n" = 0 ] || { echo "CD run $state — leave the draft to the CD" >&2; exit 1; }
-done
-```
-
-Promote only when every read succeeds and counts zero. Otherwise keep the draft: the running CD
-hands it off, or its next run re-drafts it at a newer release.
-
-**Ripeness belongs to a head, not to the PR.** The CD reuses one `goreleaser/<name>` branch, so the
-next release force-pushes a newer, possibly still-draft version into a cask PR that is already
-promoted. On 2026-10-01 this happened twice: `homebrew-tap#1767` was promoted RIPE at v7.198.8 and
-again at v7.198.9, and each time it moved to an unpublished version before it merged. So a cask PR
-is the exception to "qualifying PRs run through auto-merge" above: **never arm `--auto` on it**,
-because the head pin then guards only the arming and a later force-push would merge a head nobody
-judged. Merge in the same sitting as the promotion: wait for the required checks to settle, then
-merge directly, pinned to the exact head you judged RIPE (`--match-head-commit <sha>`). If the head
-moved first, the earlier verdict no longer applies: judge the new head again, and if it is not RIPE,
-convert the PR back to a draft and say which release it is waiting on.
+**A Cask bump PR's release is published by construction.** `brew livecheck` reads the release GitHub
+lists as latest, which is not a draft or a prerelease, so the workflow moves a Cask only to a
+published release, and `brew bump-cask-pr` takes every `sha256` from that release's assets
+(homebrew-tap#2568). The draft fence, the release-ripeness check and the product CD hand-off
+(monorepo#2992, monorepo#4980) guarded the product pipelines' cask PRs and are retired with them.
+The workflow arms the PR's auto-merge itself, so a qualifying bump PR merges once the tap's required
+checks pass, with no agent action. 🔴 **Never arm or re-arm that auto-merge yourself:
+`app/botantler-1` is not `--auto`-eligible** (above). A bump PR that stalls, with a failed check or
+an auto-merge that does not fire, is rung-one work: an adaptation commit restores the review gate as
+above, and otherwise re-run the classifier at the current head and merge directly, pinned with
+`--match-head-commit` to the head it judged. Closing a bump PR is not neutral: the workflow skips a
+version whose branch already has a closed PR, so that Cask then waits for the next release.
