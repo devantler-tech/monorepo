@@ -247,7 +247,8 @@ workspace. **Before removing any gitdir, confirm all of:**
 1. **No live worktrees** — `rtk proxy git --git-dir=<M> worktree list` shows only the main entry (no
    `.claude/worktrees/*`).
 2. **No unpushed commits** — `git --git-dir=<M> log --branches --tags --not --remotes --oneline` is empty.
-3. **No stash** — `git --git-dir=<M> stash list` is empty.
+3. **No stash** — `git --git-dir=<M> for-each-ref refs/stash` prints nothing. (Not `stash list`:
+   the `git stash` deny rule refuses it, see [Git safety](guides/git-and-worktrees.md#git-safety).)
 4. **Not named active anywhere** — cross-check the global `~/.claude/CLAUDE.md` (it names `projects/ksail`
    as an active second checkout) and any **working tree** still on disk at the old path.
 
