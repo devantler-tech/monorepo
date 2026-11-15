@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# test-inputs: .github/workflows/ci.yaml
 # consumer-census.test.sh — self-test for consumer-census.sh (monorepo#4842).
 #
 # Builds a throwaway monorepo whose `.gitmodules` lists four submodules, each backed by a local bare

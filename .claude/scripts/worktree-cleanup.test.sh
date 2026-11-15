@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/test-partitions.sh .claude/scripts/test-partitions.test.sh
+# test-inputs: .claude/scripts/worktree-claim-lib.sh .claude/scripts/worktree-cleanup-all.sh
+# test-inputs: .claude/scripts/worktree-cleanup-all.test.sh
+# test-inputs: .claude/scripts/worktree-inventory-classify.sh
+# test-inputs: .claude/scripts/worktree-inventory-classify.test.sh
+# test-inputs: .claude/scripts/worktree-inventory-merged-check.sh
+# test-inputs: .claude/scripts/worktree-inventory-merged-check.test.sh
+# test-inputs: .claude/scripts/worktree-inventory-read-verdicts.tsv
+# test-inputs: .claude/scripts/worktree-submodule-inventory.sh
+# test-inputs: .claude/scripts/worktree-submodule-inventory.test.sh .github/workflows/ci.yaml
+# test-inputs: AGENTS.md
 # test-timeout-seconds: 900
 # Measured 561 s for all 272 cases on 2026-11-03; retain a bounded local run (#4394).
 # Contract tests for worktree-cleanup.sh.

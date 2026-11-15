@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# test-inputs: **/*.bash **/*.sh .github/workflows/ci.yaml
 # Self-test for bash-parse-guard.sh (monorepo#3172).
 #
 # Every "must flag" fixture has a twin that differs only in the syntax error, so a control

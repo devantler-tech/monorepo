@@ -1,4 +1,20 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/agents/daily-maintainer.md .claude/agents/portfolio-surveyor.md
+# test-inputs: .claude/guides/** .claude/plugin-consumption/agentic-engineering-surveyor-diff.md
+# test-inputs: .claude/scripts/coderabbit-comment-verdict.sh
+# test-inputs: .claude/scripts/coderabbit-comment-verdict.test.sh
+# test-inputs: .claude/scripts/coderabbit-review-verdict.sh
+# test-inputs: .claude/scripts/coderabbit-review-verdict.test.sh
+# test-inputs: .claude/scripts/coderabbit-summary-verdict.sh
+# test-inputs: .claude/scripts/coderabbit-summary-verdict.test.sh .claude/scripts/contract-text.sh
+# test-inputs: .claude/scripts/fixtures/** .claude/scripts/local-review-payload.sh
+# test-inputs: .claude/scripts/local-review-payload.test.sh .claude/scripts/local-review-verdict.sh
+# test-inputs: .claude/scripts/local-review-verdict.test.sh .claude/scripts/managed-run-streak.sh
+# test-inputs: .claude/scripts/managed-run-streak.test.sh .claude/scripts/pr-unresolved-threads.sh
+# test-inputs: .claude/scripts/pr-unresolved-threads.test.sh
+# test-inputs: .claude/scripts/review-no-gate-guard.sh .claude/scripts/review-no-gate-guard.test.sh
+# test-inputs: .claude/scripts/review-provider-loop-contract.test.sh
+# test-inputs: .claude/skills/portfolio-maintenance/SKILL.md .github/workflows/ci.yaml AGENTS.md
 # required-gate-completeness.test.sh — hermetic proof for required-gate-completeness.sh
 # (monorepo#2730). A stub `gh` on PATH serves one canned response per endpoint, so no token or
 # network is needed. Key properties are paired with an ablated copy that must FAIL the same case.

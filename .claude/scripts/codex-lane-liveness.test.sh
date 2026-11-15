@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/scripts/contract-text.sh .github/workflows/ci.yaml
+# test-inputs: AGENTS.md
 # codex-lane-liveness.test.sh — RED/GREEN coverage for the Codex lane liveness check.
 #
 # The check exists because a dead lane looked healthy. So the assertions that matter most are the

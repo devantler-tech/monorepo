@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/*.sh .claude/scripts/memory-hygiene-go/go.mod
+# test-inputs: .github/workflows/ci.yaml
 # A blocked compiler must not hold a run-loop guard indefinitely (monorepo#4673).
 # Exercise the real launcher; fake only the Go process and its cache availability.
 set -Eeuo pipefail

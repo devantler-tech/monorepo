@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/test-partitions.sh .claude/scripts/test-partitions.test.sh
+# test-inputs: .claude/scripts/worktree-claim-lib.sh .claude/scripts/worktree-cleanup-all.sh
+# test-inputs: .claude/scripts/worktree-cleanup-all.test.sh .claude/scripts/worktree-cleanup.sh
+# test-inputs: .claude/scripts/worktree-cleanup.test.sh
+# test-inputs: .claude/scripts/worktree-inventory-classify.sh
+# test-inputs: .claude/scripts/worktree-inventory-classify.test.sh
+# test-inputs: .claude/scripts/worktree-inventory-merged-check.sh
+# test-inputs: .claude/scripts/worktree-inventory-merged-check.test.sh
+# test-inputs: .claude/scripts/worktree-inventory-read-verdicts.tsv .github/workflows/ci.yaml
+# test-inputs: AGENTS.md
 # Tests for worktree-submodule-inventory.sh — the read-only, per-submodule inventory of what
 # a session worktree still holds (monorepo#3072).
 #

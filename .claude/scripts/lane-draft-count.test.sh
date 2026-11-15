@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/guides/durable-memory.md .claude/scripts/contract-text.sh
+# test-inputs: .claude/scripts/forge-read.sh .claude/scripts/hypothesis-id-reserve.sh
+# test-inputs: .claude/scripts/hypothesis-id-reserve.test.sh
+# test-inputs: .claude/scripts/submodule-pin-currency.sh
+# test-inputs: .claude/scripts/submodule-pin-currency.test.sh
+# test-inputs: .claude/skills/portfolio-maintenance/SKILL.md .github/workflows/ci.yaml AGENTS.md
 # lane-draft-count.test.sh — RED/GREEN coverage for lane-draft-count.sh (monorepo#2562).
 #
 # The cases that matter most are the fail-closed ones: an unproven read must never print a number,

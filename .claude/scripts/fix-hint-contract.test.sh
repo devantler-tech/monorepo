@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/scripts/*.sh .github/workflows/ci.yaml AGENTS.md
 # fix-hint-contract.test.sh — no fix hint a helper prints tells an agent to break the contract
 # (monorepo#4282).
 #

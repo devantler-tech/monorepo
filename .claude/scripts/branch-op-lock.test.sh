@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/branch-cleanup.sh .claude/scripts/worktree-add.sh
+# test-inputs: .claude/scripts/worktree-claim.sh .claude/scripts/worktree-remove.sh
+# test-inputs: .github/workflows/ci.yaml
 #
 # Self-test for branch-op-lock.sh + worktree-add.sh (monorepo#2209).
 #

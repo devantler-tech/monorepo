@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/agents/portfolio-surveyor.md
+# test-inputs: .claude/scripts/surveyor-vocabulary-coverage.test.sh
+# test-inputs: .claude/skills/portfolio-maintenance/SKILL.md .github/workflows/ci.yaml .gitmodules
+# test-inputs: libraries/agent-plugins
 # Pins the corpus of survey commands below against the plugin's read-only forge
 # guard, so a guard revision cannot silently start refusing one of them.
 #

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/go-helper-build.sh .claude/scripts/memory-backup-go/**
+# test-inputs: .claude/scripts/memory-rewrite.sh .claude/scripts/memory-rewrite.test.sh
+# test-inputs: .github/workflows/ci.yaml
 # Behaviour tests for memory-history.sh (monorepo#5050) against throwaway stores.
 
 set -euo pipefail
@@ -47,7 +50,7 @@ hist="${tmp}/history/claude.git"
 
 expect 0 'initialised' "${subject}" init --store "${store}" --git-dir "${hist}" --layout claude
 [ ! -e "${store}/.git" ] || fail "init must not add a .git entry to the store"
-tracked="$("${subject}" git --git-dir "${hist}" -- ls-files | sort | tr '\n' ' ')"
+tracked="$("${subject}" git --git-dir "${hist}" -- ls-files | LC_ALL=C sort | tr '\n' ' ')"
 [ "${tracked}" = "MEMORY.md attic/old.txt inventory.private.jsonl.gz topic.md " ] ||
   fail "claude layout tracked the wrong files: ${tracked}"
 expect 0 'already initialised' "${subject}" init --store "${store}" --git-dir "${hist}" --layout claude
@@ -62,7 +65,7 @@ mkdir -p "${tmp}/elsewhere" && printf 'secret\n' >"${tmp}/elsewhere/secret"
 GIT_CONFIG_GLOBAL="${tmp}/global.gitconfig" GIT_WORK_TREE="${tmp}/elsewhere" GIT_INDEX_FILE="${tmp}/idx" \
   "${subject}" commit --git-dir "${hist}" --message 'run 1' >"${tmp}/sha"
 grep -Eq '^[0-9a-f]{40}$' "${tmp}/sha" || fail "commit did not print a sha"
-tracked="$("${subject}" git --git-dir "${hist}" -- ls-files | sort | tr '\n' ' ')"
+tracked="$("${subject}" git --git-dir "${hist}" -- ls-files | LC_ALL=C sort | tr '\n' ' ')"
 [ "${tracked}" = "MEMORY.md attic/old.txt inventory.private.jsonl.gz topic.md " ] ||
   fail "a caller's GIT_WORK_TREE changed what was committed: ${tracked}"
 [ "$("${subject}" git --git-dir "${hist}" -- log --format=%G? -1)" = 'N' ] || fail "commit was signed"
@@ -115,7 +118,7 @@ expect 0 'initialised' "${subject}" init --store "${codex}" --git-dir "${tmp}/hi
 printf 'e2\n' >"${codex}/engineer/memory.md"
 expect 0 '' "${subject}" commit --git-dir "${tmp}/history/codex.git"
 chmod 700 "${codex}/engineer/artifacts"
-tracked="$("${subject}" git --git-dir "${tmp}/history/codex.git" -- ls-files | sort | tr '\n' ' ')"
+tracked="$("${subject}" git --git-dir "${tmp}/history/codex.git" -- ls-files | LC_ALL=C sort | tr '\n' ' ')"
 [ "${tracked}" = "engineer/memory.md improver/memory.md " ] || fail "codex layout tracked the wrong files: ${tracked}"
 # A store with nothing to track yet still initialises.
 mkdir -p "${tmp}/empty-codex"

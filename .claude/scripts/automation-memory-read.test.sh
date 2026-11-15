@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/scripts/contract-text.sh
+# test-inputs: .claude/scripts/go-helper-build.sh .claude/scripts/memory-hygiene-go/**
+# test-inputs: .claude/scripts/memory-hygiene.sh .claude/scripts/memory-hygiene.test.sh
+# test-inputs: .claude/skills/portfolio-maintenance/SKILL.md .github/workflows/ci.yaml AGENTS.md
 # Functional controls for the bounded automation-ledger reader (monorepo#4533).
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

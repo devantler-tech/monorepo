@@ -23,10 +23,13 @@
 #   a little wider than CI's, never narrower.
 #
 # USAGE
-#   run-affected-tests.sh [--base <ref>] [--list] [--all] [--timeout <seconds>]
-#                         [--ci-file <path>] [--root <dir>]
+#   run-affected-tests.sh [--base <ref>] [--list | --list-json] [--all] [--convention]
+#                         [--timeout <seconds>] [--ci-file <path>] [--root <dir>]
 #
 #   --list      print the selected scripts, run nothing
+#   --list-json print the selection as a JSON array of {dir, run, path, how, timeout}, run nothing
+#   --convention  select by what each test declares instead of by ci.yaml's filters: itself, its
+#               <name>.sh and <name>-go/**, and its `# test-inputs:` header globs (monorepo#5052)
 #   --all       select every script any gated job runs. Slow: run it in the background.
 #   --timeout   override every per-script deadline in seconds. The default is 300 unless a
 #               suite declares "# test-timeout-seconds: N" in its opening comment header
@@ -48,6 +51,8 @@ die() { printf '%s: %s\n' "${me}" "$*" >&2; exit 2; }
 
 base="origin/main"
 list_only=0
+list_json=0
+convention=0
 select_all=0
 timeout_s=300
 timeout_explicit=0
@@ -59,6 +64,8 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --base) [ "$#" -ge 2 ] || die "--base needs a ref"; base="$2"; shift 2 ;;
     --list) list_only=1; shift ;;
+    --list-json) list_only=1; list_json=1; shift ;;
+    --convention) convention=1; shift ;;
     --all) select_all=1; shift ;;
     --timeout)
       [ "$#" -ge 2 ] || die "--timeout needs seconds"
@@ -66,12 +73,12 @@ while [ "$#" -gt 0 ]; do
       timeout_s="$2"; timeout_explicit=1; shift 2 ;;
     --ci-file) [ "$#" -ge 2 ] || die "--ci-file needs a path"; ci_file="$2"; shift 2 ;;
     --root) [ "$#" -ge 2 ] || die "--root needs a directory"; root="$2"; shift 2 ;;
-    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+    -h|--help) sed -n "2,/^set -uo pipefail/p" "$0" | sed "\$d"; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
 
-command -v yq >/dev/null 2>&1 || die "yq is not installed"
+[ "${convention}" -eq 1 ] || command -v yq >/dev/null 2>&1 || die "yq is not installed"
 command -v jq >/dev/null 2>&1 || die "jq is not installed"
 
 if [ -z "${root}" ]; then
@@ -80,6 +87,101 @@ fi
 cd "${root}" || die "cannot enter ${root}"
 [ -r "${ci_file}" ] || die "workflow not readable: ${ci_file}"
 
+# --- selection by convention (monorepo#5052) -------------------------------------------------
+# Instead of ci.yaml's filters, a test declares what it reads. `.claude/scripts/<name>.test.sh`
+# always reads itself, `<name>.sh` and `<name>-go/**`; any further globs are listed in its opening
+# comment header as `# test-inputs: <glob> <glob> …` lines. A Go module `<name>-go` with a go.mod is
+# tested with `go -C <dir> test ./...` whenever its own files or its sibling test's inputs change.
+# Glob semantics: inside [[ ]], `*` crosses `/`, so `**` behaves as dorny's `**`. Every
+# `**/` — leading or embedded — may also match zero directories, so each one is tried both
+# kept and dropped (`a/**/b` must match `a/b`, and `**/x` must match `x`).
+glob_match() {
+  local file="$1" done_part="$2" rest="$3" head tail
+  case "${rest}" in
+    *'**/'*)
+      head="${rest%%'**/'*}"
+      tail="${rest#*'**/'}"
+      glob_match "${file}" "${done_part}${head}**/" "${tail}" && return 0
+      glob_match "${file}" "${done_part}${head}" "${tail}" && return 0
+      return 1 ;;
+  esac
+  # shellcheck disable=SC2053 # the right-hand side is a glob on purpose
+  [[ "${file}" == ${done_part}${rest} ]]
+}
+matches() { glob_match "$1" "" "$2"; }
+
+# test_inputs <test> — every glob the test reads, one per line. A `# test-inputs:` line outside the
+# opening comment header would be silently ignored, so it is refused (exit 2) instead.
+test_inputs() {
+  local t="$1" name="${1%.test.sh}"
+  printf '%s\n%s\n%s\n' "${t}" "${name}.sh" "${name}-go/**"
+  awk '
+    /^[[:space:]]*#[[:space:]]*test-inputs/ && !/^# test-inputs: / {
+      print "malformed test-inputs line " NR " (write it as: # test-inputs: <glob> …)" > "/dev/stderr"; bad = 1; exit
+    }
+    !body && /^# test-inputs: / { sub(/^# test-inputs: /, ""); n = split($0, g, /[[:space:]]+/); for (i = 1; i <= n; i++) if (g[i] != "") print g[i]; next }
+    !body && /^[[:space:]]*(#|$)/ { next }
+    { body = 1 }
+    body && /^[[:space:]]*# test-inputs:/ { print "misplaced test-inputs line " NR > "/dev/stderr"; bad = 1; exit }
+    END { exit bad ? 2 : 0 }
+  ' "${t}"
+}
+
+# module_inputs <dir> — every glob a Go module reads: its own files, its sibling test inputs, and
+# any `// test-inputs:` lines in its go.mod.
+module_inputs() {
+  local dir="$1" sibling="${1%-go}.test.sh"
+  printf '%s\n' "${dir}/**"
+  if [ -f "${sibling}" ]; then test_inputs "${sibling}" || return 2; fi
+  awk '
+    /\/\/[[:space:]]*test-inputs/ && !/^\/\/ test-inputs: / {
+      print FILENAME ": malformed test-inputs line " NR " (write it as: // test-inputs: <glob> …)" > "/dev/stderr"; bad = 1; exit
+    }
+    /^\/\/ test-inputs: / { sub(/^\/\/ test-inputs: /, ""); n = split($0, g, /[[:space:]]+/); for (i = 1; i <= n; i++) if (g[i] != "") print g[i] }
+    END { exit bad ? 2 : 0 }
+  ' "${dir}/go.mod"
+}
+
+hit_any() { # hit_any <globs> — 0 when any changed file matches any glob
+  local pat f
+  while IFS= read -r pat; do
+    [ -n "${pat}" ] || continue
+    while IFS= read -r f; do
+      [ -n "${f}" ] || continue
+      if matches "${f}" "${pat}"; then return 0; fi
+    done <<<"${changed}"
+  done <<<"$1"
+  return 1
+}
+
+if [ "${convention}" -eq 1 ]; then
+  if [ "${select_all}" -eq 1 ]; then
+    changed_count="all"
+  else
+  mb="$(git merge-base "${base}" HEAD 2>/dev/null)" || die "no merge base between ${base} and HEAD (fetch ${base} first)"
+  changed="$( { git -c core.quotePath=false diff --name-only --no-renames "${mb}" || exit 2; git -c core.quotePath=false ls-files --others --exclude-standard || exit 2; } | sort -u )" \
+    || die "cannot list changed files"
+  changed_count="$(printf '%s\n' "${changed}" | grep -c . || true)"
+  fi
+  # Tracked tests and new ones not yet added, so a local run sees a test that is being written.
+  tests="$( { git ls-files -- '.claude/scripts/*.test.sh' &&
+    git ls-files --others --exclude-standard -- '.claude/scripts/*.test.sh'; } | sort -u)" ||
+    die "cannot list the test scripts"
+  selected=""
+  hit_filters=""
+  while IFS= read -r t; do
+    [ -n "${t}" ] || continue
+    inputs="$(test_inputs "${t}")" || die "cannot read the inputs of ${t}"
+    if [ "${select_all}" -eq 1 ] || hit_any "${inputs}"; then selected+=".	${t}	bash"$'\n'; fi
+  done <<<"${tests}"
+  while IFS= read -r mod; do
+    [ -n "${mod}" ] || continue
+    dir="${mod%/go.mod}"
+    inputs="$(module_inputs "${dir}")" || die "cannot read the inputs of ${dir}"
+    if [ "${select_all}" -eq 1 ] || hit_any "${inputs}"; then selected+=".	go:${dir}	go"$'\n'; fi
+  done <<<"$(git ls-files -- '.claude/scripts/*-go/go.mod')"
+  selected="$(printf '%s' "${selected}" | awk '!seen[$0]++')"
+else
 # --- the filters CI evaluates ------------------------------------------------------------
 # The paths-filter `filters:` input is a YAML document inside a string, so parse it twice.
 filters_json="$(yq '.jobs.changes.steps[] | select(.uses != null and (.uses | test("paths-filter"))) | .with.filters' "${ci_file}" \
@@ -98,23 +200,6 @@ else
     || die "cannot list changed files"
   changed_count="$(printf '%s\n' "${changed}" | grep -c . || true)"
 
-  # Glob semantics: inside [[ ]], `*` crosses `/`, so `**` behaves as dorny's `**`. Every
-  # `**/` — leading or embedded — may also match zero directories, so each one is tried both
-  # kept and dropped (`a/**/b` must match `a/b`, and `**/x` must match `x`).
-  glob_match() {
-    local file="$1" done_part="$2" rest="$3" head tail
-    case "${rest}" in
-      *'**/'*)
-        head="${rest%%'**/'*}"
-        tail="${rest#*'**/'}"
-        glob_match "${file}" "${done_part}${head}**/" "${tail}" && return 0
-        glob_match "${file}" "${done_part}${head}" "${tail}" && return 0
-        return 1 ;;
-    esac
-    # shellcheck disable=SC2053 # the right-hand side is a glob on purpose
-    [[ "${file}" == ${done_part}${rest} ]]
-  }
-  matches() { glob_match "$1" "" "$2"; }
 
   filter_keys="$(jq -e -r 'keys[]' <<<"${filters_json}")" || die "cannot list filter names in ${ci_file}"
   while IFS= read -r name; do
@@ -172,6 +257,16 @@ selected="$(jq -r --argjson hits "${hits_json}" '
   # first row kept for each script below is the one that says how CI runs it.
   | sort_by(if .[2] == "mention" then 1 else 0 end)[]
   | @tsv' <<<"${jobs_json}")" || die "cannot read the gated jobs in ${ci_file}"
+# Go modules the selected jobs test with `go -C <dir> test`, so both selections list them.
+go_selected="$(jq -r --argjson hits "${hits_json}" '
+  to_entries[] | .value as $job
+  | ([(($job["if"] // "") | tostring) | scan("needs\\.changes\\.outputs\\.([A-Za-z0-9_-]+)") | .[0]]) as $gates
+  | select(($gates | length) == 0 or ($gates | any(. as $f | $hits | index($f))))
+  | $job.steps[]? | (.run // "")
+  | scan("go[ \t]+-C[ \t]+([A-Za-z0-9_./-]+)[ \t]+test") | .[0]
+  | [".", ("go:" + sub("/$"; "")), "go"] | @tsv' <<<"${jobs_json}")" || die "cannot read the Go test steps in ${ci_file}"
+selected="$(printf '%s\n%s\n' "${selected}" "${go_selected}" | awk 'NF && !seen[$0]++')"
+fi
 
 # A measured slow suite may declare "# test-timeout-seconds: N" in its opening
 # comment header (#4160). Validate every declaration before any selected test runs;
@@ -205,6 +300,17 @@ missing=""
 unrunnable=""
 while IFS=$'\t' read -r wd s how; do
   [ -n "${s}" ] || continue
+  if [ "${how}" = go ]; then
+    # A Go module: `go -C <dir> test ./...` from the repository root. A whole module suite runs
+    # longer than one script, so it gets 900 seconds unless --timeout says otherwise.
+    [ -f "${s#go:}/go.mod" ] || { missing+="${s} (no go.mod)"$'\n'; continue; }
+    case $'\n'"${scripts}" in *$'\n'"${s}"$'\n'*) continue ;; esac
+    scripts+="${s}"$'\n'
+    go_deadline=900
+    [ "${timeout_explicit}" -eq 0 ] || go_deadline="${timeout_s}"
+    runs+="."$'\t'"${s}"$'\t'"${s}"$'\t'"go"$'\t'"${go_deadline}"$'\n'
+    continue
+  fi
   s="${s#./}"
   # CI launches the script from the step's working-directory, so the runner does too.
   target="${wd}/${s}"
@@ -243,9 +349,18 @@ if [ -n "${unrunnable}" ]; then
 fi
 
 n_scripts="$(printf '%s' "${scripts}" | grep -c . || true)"
-printf '%s: changed=%s filters_hit=%s scripts=%s\n' "${me}" "${changed_count}" \
-  "$(printf '%s' "${hit_filters}" | grep -c . || true)" "${n_scripts}"
+summary="$(printf '%s: changed=%s filters_hit=%s scripts=%s' "${me}" "${changed_count}" \
+  "$(printf '%s' "${hit_filters}" | grep -c . || true)" "${n_scripts}")"
+# The JSON listing owns stdout, so its summary goes to stderr.
+if [ "${list_json}" -eq 1 ]; then printf '%s\n' "${summary}" >&2; else printf '%s\n' "${summary}"; fi
 
+if [ "${list_json}" -eq 1 ]; then
+  # One object per selected entry, in run order, for a dynamic CI matrix or a selection diff.
+  printf '%s' "${runs}" | jq -R -s -c 'split("\n") | map(select(length > 0) | split("\t")
+    | {dir: .[0], run: .[1], path: .[2], how: .[3], timeout: (.[4] | tonumber)})' ||
+    die "cannot print the selection as JSON"
+  exit 0
+fi
 if [ "${list_only}" -eq 1 ]; then
   printf '%s' "${scripts}"
   exit 0
@@ -266,6 +381,8 @@ while IFS=$'\t' read -r run_wd rel s how test_timeout; do
   start="$(date +%s)"
   if [ "${how}" = "direct" ]; then
     cmd=( "./${rel#./}" )
+  elif [ "${how}" = go ]; then
+    cmd=( go -C "${rel#go:}" test ./... )
   else
     cmd=( bash "${rel}" )
   fi

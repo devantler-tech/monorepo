@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# test-inputs: .github/ISSUE_TEMPLATE/** .github/workflows/ci.yaml
+# test-inputs: .github/workflows/maintainer-ask-urgent.yaml
+# test-inputs: .github/workflows/maintainer-digest.yaml docs/digests/**
 # Self-test for maintainer-digest.sh (monorepo#4285, ADR 0009 phase 1), against a stub gh that serves
 # fixtures and records every call. One case per acceptance criterion of the issue:
 #   1. a dated file present: the digest opens with that file as its body, assigned to the maintainer,

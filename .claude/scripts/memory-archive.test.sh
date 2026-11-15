@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/go-helper-build.sh .claude/scripts/memory-backup-go/**
+# test-inputs: .claude/scripts/memory-backup.sh .claude/scripts/memory-backup.test.sh
+# test-inputs: .claude/scripts/memory-rewrite.sh .github/workflows/ci.yaml
 # Exercise the public launcher with synthetic files only (#2990).
 set -Eeuo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

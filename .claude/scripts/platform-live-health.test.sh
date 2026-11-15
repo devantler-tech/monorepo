@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/issues-and-board.md .claude/plugin-consumption/agent-instances.json
+# test-inputs: .claude/scripts/board-flow-fields.sh .claude/scripts/board-flow-fields.test.sh
+# test-inputs: .claude/scripts/finops-snapshot.sh .claude/scripts/flow-scorecard.sh
+# test-inputs: .claude/scripts/flow-scorecard.test.sh .claude/scripts/kagent-lane-runs.sh
+# test-inputs: .claude/scripts/kagent-lane-runs.test.sh .claude/scripts/prod-kube-context.sh
+# test-inputs: .claude/scripts/prod-kube-context.test.sh .claude/scripts/squash-closing-keywords.sh
+# test-inputs: .claude/scripts/squash-closing-keywords.test.sh .github/workflows/ci.yaml AGENTS.md
 # RED/GREEN coverage for platform-live-health.sh against a stub kubectl serving recorded payloads:
 # each verdict, the crash-loop blind spot of a phase filter, and every read failure as UNKNOWN.
 set -euo pipefail

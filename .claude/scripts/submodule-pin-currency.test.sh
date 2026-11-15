@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/guides/durable-memory.md .claude/scripts/contract-text.sh
+# test-inputs: .claude/scripts/forge-read.sh .claude/scripts/hypothesis-id-reserve.sh
+# test-inputs: .claude/scripts/hypothesis-id-reserve.test.sh .claude/scripts/lane-draft-count.sh
+# test-inputs: .claude/scripts/lane-draft-count.test.sh
+# test-inputs: .claude/skills/portfolio-maintenance/SKILL.md .github/workflows/ci.yaml AGENTS.md
 # submodule-pin-currency.test.sh — RED/GREEN coverage for the submodule pin currency pre-flight.
 #
 # The defect this guards against is a FALSE CURRENT: a check that reports the pin is up to date when
