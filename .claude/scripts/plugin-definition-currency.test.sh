@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/loaders/portable-agentic-engineer.md
+# test-inputs: .claude/scripts/contract-text.sh .claude/scripts/go-helper-build.sh
+# test-inputs: .claude/scripts/worktree-claim.sh .github/workflows/ci.yaml AGENTS.md
 #
 # Guards `plugin-definition-currency.sh` and the contract rule it enforces.
 #

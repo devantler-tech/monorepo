@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/**/*.json .claude/**/*.md .claude/**/*.sh .claude/guides/**
+# test-inputs: .claude/scripts/contract-text.sh .github/workflows/ci.yaml .gitmodules AGENTS.md
+# test-inputs: libraries/agent-plugins
 # Self-test for bot-pr-adaptation-push.sh (monorepo#3885).
 #
 # The helper exists to make one ORDER impossible to skip: fence, confirm, then push. So every

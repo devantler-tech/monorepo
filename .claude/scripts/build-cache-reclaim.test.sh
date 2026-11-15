@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/cleanup-trap-census-go/go.mod
+# test-inputs: .claude/scripts/codex-transcript-retention.sh
+# test-inputs: .claude/scripts/codex-transcript-retention.test.sh
+# test-inputs: .claude/scripts/codex-worktree-retention.sh
+# test-inputs: .claude/scripts/codex-worktree-retention.test.sh .github/workflows/ci.yaml
 # Contract tests for build-cache-reclaim.sh.
 #
 # Every assertion here is a SAFETY property. The script deletes, so each rule that keeps

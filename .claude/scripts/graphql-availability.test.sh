@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/guides/cadence.md .claude/scripts/board-archive.sh
+# test-inputs: .claude/scripts/board-archive.test.sh .claude/scripts/claude-task-live-runs.sh
+# test-inputs: .claude/scripts/claude-task-live-runs.test.sh .claude/scripts/disk-preflight.sh
+# test-inputs: .claude/scripts/disk-preflight.test.sh .claude/scripts/review-lane-health.sh
+# test-inputs: .claude/scripts/review-lane-health.test.sh .github/workflows/ci.yaml AGENTS.md
 # shellcheck disable=SC2016,SC2034 # check() evals single-quoted conditions that read these variables.
 # graphql-availability.test.sh — coverage for graphql-availability.sh and the merge-policy rule
 # that names the GraphQL-unavailable state (monorepo#3429).

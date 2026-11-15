@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/egress-and-privacy.md .claude/guides/work-selection.md
+# test-inputs: .claude/plugin-consumption/agent-instances.json .claude/scripts/agent-telemetry.sh
+# test-inputs: .claude/scripts/agent-telemetry.test.sh .claude/scripts/kagent-lane-runs.sh
+# test-inputs: .github/workflows/ci.yaml AGENTS.md
 # test-timeout-seconds: 180
 # Exercise the shipped CLI with synthetic metadata and record every forge call.
 # No native transcript store, GitHub credential or real repository is accessed.

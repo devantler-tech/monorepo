@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/guides/cadence.md .claude/scripts/board-archive.sh
+# test-inputs: .claude/scripts/board-archive.test.sh .claude/scripts/disk-preflight.sh
+# test-inputs: .claude/scripts/disk-preflight.test.sh .claude/scripts/graphql-availability.sh
+# test-inputs: .claude/scripts/graphql-availability.test.sh .claude/scripts/review-lane-health.sh
+# test-inputs: .claude/scripts/review-lane-health.test.sh .github/workflows/ci.yaml AGENTS.md
 # claude-task-live-runs.test.sh — RED/GREEN coverage for claude-task-live-runs.sh (monorepo#3536).
 #
 # The cases that matter most are the fail-closed ones: a session that cannot be attributed must

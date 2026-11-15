@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/scripts/contract-text.sh
+# test-inputs: .claude/scripts/go-helper-build.sh .claude/scripts/plugin-definition-currency-go/**
+# test-inputs: .claude/scripts/plugin-definition-currency.sh .github/workflows/ci.yaml AGENTS.md
 # plugin-definition-refresh.test.sh — contract test for plugin-definition-refresh.sh
 #
 # The defect under test (measured 2026-08-16, monorepo#2856):

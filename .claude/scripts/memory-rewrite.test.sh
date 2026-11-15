@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/go-helper-build.sh .claude/scripts/memory-backup-go/**
+# test-inputs: .claude/scripts/memory-history.sh .claude/scripts/memory-history.test.sh
+# test-inputs: .github/workflows/ci.yaml
 #
 # Self-test for memory-rewrite.sh — RED-proves the two real clobber modes from
 # monorepo#2293: an empty/non-positive keep-through bound (the sed `1,-1p`

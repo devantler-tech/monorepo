@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/** .github/**
 # shellcheck disable=SC2016 # The awk programs handed to mutate are literal awk source.
 # rule-sensor-inventory.test.sh — self-test for rule-sensor-inventory.sh (monorepo#4284).
 #

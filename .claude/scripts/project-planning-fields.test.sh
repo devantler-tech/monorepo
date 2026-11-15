@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/agents/portfolio-surveyor.md .claude/guides/**
+# test-inputs: .claude/loaders/portable-agentic-engineer.md .claude/scripts/contract-text.sh
+# test-inputs: .claude/skills/portfolio-maintenance/SKILL.md
+# test-inputs: .claude/skills/product-engineering/SKILL.md
+# test-inputs: .claude/skills/products/project-board/SKILL.md .github/workflows/ci.yaml AGENTS.md
 # monorepo#4057: same-named project fields must never shadow native issue fields.
 set -euo pipefail
 

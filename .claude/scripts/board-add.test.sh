@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/go-helper-build.sh .github/workflows/ci.yaml
 #
 # Self-test for board-add.sh — the point of that script is that it VERIFIES the
 # Status landed rather than trusting an exit code, so the test that matters is

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/go-helper-build.sh .claude/scripts/memory-archive.sh
+# test-inputs: .claude/scripts/memory-archive.test.sh .claude/scripts/memory-rewrite.sh
+# test-inputs: .github/workflows/ci.yaml
 #
 # Self-test for memory-backup.sh — proves a destructive-edit precursor actually
 # lands a recoverable copy (monorepo#2304), that --all snapshots the whole

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/agents/portfolio-surveyor.md .claude/guides/**
+# test-inputs: .claude/scripts/contract-text.sh .github/workflows/ci.yaml AGENTS.md
 #
 # Ratchets the byte size of the TEMPORARY `portfolio-surveyor` compatibility overlay.
 #

@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/issues-and-board.md .claude/plugin-consumption/agent-instances.json
+# test-inputs: .claude/scripts/finops-snapshot.sh .claude/scripts/flow-scorecard.sh
+# test-inputs: .claude/scripts/flow-scorecard.test.sh .claude/scripts/kagent-lane-runs.sh
+# test-inputs: .claude/scripts/kagent-lane-runs.test.sh .claude/scripts/platform-live-health.sh
+# test-inputs: .claude/scripts/platform-live-health.test.sh .claude/scripts/prod-kube-context.sh
+# test-inputs: .claude/scripts/prod-kube-context.test.sh .claude/scripts/squash-closing-keywords.sh
+# test-inputs: .claude/scripts/squash-closing-keywords.test.sh .github/workflows/ci.yaml AGENTS.md
 #
 # Self-test for board-flow-fields.sh (monorepo#4992). The checks that matter are the fail-closed
 # ones: a board read that fails, returns the wrong shape, uses a status name the board does not

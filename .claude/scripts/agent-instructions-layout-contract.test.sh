@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# test-inputs: **/AGENTS.md **/CLAUDE.md .claude/** .github/workflows/ci.yaml AGENTS.md CLAUDE.md
+# test-inputs: docs/**
 #
 # Guards the layout of this repository's agent instructions: a small always-on AGENTS.md, topic guides
 # under .claude/guides/ read on demand, and nested AGENTS.md files next to the code they govern.

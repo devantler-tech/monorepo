@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/submodule-agents-drift-exceptions.tsv .github/workflows/ci.yaml .gitmodules
+# test-inputs: applications/** github/** homebrew-tap libraries/** platform templates/**
 # submodule-agents-drift.test.sh — RED/GREEN coverage for the submodule AGENTS.md drift check (#2534).
 #
 # The defect this guards against is a FALSE CLEAN: a check that reports a pinned AGENTS.md is current

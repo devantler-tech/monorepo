@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# test-inputs: **/AGENTS.md **/CLAUDE.md .claude/** .github/workflows/ci.yaml AGENTS.md CLAUDE.md
+# test-inputs: docs/**
 # Tripwire for the safety rules agents must never edit away (monorepo#5048).
 #
 # Agents can edit their own guides, so the few rules that bound what they may do are checked for

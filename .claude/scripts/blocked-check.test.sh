@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/forge-read-go/** .claude/scripts/forge-read.sh
+# test-inputs: .claude/scripts/go-helper-build.sh .github/workflows/ci.yaml
 # Behaviour tests for blocked-check.sh (monorepo#5051) against a fake gh.
 
 set -euo pipefail

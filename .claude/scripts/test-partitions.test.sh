@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/worktree-claim-lib.sh .claude/scripts/worktree-cleanup-all.sh
+# test-inputs: .claude/scripts/worktree-cleanup-all.test.sh .claude/scripts/worktree-cleanup.sh
+# test-inputs: .claude/scripts/worktree-cleanup.test.sh
+# test-inputs: .claude/scripts/worktree-inventory-classify.sh
+# test-inputs: .claude/scripts/worktree-inventory-classify.test.sh
+# test-inputs: .claude/scripts/worktree-inventory-merged-check.sh
+# test-inputs: .claude/scripts/worktree-inventory-merged-check.test.sh
+# test-inputs: .claude/scripts/worktree-inventory-read-verdicts.tsv
+# test-inputs: .claude/scripts/worktree-submodule-inventory.sh
+# test-inputs: .claude/scripts/worktree-submodule-inventory.test.sh .github/workflows/ci.yaml
+# test-inputs: AGENTS.md
 # Exercise the real bounded partition driver with tiny suites, including dishonest
 # completion receipts. No production cleanup scenario is replaced by these controls.
 set -euo pipefail

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# test-inputs: **
 # Keep the measured short macOS cases covered without 22 runner allocations (#4394).
 # Check the actual workflow before executing its exact, allow-listed batch programs
 # against fixtures: a printed PASS never overrides a failing or missing child.

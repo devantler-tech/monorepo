@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/*.sh .claude/scripts/AGENTS.md .github/workflows/ci.yaml
 #
 # Tests gnu-only-syntax-guard.sh (monorepo#3273): each GNU-only construct is flagged by the right
 # rule on the right line, each portable equivalent passes, and every way the guard could report a

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# test-inputs: **
 # RED/GREEN coverage for ci-job-wiring.sh: one ablation per wiring point, each asserting the
 # specific defect it must report, plus the real workflow as a positive control.
 set -euo pipefail

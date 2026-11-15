@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/agents/portfolio-surveyor.md .claude/guides/**
+# test-inputs: .claude/scripts/contract-text.sh .claude/scripts/go-helper-build.sh
+# test-inputs: .github/workflows/ci.yaml AGENTS.md
 #
 # pr-ownership-disclosure.test.sh
 #

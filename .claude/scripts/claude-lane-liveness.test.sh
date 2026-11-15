@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/scripts/claude-lane-go/** .claude/scripts/contract-text.sh
+# test-inputs: .claude/scripts/go-helper-build.sh .github/workflows/ci.yaml AGENTS.md
 # claude-lane-liveness.test.sh — RED/GREEN coverage for the Claude lane liveness check.
 #
 # The check exists because a dead lane looked healthy, so the assertions that matter most are the

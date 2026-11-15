@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/scripts/contract-text.sh
+# test-inputs: .claude/scripts/worktree-claim-lib.sh .claude/scripts/worktree-cleanup.sh
+# test-inputs: .claude/skills/portfolio-maintenance/SKILL.md .github/workflows/ci.yaml AGENTS.md
 #
 # Self-test for worktree-claim.sh (monorepo#2284).
 # Hermetic: uses a throwaway git repo + worktrees; no network.

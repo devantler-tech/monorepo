@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/scripts/bugbot-request-marker.sh
+# test-inputs: .claude/scripts/bugbot-request-marker.test.sh .claude/scripts/contract-text.sh
+# test-inputs: .claude/scripts/disclosure-drift-sweep.sh
+# test-inputs: .claude/scripts/disclosure-drift-sweep.test.sh .claude/scripts/go-helper-build.sh
+# test-inputs: .claude/scripts/maintainer-comment-candidates.sh
+# test-inputs: .claude/scripts/maintainer-comment-candidates.test.sh
+# test-inputs: .claude/scripts/review-request-comment.sh
+# test-inputs: .claude/scripts/review-request-comment.test.sh .github/workflows/ci.yaml AGENTS.md
 #
 # Contract test for comment-disclosure-drift.
 #
