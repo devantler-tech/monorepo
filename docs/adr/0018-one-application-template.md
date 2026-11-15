@@ -96,8 +96,10 @@ with tenancy something you scaffold, since not every application needs it.
      KSail, KHoist, the business site, World at Ruin, the wedding app, AS Coaching and Bookkeeper,
      and the infrastructure configuration aws, unifi, Cloudflare and fleet-gitops. Infrastructure
      repositories scaffold with no stack. KSail and World at Ruin start with large ignore lists and
-     shed them over time. Libraries, actions, the platform, the templates and the organization's
-     shared repositories are not applications and keep their own configuration.
+     shed them over time. The libraries sync the same shared baseline with no tenancy
+     (maintainer direction, 2026-11-15): agent-plugins, provider-upjet-unifi, kyverno-policies
+     and the three skill actions. The platform, the templates and the organization's shared
+     repositories keep their own configuration.
   2. **A shared file, and the application's own overlay.** The template owns one copy of each
      concern, and template-sync keeps it current. Where the tool can layer configuration, the
      application owns an overlay that sync never touches. Where it cannot, the application lists
@@ -141,3 +143,5 @@ with tenancy something you scaffold, since not every application needs it.
      | KSail | Go CLI | no | nothing |
      | aws | none | configuration tenant | nothing |
      | unifi, Cloudflare, fleet-gitops | none | no | nothing |
+     | agent-plugins, kyverno-policies, the skill actions | none | no | nothing |
+     | provider-upjet-unifi | Go (generated provider) | no | nothing |
