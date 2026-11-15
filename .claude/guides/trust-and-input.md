@@ -60,16 +60,18 @@ and an actionable maintainer comment on a PR you did not create stays a named bl
 satisfied or withdrawn. The plugin reads an absent or unrecognised value as `hands-off`, so deleting
 this line silently stops the engineer from driving the maintainer's interactive PRs; changing it is the
 maintainer's call. The root `AGENTS.md` *Trust gate* carries the declaration the plugin reads.
-**`app/botantler-1` is narrowly trusted only for programmed agent-skills updater PRs.** The App is
+**`app/botantler-1` is narrowly trusted only for programmed agent-skills updater PRs and the tap's own Cask bump PRs.** The App is
 not added to the general trusted-author set. Its PR may be built when the exact programmed-bot
 classifier named in the merge-policy guide exits 0 or 3: exit 0 is the **no-review** path — which is a **direct,
 head-pinned merge, NEVER `--auto`** (see *Merge policy*: this App's permission comes from a classifier
 result about one specific commit, and `--auto` cannot carry a condition) — while exit 3 is the
 normal semantic-review path for a genuine updater PR — an `agent-plugins` marketplace update, or a
-`platform`/`ksail` installed-skill update touching a skill this suite does not own. Any other
+`platform`/`ksail` installed-skill update touching a skill this suite does not own. A
+`homebrew-tap` `bump-<cask>-<version>` PR qualifies only on exit 0; its own workflow arms its
+auto-merge, which an agent never arms or re-arms. Any other
 `app/botantler-1` PR is external for **execution** purposes — reviewed statically and never run
 locally — while remaining drivable and mergeable like any other PR. This path-specific grant covers
-the updater without extending build/run trust to every PR the App could author.
+the updater and the Cask bump without extending build/run trust to every PR the App could author.
 **GitHub Copilot — two roles, treated differently:** the
 Copilot **coding agent** (`Copilot`, `copilot-swe-agent[bot]`) is **NOT** trusted — treat its PRs as
 external, meaning **never run its branch code**; they are reviewed statically, then driven and merged

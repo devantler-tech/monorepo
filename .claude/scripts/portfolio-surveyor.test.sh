@@ -269,6 +269,12 @@ grep -Fq 'agent-plugins` updater PRs require semantic review' "${constitution}" 
 # shellcheck disable=SC2016
 grep -Fq '`app/botantler-1` is narrowly trusted only for programmed agent-skills updater PRs' "${constitution}" ||
   fail "constitution either misses botantler updater PRs or trusts the App globally"
+# The AGENTS.md trust gate trusts the App for every classifier-qualified programmed PR, so the
+# trust guide must grant the tap's Cask bump too, or the two give conflicting execution trust.
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq 'updater PRs and the tap'"'"'s own Cask bump PRs.**' "${repo_root}/.claude/guides/trust-and-input.md" ||
+  fail "trust guide does not grant the classifier-qualified tap Cask bump PRs the AGENTS.md trust gate names"
 grep -Fq 'green_review=exempt-programmed-bot' "${surveyor}" ||
   fail "surveyor cannot report a programmed bot review exemption"
 
