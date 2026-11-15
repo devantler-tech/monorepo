@@ -272,6 +272,9 @@ echo "usage:"
 acq "an abbreviated head is refused" 2 "full 40-character" 7 0123456 cr claude-run1
 acq "an unknown provider is refused" 2 "--provider must be" 7 "$head_a" copilot claude-run1
 acq "an owner with a slash is refused" 2 "--owner must match" 7 "$head_a" cr "claude/run1"
+expect "a missing --owner says it is required and names the token form" 2 \
+  "--owner is required: pass <lane>-<worktree slug>, such as claude-<slug> (#5081)" \
+  acquire --repo o/r --pr 7 --head "$head_a" --provider cr
 expect "a missing --repo is refused" 2 "--repo must be" acquire --pr 7 --head "$head_a" --provider cr --owner x
 expect "sweep refuses acquire-only flags" 2 "sweep takes only" sweep --repo o/r --pr 7
 
