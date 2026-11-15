@@ -1,13 +1,14 @@
 ---
 name: maintain-templates
-description: Maintenance task menu for the devantler-tech application template (platform-tenant-template, becoming application-template), whose scaffold lays a Go, .NET or own stack over it with optional platform tenancy, and for the retiring go-template and dotnet-template. Keep the scaffold clean, current and buildable: triage, dependency/toolchain hygiene, CI health, scaffold freshness. Use when the daily maintainer selects templates.
+description: Maintenance task menu for the devantler-tech application template (platform-tenant-template, becoming application-template), whose scaffold lays a Go, .NET, SvelteKit or own stack over it with optional platform tenancy, and for the retiring go-template and dotnet-template. Keep the scaffold clean, current and buildable: triage, dependency/toolchain hygiene, CI health, scaffold freshness. Use when the daily maintainer selects templates.
 ---
 
 # Maintain: Templates (application template; go-template and dotnet-template retiring)
 
-- **Serves:** developers starting a new devantler-tech application · **Outcome:** one command
-  (`scripts/scaffold.sh <go|dotnet|none> [--tenancy]`) gives them a building, tested service,
-  and a platform tenant that passes its probes, before they write any code
+- **Serves:** developers starting a new devantler-tech application · **Outcome:** one command,
+  `scripts/scaffold.sh <go|dotnet|svelte|none> [--tenancy]`, gives `go`, `dotnet` and `svelte` a
+  building, tested service, and with `--tenancy` a platform tenant that passes its probes, before
+  they write any code; `none` keeps a placeholder for a stack the application brings itself
   ([ADR 0018](../../../../docs/adr/0018-one-application-template.md))
 - **Constraints:** keep each stack minimal, idiomatic and current; keep the template's root
   shaped as a tenant so existing tenants keep syncing the same paths
@@ -19,8 +20,9 @@ The canonical maintenance task menu lives in the template's own repo — read th
 **`## Maintenance`** section of `templates/platform-tenant-template/AGENTS.md` (on the submodule's
 latest `main`): <https://github.com/devantler-tech/platform-tenant-template/blob/main/AGENTS.md>.
 
-Every application syncs from the template, which owns the cross-cutting files (linting, CodeQL,
-CodeRabbit, Renovate) while each application keeps its own overlays
+The target state is that every application, infrastructure-configuration repository and library
+syncs from the template, which owns the cross-cutting files (linting, CodeQL, CodeRabbit,
+Renovate) while each keeps its own overlays; onboarding is tracked on #5062
 ([ADR 0018, 2026-11-15 amendment](../../../../docs/adr/0018-one-application-template.md#amendments)).
 A concern several applications share belongs in the template, generically, not in each copy.
 
