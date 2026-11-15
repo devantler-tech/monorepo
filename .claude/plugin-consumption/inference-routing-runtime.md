@@ -68,8 +68,10 @@ runtime before any turn, and the API workspace spend limit is enforced by the pr
 
 The canary runs (monorepo#4869) record:
 
-- **Effective model:** `claude-opus-5-5` on every assistant message of the main session and its
-  subagent, in the transcripts of the 2026-11-14 and 2026-11-15 runs.
+- **Effective model:** `claude-opus-5-5` on every assistant message in the main-session transcripts
+  of the 2026-11-14 and 2026-11-15 runs and in the 2026-11-15 run's survey-subagent transcript. The
+  subagent ran inside the parent run on its model and credential, so it is not a routed child (the
+  spend and inference guide's *kagent credit lane*).
 - **Per-run cost:** about $3.80 for the 2026-11-15 run, the first whose subagent transcript reached
   the lane store. The main session cost about $2.13 and the portfolio-surveyor subagent about
   $1.67. Each is counted from its transcript's token usage at Opus 5.5 prices, taking each
