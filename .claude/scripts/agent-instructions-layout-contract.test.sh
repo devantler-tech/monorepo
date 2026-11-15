@@ -104,6 +104,28 @@ resolve_rel() {
   printf '%s' "${joined:-.}"
 }
 
+# in_unpopulated_submodule <root> <path> — succeeds when <path> lies inside a submodule that
+# <root>/.gitmodules registers and that is not populated here: its files cannot be checked, and the
+# submodule owns them. A misspelt submodule name, or a missing file in a populated submodule, fails.
+# Returns 1 when <path> is outside every such submodule and 2 when .gitmodules cannot be read.
+in_unpopulated_submodule() {
+  local root="$1" path="$2" registered key sm status=0
+  [ -f "${root}/.gitmodules" ] || return 1
+  registered="$(git config --file "${root}/.gitmodules" --get-regexp '^submodule\..*\.path$')" || status=$?
+  # git config exits 1 when nothing matches, which only means no submodule is registered.
+  [ "${status}" -le 1 ] || return 2
+  while read -r key sm; do
+    [ -n "${key}" ] && [ -n "${sm}" ] || continue
+    case "${path}" in
+      "${sm}" | "${sm}"/*)
+        [ -e "${root}/${sm}/.git" ] && return 1
+        return 0
+        ;;
+    esac
+  done <<<"${registered}"
+  return 1
+}
+
 # nested_agents <root> — this repository's own nested AGENTS.md files, tracked or new. `git ls-files`
 # never descends into a submodule, whose AGENTS.md belongs to that product's repository. A failed
 # listing aborts the check rather than reading as "no nested files".
@@ -117,7 +139,7 @@ nested_agents() {
 # check_layout <root> — runs every property against a checkout rooted at <root>; prints the first
 # violation and returns 1, or returns 0.
 check_layout() {
-  local root="$1" agents="$1/AGENTS.md" size nested nested_list files file dir target path anchor anchor_list chain_size chain_dir
+  local root="$1" agents="$1/AGENTS.md" size nested nested_list files file dir target path anchor anchor_list chain_size chain_dir submodule_status
   [ -r "${agents}" ] || { echo "cannot read ${agents}"; return 1; }
   core_discovery_rule "${agents}" ||
     { echo "empty-discovery completeness rule is missing from the always-on Non-negotiables core"; return 1; }
@@ -198,8 +220,11 @@ check_layout() {
       fi
       # A link into an unpopulated submodule cannot be checked here; the submodule owns that file.
       if [ ! -e "${root}/${path}" ]; then
-        case "${path}" in
-          libraries/* | applications/* | infrastructure/* | platform/* | templates/* | github/* | homebrew-tap/*) continue ;;
+        submodule_status=0
+        in_unpopulated_submodule "${root}" "${path}" || submodule_status=$?
+        case "${submodule_status}" in
+          0) continue ;;
+          2) echo "cannot read ${root}/.gitmodules to tell which link targets live in submodules"; return 1 ;;
         esac
         echo "${file} links to ${target}, which does not exist"
         return 1
@@ -230,7 +255,8 @@ echo "ok   the live instruction layout satisfies every property"
 fixture() {
   rm -rf "${scratch}/repo"
   mkdir -p "${scratch}/repo/.claude"
-  cp "${repo_root}/AGENTS.md" "${repo_root}/CLAUDE.md" "${scratch}/repo/"
+  # .gitmodules tells the link check which missing targets live in unpopulated submodules.
+  cp "${repo_root}/AGENTS.md" "${repo_root}/CLAUDE.md" "${repo_root}/.gitmodules" "${scratch}/repo/"
   cp -R "${repo_root}/.claude/guides" "${scratch}/repo/.claude/guides"
   mkdir -p "${scratch}/repo/.claude/scripts" "${scratch}/repo/docs"
   cp "${repo_root}/.claude/scripts/AGENTS.md" "${repo_root}/.claude/scripts/CLAUDE.md" "${scratch}/repo/.claude/scripts/"
@@ -357,6 +383,18 @@ expect_failure "dead relative link" "which does not exist"
 fixture
 printf '\nSee [the ladder](../../AGENTS.md#no-such-heading).\n' >>"${scratch}/repo/.claude/guides/cadence.md"
 expect_failure "dead anchor" "has no such heading"
+
+# Only a registered, unpopulated submodule excuses a missing target: not a misspelt submodule name
+# under a submodule directory, and not a missing file in a populated submodule.
+fixture
+printf '\nSee [a misspelt submodule](../../infrastructure/fleet-gitpos/AGENTS.md).\n' >>"${scratch}/repo/.claude/guides/cadence.md"
+expect_failure "link into an unregistered submodule path" "which does not exist"
+
+fixture
+mkdir -p "${scratch}/repo/infrastructure/aws"
+printf 'gitdir: ../../.git/modules/aws\n' >"${scratch}/repo/infrastructure/aws/.git"
+printf '\nSee [a missing file](../../infrastructure/aws/NO-SUCH-FILE.md).\n' >>"${scratch}/repo/.claude/guides/cadence.md"
+expect_failure "missing file in a populated submodule" "which does not exist"
 
 fixture
 sed -i.bak 's/^## Stack map$/## Stack catalogue/' "${scratch}/repo/AGENTS.md"
