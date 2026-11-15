@@ -124,7 +124,8 @@ inference API credential this deployment holds. It is bound by all of these:
 - **In the run, a backstop:** the run stops on what it observes: a model ID other than
   `claude-opus-5-5`, or a billing route other than the credit.
 
-The schedule stays suspended until every sub-issue of #4866 is done.
+The schedule has run daily since 2026-11-15. The maintainer turned it on for a trial of about half
+a month before every sub-issue of #4866 was done (ADR 0014, amendment of 2026-11-15).
 
 **No-Fable is a protected limit:** the entire Fable model family is prohibited in recurring parent
 runs, children, advisors, fallback, retries and experiments, even if a provider describes it as
