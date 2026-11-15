@@ -123,7 +123,8 @@ with tenancy something you scaffold, since not every application needs it.
   5. **CodeQL moves to advanced setup per repository.** GitHub refuses advanced results while
      default setup is on, so the shared workflow stays off until a repository's default setup is
      turned off, which is a repository security setting the maintainer changes, and its
-     `CODEQL_SETUP` variable is set to `advanced`.
+     `CODEQL_SETUP` variable is set to `advanced`. Alerts are fixed in ordinary reviewed pull
+     requests, never with Copilot Autofix (maintainer direction, 2026-11-15).
   6. **Go applications keep linting through the shared Go validator**, which already runs
      MegaLinter with signed fixes; every other stack calls the template's `lint.yaml`. Extracting a
      stack-neutral lint workflow with signed fixes into `devantler-tech/.github` is a follow-up.
