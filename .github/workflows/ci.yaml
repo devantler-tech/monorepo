@@ -915,6 +915,8 @@ jobs:
               # The foreground poll-loop guard shares that settings.json wiring (monorepo#5010).
               - '.claude/scripts/foreground-poll-guard.sh'
               - '.claude/scripts/foreground-poll-guard.test.sh'
+              # The tool-call guide's unquoted-'=' zsh rule has its own contract test (monorepo#5075).
+              - '.claude/scripts/zsh-equals-word-contract.test.sh'
               # The overlay reads a Kata's measurement date only through this helper
               # (monorepo#2838), so a change to it or its test re-runs this job.
               - '.claude/scripts/kata-measure-date.sh'
@@ -2866,6 +2868,12 @@ jobs:
         run: |
           shellcheck .claude/scripts/foreground-poll-guard.sh .claude/scripts/foreground-poll-guard.test.sh
           bash .claude/scripts/foreground-poll-guard.test.sh
+      # The guide forbids an unquoted word starting with `=` in a Bash call, because zsh stops the
+      # whole call at `echo ===` (monorepo#5075). Checks the guide text; the zsh leg runs where zsh exists.
+      - name: Verify the unquoted-equals zsh rule
+        run: |
+          shellcheck .claude/scripts/zsh-equals-word-contract.test.sh
+          bash .claude/scripts/zsh-equals-word-contract.test.sh
       # Hermetic: judges synthetic Kata bodies, no API call (monorepo#2838).
       - name: Verify the Kata measurement-date classifier
         run: |

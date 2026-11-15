@@ -174,6 +174,14 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   IFS-split; only parameter expansion is exempt), so an unexpected result there is ordinary
   whitespace splitting, not this bug. Keep the two diagnoses apart — the parameter-expansion family
   is `set -- $var` and `cmd $args`.
+- **Never start an unquoted word with `=` in a `Bash` call — under zsh, `echo ===` stops the whole
+  call.** zsh reads a word that begins with `=` as "the path of this command", so `echo ===` looks
+  for a command named `==`, prints `== not found`, exits `1` and **skips every command after it**.
+  The separator between two reads is where this happens: measured over the 7 days to 2026-11-15,
+  **58 calls in about 45 sessions** failed on `echo ===` or a longer row of `=`, each losing the reads
+  after it and costing a second call (monorepo#5075). Quote it or use dashes:
+  `printf '%s\n' '==='` or `echo ---`. The same goes for any argument that begins with `=`, such as
+  `=value`: quote it. bash has no such rule, so a script with a bash shebang is not affected.
 - **Put ONE verb in a `Bash` call — the classifier's denials concentrate on calls that prefix the real
   command with `cd` or a variable assignment.** Measured over the 7 days to 2026-08-16: **58 auto-mode
   classifier denials across 15 distinct sessions**, of which the **27 multi-statement** ones span **12
