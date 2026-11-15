@@ -739,16 +739,15 @@ public and private — no per-repo loop needed to enumerate):
      This includes drafts and promoted PRs from humans and actionable trusted bots — EXCEPT trusted
      **programmed bot PRs**: the shared agent-skills updater's exact generated path in `platform` and
      `ksail` (maintainer
-     direction 2026-07-23), Homebrew-tap cask PRs (GoReleaser's for `ksail`/`ksail-desktop` and
-     World at Ruin's CD-generated ones on `goreleaser/world-at-ruin`, maintainer direction
-     2026-07-18). Apply this
+     direction 2026-07-23), and the tap's own Cask bump PRs (`chore(cask): update <cask> to
+     v<version>` on `bump-<cask>-<version>`, homebrew-tap#2568). Apply this
      exemption **only** when the checked-in exact classifier exits 0. It is a declared classifier,
      so run it as this forge-first pipeline, the only shape the guard admits (monorepo#3123):
      `gh api --paginate --slurp repos/devantler-tech/<repo>/pulls/<n>/commits | jq -c '{repo:"<repo>",author:"<author>",head_ref:"<headRefName>",title:"<title>",head_oid:"<headRefOid>",files:<files_json>,skill_owners:<skill_owners_json-or-null>,commits:(add | map({sha, author_login:(.author.login // ""), author_name:.commit.author.name, author_email:.commit.author.email, author_date:.commit.author.date, committer_login:(.committer.login // ""), committer_name:.commit.committer.name, committer_email:.commit.committer.email, committer_date:.commit.committer.date, message:.commit.message, verified:(.commit.verification.verified == true), parents:[.parents[].sha]}))}' | <repo-root>/.claude/scripts/programmed-bot-review-exemption.sh --input -`.
      Substitute each `<…>` as a JSON literal; a value containing `'` cannot be quoted, so
      report that PR `QUERY-UNKNOWN` rather than improvise. Pass the repository basename (`ksail`, not `devantler-tech/ksail`) and the author exactly as
-     that repo's arm compares it: `app/<slug>` for App-authored arms (`app/ksail-bot`), plain
-     `devantler` for the homebrew-tap cask arms. Never the REST `<slug>[bot]` the deepening
+     that repo's arm compares it: `app/<slug>` (`app/ksail-bot`, and `app/botantler-1`
+     for the platform and agent-plugins updaters and the tap's Cask bump PRs). Never the REST `<slug>[bot]` the deepening
      query returns: well-formed, matches no arm, exits 1, spends a metered lane (monorepo#2991).
      For an installed-skill updater PR (any changed path under `.agents/skills/`), `skill_owners_json`
      is **required**: a compact JSON object mapping each changed skill root (`.agents/skills/<name>`)
@@ -759,7 +758,7 @@ public and private — no per-repo loop needed to enumerate):
      tripwire the caller may skip never fires. Every other arm ignores it (pass `null`).
      `files_json` is every path from the deepening query as one JSON string array. The pipeline
      builds the commit list itself, from the REST commits endpoint with both raw dates verbatim —
-     the classifier compares them to tell a fresh release commit from a rewritten one. Do not
+     the classifier's schema requires them, and a payload without them exits 2. Do not
      substitute `gh pr view --json commits`: it omits raw committer provenance and both dates.
      The list's last SHA must equal `headRefOid`; an agent/maintainer adaptation commit therefore
      revokes the exemption even when the branch, title, and files still look generated. Exit 1 means

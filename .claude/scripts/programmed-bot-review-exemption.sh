@@ -5,7 +5,7 @@
 #   programmed-bot-review-exemption.sh --input -   # stdin: {repo, author, head_ref, title, head_oid, files, commits[, skill_owners]}
 #
 #   repo              bare name (`homebrew-tap`) or `devantler-tech/<name>`
-#   author            login as the repo's arm compares it (`app/ksail-bot`, `devantler`)
+#   author            login as the repo's arm compares it (`app/ksail-bot`, `app/botantler-1`)
 #   head-ref, title   the PR's head branch and title
 #   head-oid          full 40-hex head SHA
 #   files-json        JSON array of changed paths
@@ -210,7 +210,10 @@ matches_agent_skills_files() {
 # belong to its own plugin — so a per-skill PR cannot carry a second skill's update past review routing.
 # The plugin manifests are the Claude one (`.claude-plugin/plugin.json`) and, since the plugin also
 # ships to Codex, the Codex one (`.codex-plugin/plugin.json`); the release-notes bump writes both
-# (monorepo#4928). The Codex manifest is admitted only for a plugin whose skill changed.
+# (monorepo#4928). The Codex manifest is admitted only for a plugin whose skill changed. The
+# marketplace is `.claude-plugin/marketplace.json` alone: agent-plugins#709 deleted the second
+# manifest set (`.github/plugin/marketplace.json` and each top-level `plugins/<name>/plugin.json`),
+# so a PR that writes either is no longer updater output.
 matches_agent_plugins_review_files() {
   local skill_path="${1-}" skill_re plugin_re
   if [[ -n "${skill_path}" ]]; then
@@ -225,12 +228,11 @@ matches_agent_plugins_review_files() {
     any(.[]; test($skill)) and
     all(.[];
       test($skill) or
-      test("^\($plugin)/(\\.claude-plugin/)?plugin\\.json$") or
+      test("^\($plugin)/\\.claude-plugin/plugin\\.json$") or
       (. as $f | [$changed[] | "\(.)/.codex-plugin/plugin.json"] | index($f) != null) or
       test("^\($plugin)/resources/provider-neutral\\.desired-state\\.json$") or
       (. as $f | [$changed[] | "\(.)/CHANGELOG.md"] | index($f) != null) or
-      . == ".claude-plugin/marketplace.json" or
-      . == ".github/plugin/marketplace.json")
+      . == ".claude-plugin/marketplace.json")
   ' --argjson changed "$(jq -c --arg skill "${skill_re}" \
       '[.[] | select(test($skill)) | capture("^(?<p>plugins/[^/]+)/skills/").p] | unique' \
       <<<"${files_json}")" <<<"${files_json}" >/dev/null
@@ -415,11 +417,13 @@ matches_agent_plugins_review_provenance() {
   ' <<<"${commits_json}" >/dev/null
 }
 
-# When `main` moves, the repository's recheck workflow refreshes every open PR through GitHub's
-# update-branch API (agent-plugins `recheck-open-prs.yaml`). GitHub computes that merge itself and
-# signs it, authored by the App whose token asked for it and committed by `web-flow`. Before
-# monorepo#4597 that one trailing commit turned a genuine updater PR into exit 1, so merging one
-# updater PR made its open sibling "untrusted".
+# When `main` moves, an open PR is refreshed through GitHub's update-branch API. GitHub computes
+# that merge itself and signs it, authored by the App whose token asked for it and committed by
+# `web-flow`. In agent-plugins the refresh first came from its `recheck-open-prs.yaml` workflow,
+# which the merge queue replaced (agent-plugins#707); update-branch merges still occur, there and
+# on the tap's Cask bump PRs, so the helper stays. Before monorepo#4597 that one trailing commit
+# turned a genuine updater PR into exit 1, so merging one updater PR made its open sibling
+# "untrusted".
 #
 # strip_base_refresh_merges <app-login> <app-id> rewrites commits_json without its trailing
 # base-refresh merges, so the arms below judge the programmed head the refresh sat on. A commit
@@ -474,119 +478,48 @@ updater_verdict() {
 }
 
 # updater_app <repo> prints the login and numeric user ID of the App that writes this repository's
-# signed updater commits, or nothing for a repository with none.
+# signed programmed commits, or nothing for a repository with none. The tap's Cask bump workflow
+# mints its token from the same org App (`vars.APP_CLIENT_ID`) as the agent-plugins updater.
 updater_app() {
   case "$1" in
-  agent-plugins | platform) printf '%s %s\n' "botantler-1[bot]" "185060876" ;;
+  agent-plugins | homebrew-tap | platform) printf '%s %s\n' "botantler-1[bot]" "185060876" ;;
   ksail) printf '%s %s\n' "ksail-bot[bot]" "262010955" ;;
   esac
 }
 
-is_semver() {
-  [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]
-}
-
-# GoReleaser's tap path (ksail, ksail-desktop). The branch is evergreen, so one open PR can
-# accumulate several release cycles, each a GoReleaser cask commit optionally followed by the tap's
-# `brew style --fix` autocorrect commit (the tap's, or ksail's own when it wins the race). Every
-# commit must match one of those identities — an
-# agent or human adaptation commit anywhere in the list takes the PR off its programmed path and
-# makes it review-bearing again, per the constitution's carve-out.
-# GoReleaser writes either its default subject or the Conventional subject ksail's
-# `commit_msg_template` sets (ksail#6975); an evergreen branch can carry both across cycles (#3547).
-matches_homebrew_provenance() {
-  local component="$1"
-  local version="$2"
-
-  jq -e \
-    --arg head "${head}" \
-    --arg component "${component}" \
-    --arg version "${version}" \
-    '
-      def goreleaser_commit:
-        .author_login == "goreleaserbot" and
-        .author_name == "goreleaserbot" and
-        .author_email == "bot@goreleaser.com" and
-        .committer_login == "goreleaserbot" and
-        .committer_name == "goreleaserbot" and
-        .committer_email == "bot@goreleaser.com" and
-        (.message | test("^(Brew cask update for \($component) version |chore\\(cask\\): update \($component) to )v[0-9]+\\.[0-9]+\\.[0-9]+([+-][0-9A-Za-z.-]+)?$"));
-      def autocorrect_commit:
-        .author_login == "" and
-        .author_name == "generator-bot" and
-        .author_email == "generator-bot@users.noreply.github.com" and
-        .committer_login == "" and
-        .committer_name == "generator-bot" and
-        .committer_email == "generator-bot@users.noreply.github.com" and
-        .message == "style: autocorrect Casks (brew style --fix)";
-      # The ksail release job commits the same `brew style --fix` itself when it wins the race against
-      # the tap autocorrect (ksail .github/scripts/style-clean-cask-branch.sh; homebrew-tap#1650,
-      # #3441). Unsigned and identified by git config only — the same trust as generator-bot above.
-      def pipeline_style_commit:
-        .author_login == "github-actions[bot]" and
-        .author_name == "github-actions[bot]" and
-        .author_email == "41898282+github-actions[bot]@users.noreply.github.com" and
-        .committer_login == "github-actions[bot]" and
-        .committer_name == "github-actions[bot]" and
-        .committer_email == "41898282+github-actions[bot]@users.noreply.github.com" and
-        .message == "style: brew style --fix generated cask";
-      length > 0 and
-      (.[0] | goreleaser_commit) and
-      (.[-1].sha == $head) and
-      all(.[]; goreleaser_commit or autocorrect_commit or pipeline_style_commit) and
-      # The title version must name one of the release cycles actually present, so a stale or
-      # hand-edited title cannot smuggle an arbitrary version past the gate. It is deliberately NOT
-      # pinned to the LATEST cycle: on a real multi-cycle PR (tap#1225) the title stayed at the
-      # first cycle v7.176.0 while a later commit shipped v7.176.1, so requiring the newest would
-      # reject a genuine release.
-      any(.[];
-        goreleaser_commit and
-        (.message == "Brew cask update for \($component) version \($version)" or
-         .message == "chore(cask): update \($component) to \($version)"))
-    ' <<<"${commits_json}" >/dev/null
-}
-
-# World at Ruin's cask PRs come from its own CD workflow rather than GoReleaser, so they are a
-# single tap-token commit whose message is the normalized title. Named explicitly by maintainer
-# direction 2026-07-18 as a programmed release path.
+# The tap bumps its own Casks (homebrew-tap#2568), replacing the product pipelines' cask PRs
+# (ksail#8394, world-at-ruin#1713). Its hourly `bump-casks` workflow finds each Cask's latest
+# GitHub release with `brew livecheck`, rewrites the Cask with `brew bump-cask-pr --write-only`
+# (which also runs `brew style --fix`), and commits it once through the contents API under the
+# App's token, with the PR title as the message. GitHub's latest release is never a draft or a
+# prerelease, so the release a bump PR names is published by construction.
 #
-# This arm has to earn a property the GoReleaser arm gets for free. The tap token commits under the
-# maintainer's own Git identity, so every login/name/email/message field is the same whether the
-# workflow produced the commit or a person rewrote it — an adaptation commit cannot be detected by
-# identity here the way `goreleaserbot` detects it above.
-#
-# The author/committer date pair supplies the missing signal. A commit created in one operation
-# carries one timestamp in both fields; `git commit --amend` preserves the author date and moves the
-# committer date, which is exactly the maneuver that edits a cask body while leaving every identity
-# field intact. Requiring the pair to be equal therefore revokes the exemption for a rewritten
-# commit and keeps it for a freshly-produced one (#2291).
-#
-# Measured 2026-07-28 on the real path: the CD workflow pushes with the tap token rather than
-# committing through the API, so its commits are `verified=false`/`unsigned`. A signature predicate
-# would reject every genuine release, which is why the date pair — not commit signing — is the
-# discriminator here.
-#
-# Residual, deliberately accepted: `git commit --amend --reset-author`, or an explicit `--date`,
-# realigns the pair and is not detected. Both are deliberate evasions by an actor who already holds
-# tap write access, whereas the plain `--amend` this catches is the maneuver reachable by accident.
-matches_war_cask_provenance() {
-  local version="$1"
-
-  jq -e \
-    --arg head "${head}" \
-    --arg version "${version}" \
-    'length == 1 and
-     (.[0].author_date == .[0].committer_date) and
-     (map(del(.author_date, .committer_date, .verified, .parents)) == [{
-      sha: $head,
-      author_login: "devantler",
-      author_name: "Nikolai Emil Damm",
-      author_email: "ned@devantler.tech",
-      committer_login: "devantler",
-      committer_name: "Nikolai Emil Damm",
-      committer_email: "ned@devantler.tech",
-      message: "chore(cask): update world-at-ruin to \($version)"
-    }])' <<<"${commits_json}" >/dev/null
+# The identities are only what the commit claims, as on the updater's signed sync commit above, so
+# GitHub's own signature verdict (`verified: true`) is required: only a token of this App can make
+# GitHub sign a commit authored as the App. Every App-signed commit measured in this org is
+# committed by `web-flow`; the App itself as committer is accepted too, because GitHub's API
+# default names the authenticated App there and only GitHub's signature can verify either form.
+# The list must hold that one commit. A second one, even a re-run of the workflow after `main`
+# changed the Cask under an open PR, sends the PR to review.
+matches_cask_bump_provenance() {
+  local app_login="$1" app_id="$2"
+  jq -e --arg app_login "${app_login}" --arg app_id "${app_id}" --arg title "${title}" '
+    "\($app_id)+\($app_login)@users.noreply.github.com" as $app_email |
+    $app_login != "" and
+    length == 1 and
+    (.[0] |
+      .verified == true and
+      .author_login == $app_login and
+      .author_name == $app_login and
+      .author_email == $app_email and
+      ((.committer_login == "web-flow" and
+        .committer_name == "GitHub" and
+        .committer_email == "noreply@github.com") or
+       (.committer_login == $app_login and
+        .committer_name == $app_login and
+        .committer_email == $app_email)) and
+      .message == $title)
+  ' <<<"${commits_json}" >/dev/null
 }
 
 if [[ "${branch}" == "deps/agent-skills-update" &&
@@ -654,57 +587,29 @@ if [[ "${repo}" == "agent-plugins" &&
   fi
 fi
 
-# cask_exempt grants a tap cask PR its exemption and says, on stderr, what that does not prove. Exit 0
-# names who made the PR, never whether its release is published, and twice a draft cask PR was
-# promoted on exit 0 alone before its release existed (homebrew-tap#1496 for monorepo#2992, then
-# homebrew-tap#1936 for monorepo#4104). The rule that prevents it lives in the merge-policy guide, far
-# from this call, so the reminder is printed where the decision is made. Stdout stays empty and the
-# exit status is unchanged, so no caller's verdict moves.
-cask_exempt() {
-  printf '%s\n' "programmed-bot-review-exemption: exit 0 proves who made this cask pull request, not that its release is published; before promoting a draft, check its release with .claude/scripts/release-cask-ripeness.sh (merge-policy guide) and promote only on RIPE while no CD run for that product is queued or in progress" >&2
-  exit 0
-}
-
-if [[ "${repo}" == "homebrew-tap" && "${author}" == "devantler" ]]; then
-  case "${branch}" in
-  goreleaser/ksail)
-    component="ksail"
-    expected_file="Casks/ksail.rb"
-    ;;
-  goreleaser/ksail-desktop)
-    component="ksail-desktop"
-    expected_file="Casks/ksail-desktop.rb"
-    ;;
-  goreleaser/world-at-ruin)
-    component="world-at-ruin"
-    expected_file="Casks/world-at-ruin.rb"
-    ;;
-  *)
-    exit 1
-    ;;
-  esac
-
-  normalized_title_prefix="chore(cask): update ${component} to "
-  goreleaser_title_prefix="Brew cask update for ${component} version "
-  case "${title}" in
-  "${normalized_title_prefix}"*)
-    version="${title#"${normalized_title_prefix}"}"
-    ;;
-  "${goreleaser_title_prefix}"*)
-    version="${title#"${goreleaser_title_prefix}"}"
-    ;;
-  *)
-    exit 1
-    ;;
-  esac
-
-  if is_semver "${version}" && matches_exact_files "${expected_file}"; then
-    if [[ "${component}" == "world-at-ruin" ]]; then
-      matches_war_cask_provenance "${version}" && cask_exempt
-    else
-      matches_homebrew_provenance "${component}" "${version}" && cask_exempt
+# The tap's Cask bump PRs. The workflow names its branch `bump-<cask>-<version>` and its title
+# `chore(cask): update <cask> to v<version>` from one livecheck result, so the branch fixes the
+# Cask and the version, the title must name the same pair, and the PR may change only that Cask's
+# file. The version is digits and dots, the only shape the workflow accepts. The workflow arms
+# auto-merge itself, so exit 0 here waives only the review.
+cask_bump_branch_re='^bump-(ksail|ksail-desktop|world-at-ruin)-([0-9]+(\.[0-9]+)*)$'
+if [[ "${repo}" == "homebrew-tap" && "${author}" == "app/botantler-1" &&
+  ("${branch}" == bump-* || "${title}" == "chore(cask): update "*) ]]; then
+  if [[ "${branch}" =~ ${cask_bump_branch_re} ]]; then
+    cask="${BASH_REMATCH[1]}"
+    version="${BASH_REMATCH[2]}"
+    read -r app_login app_id <<<"$(updater_app "${repo}")" || true
+    strip_base_refresh_merges "${app_login-}" "${app_id-}"
+    if [[ "${title}" == "chore(cask): update ${cask} to v${version}" ]] &&
+      matches_exact_files "Casks/${cask}.rb" &&
+      matches_cask_bump_provenance "${app_login-}" "${app_id-}"; then
+      updater_verdict 0
     fi
   fi
+  # As for the updater above: still exit 1, but said, so a changed bump workflow is not mistaken
+  # for a PR that never claimed to be one.
+  printf 'programmed-bot-review-exemption: %s Cask bump PR with an unexpected branch, title, files or commit provenance; treated as untrusted\n' \
+    "${repo}" >&2
 fi
 
 exit 1

@@ -10,8 +10,6 @@
 # test-inputs: .claude/scripts/pr-ownership-disclosure.sh
 # test-inputs: .claude/scripts/pr-ownership-disclosure.test.sh
 # test-inputs: .claude/scripts/programmed-bot-review-exemption.sh
-# test-inputs: .claude/scripts/release-cask-ripeness.sh
-# test-inputs: .claude/scripts/release-cask-ripeness.test.sh
 # test-inputs: .claude/scripts/surveyor-hook-dispatch.sh
 # test-inputs: .claude/scripts/surveyor-hook-dispatch.test.sh .claude/settings.json
 # test-inputs: .claude/skill-ownership-allowlist.tsv .claude/skills/portfolio-maintenance/SKILL.md

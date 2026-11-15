@@ -92,10 +92,6 @@ MP-093	dependency-automation-and-programmed-bot-prs	Supplying it can only withdr
 MP-094	dependency-automation-and-programmed-bot-prs	It is **required on this arm** and omitting it returns	computational	.claude/scripts/programmed-bot-review-exemption.sh	matches_suite_owned_skills && updater_verdict 0
 MP-095	dependency-automation-and-programmed-bot-prs	The other arms take seven arguments and never consult	narrative	-	-
 MP-096	dependency-automation-and-programmed-bot-prs	Never infer it from the title alone.	none	-	-
-MP-097	dependency-automation-and-programmed-bot-prs	🔴 **The exemption proves provenance, never ripeness:	computational	.claude/scripts/release-cask-ripeness.sh	NOT-RIPE release
-MP-098	dependency-automation-and-programmed-bot-prs	On a 404, `gh api` still prints the error body on	none	-	-
-MP-099	dependency-automation-and-programmed-bot-prs	So a cask PR is the exception to "qualifying PRs	none	-	-
-MP-100	dependency-automation-and-programmed-bot-prs	`RIPE` is necessary, not sufficient	none	-	-
 MP-101	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	A park is that state only while `blocked-check.sh` reports the PR	computational	.claude/scripts/blocked-check.sh	PARKED
 MP-102	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Its blocker is still owned work (*A park is never a resting place* below).	none	-	-
 MP-104	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**A park is never a resting place** (agent-plugins#699	computational	.claude/scripts/blocked-check.sh	no current route
@@ -111,3 +107,4 @@ MP-113	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Closing 
 MP-114	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The PR itself, its review, CI or evaluation is never its blocker	none	-	-
 MP-115	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Edit it in place on every later run, never post a second	computational	.claude/scripts/blocked-check.sh	DUPLICATE
 MP-116	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**An upstream blocker is re-checked against live releases on its Wait for issue**	computational	.claude/scripts/blocked-check.sh	STALE
+MP-117	dependency-automation-and-programmed-bot-prs	Never arm or re-arm that auto-merge yourself	none	-	-
