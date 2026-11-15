@@ -81,3 +81,59 @@ with tenancy something you scaffold, since not every application needs it.
   replace their ignore list with the template's ownership model.
 - The portfolio map keeps `go-template` and `dotnet-template` until they are archived; the stack
   map already points new template work at the application template.
+
+## Amendments
+
+- **2026-11-15: every application syncs from the template, which carries the cross-cutting
+  concerns.** The maintainer asked that every application use the template with template sync,
+  so that cross-cutting concerns live in one place while each application can still diverge,
+  and that the template grow to cover applications' needs generically: new stacks such as
+  SvelteKit, generic workflows, and correct CodeQL, Dependabot, Renovate, CodeRabbit and
+  MegaLinter configuration.
+
+  1. **Scope.** Every repository under `applications/`, plus Bookkeeper and Cloudflare: KSail,
+     KHoist, the business site, World at Ruin, the wedding app, AS Coaching, aws, unifi,
+     fleet-gitops, Bookkeeper and Cloudflare. Configuration repositories scaffold with no stack.
+     KSail and World at Ruin start with large ignore lists and shed them over time.
+  2. **A shared file, and the application's own overlay.** The template owns one copy of each
+     concern, and template-sync keeps it current. Where the tool can layer configuration, the
+     application owns an overlay that sync never touches. Where it cannot, the application lists
+     the shared file in `.templatesyncignore` and owns its copy. Logic that serves repositories
+     beyond the template's applications stays in `devantler-tech/.github`, pinned like any
+     dependency.
+
+     | Concern | Shared | The application's own |
+     |---|---|---|
+     | Linting | `lint.yaml` and `.github/mega-linter.base.yml` (MegaLinter cupcake, read-only) | `.mega-linter.yml`, which extends the base |
+     | Markdown and YAML style | `.markdownlint.json`, `.yamllint.yml` | ignored copies |
+     | Code scanning | `codeql.yaml`, advanced, with languages detected from the files | `.github/codeql/codeql-config.yml` |
+     | Code review | `.coderabbit.yaml`, layered over the organization's settings | an ignored copy |
+     | Dependencies | `renovate.json` for `deploy/` image tags and Helm charts (tenants) | `.github/dependabot.yml`, composed per stack by the scaffold |
+
+  3. **SvelteKit is a stack.** `stacks/svelte` is a SvelteKit 3 and Svelte 5 app on Node 26 with
+     `adapter-node`, OpenFeature, Vitest, svelte-check and ESLint, serving `GET /` on port 3000
+     like the other stacks.
+  4. **Renovate fills Dependabot's gaps only.** Dependabot keeps packages, GitHub Actions and the
+     Dockerfile current. Renovate, extending the organization preset, updates only the image tags
+     and Helm charts in `deploy/`, so no update arrives twice. A repository must be enrolled in
+     Renovate before the file does anything.
+  5. **CodeQL moves to advanced setup per repository.** GitHub refuses advanced results while
+     default setup is on, so the shared workflow stays off until a repository's default setup is
+     turned off, which is a repository security setting the maintainer changes, and its
+     `CODEQL_SETUP` variable is set to `advanced`.
+  6. **Go applications keep linting through the shared Go validator**, which already runs
+     MegaLinter with signed fixes; every other stack calls the template's `lint.yaml`. Extracting a
+     stack-neutral lint workflow with signed fixes into `devantler-tech/.github` is a follow-up.
+  7. **Onboarding order.** The two tenants that already sync from the template adopt the new
+     files first, then the two `go-template` consumers switch their source, then the rest add a
+     sync caller. Each runs in its own pull request in its own repository:
+
+     | Application | Stack | Tenancy | Syncs from today |
+     |---|---|---|---|
+     | Wedding app, AS Coaching | SvelteKit | yes | this template |
+     | KHoist, Bookkeeper | Go | own Helm chart and release | `go-template` |
+     | Business site | Go and Node | yes | nothing |
+     | World at Ruin | Godot and Go | own server release | nothing |
+     | KSail | Go CLI | no | nothing |
+     | aws | none | configuration tenant | nothing |
+     | unifi, Cloudflare, fleet-gitops | none | no | nothing |

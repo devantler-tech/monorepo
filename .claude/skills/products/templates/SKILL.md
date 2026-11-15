@@ -19,6 +19,11 @@ The canonical maintenance task menu lives in the template's own repo — read th
 **`## Maintenance`** section of `templates/platform-tenant-template/AGENTS.md` (on the submodule's
 latest `main`): <https://github.com/devantler-tech/platform-tenant-template/blob/main/AGENTS.md>.
 
+Every application syncs from the template, which owns the cross-cutting files (linting, CodeQL,
+CodeRabbit, Renovate) while each application keeps its own overlays
+([ADR 0018, 2026-11-15 amendment](../../../../docs/adr/0018-one-application-template.md#amendments)).
+A concern several applications share belongs in the template, generically, not in each copy.
+
 `go-template` and `dotnet-template` take only dependency and CI upkeep until KHoist and Bookkeeper
 move their template-sync source and both repositories are archived. File new Go or .NET template
 work on the application template.
