@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/guides/git-and-worktrees.md
+# test-inputs: .claude/scripts/contract-text.sh .claude/scripts/gh-json-read.sh
+# test-inputs: .claude/scripts/gh-json-read.test.sh .claude/scripts/security-advisory-sweep.sh
+# test-inputs: .claude/scripts/security-advisory-sweep.test.sh
+# test-inputs: .claude/scripts/worktree-lane-sweep.sh .claude/scripts/worktree-lane-sweep.test.sh
+# test-inputs: .claude/skills/portfolio-maintenance/SKILL.md .github/workflows/ci.yaml AGENTS.md
 # Contract tests for shared-checkout-freshness.sh.
 #
 # Each case builds a real upstream repository and a real clone standing in for the shared

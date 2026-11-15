@@ -206,8 +206,8 @@ because it has a safe per-task fallback; `id`, `enabled`, `lastRunAt` and `cronE
 and still abort the store. A task with no anchor reports the missing field by name rather than the
 cron expression, so the next reader does not diagnose a healthy cron. See monorepo#3530.
 ⚠️ **That narrowness is defence in depth, NOT a claim that the cause may never be named.**
-*Sensitive information stays private* governs what may be published, and it permits — and the
-`**Blocker:**` line requires — the bounded **cause class**. So diagnose a `1` from the runtime's own
+*Sensitive information stays private* governs what may be published, and it permits — and an
+outage's Wait for issue requires — the bounded **cause class**. So diagnose a `1` from the runtime's own
 per-turn outcome record rather than the scheduler's: each rollout's `task_complete` event carries a
 `codex_error_info` classifier naming the cause (`usage_limit_exceeded`, …) beside the operator-facing
 message. That classifier is ground truth, where duration-plus-inbox-presence is only a proxy and

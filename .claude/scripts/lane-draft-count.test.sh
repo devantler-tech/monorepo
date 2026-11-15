@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/guides/durable-memory.md .claude/scripts/contract-text.sh
+# test-inputs: .claude/scripts/forge-read.sh .claude/scripts/hypothesis-id-reserve.sh
+# test-inputs: .claude/scripts/hypothesis-id-reserve.test.sh
+# test-inputs: .claude/scripts/submodule-pin-currency.sh
+# test-inputs: .claude/scripts/submodule-pin-currency.test.sh
+# test-inputs: .claude/skills/portfolio-maintenance/SKILL.md .github/workflows/ci.yaml AGENTS.md
 # lane-draft-count.test.sh — RED/GREEN coverage for lane-draft-count.sh (monorepo#2562).
 #
 # The cases that matter most are the fail-closed ones: an unproven read must never print a number,
@@ -130,7 +136,7 @@ T_REGISTRY="$FIX/noauthor.json" check "a registry lane without an author is UNKN
 
 # The live path reads through the conditional reader. A stub stands in for it here, so these cases
 # cover what the script does with the reader's answer: one line of pages per endpoint, in order.
-[ -x "$SCRIPT_DIR/blocked-label-blocker-line.sh" ] \
+[ -x "$SCRIPT_DIR/forge-read.sh" ] \
   || { echo "FAIL: the default conditional reader is missing or not executable" >&2; fail=$((fail + 1)); }
 cat > "$FIX/reader" <<'STUB'
 #!/usr/bin/env bash

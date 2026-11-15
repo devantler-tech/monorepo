@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/github-artifacts.md .github/workflows/ci.yaml AGENTS.md
 # shellcheck disable=SC2016
 # Contract prose uses literal backticks, never shell substitutions.
 #

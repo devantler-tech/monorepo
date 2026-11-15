@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/plugin-consumption/agent-instances.json
+# test-inputs: .claude/scripts/agent-claim-sweep.sh .claude/scripts/agent-claim-sweep.test.sh
+# test-inputs: .claude/scripts/agent-claim.sh .claude/scripts/agent-claim.test.sh
+# test-inputs: .claude/scripts/claim-lease-timeline-contract.test.sh
+# test-inputs: .claude/scripts/contract-text.sh .github/workflows/ci.yaml AGENTS.md
 # Hermetic test for review-request-lock.sh (monorepo#2894).
 #
 # `gh` is stubbed on PATH by a small ref store that behaves like the GitHub REST git API:

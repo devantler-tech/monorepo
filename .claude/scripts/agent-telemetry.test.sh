@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/egress-and-privacy.md .claude/guides/work-selection.md
+# test-inputs: .claude/plugin-consumption/agent-instances.json
+# test-inputs: .claude/scripts/agent-telemetry-outcome-scope.test.sh
+# test-inputs: .claude/scripts/kagent-lane-runs.sh .github/workflows/ci.yaml AGENTS.md
 # test-timeout-seconds: 1800
 # Full synthetic security and failure fixtures took 1508 seconds on the busy Mac (#4160).
 # agent-telemetry.test.sh — behavioural tests for agent-telemetry.sh

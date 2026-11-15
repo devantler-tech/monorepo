@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# test-inputs: **
 # Exercise the repository-owned admission action against candidate workflow data.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

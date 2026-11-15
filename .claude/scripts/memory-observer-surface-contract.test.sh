@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# test-inputs: **/AGENTS.md **/CLAUDE.md .claude/** .github/workflows/ci.yaml AGENTS.md CLAUDE.md
+# test-inputs: docs/**
 # Keep the maintainer-authorized memory observer grant exact and read-only (#4533).
 # Synthetic controls prove that a mention elsewhere, a wildcard or a prefix extension
 # cannot turn another helper into an Agent Improver implementation surface.

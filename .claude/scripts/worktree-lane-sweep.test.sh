@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/guides/git-and-worktrees.md
+# test-inputs: .claude/scripts/contract-text.sh .claude/scripts/gh-json-read.sh
+# test-inputs: .claude/scripts/gh-json-read.test.sh .claude/scripts/security-advisory-sweep.sh
+# test-inputs: .claude/scripts/security-advisory-sweep.test.sh
+# test-inputs: .claude/scripts/shared-checkout-freshness.sh
+# test-inputs: .claude/scripts/shared-checkout-freshness.test.sh
+# test-inputs: .claude/skills/portfolio-maintenance/SKILL.md .github/workflows/ci.yaml AGENTS.md
 # Contract tests for worktree-lane-sweep.sh — the supervised, detached lane sweep (#3714).
 #
 # The launcher runs from a copy beside a fake worktree-cleanup-all.sh whose behaviour each case

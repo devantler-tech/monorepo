@@ -209,10 +209,10 @@ moves a card: a measurement date that has not arrived, an event that happens on 
 schedule, an act only the maintainer can perform, or another issue that must be finished first. That open issue goes to **🫴 Ready**, even
 when Verifying is under its ceiling, and its **resume condition** is recorded in the form the
 [work-selection guide](work-selection.md) already reads, never in prose alone: a date as the
-`**Measure on:** YYYY-MM-DD` line in the issue body; an event as a `**Blocker:**` record of kind
-`outcome` with the `blocked` label; an act only the maintainer can perform as an `authority`
-record with its delivered ask; a `devantler-tech` issue that must be finished first as a
-native *blocked by* dependency, and one outside the portfolio as an `upstream` record. A
+`**Measure on:** YYYY-MM-DD` line in the issue body; anything else as a native *blocked by*
+issue with the `blocked` label: a `devantler-tech` issue that must be finished first, a **Wait
+for** issue for an event or for a change outside the portfolio, or the open `maintainer-ask`
+issue for an act only the maintainer can perform. A
 dependency inside the portfolio is itself work to select, so the wait never hides it. One
 comment states the verified obstacle and the next action. The issue body must also carry its
 `**Delivered on:** YYYY-MM-DD` line before the move (add it with the real delivery date if it is
@@ -240,9 +240,10 @@ the portfolio map's parenthetical** (both go stale — the map still said "UniFi
 **"Blocked" is deliberately NOT a status.** Blocking is orthogonal to position — work can be blocked
 while *Ready* or while *In Review* — so a Blocked column would destroy the information about where it
 actually is. Express it as a native **issue dependency** (`gh issue edit <N> --add-blocked-by <M>`),
-which renders a Blocked badge on the card in whatever column it sits. Reserve the `blocked` **label**
-for blockers that dependencies cannot express — every `**Blocker:**` record of kind `upstream`
-(such as a release in another org), `outcome` or `authority` carries it. The board carries **exactly three
+which renders a Blocked badge on the card in whatever column it sits. Every blocker is an issue in
+this organisation (a Wait for issue stands in for a release in another org, an event or a
+maintainer act), and parked work also carries the `blocked` **label** so searches can exclude it
+([work-selection guide](work-selection.md)). The board carries **exactly three
 views** — **kanban (board)**, **backlog (table)**, **roadmap (roadmap)** — and epic breakdown is the
 **Backlog view's hierarchy** (its `Show hierarchy` toggle — **not** a `Parent issue` group-by), not a
 fourth view: **prefer an extra grouping/slice on an

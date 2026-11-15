@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/scripts/claude-lane-go/**
+# test-inputs: .claude/scripts/claude-lane-liveness.sh .claude/scripts/codex-lane-liveness.sh
+# test-inputs: .claude/scripts/go-helper-build.sh .github/workflows/ci.yaml AGENTS.md
 # sibling-lane-watch.test.sh — coverage for sibling-lane-watch.sh (monorepo#3801).
 #
 # The cases that matter most are the ones that keep the last-resort Slack DM rare and single: no

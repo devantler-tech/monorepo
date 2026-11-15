@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/build-cache-reclaim.sh .claude/scripts/build-cache-reclaim.test.sh
+# test-inputs: .claude/scripts/cleanup-trap-census-go/go.mod
+# test-inputs: .claude/scripts/codex-transcript-retention.sh
+# test-inputs: .claude/scripts/codex-transcript-retention.test.sh .github/workflows/ci.yaml
 # Tests for codex-worktree-retention.sh (monorepo#4329).
 #
 # The helper DELETES, so every case is a safety property proved by ablation: each kept fixture

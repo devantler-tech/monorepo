@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/plugin-consumption/agent-instances.json
+# test-inputs: .claude/scripts/agent-claim.sh .claude/scripts/agent-claim.test.sh
+# test-inputs: .claude/scripts/claim-lease-timeline-contract.test.sh
+# test-inputs: .claude/scripts/contract-text.sh .claude/scripts/review-request-lock.sh
+# test-inputs: .claude/scripts/review-request-lock.test.sh .github/workflows/ci.yaml AGENTS.md
 #
 # Self-test for agent-claim-sweep.sh (monorepo#3589). A local bare remote holds
 # claim tips; a fake `gh` on PATH answers issue states. Nothing touches the

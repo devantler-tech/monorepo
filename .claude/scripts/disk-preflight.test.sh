@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/guides/cadence.md .claude/scripts/board-archive.sh
+# test-inputs: .claude/scripts/board-archive.test.sh .claude/scripts/claude-task-live-runs.sh
+# test-inputs: .claude/scripts/claude-task-live-runs.test.sh
+# test-inputs: .claude/scripts/graphql-availability.sh .claude/scripts/graphql-availability.test.sh
+# test-inputs: .claude/scripts/review-lane-health.sh .claude/scripts/review-lane-health.test.sh
+# test-inputs: .github/workflows/ci.yaml AGENTS.md
 # Contract tests for disk-preflight.sh.
 #
 # A fake `df` first on PATH replays a chosen report, so every verdict is provable on any host

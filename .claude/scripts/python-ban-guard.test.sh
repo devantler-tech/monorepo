@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# test-inputs: ** .claude/scripts/go-helper-build.sh
 #
 # Self-test for python-ban-guard.sh.
 #

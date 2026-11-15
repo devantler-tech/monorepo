@@ -1,4 +1,24 @@
 #!/usr/bin/env bash
+# test-inputs: .*/environment.json .claude/agents/agent-improver.md
+# test-inputs: .claude/agents/daily-maintainer.md .claude/agents/finops-engineer.md
+# test-inputs: .claude/agents/portfolio-surveyor.md .claude/finops/** .claude/guides/**
+# test-inputs: .claude/loaders/** .claude/loaders/portable-agentic-engineer.md
+# test-inputs: .claude/plugin-consumption/agent-instances.json
+# test-inputs: .claude/plugin-consumption/agentic-engineering.desired-state.json
+# test-inputs: .claude/plugin-consumption/inference-routing* .claude/scripts/contract-text.sh
+# test-inputs: .claude/scripts/finops-snapshot.sh .claude/scripts/fixtures/**
+# test-inputs: .claude/scripts/inference-routing-contract.test.sh
+# test-inputs: .claude/scripts/inference-routing-scorecard.sh
+# test-inputs: .claude/scripts/inference-routing-scorecard.test.sh
+# test-inputs: .claude/scripts/markdown-structural-lines.awk
+# test-inputs: .claude/scripts/portfolio-surveyor-forge-hook.sh .claude/scripts/pr-body-contract.sh
+# test-inputs: .claude/scripts/pr-body-contract.test.sh .claude/scripts/pr-body-public-tlds.txt
+# test-inputs: .claude/scripts/pr-worktree-holder.sh
+# test-inputs: .claude/scripts/provider-neutral-agents-contract.test.sh .claude/settings.json
+# test-inputs: .claude/skills/agent-improvement/** .claude/skills/finops/SKILL.md
+# test-inputs: .claude/skills/portfolio-maintenance/SKILL.md
+# test-inputs: .claude/skills/product-engineering/SKILL.md .claude/skills/self-improvement/SKILL.md
+# test-inputs: .github/workflows/ci.yaml AGENTS.md libraries/agent-plugins
 #
 # Guards the writer contract for the Agent Improver and for the Agentic Engineer's
 # merged spend mandate: each must resolve reviewed sources and own selected
@@ -2173,7 +2193,6 @@ for channel_rule in \
   "Never send status messages." \
   "never repeat an answered ask" \
   "Never record an ask that was not delivered" \
-  "The ask must be the last thing" \
   "at most three urgent bot assignments per UTC day" \
   "Closed or relabelled asks still consume the cap" \
   "failed or partial read is UNKNOWN" \
@@ -2215,26 +2234,6 @@ for push_rule in \
 done
 assert_prose "\`@devantler\` mentions and push notifications are not channels." \
   "AGENTS.md's Maintainer channels summary no longer rules out the push notification (monorepo#3243)"
-# The ask-record rule must say both meanings of `push` are excluded. A refutation of the old
-# sentence would only stop a verbatim revert, so every backticked `push` token in THAT rule must
-# carry the disambiguation. Scoped to the rule's paragraph: `push` legitimately names other things
-# elsewhere in the contract (a git push, a workflow trigger), and those are not this rule.
-ask_rule_flat="$(
-  awk 'index($0, "**An `authority` line MUST also record the ask") { inside = 1 }
-       inside && /^[[:space:]]*$/ { exit }
-       inside { print }' "${repo_root}/.claude/guides/work-selection.md" | tr '\n' ' ' | tr -s '[:space:]' ' '
-)"
-[ -n "${ask_rule_flat}" ] ||
-  fail "could not extract the work-selection guide's ask-record rule, so the push exclusion cannot be checked (monorepo#3243)"
-# `|| true` inside the group: under pipefail a grep that matches nothing would otherwise abort the
-# run before the assertion below can name what is missing.
-push_tokens="$({ grep -o '`push`' <<<"${ask_rule_flat}" || true; } | wc -l | tr -d ' ')"
-push_disambiguated="$({ grep -o "\`push\`, whether it means a git push or the runtime's push notification" \
-  <<<"${ask_rule_flat}" || true; } | wc -l | tr -d ' ')"
-[ "${push_disambiguated}" -ge 1 ] ||
-  fail "the ask-record rule excludes 'push' without saying which push it means (monorepo#3243)"
-[ "${push_tokens}" = "${push_disambiguated}" ] ||
-  fail "the ask-record rule names \`push\` ${push_tokens} times but disambiguates it only ${push_disambiguated} — an ambiguous exclusion is back (monorepo#3243)"
 
 # The plugin's maintainer-PR driving fact (agent-plugins#201) is read from the Trust gate
 # section and defaults to hands-off when that section does not declare it. This deployment

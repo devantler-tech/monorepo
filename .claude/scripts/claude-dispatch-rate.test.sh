@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/claude-lane-go/** .claude/scripts/go-helper-build.sh
+# test-inputs: .github/workflows/ci.yaml
 # claude-dispatch-rate.test.sh — RED/GREEN coverage for the Claude scheduled-vs-actual dispatch rate.
 #
 # The rate is only useful if it neither invents drops nor hides them, so both directions are pinned:

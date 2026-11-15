@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/scripts/bugbot-request-marker.sh
+# test-inputs: .claude/scripts/bugbot-request-marker.test.sh
+# test-inputs: .claude/scripts/comment-disclosure-drift-go/**
+# test-inputs: .claude/scripts/comment-disclosure-drift.sh
+# test-inputs: .claude/scripts/comment-disclosure-drift.test.sh .claude/scripts/contract-text.sh
+# test-inputs: .claude/scripts/disclosure-drift-sweep.sh
+# test-inputs: .claude/scripts/disclosure-drift-sweep.test.sh .claude/scripts/go-helper-build.sh
+# test-inputs: .claude/scripts/maintainer-comment-candidates.sh
+# test-inputs: .claude/scripts/maintainer-comment-candidates.test.sh .github/workflows/ci.yaml
+# test-inputs: AGENTS.md
 # Hermetic test for review-request-comment.sh (monorepo#3319).
 #
 # Two kinds of assertion:

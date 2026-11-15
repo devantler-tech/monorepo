@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# test-inputs: .github/workflows/** .gitmodules applications/business-site
 # Keep the aggregator from becoming a second website publisher after live cutover.
 set -euo pipefail
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)

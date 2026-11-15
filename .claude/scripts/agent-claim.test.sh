@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/plugin-consumption/agent-instances.json
+# test-inputs: .claude/scripts/agent-claim-sweep.sh .claude/scripts/agent-claim-sweep.test.sh
+# test-inputs: .claude/scripts/claim-lease-timeline-contract.test.sh
+# test-inputs: .claude/scripts/contract-text.sh .claude/scripts/review-request-lock.sh
+# test-inputs: .claude/scripts/review-request-lock.test.sh .github/workflows/ci.yaml AGENTS.md
 #
 # Self-test for agent-claim.sh — RED/GREEN coverage of the seventeen traps proven
 # by monorepo#2302, its review rounds and monorepo#3811. Fixtures use a local bare remote + two

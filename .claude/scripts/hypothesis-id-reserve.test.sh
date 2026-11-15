@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/guides/durable-memory.md .claude/scripts/contract-text.sh
+# test-inputs: .claude/scripts/forge-read.sh .claude/scripts/lane-draft-count.sh
+# test-inputs: .claude/scripts/lane-draft-count.test.sh .claude/scripts/submodule-pin-currency.sh
+# test-inputs: .claude/scripts/submodule-pin-currency.test.sh
+# test-inputs: .claude/skills/portfolio-maintenance/SKILL.md .github/workflows/ci.yaml AGENTS.md
 # hypothesis-id-reserve.test.sh — RED/GREEN coverage for hypothesis-id-reserve.sh (monorepo#3536).
 #
 # The case that matters most is the one the helper exists for: callers that run at the same moment

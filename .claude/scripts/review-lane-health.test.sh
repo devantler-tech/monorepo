@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/guides/** .claude/guides/cadence.md .claude/scripts/board-archive.sh
+# test-inputs: .claude/scripts/board-archive.test.sh .claude/scripts/claude-task-live-runs.sh
+# test-inputs: .claude/scripts/claude-task-live-runs.test.sh .claude/scripts/disk-preflight.sh
+# test-inputs: .claude/scripts/disk-preflight.test.sh .claude/scripts/graphql-availability.sh
+# test-inputs: .claude/scripts/graphql-availability.test.sh .github/workflows/ci.yaml AGENTS.md
 # RED/GREEN coverage for review-lane-health.sh: each verdict from recorded events, the artifact
 # classification against a stub gh, and a failed read reported as UNKNOWN.
 set -euo pipefail

@@ -156,7 +156,7 @@ direction 2026-07-11: "We generally do not want to share sensitive information p
 
 **This rule extends to provider and account posture — the case where the deployment
 contradicted itself.** A lane, review provider, or other vendor dependency that stops serving must be
-reported through the mandated `**Blocker:**` line (*Issue-driven → Pull valuable Ready work*, skip clause
+reported through a blocker Wait for issue (*Issue-driven → Pull valuable Ready work*, skip clause
 (b)), which on a public repository is a **public** artifact — while
 [`codex-lane-liveness.sh`](../scripts/codex-lane-liveness.sh) treats "billing, credentials,
 account posture" as private runtime state it must never carry into an artifact. Each is right about
@@ -167,7 +167,7 @@ half of it, so the split is by **granularity**, exactly as it already is for a s
 | the **cause class**: `quota/billing`, `credentials/auth`, `runtime/config`, `unknown` | exact reset or retry timestamps |
 | that a named lane or provider is degraded, and since when | quota, credit, or balance figures |
 | whether the remedy is **agent-actionable or maintainer-only** | plan, tier, or subscription identity |
-| the `last-verified <date>: <result>` the blocker line requires | account, organisation, or billing identifiers |
+| the dated check result recorded on that Wait for issue | account, organisation, or billing identifiers |
 | | correlation of posture **across vendors** |
 
 The right-hand column is what turns an outage note into a map of the deployment's dependencies and

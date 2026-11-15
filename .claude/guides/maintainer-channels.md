@@ -40,12 +40,12 @@ Never reopen or relabel an answered ask to bypass suppression.
 - **Surface:** the reviewed daily and urgent GitHub workflows, never an agent's own assignment.
 
 **Record intake and delivery separately.** After reading the filed ask back with the correct owner,
-number, open state and label, record `| asked digest devantler-tech/monorepo#N <YYYY-MM-DD>`.
-This is an intake receipt, never a claim that a notification arrived. The ask must be the last thing
-in that paragraph, followed by a blank line. Never record an ask that was not delivered to its stated
-surface. An authority-parked PR without a linked open ask is ACTIONABLE in the parked digest.
-The 14-day `STALE-ASK` clock remains a re-verification alarm: read replies and verify the need;
-never renew an answered ask or manufacture another notification.
+number, open state and label, link it as the native *blocked by* issue of the work it holds
+(work-selection guide, *Every blocker is an issue*). The link is an intake receipt, never a claim
+that a notification arrived. Never record an ask that was not delivered to its stated surface, so never link one as a blocker.
+`blocked-check.sh` reports an ask that has gone 7 days without a check as `STALE`: read replies and
+verify the need, and record the check by editing one check comment in place, because a new comment
+notifies the maintainer. Never renew an answered ask or manufacture another notification.
 
 **Preview a filed ask before the next send.** Run
 `.claude/scripts/maintainer-digest.sh needs-you --repo devantler-tech/monorepo` and find your ask by

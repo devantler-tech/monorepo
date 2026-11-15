@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# test-inputs: .github/workflows/ci.yaml
 # Tests for main-head-rung0-probe.sh (monorepo#3623, monorepo#4518).
 #
 # A stub `gh` on PATH serves one fixture directory per case: head.json for `commits/<branch>`,

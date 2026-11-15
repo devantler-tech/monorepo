@@ -21,7 +21,7 @@
 # COST: the reads are conditional. A list the forge confirms unchanged in this call is taken from
 # the copy kept by the previous call and is not charged to the hourly request budget; nothing is
 # reused on age, so a count is still only what the forge confirmed while it was being read
-# (monorepo#4055). The kept pages live where blocked-label-blocker-line.sh keeps its own.
+# (monorepo#4055). The kept pages live in forge-read.sh's cache.
 #
 # FAILS CLOSED. A count is printed only when the read is provably complete; otherwise UNKNOWN:
 #   - any failed request;
@@ -88,11 +88,11 @@ lanes=$(jq -ec '
 printf '%s' "$lanes" | jq -e --arg l "$LANE" 'any(.[]; .ns == $l)' >/dev/null || unknown "lane '$LANE' is not a registered namespace"
 
 # forge_read <endpoint>... — one line per endpoint: the JSON array of its pages. The reads are
-# conditional (blocked-label-blocker-line-go/read.go): a page the forge confirms unchanged in THIS
+# conditional (forge-read-go/read.go): a page the forge confirms unchanged in THIS
 # call costs nothing against the hourly request budget, and nothing is ever served on age. One
 # count used to cost about 72 requests, almost all of them for lists that had not changed since
 # the previous run (monorepo#4055). LANE_FORGE_READ replaces the reader in tests.
-FORGE_READ="${LANE_FORGE_READ:-$HERE/blocked-label-blocker-line.sh}"
+FORGE_READ="${LANE_FORGE_READ:-$HERE/forge-read.sh}"
 forge_read() { "$FORGE_READ" read "$@" 2>/dev/null; }
 
 # read_drafts <repo-names> — every open draft across those repositories, sorted by id.

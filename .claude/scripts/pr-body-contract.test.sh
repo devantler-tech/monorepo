@@ -1,4 +1,24 @@
 #!/usr/bin/env bash
+# test-inputs: .*/environment.json .claude/agents/agent-improver.md
+# test-inputs: .claude/agents/daily-maintainer.md .claude/agents/finops-engineer.md
+# test-inputs: .claude/agents/portfolio-surveyor.md .claude/finops/** .claude/guides/**
+# test-inputs: .claude/loaders/** .claude/loaders/portable-agentic-engineer.md
+# test-inputs: .claude/plugin-consumption/agent-instances.json
+# test-inputs: .claude/plugin-consumption/agentic-engineering.desired-state.json
+# test-inputs: .claude/plugin-consumption/inference-routing*
+# test-inputs: .claude/scripts/agent-role-delivery-contract.test.sh
+# test-inputs: .claude/scripts/contract-text.sh .claude/scripts/finops-snapshot.sh
+# test-inputs: .claude/scripts/fixtures/** .claude/scripts/inference-routing-contract.test.sh
+# test-inputs: .claude/scripts/inference-routing-scorecard.sh
+# test-inputs: .claude/scripts/inference-routing-scorecard.test.sh
+# test-inputs: .claude/scripts/markdown-structural-lines.awk
+# test-inputs: .claude/scripts/portfolio-surveyor-forge-hook.sh
+# test-inputs: .claude/scripts/pr-body-public-tlds.txt .claude/scripts/pr-worktree-holder.sh
+# test-inputs: .claude/scripts/provider-neutral-agents-contract.test.sh .claude/settings.json
+# test-inputs: .claude/skills/agent-improvement/** .claude/skills/finops/SKILL.md
+# test-inputs: .claude/skills/portfolio-maintenance/SKILL.md
+# test-inputs: .claude/skills/product-engineering/SKILL.md .claude/skills/self-improvement/SKILL.md
+# test-inputs: .github/workflows/ci.yaml AGENTS.md libraries/agent-plugins
 # Behaviour tests for pr-body-contract.sh: the three safety rules (monorepo#5049) and the seed path.
 
 # shellcheck disable=SC2016 # Backticks in fixture bodies are literal Markdown, never substitutions.

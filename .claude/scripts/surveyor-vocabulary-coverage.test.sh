@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/agents/portfolio-surveyor.md
+# test-inputs: .claude/scripts/surveyor-forge-vocabulary.test.sh
+# test-inputs: .claude/skills/portfolio-maintenance/SKILL.md .github/workflows/ci.yaml .gitmodules
+# test-inputs: libraries/agent-plugins
 # Pins SOURCES -> CORPUS, the half `surveyor-forge-vocabulary.test.sh` states
 # plainly that it does not cover.
 #
