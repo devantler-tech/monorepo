@@ -196,6 +196,24 @@ expect "a finding title quoted inside the icon-format informational section is n
 expect "a real icon-format review body with only informational sections reads green" 0 "GREEN" "$(payload "${clean}
 $(cat "${icon_fixture}")")"
 
+# A comments-category title whose count is in neither shape cannot be counted, so it is UNKNOWN.
+odd_title="${clean}
+<details>
+<summary>🧹 Nitpick comments [2]</summary><blockquote>
+</blockquote></details>"
+expect "an unparsable section count is UNKNOWN, never zero" 2 "UNKNOWN unparsable-section-title" "$(payload "${odd_title}")"
+expect "an unparsable icon-format section count is UNKNOWN" 2 "UNKNOWN unparsable-section-title" "$(payload "${clean}
+<summary>${icon} Nitpick comments</summary>")"
+expect "a file named like the category is not a section title" 1 "FINDINGS 1" "$(payload "${clean}
+<details>
+<summary>🧹 Nitpick comments (1)</summary><blockquote>
+<details>
+<summary>pkg/comments.go (1)</summary><blockquote>
+</blockquote></details>
+</blockquote></details>")"
+expect "a metadata title is not a section title" 0 "GREEN" "$(payload "${clean}
+<summary>${icon} Review info</summary>")"
+
 expect "only the exact informational title is excluded" 1 "FINDINGS 2" "$(payload "${clean}
 <summary>🔇 Security comments (2)</summary>")"
 
@@ -292,8 +310,11 @@ ablate "no informational exclusion" 'elif ($t | informational) then' 'elif false
 <summary>🔇 Additional comments (3)</summary>")" "GREEN"
 ablate "old-shape-only section count" 'comments(?: \\(([0-9]+)\\)|: ([0-9]+))</summary>$' 'comments \\(([0-9]+)\\)</summary>$' \
   "$(payload "${icon_nitpick}")" "FINDINGS 2"
-ablate "no icon strip" 'def iconless: sub("^<summary><picture>.*?</picture>\\s*"; "<summary>");' 'def iconless: .;' \
-  "$(payload "${icon_nitpick}")" "FINDINGS 2"
+ablate "unparsable titles read as zero" 'elif $walk.odd > 0 then' 'elif false then' \
+  "$(payload "${odd_title}")" "UNKNOWN unparsable-section-title"
+# Removing the icon strip is not ablated: the unparsable-title rule then turns an icon-format
+# section into UNKNOWN (exit 2), which fails closed, and the icon-format nitpick case above pins
+# that it is counted as FINDINGS instead.
 ablate "icon titles not tokenised" '<summary>(?:<picture>.*?</picture>)?[^<]*</summary>' '<summary>[^<]*</summary>' \
   "$(payload "${icon_nitpick}")" "FINDINGS 2"
 ablate "no icon-format informational exclusion" ' or test("^<summary><picture>.*?</picture>\\s*Additional comments: [0-9]+</summary>$")' '' \

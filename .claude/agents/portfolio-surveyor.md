@@ -813,7 +813,7 @@ public and private — no per-repo loop needed to enumerate):
      `gh api repos/devantler-tech/<repo>/pulls/<n>/reviews/<review-id> --jq '{head:"<headRefOid>",author:.user.login,commit_id:.commit_id,body:(.body // "")}' | <repo-root>/.claude/scripts/coderabbit-review-verdict.sh --input -`
      (the guard admits a declared helper only as this absolute, forge-first `--input -` call;
      monorepo#3572). `GREEN` is the review-object satisfier, `FINDINGS <n>` counts toward the
-     row's body findings, and `NONE` or a failed call means that object is no review. Treat that review object, CodeRabbit's substantive
+     row's body findings, and `NONE`, `UNKNOWN` (exit 2) or a failed call means that object is no review. Treat that review object, CodeRabbit's substantive
      auto-generated summary comment (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated
      after the authenticated request **for which
      `gh api repos/devantler-tech/<repo>/issues/comments/<comment-id> --jq '{head:"<headRefOid>",body:.body}' | <repo-root>/.claude/scripts/coderabbit-summary-verdict.sh --input -`
