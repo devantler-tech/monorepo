@@ -2977,7 +2977,7 @@ subst "$FIX/codex/sessions/r.jsonl"
 
 runleak() {
   fixture_project_bindings "$FIX/projects" || exit 1
-  CLAUDE_PROJECTS_DIR="$FIX/projects" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  CLAUDE_PROJECTS_DIR="$FIX/projects" CODEX_HOME="${RUNLEAK_CODEX_HOME:-$FIX/codex}" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
   CLAUDE_LOADER_PATH="$FIX/claude-sched/daily-ai-assistant/SKILL.md" \
   CODEX_LOADER_PATH="$FIX/codex/automations/daily-ai-engineer/automation.toml" \
   bash "$TARGET" --since-days 3650 --max-files 50 "$@" 2>&1
@@ -2991,6 +2991,15 @@ check   "codex: an MCP result flagged isError counts as a failure" "$OUT" "McpTo
 nocheck "codex: a failure stamped outside the window is not counted" "$OUT" "codex-out-of-window"
 check   "codex: files without item records are reported, never read as clean" "$OUT" "codex files with no item_completed record (unmeasured): 0 of 1"
 nocheck "codex: the stale no-error-flag gap note is gone" "$OUT" "no is_error flag,"
+# A truncated, partly appended line must not let the surviving records print as
+# a complete measurement (#5097 review): the section reads UNKNOWN instead.
+mkdir -p "$FIX/codex-bad/sessions"
+cp "$FIX/codex/sessions/r.jsonl" "$FIX/codex-bad/sessions/r.jsonl"
+printf '%s' '{"timestamp":"2026-01-01T00:00:00.000Z","type":"event_msg","payload":{"type":"item_comp' \
+  >> "$FIX/codex-bad/sessions/r.jsonl"
+OUT=$(RUNLEAK_CODEX_HOME="$FIX/codex-bad" runleak --section reliability)
+check   "codex: an unparseable line makes the count UNKNOWN" "$OUT" "codex item failures: UNKNOWN — 0 file(s) could not be read, 1 line(s) did not parse"
+nocheck "codex: a partial read never prints a count" "$OUT" "codex item failures in window:"
 
 OUT=$(runleak --section safety)
 # Injection resistance: quoted prose is NOT a guard firing; a real errored

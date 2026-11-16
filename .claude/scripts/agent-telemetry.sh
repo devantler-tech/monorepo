@@ -4790,34 +4790,50 @@ if want reliability; then
     CX_REL_FAIL=0
     printf '%s\n' "$CX_CACHE" | while IFS= read -r f; do
       [ -n "$f" ] || continue
-      jq -Rrs --arg since "$WINDOW_SINCE" "$JQ_SHAPE_DEFS"'split("\n")|map(select(length>0)|(try fromjson catch empty))
-        | [ .[] | select(.type=="event_msg" and .payload.type=="item_completed")
-            | select(.payload.item.type=="CommandExecution" or .payload.item.type=="McpToolCall") ] as $items
-        | if ($items|length)==0 then "N"
-          else $items[]
-            | (.timestamp // "") as $ts
-            | if ($ts | usable_ts | not) then "U"
-              elif $ts < $since then empty
-              else .payload.item as $i
-                | (($i.status=="failed") or ($i.result.isError? == true)) as $failed
-                | if ($failed|not) then "OK"
-                  elif $i.type=="CommandExecution" then
-                    "F\tCommandExecution exit \($i.exit_code // "?"): \(($i.aggregated_output // "") | scalar_text | gsub("[[:cntrl:]]+";" ") | .[0:100])"
-                  else
-                    "F\tMcpToolCall \($i.server // "?").\($i.tool // "?"): \((($i.result.content // [])|map(.text? // "")|join(" ")) // "" | gsub("[[:cntrl:]]+";" ") | .[0:100])"
+      # STREAMED, one line at a time (`inputs`), never slurped: Codex rollouts
+      # reach multiple gigabytes, and a slurped read materialises every record
+      # before the window filter can drop it (#5097 review). A line that does
+      # not parse is counted as `P`, never skipped: a partial read must not
+      # print as a clean measurement.
+      cx_rows=$(jq -nRr --arg since "$WINDOW_SINCE" "$JQ_SHAPE_DEFS"'
+        inputs | select(length > 0)
+        | (try fromjson catch "\u0000BAD") as $r
+        | if ($r | type) == "string" and $r == "\u0000BAD" then "P"
+          elif ($r | type) != "object" then empty
+          elif $r.type != "event_msg" or ($r.payload | type) != "object"
+               or $r.payload.type != "item_completed" then empty
+          else ($r.payload.item // {}) as $i
+            | if ($i | type) != "object" then empty
+              elif ($i.type != "CommandExecution" and $i.type != "McpToolCall") then empty
+              else ($r.timestamp // "") as $ts
+                | if ($ts | usable_ts | not) then "U"
+                  elif $ts < $since then "O"
+                  else (($i.status == "failed") or ($i.result.isError? == true)) as $failed
+                    | if ($failed | not) then "OK"
+                      elif $i.type == "CommandExecution" then
+                        "F\tCommandExecution exit \($i.exit_code // "?"): \(($i.aggregated_output // "") | scalar_text | gsub("[[:cntrl:]]+";" ") | .[0:100])"
+                      else
+                        "F\tMcpToolCall \($i.server // "?" | scalar_text).\($i.tool // "?" | scalar_text): \(((($i.result.content? // []) | if type == "array" then map(.text? // "" | scalar_text) | join(" ") else scalar_text end)) | gsub("[[:cntrl:]]+";" ") | .[0:100])"
+                      end
                   end
               end
           end
-      ' "$f" 2>/dev/null || echo "X"
+      ' "$f" 2>/dev/null) || { echo "X"; continue; }
+      # A file holding no item record at all (the format before Codex 0.167)
+      # is reported as unmeasured. An item stamped before the window (`O`)
+      # proves the format, so the file is measured even when nothing is in it.
+      if ! printf '%s\n' "$cx_rows" | grep -qE '^(OK|O|U|F	)'; then echo "N"; fi
+      printf '%s\n' "$cx_rows" | grep -v '^O$' | grep -v '^$' || true
     done | redact > "$CXREL" || CX_REL_FAIL=1
     CX_ITEMS=$(grep -cE '^(OK|F	)' "$CXREL" || true)
     CX_FAILED=$(grep -c '^F	' "$CXREL" || true)
     CX_NOREC=$(grep -cx 'N' "$CXREL" || true)
     CX_UNDATED=$(grep -cx 'U' "$CXREL" || true)
     CX_UNREAD=$(grep -cx 'X' "$CXREL" || true)
+    CX_BAD=$(grep -cx 'P' "$CXREL" || true)
     echo
-    if [ "$CX_REL_FAIL" -ne 0 ] || [ "$CX_UNREAD" -gt 0 ]; then
-      echo "  codex item failures: UNKNOWN — ${CX_UNREAD} file(s) could not be read"
+    if [ "$CX_REL_FAIL" -ne 0 ] || [ "$CX_UNREAD" -gt 0 ] || [ "$CX_BAD" -gt 0 ]; then
+      echo "  codex item failures: UNKNOWN — ${CX_UNREAD} file(s) could not be read, ${CX_BAD} line(s) did not parse"
       main_rc=2
     else
       echo "  codex item failures in window: ${CX_FAILED} of ${CX_ITEMS} items   [item_completed records, Codex >= 0.167]"
