@@ -71,6 +71,14 @@ result="$(jq -r '
     sub("^\\s+"; "")
     | if test("^<!--[\\s\\S]*?-->") then sub("^<!--[\\s\\S]*?-->"; "") | strip else . end;
 
+  # CodeRabbit titles a section either "<emoji> <Category> comments (N)" or, in its icon format,
+  # "<picture>…</picture> <Category> comments: N" (monorepo#5091). Both shapes are counted, so a
+  # finding section in either one can never read as zero.
+  def iconless: sub("^<summary><picture>.*?</picture>\\s*"; "<summary>");
+  def section_count: [iconless | scan("^<summary>[^<]*comments(?: \\(([0-9]+)\\)|: ([0-9]+))</summary>$") | (.[0] // .[1]) | tonumber] | add // 0;
+  # The informational section, in either shape. Only this exact category is excluded.
+  def informational: test("^<summary>🔇 Additional comments \\(") or test("^<summary><picture>.*?</picture>\\s*Additional comments: [0-9]+</summary>$");
+
   .body as $body
   | ($body | strip) as $lead
   | ($lead | test("^\\*\\*Actionable comments posted: [0-9]+\\*\\*")) as $marker
@@ -82,17 +90,17 @@ result="$(jq -r '
   # can quote changed code carrying finding-shaped summaries. Counting resumes once it closes.
   # Sections are read from $lead: leading comments are metadata. The did-not-run scan below keeps
   # the full $body, because the CodeRabbit rate-limit marker is itself a comment.
-  | ([$lead | scan("<details[^>]*>|</details>|<summary>[^<]*</summary>")]
+  | ([$lead | scan("<details[^>]*>|</details>|<summary>(?:<picture>.*?</picture>)?[^<]*</summary>")]
       | reduce .[] as $t ({d: 0, skip: null, n: 0, under: false, hidden: 0};
           if ($t | startswith("</details")) then
             (if .skip != null and .d <= .skip then .skip = null else . end) | .d -= 1 | (if .d < 0 then .under = true else . end)
           elif ($t | startswith("<details")) then .d += 1
           # Inside the skipped section, a finding-shaped title is only COUNTED, never trusted: it may be
           # quoted text, or a real section that balanced quoted tags pulled inside the skip.
-          elif .skip != null then .hidden += ([$t | scan("^<summary>[^<]*comments \\(([0-9]+)\\)</summary>$") | .[0] | tonumber] | add // 0)
-          elif ($t | test("^<summary>🔇 Additional comments \\(")) then
+          elif .skip != null then .hidden += ($t | section_count)
+          elif ($t | informational) then
             (if .d > 0 then .skip = .d else . end)
-          else .n += ([$t | scan("^<summary>[^<]*comments \\(([0-9]+)\\)</summary>$") | .[0] | tonumber] | add // 0)
+          else .n += ($t | section_count)
           end)) as $walk
   | $walk.n as $sections
   # Quoted code can carry an unmatched literal tag, which leaves the walk unbalanced. A skip that

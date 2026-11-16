@@ -359,7 +359,9 @@ The surveyor reads this repo's `AGENTS.md` contract sections (*Portfolio map*, *
   `♻️ Duplicate comments (N)`, and any future category — never a thread, no `isResolved` state.
   Match the **shape**, not a hard-coded title list (a new category title must not silently escape
   the count); the only excluded shape is `🔇 Additional comments (N)`, CodeRabbit's explicitly
-  non-actionable/informational section. Per PR also check
+  non-actionable/informational section. CodeRabbit's icon format titles the same sections
+  `<picture>…</picture> <Category> comments: N`; count both shapes (monorepo#5091), as
+  `coderabbit-review-verdict.sh` does, and exclude only its `Additional comments: N`. Per PR also check
   `gh api repos/<owner>/<repo>/pulls/<n>/reviews --paginate | jq -s
   '[.[][] | select(.user.login=="coderabbitai[bot]")] | max_by(.submitted_at)
   | {sha: (.commit_id // ""), n: ((.body // "")

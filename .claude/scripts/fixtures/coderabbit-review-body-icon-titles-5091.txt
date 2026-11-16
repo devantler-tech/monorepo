@@ -1,0 +1,192 @@
+<!-- coderabbit-ai-generated:v1 -->
+
+
+
+<details>
+<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/message-square-off-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/message-square-off.svg" width="16" height="16" align="absmiddle" alt=""></picture> Additional comments: 1</summary><blockquote>
+<dl>
+<dd>
+<br>
+
+<details>
+<summary>docs/digests/2026-11-17.md: 1</summary><blockquote>
+<dl>
+<dd>
+<br>
+
+`549-551`: **<picture><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/amber-16.svg" width="16" height="16" align="absmiddle" alt=""></picture> Minor** · **Data Integrity & Integration** · **Quick win**
+
+<picture><img src="https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-warning.svg" width="20" height="20" align="absmiddle" alt=""></picture> **Unverified finding**
+Verification ran but could not confirm this finding. It is shown for review, not as a verified issue.
+
+**Include each selected digest’s progress entries.**
+
+If November 17 is quiet and a later summary is selected in the same batch, this extraction combines only `What shipped`. The body retains the later file’s progress section, but the receipt marks this file as delivered. Its three progress entries are therefore omitted and will not be retried. Combine the progress sections as well. ([raw.githubusercontent.com](https://raw.githubusercontent.com/devantler-tech/monorepo/d5680042a9bb78213f414427168cfd4558f75acd/.claude/scripts/maintainer-digest.sh))
+
+<!-- cr-comment:v1:7640dbc74d45b72ef73f0346 -->
+
+</dd>
+</dl>
+</blockquote></details>
+
+</dd>
+</dl>
+</blockquote></details>
+
+<h6>
+<details>
+<summary><picture><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/info.svg" width="12" height="12" align="absmiddle" alt=""></picture> Review info</summary>
+<dl>
+<dd>
+<br>
+
+<details>
+<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/cog-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/cog.svg" width="16" height="16" align="absmiddle" alt=""></picture> Run configuration</summary>
+<dl>
+<dd>
+<br>
+
+- **Source mode**: Auto
+- **Repository**: [devantler-tech/monorepo](<https://github.com/devantler-tech/monorepo>)
+- **Branch**: [claude/digest-2026-11-17-4285](<https://github.com/devantler-tech/monorepo/tree/claude%2Fdigest-2026-11-17-4285>)
+- **File**: [.coderabbit.yaml](<https://github.com/devantler-tech/monorepo/blob/d5680042a9bb78213f414427168cfd4558f75acd/.coderabbit.yaml>)
+- **Commit**: [d568004](<https://github.com/devantler-tech/monorepo/commit/d5680042a9bb78213f414427168cfd4558f75acd>)
+- **Layers**: Repository YAML (base), Organization UI (inherited)
+- **Review profile**: ASSERTIVE
+- **Plan**: Advanced
+- **Run ID**: `f77e7b65-d80f-4ea4-9496-1fbd552e8e9f`
+
+</dd>
+</dl>
+</details>
+
+<details>
+<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/git-commit-horizontal-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/git-commit-horizontal.svg" width="16" height="16" align="absmiddle" alt=""></picture> Commits</summary>
+<dl>
+<dd>
+<br>
+
+Reviewing files that changed from the base of the PR and between 78f7c7dfdb814c7896001f41159fad0da5332b6b and d5680042a9bb78213f414427168cfd4558f75acd.
+
+</dd>
+</dl>
+</details>
+
+<details>
+<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/file-plus-corner-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/file-plus-corner.svg" width="16" height="16" align="absmiddle" alt=""></picture> Files selected for processing: 1</summary>
+<dl>
+<dd>
+<br>
+
+* `docs/digests/2026-11-17.md`
+
+</dd>
+</dl>
+</details>
+
+**Included review availability:** This review used your included allowance. Your plan provides up to 1 included review per hour; 0 remain after this review.
+
+</dd>
+</dl>
+</details>
+
+<details>
+<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/review-details-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/review-details.svg" width="12" height="12" align="absmiddle" alt=""></picture> Review details</summary>
+<dl>
+<dd>
+<br>
+
+<details>
+<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/clock-alert-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/clock-alert.svg" width="16" height="16" align="absmiddle" alt=""></picture> Context from checks skipped due to timeout: 5</summary>
+<dl>
+<dd>
+<br>
+
+* GitHub Check: CodeRabbit
+* GitHub Check: Test agent instructions layout contract (macos-latest)
+* GitHub Check: Test python ban guard
+* GitHub Check: Affected tests by convention (ubuntu-latest) (non-blocking)
+* GitHub Check: Affected tests by convention (macos-latest) (non-blocking)
+
+</dd>
+</dl>
+</details>
+
+<details>
+<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/layers-plus-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/layers-plus.svg" width="16" height="16" align="absmiddle" alt=""></picture> Additional context used</summary>
+<dl>
+<dd>
+<br>
+
+<details>
+<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/book-open-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/book-open.svg" width="16" height="16" align="absmiddle" alt=""></picture> Code guidelines: 1</summary>
+<dl>
+<dd>
+<br>
+
+```
+docs/AGENTS.md — auto-discovered
+```
+
+</dd>
+</dl>
+</details><details>
+<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/route-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/route.svg" width="16" height="16" align="absmiddle" alt=""></picture> Path-based instructions: 1</summary>
+<dl>
+<dd>
+<br>
+
+<details>
+<summary>Applicability reference: AGENTS.md: # AGENTS.md — devantler-tech monorepo | Path | What it holds | Instructions | |---|---|---| | `docs/` | Portfolio architecture decisions in `docs/adr/` | [`docs/AGENTS.md`](docs/AGENTS.md) | Source excerp...</summary>
+<dl>
+<dd>
+<br>
+
+
+**CodeRabbit inference engine (docs/AGENTS.md)**
+
+**Files:**
+- `docs/digests/2026-11-17.md`
+
+</dd>
+</dl>
+</details>
+
+</dd>
+</dl>
+</details><details>
+<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/wrench-dark.svg"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/wrench.svg" width="16" height="16" align="absmiddle" alt=""></picture> markdownlint-cli2 (0.24.0)</summary>
+<dl>
+<dd>
+<br>
+
+<details>
+<summary>docs/digests/2026-11-17.md</summary>
+<dl>
+<dd>
+<br>
+
+[warning] 1-1: First line in a file should be a top-level heading
+
+(MD041, first-line-heading, first-line-h1)
+
+</dd>
+</dl>
+</details>
+
+</dd>
+</dl>
+</details>
+
+</dd>
+</dl>
+</details>
+
+</dd>
+</dl>
+</details>
+</h6>
+
+<!-- This is an auto-generated comment by CodeRabbit for review status -->
+
+<!-- coderabbit-review-publication v1 publication=4f66046b-3d2f-4291-b3a0-9d8964e4d1ab attempt=3db7f80a-3639-4035-bf1c-6f07ca4ecebf batch=1/1 -->
