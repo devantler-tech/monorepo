@@ -4822,7 +4822,7 @@ if want reliability; then
       # A file holding no item record at all (the format before Codex 0.167)
       # is reported as unmeasured. An item stamped before the window (`O`)
       # proves the format, so the file is measured even when nothing is in it.
-      if ! printf '%s\n' "$cx_rows" | grep -qE '^(OK|O|U|F	)'; then echo "N"; fi
+      if ! grep -qE '^(OK|O|U|F	)' <<<"$cx_rows"; then echo "N"; fi
       printf '%s\n' "$cx_rows" | grep -v '^O$' | grep -v '^$' || true
     done | redact > "$CXREL" || CX_REL_FAIL=1
     CX_ITEMS=$(grep -cE '^(OK|F	)' "$CXREL" || true)
