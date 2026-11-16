@@ -204,6 +204,10 @@ odd_title="${clean}
 expect "an unparsable section count is UNKNOWN, never zero" 2 "UNKNOWN unparsable-section-title" "$(payload "${odd_title}")"
 expect "an unparsable icon-format section count is UNKNOWN" 2 "UNKNOWN unparsable-section-title" "$(payload "${clean}
 <summary>${icon} Nitpick comments</summary>")"
+for odd in "Nitpick comments 2" "Nitpick comments - 2" "Nitpick comments (two)" "Nitpick comments(2)" "Nitpick comments"; do
+  expect "an unparsable count is UNKNOWN: ${odd}" 2 "UNKNOWN unparsable-section-title" "$(payload "${clean}
+<summary>🧹 ${odd}</summary>")"
+done
 expect "a file named like the category is not a section title" 1 "FINDINGS 1" "$(payload "${clean}
 <details>
 <summary>🧹 Nitpick comments (1)</summary><blockquote>

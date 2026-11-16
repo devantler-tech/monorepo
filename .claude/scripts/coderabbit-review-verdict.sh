@@ -83,8 +83,10 @@ result="$(jq -r '
   # The informational section, in either shape. Only this exact category is excluded.
   def informational: test("^<summary>🔇 Additional comments \\(") or test("^<summary><picture>.*?</picture>\\s*Additional comments: [0-9]+</summary>$");
   # A title naming a comments category in a shape neither count form reads. Counting it as zero
-  # would let an unread finding section read green, so it makes the verdict UNKNOWN.
-  def unparsable: (iconless | test("comments\\s*([(\\[:{]|</summary>$)"))
+  # would let an unread finding section read green, so it makes the verdict UNKNOWN. This is an
+  # allow-list: any title using the word "comments" must be one of the two count shapes. Only a
+  # file path, where the word runs on into a name (`comments.go`, `comments/`), is not a title.
+  def unparsable: (iconless | test("comments(?![A-Za-z0-9_./-])"))
     and ((iconless | test("^<summary>[^<]*comments(?: \\([0-9]+\\)|: [0-9]+)</summary>$")) | not);
 
   .body as $body
