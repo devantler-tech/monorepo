@@ -89,6 +89,15 @@ expect_deny_clock() {
   fi
 }
 
+expect_deny_task() {
+  run "$1" "$2"
+  if [ "${rc}" -ne 2 ]; then
+    fail_case "$1: expected a task-output denial (exit 2), got exit ${rc}"
+  elif ! grep -q 'deny: foreground wait on a background task' <<<"${err}"; then
+    fail_case "$1: exit 2 without the task-output reason: ${err}"
+  fi
+}
+
 expect_allow() {
   run "$1" "$2" "${3:-false}" "${4:-}"
   [ "${rc}" -eq 0 ] || fail_case "$1: expected admission (exit 0), got exit ${rc}: ${err}"
@@ -141,6 +150,19 @@ until gh pr checks 1; do sleep 30; done'
   expect_deny_clock clock-arith 'end=$(( $(date +%s) + 300 )); while (( $(date +%s) < end )); do sleep 30; done'
 }
 
+# --- Denied: a loop that polls a background task's output file (monorepo#5087) -------------
+# The runtime announces when a backgrounded task finishes, so a foreground loop that re-reads its
+# output file blocks the run for nothing. These are the shapes measured in scheduled runs.
+# shellcheck disable=SC2016
+{
+  expect_deny_task task-counted 'f=/private/tmp/claude-501/p/s/tasks/b61krf491.output; for i in $(seq 1 34); do grep -q done- $f && break; sleep 5; done; cat $f'
+  expect_deny_task task-until-grep 'until grep -q "exit=" /private/tmp/claude-501/p/s/tasks/b61krf491.output 2>/dev/null; do sleep 10; done; tail -5 /private/tmp/claude-501/p/s/tasks/b61krf491.output'
+  expect_deny_task task-until-size 'until [ -s /private/tmp/claude-501/p/s/tasks/b61krf491.output ]; do sleep 20; done; cat /private/tmp/claude-501/p/s/tasks/b61krf491.output'
+  expect_deny_task task-quoted-var 'F="/private/tmp/claude-501/p/s/tasks/b61krf491.output"; n=0; until grep -q "^EXIT " "$F" || [ $n -ge 34 ]; do sleep 5; n=$((n+1)); done; wc -c < "$F"'
+  # A remote read after the loop does not make it a remote poll: the wait is still on the file.
+  expect_deny_task task-then-read 'f=/private/tmp/claude-501/p/s/tasks/b61krf491.output; for i in $(seq 1 34); do grep -q done- $f && break; sleep 5; done; gh pr checks 1'
+}
+
 # --- Admitted: what the guard must leave alone -----------------------------------------------
 # shellcheck disable=SC2016
 {
@@ -163,6 +185,16 @@ chmod +x /tmp/w.sh'
   expect_allow clock-backgrounded 'until [ "$(date -u +%H%M)" -ge 1200 ]; do sleep 10; done' true
   expect_allow clock-monitor 'until [ "$(date -u +%H%M)" -ge 1200 ]; do sleep 10; done' false monitor
   expect_allow clock-in-body 'while kill -0 123 2>/dev/null; do date -u +%T; sleep 10; done'
+  # A background task's output may be read once, waited on in the background, or sampled briefly.
+  expect_allow task-single-read 'tail -20 /private/tmp/claude-501/p/s/tasks/b61krf491.output'
+  expect_allow task-backgrounded 'until grep -q Ready /private/tmp/claude-501/p/s/tasks/b61krf491.output; do sleep 5; done' true
+  expect_allow task-monitor 'until grep -q Ready /private/tmp/claude-501/p/s/tasks/b61krf491.output; do sleep 5; done' false monitor
+  expect_allow task-sampling 'until grep -q Ready /private/tmp/claude-501/p/s/tasks/b61krf491.output; do sleep 1; done'
+  expect_allow task-heredoc 'cat > /tmp/w.sh <<'"'"'EOF'"'"'
+until grep -q done /private/tmp/claude-501/p/s/tasks/b61krf491.output; do sleep 5; done
+EOF
+chmod +x /tmp/w.sh'
+  expect_allow other-tasks-dir 'until [ -s /tmp/tasks/list.txt ]; do sleep 5; done'
   expect_allow no-loop 'gh pr checks 1'
   # A control word inside an argument is not a command position.
   expect_allow quoted-if 'for i in {1..3}; do echo "check if gh is available"; sleep 5; done'
@@ -191,5 +223,5 @@ EXPECTED_GUARD="${expected}" jq -e '
 if [ "${fail}" -ne 0 ]; then
   exit 1
 fi
-echo "foreground-poll-guard: foreground remote poll loops denied, everything else admitted, wired in settings.json."
+echo "foreground-poll-guard: foreground remote poll, clock-wait and task-output loops denied, everything else admitted, wired in settings.json."
 test_run_completed=1

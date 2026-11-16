@@ -24,6 +24,12 @@
 # GitHub once, and waiting again: 70 such loops blocked 11,860 s in the 7 days to 2026-11-14,
 # 19 of them in one run right after the runtime refused its `sleep` (monorepo#5043).
 #
+# A third reason covers a loop that sleeps 5 s or more in a call naming a runtime task output
+# file (`.../tasks/<id>.output`). The runtime announces when a backgrounded task finishes, and
+# the guide already says never to poll that file, but such a loop reads only a local file, so it
+# passed as a local wait. In the 7 days to 2026-11-16 scheduled runs made 112 such calls and
+# blocked 18,956 s, the Agent Improver 43 of them (monorepo#5087).
+#
 # Everything else exits 0: a loop that waits on a local process (the clock may be its deadline),
 # a short sampling loop (sleep under 5 s), a `for` over a list of repositories, a settle `sleep`
 # outside any loop, and every backgrounded call.
@@ -75,6 +81,9 @@ verdict=$(printf '%s\n' "${cmd}" | awk '
     text = text " ; " line
   }
   END {
+    # A runtime task output file named anywhere in the call (before quotes are dropped, so a
+    # quoted path still counts) makes a sleeping loop a wait on a background task (#5087).
+    taskf = (text ~ /\/tasks\/[A-Za-z0-9_-]+\.output/)
     text = unquote(text)
     gsub(/&&|\|\||[;|(){}`]/, " ; ", text)
     n = split(text, t, /[[:space:]]+/)
@@ -107,11 +116,12 @@ verdict=$(printf '%s\n' "${cmd}" | awk '
           cp = (x == ";" || (cp && (x == "do" || x == "then" || x == "else" || x == "if" || x == "elif" || x == "while" || x == "until" || x == "!" || x == "[" || x == "[[" || x ~ /^[A-Za-z_][A-Za-z0-9_]*=/)) || x ~ /=["\047]?\$$/ || x ~ /^["\047]?\$$/ )
         }
         if (s && r) found = 1
+        if (s && taskf) task = 1
         if (s && c && !o && w != "for") clock = 1
       }
       cmdpos = (w == ";" || (cmdpos && (w == "do" || w == "then" || w == "else" || w == "if" || w == "elif" || w == "!" || w ~ /^[A-Za-z_][A-Za-z0-9_]*=/)) || w ~ /=["\047]?\$$/ || w ~ /^["\047]?\$$/)
     }
-    print (found ? "deny" : clock ? "deny-clock" : "allow")
+    print (found ? "deny" : task ? "deny-task" : clock ? "deny-clock" : "allow")
   }
   # Quoted text is an argument, never a command: drop single-quoted text, and keep only the
   # command substitutions ($(...) and backticks) inside double quotes, which the shell runs.
@@ -177,6 +187,16 @@ the run until it times out (.claude/guides/tool-call-discipline.md, "NEVER foreg
 remote wait"). Arm ONE watcher instead and go do other work: the Monitor tool with this
 until-loop, or the same call with run_in_background. In a delegated run, make one bounded
 read of the condition, or stop and report the state to your parent.
+EOF
+  exit 2
+fi
+if [ "${verdict}" = deny-task ]; then
+  cat >&2 <<'EOF'
+deny: foreground wait on a background task. A loop that sleeps while it re-reads a background
+task's output file blocks the run for nothing: the runtime announces when that task finishes
+(.claude/guides/tool-call-discipline.md, "NEVER foreground-block on a remote wait"). Go do other
+work and act on the notification. To wait for a line the task prints, run this same loop with
+run_in_background, which sends one notification when it exits.
 EOF
   exit 2
 fi
