@@ -100,3 +100,20 @@ platform: "Automate this process, or remove it so new changes are automatically 
 - Rollout: business-site first (its last manual re-pin, the switch, then signing as itself), then
   the KHoist documentation, the KHoist controller chart and UniFi, each wired so its health stays
   outside `apps`. The tenants already following tags only switch their signing under ADR 0017.
+
+## Amendments
+
+- **2026-11-16: a release starts on the settings the platform already has.** A release goes live as
+  soon as it is published, so it can no longer ship in the same pull request as the platform
+  settings it reads. Business-site showed the coupling: its v3.13.0 needed two new portal settings
+  that its v3.12.0 refused at startup. So:
+  - Settings that are not secret ship in the release's own package, beside the app that reads them.
+  - The platform supplies only secrets and platform facts, and a tenant's runtime tolerates a key it
+    does not know, so the platform can add a key before the release that reads it.
+  - A release that needs a key the platform does not have yet keeps that feature off until it
+    exists.
+- **2026-11-16: check a package against the platform's admission rules before it is released.**
+  Flux dry-runs a package against the live admission policies, so a refused release changes nothing,
+  but it is found only after publication (business-site v3.9.0 was refused for a Job without
+  `runAsNonRoot` on each container). A tenant's CI checks its package against the platform's
+  admission policies, so a release that would be refused is not published.
