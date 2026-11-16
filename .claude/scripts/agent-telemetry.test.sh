@@ -2962,6 +2962,18 @@ printf '%s\n' "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$FIX/codex\"}}"
   > "$FIX/codex/sessions/r.jsonl"
 printf '%s\n' '{"type":"response_item","payload":{"type":"function_call","arguments":"{\"command\":\"sleep 99\"}"}}' \
   >> "$FIX/codex/sessions/r.jsonl"
+# Codex >= 0.167 records each finished item as an `item_completed` event whose
+# item carries `status` (monorepo#5096). Two in-window failures (a command, and
+# an MCP call whose result says isError), one success, and one failure stamped
+# far outside the window, which must not count. The failed command's output
+# carries a token, which must never be echoed.
+cat >> "$FIX/codex/sessions/r.jsonl" <<'EOF'
+{"timestamp":"__NOW__","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","status":"failed","exit_code":1,"command":["git","push"],"aggregated_output":"fatal: codex-push-rejected __GHPB__\n"}}}
+{"timestamp":"__NOW__","type":"event_msg","payload":{"type":"item_completed","item":{"type":"McpToolCall","status":"completed","server":"github","tool":"get_issue","result":{"isError":true,"content":[{"type":"text","text":"codex-mcp-not-found"}]}}}}
+{"timestamp":"__NOW__","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","status":"completed","exit_code":0,"command":["git","status"],"aggregated_output":"clean\n"}}}
+{"timestamp":"2000-01-01T00:00:00.000Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","status":"failed","exit_code":2,"command":["git","fetch"],"aggregated_output":"codex-out-of-window\n"}}}
+EOF
+subst "$FIX/codex/sessions/r.jsonl"
 
 runleak() {
   fixture_project_bindings "$FIX/projects" || exit 1
@@ -2973,6 +2985,12 @@ runleak() {
 
 OUT=$(runleak --section reliability)
 nocheck "P1: never echoes a token in an error signature" "$OUT" "$(ex __GHPB__)"
+check   "codex: in-window item failures are counted (#5096)" "$OUT" "codex item failures in window: 2 of 3 items"
+check   "codex: a failed command is listed by its output" "$OUT" "CommandExecution exit <n>: fatal: codex-push-rejected"
+check   "codex: an MCP result flagged isError counts as a failure" "$OUT" "McpToolCall github.get_issue: codex-mcp-not-found"
+nocheck "codex: a failure stamped outside the window is not counted" "$OUT" "codex-out-of-window"
+check   "codex: files without item records are reported, never read as clean" "$OUT" "codex files with no item_completed record (unmeasured): 0 of 1"
+nocheck "codex: the stale no-error-flag gap note is gone" "$OUT" "no is_error flag,"
 
 OUT=$(runleak --section safety)
 # Injection resistance: quoted prose is NOT a guard firing; a real errored
