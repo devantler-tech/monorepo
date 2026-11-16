@@ -41,21 +41,28 @@ platform: "Automate this process, or remove it so new changes are automatically 
 3. **A tenant cannot break the platform.** The `apps` layer counts a tenant's Flux source and
    Kustomization as healthy once they exist; their health is the tenant's own. The deploy's
    reconcile already skips tenant Kustomizations, and a `Tenant` instance does not track its
-   children's health. A failing release leaves the previous one running: Flux refuses an artifact
-   whose signature does not match, dry-runs the whole package before it applies anything, and a
-   rollout that never becomes healthy leaves the old pods serving. The existing Flux error alert
-   covers every tenant source and Kustomization.
+   children's health. Flux refuses an artifact whose signature does not match and dry-runs the
+   whole package before it applies anything, so a release that fails either check changes nothing.
+   A release that passes them but fails while it is applied, or never becomes healthy, can leave
+   part of the package applied; it keeps the old pods serving only through a rollout that keeps
+   them until the new ones are ready. So a tenant serves through a rolling update that keeps every
+   old pod until its replacement is ready, never `Recreate`. The existing Flux error alert covers
+   every tenant source and Kustomization.
 
-4. **Migrations run before the new revision serves.** A package that changes its database ships the
-   migration as a Job in the package, and its new revision becomes ready only once the schema it
-   needs exists, so the old revision keeps serving until then. Business-site does this today.
+4. **Migrations run before the new revision serves, and keep the old one working.** A package that
+   changes its database ships the migration as a Job in the package, and its new revision becomes
+   ready only once the schema it needs exists. Old pods keep serving until then, and again after a
+   roll-forward fix, so a migration only adds what the new revision needs; removing what the old
+   revision reads waits for a later release. Business-site does this today.
 
 5. **Roll forward, or pin in an emergency.** A bad release is fixed by the next release. To stop on a
    known-good release, set the tenant's version to that one release (`version: "3.12.0"` on a
    `Tenant`, `semver: "3.12.0"` on a hand-written source) in a normal platform pull request, and
    remove the pin once a fixed release exists. While that pull request is on its way, the maintainer
-   may suspend the tenant's Kustomization (`flux suspend kustomization <tenant> -n <tenant>`) and
-   resume it when the pin is live. A release tag is never moved or deleted to roll back.
+   may suspend the tenant's Kustomization (`flux suspend kustomization <tenant> -n <tenant>`). Once
+   the pin is live, they resume it only after the tenant's source reports Ready with the pinned
+   version (`kubectl -n <tenant> get ocirepository <tenant>`), so the Kustomization never re-applies
+   the bad artifact it still holds. A release tag is never moved or deleted to roll back.
 
 6. **Dev follows every signed release, prod the stable ones.** Dev selects the newest release
    including pre-releases, prod the newest stable release. Both update by themselves. Every signed
