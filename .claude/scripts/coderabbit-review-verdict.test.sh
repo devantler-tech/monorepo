@@ -27,6 +27,7 @@ tool="${here}/coderabbit-review-verdict.sh"
 fixtures="${here}/fixtures"
 hint_fixture="${fixtures}/coderabbit-review-body-hint-prefix-2819.txt"
 outside_fixture="${fixtures}/coderabbit-review-body-outside-diff-2748.txt"
+icon_fixture="${fixtures}/coderabbit-review-body-icon-titles-5091.txt"
 head="0123456789abcdef0123456789abcdef01234567"
 other="89abcdef0123456789abcdef0123456789abcdef"
 
@@ -46,7 +47,7 @@ trap on_exit EXIT
 failures=0
 checks=0
 
-for f in "${hint_fixture}" "${outside_fixture}"; do
+for f in "${hint_fixture}" "${outside_fixture}" "${icon_fixture}"; do
   [ -s "${f}" ] || { echo "FAIL fixture missing or empty: ${f}" >&2; exit 1; }
 done
 
@@ -169,6 +170,54 @@ The template opens a <details> block here.
 The template closes it with </details> here."
 expect "a real section hidden by balanced quoted tags never reads green" 1 "NONE hidden-finding-sections" "$(payload "${hidden_real}")"
 
+# The icon format (monorepo#5091): "<picture>…</picture> <Category> comments: N". A finding section
+# in it counts, the informational one does not, and the real review it was taken from reads zero.
+icon="<picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"x-dark.svg\"><img src=\"x.svg\" width=\"16\" height=\"16\" align=\"absmiddle\" alt=\"\"></picture>"
+icon_nitpick="${clean}
+<details>
+<summary>${icon} Nitpick comments: 2</summary><blockquote>
+</blockquote></details>"
+expect "an icon-format nitpick section counts as findings" 1 "FINDINGS 2" "$(payload "${icon_nitpick}")"
+icon_info="${clean}
+<details>
+<summary>${icon} Additional comments: 3</summary><blockquote>
+<details>
+<summary>docs/x.md: 3</summary><blockquote>
+</blockquote></details>
+</blockquote></details>"
+expect "the icon-format informational section is not a finding" 0 "GREEN" "$(payload "${icon_info}")"
+expect "only the exact icon-format informational title is excluded" 1 "FINDINGS 2" "$(payload "${clean}
+<summary>${icon} Security comments: 2</summary>")"
+expect "a finding title quoted inside the icon-format informational section is never green" 1 "NONE hidden-finding-sections" "$(payload "${clean}
+<details>
+<summary>${icon} Additional comments: 1</summary><blockquote>
+<summary>${icon} Nitpick comments: 2</summary>
+</blockquote></details>")"
+expect "a real icon-format review body with only informational sections reads green" 0 "GREEN" "$(payload "${clean}
+$(cat "${icon_fixture}")")"
+
+# A comments-category title whose count is in neither shape cannot be counted, so it is UNKNOWN.
+odd_title="${clean}
+<details>
+<summary>🧹 Nitpick comments [2]</summary><blockquote>
+</blockquote></details>"
+expect "an unparsable section count is UNKNOWN, never zero" 2 "UNKNOWN unparsable-section-title" "$(payload "${odd_title}")"
+expect "an unparsable icon-format section count is UNKNOWN" 2 "UNKNOWN unparsable-section-title" "$(payload "${clean}
+<summary>${icon} Nitpick comments</summary>")"
+for odd in "Nitpick comments 2" "Nitpick comments - 2" "Nitpick comments (two)" "Nitpick comments(2)" "Nitpick comments"; do
+  expect "an unparsable count is UNKNOWN: ${odd}" 2 "UNKNOWN unparsable-section-title" "$(payload "${clean}
+<summary>🧹 ${odd}</summary>")"
+done
+expect "a file named like the category is not a section title" 1 "FINDINGS 1" "$(payload "${clean}
+<details>
+<summary>🧹 Nitpick comments (1)</summary><blockquote>
+<details>
+<summary>pkg/comments.go (1)</summary><blockquote>
+</blockquote></details>
+</blockquote></details>")"
+expect "a metadata title is not a section title" 0 "GREEN" "$(payload "${clean}
+<summary>${icon} Review info</summary>")"
+
 expect "only the exact informational title is excluded" 1 "FINDINGS 2" "$(payload "${clean}
 <summary>🔇 Security comments (2)</summary>")"
 
@@ -260,9 +309,20 @@ ablate "unanchored service heading" '(\\A|\\n)(> )?#+ (Review limit reached|Revi
   'Review limit reached|Review failed|Review skipped' \
   "$(payload "${clean}
 The retry path logs Review failed when the upstream call errors.")" "GREEN"
-ablate "no informational exclusion" 'elif ($t | test("^<summary>🔇 Additional comments \\(")) then' 'elif false then' \
+ablate "no informational exclusion" 'elif ($t | informational) then' 'elif false then' \
   "$(payload "${clean}
 <summary>🔇 Additional comments (3)</summary>")" "GREEN"
+ablate "old-shape-only section count" 'comments(?: \\(([0-9]+)\\)|: ([0-9]+))</summary>$' 'comments \\(([0-9]+)\\)</summary>$' \
+  "$(payload "${icon_nitpick}")" "FINDINGS 2"
+ablate "unparsable titles read as zero" 'elif $walk.odd > 0 then' 'elif false then' \
+  "$(payload "${odd_title}")" "UNKNOWN unparsable-section-title"
+# Removing the icon strip is not ablated: the unparsable-title rule then turns an icon-format
+# section into UNKNOWN (exit 2), which fails closed, and the icon-format nitpick case above pins
+# that it is counted as FINDINGS instead.
+ablate "icon titles not tokenised" '<summary>(?:<picture>.*?</picture>)?[^<]*</summary>' '<summary>[^<]*</summary>' \
+  "$(payload "${icon_nitpick}")" "FINDINGS 2"
+ablate "no icon-format informational exclusion" ' or test("^<summary><picture>.*?</picture>\\s*Additional comments: [0-9]+</summary>$")' '' \
+  "$(payload "${icon_info}")" "GREEN"
 ablate "no skip inside the informational section" '(if .d > 0 then .skip = .d else . end)' '.' \
   "$(payload "${quoted}")" "NONE hidden-finding-sections"
 ablate "no hidden-section check" 'elif $walk.hidden > 0 then' 'elif false then' \

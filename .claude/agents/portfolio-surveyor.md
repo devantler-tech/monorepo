@@ -681,7 +681,7 @@ public and private — no per-repo loop needed to enumerate):
      non-agent-disclosed) timestamp into `human-comment:<age>` alongside the issue comments and top-level reviews.
      For (b)'s body surface: CodeRabbit emits non-inline
      findings as collapsed sections
-     in review bodies, each titled `<emoji> <Category> comments (N)` inside a `<summary>` tag —
+     in review bodies, each titled `<emoji> <Category> comments (N)` (icon format: `<picture>…</picture> <Category> comments: N`, monorepo#5091) inside a `<summary>` tag —
      `⚠️ Outside diff range comments (N)`, `🧹 Nitpick comments (N)`, `♻️ Duplicate comments (N)`,
      and any future category — which never become threads. Match the shape, not a hard-coded title
      list; exclude only `🔇 Additional comments (N)` (CodeRabbit's non-actionable/informational
@@ -695,7 +695,7 @@ public and private — no per-repo loop needed to enumerate):
      **whether or not its body contains a finding section** — a newest review with no
      finding sections means the findings are cleared and `body_findings=0`; never fall back to an
      older review that still had sections (that re-reports what the newest review already cleared).
-     From that single newest review, extract each matching section's numeric `(N)` excluding `🔇`, and report
+     From that single newest review, extract each matching section's count (`(N)` or `: N`) excluding the informational `Additional comments` section, and report
      `body_findings=<n>@<sha>` where `<sha>` is that review's `commit_id` (for a **Codex comment-form
      finding** — see below — `<sha>` is instead the head recovered from its blob permalinks, since
      such a comment carries no `commit_id` and no `**Reviewed commit:**` marker). When `<sha>` differs from
@@ -813,7 +813,7 @@ public and private — no per-repo loop needed to enumerate):
      `gh api repos/devantler-tech/<repo>/pulls/<n>/reviews/<review-id> --jq '{head:"<headRefOid>",author:.user.login,commit_id:.commit_id,body:(.body // "")}' | <repo-root>/.claude/scripts/coderabbit-review-verdict.sh --input -`
      (the guard admits a declared helper only as this absolute, forge-first `--input -` call;
      monorepo#3572). `GREEN` is the review-object satisfier, `FINDINGS <n>` counts toward the
-     row's body findings, and `NONE` or a failed call means that object is no review. Treat that review object, CodeRabbit's substantive
+     row's body findings, and `NONE`, `UNKNOWN` (exit 2) or a failed call means that object is no review. Treat that review object, CodeRabbit's substantive
      auto-generated summary comment (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated
      after the authenticated request **for which
      `gh api repos/devantler-tech/<repo>/issues/comments/<comment-id> --jq '{head:"<headRefOid>",body:.body}' | <repo-root>/.claude/scripts/coderabbit-summary-verdict.sh --input -`

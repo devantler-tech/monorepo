@@ -14,6 +14,8 @@
 #     - a review whose findings all sit outside the diff opens with the outside-diff CAUTION block
 #       and carries no marker at all, and always carries a finding (monorepo#2748);
 #     - a finding in a collapsed section counts, except `🔇 Additional comments` (informational);
+#     - a `… comments` section title whose count is in neither known shape is UNKNOWN, never zero
+#       (monorepo#5091);
 #     - a finding-shaped title inside that informational section blocks the green: balanced quoted
 #       tags can pull a real section inside it, and no tag walk can tell (monorepo#3571 review);
 #     - a did-not-run marker blocks the green but never discards a finding (monorepo#2764).
@@ -33,15 +35,17 @@
 #   NONE <reason>    not a review result for this head; <reason> is one of not-coderabbit,
 #                    other-head, empty-container, not-a-review, did-not-run, unbalanced-sections,
 #                    hidden-finding-sections
+#   UNKNOWN unparsable-section-title
+#                    a `… comments` section title whose count cannot be read
 #
 # EXIT CODES
 #   0  GREEN
 #   1  FINDINGS or NONE
-#   2  usage error or malformed input — nothing was judged
+#   2  UNKNOWN, or a usage error or malformed input — nothing was judged
 set -euo pipefail
 
 usage() {
-  sed -n '19,37p' "$0" >&2
+  sed -n '23,44p' "$0" >&2
   exit 2
 }
 
@@ -71,6 +75,20 @@ result="$(jq -r '
     sub("^\\s+"; "")
     | if test("^<!--[\\s\\S]*?-->") then sub("^<!--[\\s\\S]*?-->"; "") | strip else . end;
 
+  # CodeRabbit titles a section either "<emoji> <Category> comments (N)" or, in its icon format,
+  # "<picture>…</picture> <Category> comments: N" (monorepo#5091). Both shapes are counted, so a
+  # finding section in either one can never read as zero.
+  def iconless: sub("^<summary><picture>.*?</picture>\\s*"; "<summary>");
+  def section_count: [iconless | scan("^<summary>[^<]*comments(?: \\(([0-9]+)\\)|: ([0-9]+))</summary>$") | (.[0] // .[1]) | tonumber] | add // 0;
+  # The informational section, in either shape. Only this exact category is excluded.
+  def informational: test("^<summary>🔇 Additional comments \\(") or test("^<summary><picture>.*?</picture>\\s*Additional comments: [0-9]+</summary>$");
+  # A title naming a comments category in a shape neither count form reads. Counting it as zero
+  # would let an unread finding section read green, so it makes the verdict UNKNOWN. This is an
+  # allow-list: any title using the word "comments" must be one of the two count shapes. Only a
+  # file path, where the word runs on into a name (`comments.go`, `comments/`), is not a title.
+  def unparsable: (iconless | test("comments(?![A-Za-z0-9_./-])"))
+    and ((iconless | test("^<summary>[^<]*comments(?: \\([0-9]+\\)|: [0-9]+)</summary>$")) | not);
+
   .body as $body
   | ($body | strip) as $lead
   | ($lead | test("^\\*\\*Actionable comments posted: [0-9]+\\*\\*")) as $marker
@@ -82,17 +100,17 @@ result="$(jq -r '
   # can quote changed code carrying finding-shaped summaries. Counting resumes once it closes.
   # Sections are read from $lead: leading comments are metadata. The did-not-run scan below keeps
   # the full $body, because the CodeRabbit rate-limit marker is itself a comment.
-  | ([$lead | scan("<details[^>]*>|</details>|<summary>[^<]*</summary>")]
-      | reduce .[] as $t ({d: 0, skip: null, n: 0, under: false, hidden: 0};
+  | ([$lead | scan("<details[^>]*>|</details>|<summary>(?:<picture>.*?</picture>)?[^<]*</summary>")]
+      | reduce .[] as $t ({d: 0, skip: null, n: 0, under: false, hidden: 0, odd: 0};
           if ($t | startswith("</details")) then
             (if .skip != null and .d <= .skip then .skip = null else . end) | .d -= 1 | (if .d < 0 then .under = true else . end)
           elif ($t | startswith("<details")) then .d += 1
           # Inside the skipped section, a finding-shaped title is only COUNTED, never trusted: it may be
           # quoted text, or a real section that balanced quoted tags pulled inside the skip.
-          elif .skip != null then .hidden += ([$t | scan("^<summary>[^<]*comments \\(([0-9]+)\\)</summary>$") | .[0] | tonumber] | add // 0)
-          elif ($t | test("^<summary>🔇 Additional comments \\(")) then
+          elif .skip != null then .hidden += ($t | section_count)
+          elif ($t | informational) then
             (if .d > 0 then .skip = .d else . end)
-          else .n += ([$t | scan("^<summary>[^<]*comments \\(([0-9]+)\\)</summary>$") | .[0] | tonumber] | add // 0)
+          else .n += ($t | section_count) | .odd += (if ($t | unparsable) then 1 else 0 end)
           end)) as $walk
   | $walk.n as $sections
   # Quoted code can carry an unmatched literal tag, which leaves the walk unbalanced. A skip that
@@ -110,6 +128,7 @@ result="$(jq -r '
     elif $n > 0 then "FINDINGS \($n)"
     # The outside-diff shape always carries a finding; a zero count there is a parse miss, not a green.
     elif $outside then "FINDINGS 1"
+    elif $walk.odd > 0 then "UNKNOWN unparsable-section-title"
     elif $notrun then "NONE did-not-run"
     elif ($balanced | not) then "NONE unbalanced-sections"
     # No tag walk can tell quoted tags from real ones, so GREEN needs no finding-shaped title anywhere.
@@ -118,4 +137,8 @@ result="$(jq -r '
 ' <<<"$payload")" || exit 2
 
 printf '%s\n' "$result"
-[ "$result" = GREEN ]
+case "${result}" in
+  GREEN) exit 0 ;;
+  UNKNOWN*) exit 2 ;;
+  *) exit 1 ;;
+esac
