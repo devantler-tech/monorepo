@@ -38,7 +38,8 @@
 #
 # Exit codes:
 #   0  WITHIN  — the lane holds N <= cap open drafts; the per-lane bound does not block a draft
-#   1  OVER    — the lane holds more than cap open drafts; open none, finish instead
+#   1  OVER    — the lane holds more than cap open drafts; open none but a hotfix or an unblocker
+#                of parked work (cadence guide, "An unblocker is finishing work"); finish instead
 #   2  UNKNOWN — usage error, unreadable registry, or an incomplete read
 #
 # Test seams (when LANE_DRAFTS_JSON is set, gh is never invoked; all must then be set):
