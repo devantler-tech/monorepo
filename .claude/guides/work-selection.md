@@ -393,7 +393,9 @@ and a parked dependency PR the parked digest reports `STRANDED` is still this ru
 *A park is never a resting place* under [*You own EVERY pull request*](merge-policy.md#you-own-every-pull-request-in-the-portfolio--whoever-authored-it)).
 Closing old work creates no intake credit: the lane's total open own-PR count must not rise while the
 oldest cohort drains, and no replacement draft may be opened merely because an old one was disposed
-of.
+of. An unblocker of parked work is the one exception: it frees the cohort it is opened for, so it
+may raise the count (cadence guide, *An unblocker is finishing work*; the per-run bound of 5 still
+applies).
 
 ## Value-prioritized Kanban pull
 
