@@ -605,6 +605,15 @@ if [[ "${repo}" == "homebrew-tap" && "${author}" == "app/botantler-1" &&
       matches_cask_bump_provenance "${app_login-}" "${app_id-}"; then
       updater_verdict 0
     fi
+    # Since homebrew-tap#2575 the workflow bumps the KSail CLI and desktop Casks together: one PR
+    # from `bump-ksail-<version>` titled `chore(cask): update KSail CLI and desktop to v<version>`,
+    # changing exactly both Casks, under the same one-commit provenance (monorepo#5117).
+    if [[ "${cask}" == "ksail" &&
+      "${title}" == "chore(cask): update KSail CLI and desktop to v${version}" ]] &&
+      matches_exact_files "Casks/ksail.rb" "Casks/ksail-desktop.rb" &&
+      matches_cask_bump_provenance "${app_login-}" "${app_id-}"; then
+      updater_verdict 0
+    fi
   fi
   # As for the updater above: still exit 1, but said, so a changed bump workflow is not mistaken
   # for a PR that never claimed to be one.
