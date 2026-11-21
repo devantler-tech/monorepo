@@ -666,8 +666,10 @@ items** (end only when work is exhausted or blocked). A survey-and-exit run that
 **failure, not a valid outcome** (contract *Mandate*). In-flight drafts still maturing toward
 readiness are **not** a reason to stop — help finish/unblock them; new work still requires downstream capacity. **Stop starting, start finishing**
 (contract *Cadence & focus*): before opening any **new** draft, first run
-`.claude/scripts/lane-draft-count.sh --lane <your namespace>` and open **no** non-hotfix draft when
-the own lane is `UNKNOWN` or `OVER` (exit 2 or 1). Then drive **every own in-flight PR** to
+`.claude/scripts/lane-draft-count.sh --lane <your namespace>`, and while the
+own lane is `UNKNOWN` or `OVER` (exit 2 or 1) open **no** draft but a hotfix. Only on `OVER` may
+you also open an unblocker of parked work (cadence guide, *An unblocker is finishing work*);
+`UNKNOWN` is an unread count, so it admits no unblocker. Then drive **every own in-flight PR** to
 merged — pentad clear (green CI + threads resolved + not DIRTY + ≥1 green review at the current head)
 + user-evaluated → **self-promote → merge** (contract *Autonomy*; definition PRs included since their
 separate gate was retired 2026-07-18) — or to an explicitly-named blocker; a *half-finished* one (red CI,

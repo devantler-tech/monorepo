@@ -217,8 +217,11 @@ select_text=$(section "## 2. Select")
 survey_text=$(section "## 1. Survey")
 if [ -n "$select_text" ] && [ -n "$survey_text" ] &&
   grep -Fq '.claude/scripts/lane-draft-count.sh --lane <your namespace>' <<<"$select_text" &&
-  grep -Fq 'open **no** non-hotfix draft when' <<<"$select_text" &&
+  grep -Fq 'open **no** draft but a hotfix.' <<<"$select_text" &&
   grep -Fq 'own lane is `UNKNOWN` or `OVER`' <<<"$select_text" &&
+  grep -Fq 'Only on `OVER` may' <<<"$select_text" &&
+  grep -Fq '`UNKNOWN` is an unread count, so it admits no unblocker.' <<<"$select_text" &&
+  grep -Fq 'An unblocker is finishing work, so the per-lane bound does not block it' "$SCRIPT_DIR/../guides/cadence.md" &&
   ! grep -Fq 'lane-draft-count.sh' <<<"$survey_text"; then
   pass=$((pass + 1))
 else

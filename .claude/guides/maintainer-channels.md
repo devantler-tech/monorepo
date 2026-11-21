@@ -23,6 +23,17 @@ or deciding about our own work are the engineer's steps. A runtime permission re
 durable fix request, shared by every affected item, rather than another ask for each item.
 Offer options that can work: an approving reply cannot change runtime permissions.
 
+**Approving a pending deployment is the engineer's step too** (maintainer direction 2026-11-21: he
+approves no workflow run by hand). When a run of a reviewed workflow waits on an environment
+reviewer, approve it yourself once it is a run already chosen: the option of an answered ask, a
+merge-queue deploy of a ready PR, or a step an incident record names. Its ref must be a protected
+branch or that branch's merge-queue ref (`gh-readonly-queue/<branch>/…`), which is the ref a
+merge-queue deploy runs on. Never approve a run nobody chose, a run from any other ref, or a kind of
+run an open incident hold still holds. A
+temporary hold never rests on a maintainer click: name its owner and lift criteria on the incident
+issue, and the owner lifts it once they hold. On 2026-11-21 a chosen outage fix waited 6.5 hours for
+such a click because each run read the gate as his.
+
 This preserves the maintainer's 2026-07-12 direction, superseding the same-day "standing ping duties":
 contact him only for a genuine blocker, never status messages. The accepted GitHub cutover changes
 the delivery surface, not that attention boundary.
