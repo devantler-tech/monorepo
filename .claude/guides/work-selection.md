@@ -381,6 +381,10 @@ is what *starting* outruns *finishing* looks like, and closing it is rung 1's jo
 **Finish across the portfolio by delivery stage: merge-ready, due verification, review resolution, implementation/unblocking.**
 Help the saturated stage first; within comparable work use original first-start age, falling back to
 immutable PR creation time when the start is unknown. `updatedAt` is activity, not waiting age.
+Parked PRs belong to the unblocking stage, so a blocker that many of them wait on is usually the
+saturated stage: work it, the blocker with the most parked dependents first, before routine
+dependency or Cask-bump merges. On 2026-11-21, 39 of 42 merged PRs were such bumps while one
+blocker (platform#6433) held 26 parked PRs and nobody worked it.
 A PR reaches a terminal state when it is merged, parked on a named live-verified
 blocker, or—when a stale draft is not worth reviving—closed with every still-valid finding re-filed
 as an issue (an invalid or superseded finding may instead be closed with the reason recorded).

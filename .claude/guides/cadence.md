@@ -292,6 +292,16 @@ than a measured optimum — each sits above the lane's observed drainage and idl
 caps bite only on a burst ([#2490](https://github.com/devantler-tech/monorepo/issues/2490) holds the
 measurement they were set from). **Treat a cap you hit as the signal it is**: your lane's
 finishing capacity is the binding constraint, and the work to do is finishing.
+
+**An unblocker is finishing work, so the per-lane bound does not block it** (maintainer decision
+2026-11-21). A draft is an unblocker when the issue it closes is the recorded blocker of a parked
+item: a `PARKED <item> <blocker>` row of [`blocked-check.sh`](../scripts/blocked-check.sh), or the
+open native blocker of a parked issue. The per-run bound of 5 still applies, and the draft's body
+names the parked items it frees. Take unblockers by number of parked dependents, most first. Why:
+from 2026-11-16 to 2026-11-21 the Claude lane held 21 to 23 drafts and **every one was parked**, so
+the bound forbade exactly the drafts that would free them (ksail#8413, which five parked PRs wait on;
+platform#6465), and it also kept the Agent Improver from shipping. Parked drafts spend no review
+capacity, which is what the bound exists to protect.
 ⚠️ **A cap is NOT licence to stop early, and it never blocks the floor.** *Work as long as there is
 work* below is unchanged: the cap redirects a run **from starting toward finishing**, and finishing is
 unbounded — a run that hits the cap and then idles has stopped too soon. The floor is unaffected for

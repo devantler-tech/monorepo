@@ -183,7 +183,8 @@ Draft intake is capped:
 | **Per lane** | While your own lane holds **more than 20** open drafts, open **no** new ones — spend the whole run finishing. |
 
 Check the per-lane bound with `.claude/scripts/lane-draft-count.sh --lane <namespace>` (exit `2` is
-UNKNOWN, which means not permitted). Hotfixes and filing issues are exempt. Full rules:
+UNKNOWN, which means not permitted). Hotfixes and filing issues are exempt; an unblocker of parked
+work is exempt from the per-lane bound only. Full rules:
 [cadence guide](.claude/guides/cadence.md).
 
 ### Durable memory — your native memory + the run report
