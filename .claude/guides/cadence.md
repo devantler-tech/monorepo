@@ -296,7 +296,8 @@ finishing capacity is the binding constraint, and the work to do is finishing.
 **An unblocker is finishing work, so the per-lane bound does not block it** (maintainer decision
 2026-11-21). A draft is an unblocker when the issue it closes is the recorded blocker of a parked
 item: a `PARKED <item> <blocker>` row of [`blocked-check.sh`](../scripts/blocked-check.sh), or the
-open native blocker of a parked issue. The per-run bound of 5 still applies, and the draft's body
+open native blocker of a parked issue. It applies only to an `OVER` count: an `UNKNOWN` one stays
+not permitted. The per-run bound of 5 still applies, and the draft's body
 names the parked items it frees. The same exemption covers the work-selection guide's rule that the
 lane's open own-PR count must not rise while its oldest cohort drains. Take unblockers by number of parked dependents, most first. Why:
 from 2026-11-16 to 2026-11-21 the Claude lane held 21 to 23 drafts and **every one was parked**, so
