@@ -2045,6 +2045,31 @@ expect_tap_bump "ksail-desktop" 0 "" \
 expect_tap_bump "world-at-ruin" 0 "" \
   homebrew-tap app/botantler-1 bump-world-at-ruin-0.172.5 "chore(cask): update world-at-ruin to v0.172.5" \
   "${tap_bump_head}" '["Casks/world-at-ruin.rb"]' "$(tap_bump_commits world-at-ruin 0.172.5)"
+# Since homebrew-tap#2575 the KSail CLI and desktop Casks bump together in one PR (monorepo#5117).
+combined_title="chore(cask): update KSail CLI and desktop to v7.213.44"
+combined_commits="$(jq -c --arg m "${combined_title}" '.[0].message = $m' <<<"${ksail_bump_commits}")"
+combined_casks='["Casks/ksail-desktop.rb","Casks/ksail.rb"]'
+expect_tap_bump "KSail CLI and desktop together" 0 "" \
+  homebrew-tap app/botantler-1 bump-ksail-7.213.44 "${combined_title}" \
+  "${tap_bump_head}" "${combined_casks}" "${combined_commits}"
+expect_tap_bump "combined title changing only the CLI Cask" 1 "${tap_bump_note}" \
+  homebrew-tap app/botantler-1 bump-ksail-7.213.44 "${combined_title}" \
+  "${tap_bump_head}" "${ksail_cask}" "${combined_commits}"
+expect_tap_bump "combined title with an extra file" 1 "${tap_bump_note}" \
+  homebrew-tap app/botantler-1 bump-ksail-7.213.44 "${combined_title}" \
+  "${tap_bump_head}" '["Casks/ksail-desktop.rb","Casks/ksail.rb","README.md"]' "${combined_commits}"
+expect_tap_bump "combined title from the desktop Cask's branch" 1 "${tap_bump_note}" \
+  homebrew-tap app/botantler-1 bump-ksail-desktop-7.213.44 "${combined_title}" \
+  "${tap_bump_head}" "${combined_casks}" "${combined_commits}"
+expect_tap_bump "combined title naming another version than its branch" 1 "${tap_bump_note}" \
+  homebrew-tap app/botantler-1 bump-ksail-7.213.45 "${combined_title}" \
+  "${tap_bump_head}" "${combined_casks}" "${combined_commits}"
+expect_tap_bump "combined bump whose commit message is not the title" 1 "${tap_bump_note}" \
+  homebrew-tap app/botantler-1 bump-ksail-7.213.44 "${combined_title}" \
+  "${tap_bump_head}" "${combined_casks}" "${ksail_bump_commits}"
+expect_tap_bump "combined bump GitHub did not sign" 1 "${tap_bump_note}" \
+  homebrew-tap app/botantler-1 bump-ksail-7.213.44 "${combined_title}" \
+  "${tap_bump_head}" "${combined_casks}" "$(jq -c '.[0].verified = false' <<<"${combined_commits}")"
 # GitHub's API default names the authenticated App as committer; only GitHub's signature can make
 # that commit verified, as it does for the `web-flow` form.
 expect_tap_bump "commit the App itself committed" 0 "" "${ksail_bump_args[@]}" "${ksail_cask}" \

@@ -886,8 +886,12 @@ gated by required CI and auto-merge rather than an AI review:
   directions 2026-07-13 and 2026-07-18): the tap's own hourly `bump-casks` workflow opens one PR per
   outdated Cask, authored by `app/botantler-1` on `bump-<cask>-<version>` with the title
   `chore(cask): update <cask> to v<version>`, changing only `Casks/<cask>.rb` in one GitHub-signed
-  commit whose message is the title. KSail's GoReleaser cask pipeline (ksail#8394) and World at
-  Ruin's CD cask job (world-at-ruin#1713) are gone, so no `goreleaser/*` cask PR opens any more.
+  commit whose message is the title. Since homebrew-tap#2575 the KSail CLI and desktop Casks bump
+  together: one PR on `bump-ksail-<version>` titled
+  `chore(cask): update KSail CLI and desktop to v<version>`, changing exactly `Casks/ksail.rb` and
+  `Casks/ksail-desktop.rb` under the same one-commit provenance (monorepo#5117). KSail's GoReleaser
+  cask pipeline (ksail#8394) and World at Ruin's CD cask job (world-at-ruin#1713) are gone, so no
+  `goreleaser/*` cask PR opens any more.
 
 **`agent-plugins` updater PRs require semantic review.** Bundled skills are executable agent
 instructions sourced from several upstreams, so path and commit provenance prove who produced an
