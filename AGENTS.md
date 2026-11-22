@@ -171,6 +171,8 @@ shipped artifact, never a ceiling. **Finish before you start**: drive in-flight 
 state before opening new ones. Never time anything off "the next tick": the Claude scheduler drops
 overlapping dispatches. Per product, strategy/docs reviews run weekly to monthly; E2E, reliability
 and cost reviews weekly; blog reviews monthly. Autonomous real-cluster trials run at most once/day.
+The Codex Engineer handles the [weekly stale issue review](.claude/guides/cadence.md#weekly-stale-issue-review)
+within its existing runs.
 Maintainer-requested trials follow
 [Temporary engineering costs](.claude/guides/spend-and-inference.md#temporary-engineering-costs).
 Draft intake is capped:

@@ -26,6 +26,30 @@ decomposition exist to keep that queue stocked with well-formed, ready work. Imp
 `Fixes #delivery` to close the delivered slice and, when needed, `Part of #experiment` to preserve its
 outcome record.
 
+## Stale issue review
+
+On the [weekly review cadence](cadence.md#weekly-stale-issue-review), check open issues in active
+public `devantler-tech` repositories with an enabled stale workflow. Resolve the deployed action's
+eligible issue types, exemptions and age thresholds. Review issues already marked `stale` and
+unmarked issues within two weeks of the reminder threshold or older, based on their last GitHub
+update. The shared 90-day policy makes that second set 76 days and older. Page through both sets
+and apply the empty discovery control in [work selection](work-selection.md) when the
+archived-filtered result is empty.
+Respect workflow exemptions and the existing boundary on automation-owned issues.
+
+Start with issues closest to closure. Check current user impact, roadmap commitments, native Priority,
+and any delivered work, prerequisites or narrower open issues. Add `keep-open` when the issue still
+tracks concrete user impact or an explicit current roadmap commitment. An unset Priority, an open
+parent, or age alone cannot make that decision. Let the stale workflow handle work that has shipped,
+is covered elsewhere, or no longer matters. Record unknown evidence in the run report and leave
+those issues alone until it can be checked.
+
+Immediately before each write, re-read the issue and verify that it is still eligible and that the
+repository has the managed `keep-open` label. Add the label without replacing existing labels and
+read it back. Limit review writes to that label. The stale workflow owns reminders and closure.
+Report the number reviewed and newly protected, links and reasons for the protections, and any
+incomplete coverage in the normal run report.
+
 ## Issue hierarchy — sub-issues are the structure; prose is NOT
 **Writing `Part of #99` in an issue body creates NO relationship.** It renders a cross-reference and
 nothing else: no parent, no rollup, no project field, no filterable edge. Decomposition is expressed

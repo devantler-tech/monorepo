@@ -361,3 +361,17 @@ visibly move** — a feature increment shipped, an epic's first child landed, a 
 merely its coverage % and docs freshness. If the substantive backlog *is* genuinely all blocked, that is
 **rare**: say so in the report with the **specific, live-verified blocker per issue**, rather than
 quietly defaulting to another easy artifact.
+
+### Weekly stale issue review
+
+The scheduled **Codex Engineer** owns the [stale issue review](issues-and-board.md#stale-issue-review)
+portfolio-wide. Either existing engineer entry can run it during issue triage when seven days have
+elapsed since the last complete review, or when no completion is recorded. Live breakage and due
+delivery work take precedence. Check for a due review before selecting fresh implementation or
+ending a run, so a busy backlog cannot defer it indefinitely.
+
+Use `last_stale_issue_review` in the [shared Codex engineer memory](durable-memory.md#durable-memory--your-native-memory--the-run-report).
+Re-read it before starting a due pass and immediately before adding protection. If an overlapping
+run has recorded completion, end this pass. Record the completion time only after discovery,
+decisions, and label readbacks are complete. Incomplete reads, unresolved decisions, and unverified
+writes leave the review due. Report what remains so the next eligible run can finish it.
