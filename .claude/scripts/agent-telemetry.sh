@@ -3893,19 +3893,16 @@ fi
 if want dispatch; then
   echo
   echo "── DISPATCH HEALTH (did the run actually run?) ──────────────────"
-  # DEFAULT-OFF. This is a substantive new capability whose output another agent
-  # consumes as evidence, so it ships latent and is activated as a separate,
-  # reversible step once its numbers have been checked against a known window.
+  # DEFAULT-ON since monorepo#5116. It shipped latent (#2612) and was activated
+  # as a separate, reversible step only after its numbers matched a known window:
+  # the 2026-11-16 → 11-21 weekly-limit outage, where every live/dead count per
+  # entry equalled the runtime scheduler's own run records. Left off, that outage
+  # read as an empty corpus and LOWERED every per-session rate (#2610).
+  # `DISPATCH_HEALTH=off` remains the explicit way to switch it off.
   # `--section dispatch` chooses WHICH sections run; this chooses whether the
   # capability is active at all, and the two are deliberately not the same knob.
-  #
-  # The review history is the argument for the gate rather than against it: the
-  # classifier's denominator advice and incident model were each wrong in ways
-  # that read as authoritative, and a wrong recommendation consumed by the Agent
-  # Improver is worse than no recommendation.
-  if [ "${DISPATCH_HEALTH:-off}" != "on" ]; then
-    echo "  (disabled — set DISPATCH_HEALTH=on to activate)"
-    echo "  New capability, default-off pending validation against a known window."
+  if [ "${DISPATCH_HEALTH:-on}" != "on" ]; then
+    echo "  (disabled — DISPATCH_HEALTH is not 'on'; unset it or set it to 'on' to activate)"
   elif [ -z "$WINDOW_SINCE" ]; then
     # FAIL CLOSED, exactly as RELIABILITY does with the same cutoff. Scoring on
     # an empty cutoff would compare every timestamp against "" — always true —
@@ -4318,6 +4315,15 @@ DH_UNKNOWN_IDS
       printf '    %s of its transcripts carry no usable record timestamp, so whether any\n' "$DH_UNDATED"
       echo "    dispatch ran inside this window cannot be established either way."
       echo "    This is NOT evidence of an absence and NOT evidence of an outage."
+    elif [ "$DH_TOTAL" -eq 0 ] && [ "$DH_UNREADABLE" -gt 0 ]; then
+      # Claimed BEFORE the absence branches below (#5126 review): an unreadable
+      # root may hold an in-window dispatch, so neither "no dispatch inside this
+      # window" nor "did not run" is established beside one.
+      printf '  UNKNOWN in-window population for role "%s".\n' "$DH_ROLE"
+      main_rc=2
+      printf '    %s root transcript(s) could not be read and may hold a dispatch of it,\n' "$DH_UNREADABLE"
+      echo "    so whether any ran inside this window cannot be established either way."
+      echo "    This is NOT evidence of an absence and NOT evidence of an outage."
     elif [ "$DH_TOTAL" -eq 0 ] && [ "$DH_OUTWIN" -gt 0 ]; then
       printf '  Role "%s" has no dispatch INSIDE this window.\n' "$DH_ROLE"
       printf '    %s of its transcripts were selected by file mtime but every record they\n' "$DH_OUTWIN"
@@ -4334,6 +4340,21 @@ DH_UNKNOWN_IDS
       echo "    Treat the dispatch count as UNKNOWN, not as an outage: this is what a"
       echo "    changed dispatch-record format looks like, and it is indistinguishable"
       echo "    from a fleet that never ran unless you check the record itself."
+    fi
+    # A count is partial when part of the population could not be read or placed
+    # in time (#5126 review), whatever the count. A zero with undated runs is
+    # claimed above; a positive count beside them is claimed here, and a
+    # multi-entry list names its undated entries above, so only a single role is.
+    # An unreadable root may be a dispatch of this role, so it makes a positive
+    # count partial too; a zero beside one is claimed above. Both hold for a root
+    # the separately capped session set never saw.
+    if [ "$DH_TOTAL" -gt 0 ] && [ "$DH_UNDATED" -gt 0 ] && [ "$DH_ROLE_COUNT" -le 1 ]; then
+      printf '  UNKNOWN: %s dispatch(es) of role "%s" carry no usable record timestamp, so the count below may be short.\n' "$DH_UNDATED" "$DH_ROLE"
+      main_rc=2
+    fi
+    if [ "$DH_TOTAL" -gt 0 ] && [ "$DH_UNREADABLE" -gt 0 ]; then
+      printf '  UNKNOWN: %s root transcript(s) could not be read, so the count below may be short.\n' "$DH_UNREADABLE"
+      main_rc=2
     fi
     printf '  claude dispatches classified: %s   (root transcripts only; subagents excluded)\n' "$DH_TOTAL"
     printf '    live ......... %s   <- complete evidence (ended its turn normally)\n' "$DH_LIVE"
