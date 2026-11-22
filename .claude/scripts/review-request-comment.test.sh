@@ -126,6 +126,11 @@ expect_refusal "bugbot trigger with actor" --provider bugbot --part trigger --ac
 expect_refusal "part on cr" --provider cr --head "${sha}" --part trigger
 expect_refusal "bad actor" --provider cr --head "${sha}" --actor maintainer
 expect_refusal "near-miss actor" --provider cr --head "${sha}" --actor agent_improver
+# The refusal must come from the actor check, not from some other exit 1.
+"${composer}" --provider cr --head "${sha}" --actor agent_improver >/dev/null 2>"${tmpdir}/err" || true
+if ! grep -qF -- "--actor must be engineer (agentic-engineer) or improver (agent-improver), got 'agent_improver'" "${tmpdir}/err"; then
+  bad "near-miss actor: refusal does not name the invalid actor"
+fi
 expect_refusal "unknown flag" --provider cr --head "${sha}" --body x
 
 # --- 2. end-to-end through the real drift guard ------------------------------------------
