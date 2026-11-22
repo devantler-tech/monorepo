@@ -164,9 +164,14 @@ func TestProvenanceRecordDoesNotHideTheTaskMarker(t *testing.T) {
 		}
 	})
 	t.Run("negative control: reading only the first line reports the working task as dead", func(t *testing.T) {
-		code, _, stderr := runLiveness(t, environment{readHeader: readFirstLine}, args...)
+		code, stdout, stderr := runLiveness(t, environment{readHeader: readFirstLine}, args[:len(args)-1]...)
 		if code != 1 {
 			t.Fatalf("exit %d, want 1: %s", code, stderr)
+		}
+		for _, want := range []string{"NOT-PRODUCING  alpha", "OK  beta"} {
+			if !strings.Contains(stdout, want) {
+				t.Errorf("stdout lacks %q: %s", want, stdout)
+			}
 		}
 	})
 }
