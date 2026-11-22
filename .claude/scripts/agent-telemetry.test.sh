@@ -12393,6 +12393,25 @@ OUT=$(env CLAUDE_PROJECTS_DIR="$FIX/dh-recwin-stale-unreadable" CODEX_HOME="$FIX
       DISPATCH_HEALTH=on bash "$TARGET" --since-days 1 --max-files 1 --section dispatch 2>&1); rc=$?
 check   "dispatch: an unreadable root is UNKNOWN under the file cap" "$OUT" 'root transcript(s) could not be read'
 if [ "$rc" -eq 2 ]; then ok "dispatch: an unreadable root under the file cap exits 2"; else bad "dispatch: an unreadable root under the file cap exits 2" "exit $rc"; fi
+OUT=$(env CLAUDE_PROJECTS_DIR="$FIX/dh-recwin-stale-unreadable" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      DISPATCH_HEALTH=on bash "$TARGET" --since-days 1 --section dispatch 2>&1)
+check   "dispatch: older runs beside an unreadable root are UNKNOWN"      "$OUT" 'UNKNOWN in-window population'
+nocheck "dispatch: older runs beside an unreadable root claim no absence" "$OUT" 'has no dispatch INSIDE this window'
+# Both roots selected by the dispatch scan while the separately capped session
+# set holds only the two newer sidechains, so no other check saw the unreadable
+# root: the dispatch section alone must say it does not know.
+mkdir -p "$FIX/dh-capdiv-unreadable/subagents"
+cp "$FIX/dh-recwin-stale/s.jsonl" "$FIX/dh-capdiv-unreadable/s.jsonl"
+sleep 1
+: > "$FIX/dh-capdiv-unreadable/z.jsonl"
+sleep 1
+cp "$FIX/dh-capdiv/subagents/a.jsonl" "$FIX/dh-capdiv/subagents/b.jsonl" "$FIX/dh-capdiv-unreadable/subagents/"
+OUT=$(env CLAUDE_PROJECTS_DIR="$FIX/dh-capdiv-unreadable" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      DISPATCH_HEALTH=on bash "$TARGET" --since-days 1 --max-files 2 --section dispatch 2>&1); rc=$?
+check   "dispatch: the cap split selects both roots"                        "$OUT" 'root transcripts selected by file mtime: 2'
+check   "dispatch: an unreadable root the session cap hid is UNKNOWN"        "$OUT" 'UNKNOWN in-window population'
+nocheck "dispatch: an unreadable root the session cap hid claims no absence" "$OUT" 'has no dispatch INSIDE this window'
+if [ "$rc" -eq 2 ]; then ok "dispatch: an unreadable root the session cap hid exits 2"; else bad "dispatch: an unreadable root the session cap hid exits 2" "exit $rc"; fi
 dh_rc "dispatch exit: the section switched off is exit 0"          0 "$FIX/dhrec-prose"    3650 DISPATCH_HEALTH=off
 
 # ── monorepo#4146: a settled scheduled Codex run lives in `archived_sessions/` ─

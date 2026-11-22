@@ -4315,6 +4315,15 @@ DH_UNKNOWN_IDS
       printf '    %s of its transcripts carry no usable record timestamp, so whether any\n' "$DH_UNDATED"
       echo "    dispatch ran inside this window cannot be established either way."
       echo "    This is NOT evidence of an absence and NOT evidence of an outage."
+    elif [ "$DH_TOTAL" -eq 0 ] && [ "$DH_UNREADABLE" -gt 0 ]; then
+      # Claimed BEFORE the absence branches below (#5126 review): an unreadable
+      # root may hold an in-window dispatch, so neither "no dispatch inside this
+      # window" nor "did not run" is established beside one.
+      printf '  UNKNOWN in-window population for role "%s".\n' "$DH_ROLE"
+      main_rc=2
+      printf '    %s root transcript(s) could not be read and may hold a dispatch of it,\n' "$DH_UNREADABLE"
+      echo "    so whether any ran inside this window cannot be established either way."
+      echo "    This is NOT evidence of an absence and NOT evidence of an outage."
     elif [ "$DH_TOTAL" -eq 0 ] && [ "$DH_OUTWIN" -gt 0 ]; then
       printf '  Role "%s" has no dispatch INSIDE this window.\n' "$DH_ROLE"
       printf '    %s of its transcripts were selected by file mtime but every record they\n' "$DH_OUTWIN"
@@ -4336,14 +4345,14 @@ DH_UNKNOWN_IDS
     # in time (#5126 review), whatever the count. A zero with undated runs is
     # claimed above; a positive count beside them is claimed here, and a
     # multi-entry list names its undated entries above, so only a single role is.
-    # An unreadable root may be a dispatch of this role, so it makes every count
-    # unknown — including a zero the branches above explain another way, and a
-    # root the separately capped session set never saw.
+    # An unreadable root may be a dispatch of this role, so it makes a positive
+    # count partial too; a zero beside one is claimed above. Both hold for a root
+    # the separately capped session set never saw.
     if [ "$DH_TOTAL" -gt 0 ] && [ "$DH_UNDATED" -gt 0 ] && [ "$DH_ROLE_COUNT" -le 1 ]; then
       printf '  UNKNOWN: %s dispatch(es) of role "%s" carry no usable record timestamp, so the count below may be short.\n' "$DH_UNDATED" "$DH_ROLE"
       main_rc=2
     fi
-    if [ "$DH_UNREADABLE" -gt 0 ]; then
+    if [ "$DH_TOTAL" -gt 0 ] && [ "$DH_UNREADABLE" -gt 0 ]; then
       printf '  UNKNOWN: %s root transcript(s) could not be read, so the count below may be short.\n' "$DH_UNREADABLE"
       main_rc=2
     fi
