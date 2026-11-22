@@ -107,4 +107,5 @@ MP-113	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Closing 
 MP-114	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	The PR itself, its review, CI or evaluation is never its blocker	none	-	-
 MP-115	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	Edit it in place on every later run, never post a second	computational	.claude/scripts/blocked-check.sh	DUPLICATE
 MP-116	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**An upstream blocker is re-checked against live releases on its Wait for issue**	computational	.claude/scripts/blocked-check.sh	STALE
+MP-118	you-own-every-pull-request-in-the-portfolio--whoever-authored-it	**On a merge-queue repository, confirm with the one GraphQL read	none	-	-
 MP-117	dependency-automation-and-programmed-bot-prs	Never arm or re-arm that auto-merge yourself	none	-	-
