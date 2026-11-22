@@ -44,7 +44,7 @@
 	branch = main
 [submodule "templates/platform-tenant-template"]
 	path = templates/platform-tenant-template
-	url = git@github.com:devantler-tech/platform-tenant-template.git
+	url = git@github.com:devantler-tech/application-template.git
 	branch = main
 [submodule "templates/platform-template"]
 	path = templates/platform-template

@@ -31,7 +31,7 @@ Populate a submodule with `.claude/scripts/submodule-init.sh <path>` — never a
 | Portfolio aggregator | `devantler-tech/monorepo` | repo root | this file |
 | devantler.tech site | `devantler-tech/business-site` | `applications/business-site` | `AGENTS.md` and [product card](.claude/skills/products/business-site/SKILL.md) |
 | Shared automation and organization defaults | `devantler-tech/.github` | `github/devantler-tech/.github-public` | `AGENTS.md` |
-| Application template (Go, .NET, optional tenancy; being renamed application-template) | `devantler-tech/platform-tenant-template` | `templates/platform-tenant-template` | `AGENTS.md` |
+| Application template (Go, .NET, SvelteKit, optional tenancy) | `devantler-tech/application-template` | `templates/platform-tenant-template` | `AGENTS.md` |
 | Go template (retiring) | `devantler-tech/go-template` | `templates/go-template` | `AGENTS.md` |
 | .NET template (retiring) | `devantler-tech/dotnet-template` | `templates/dotnet-template` | `AGENTS.md` |
 | Platform template | `devantler-tech/platform-template` | `templates/platform-template` | `AGENTS.md` |
@@ -76,7 +76,7 @@ filed. Needs matching no row are filed on the **default intake repo** below.
 | Repo automation | Automatic checks, releases and chores on code repositories | `devantler-tech/.github` |
 | AI assistant skills | Teaching the AI assistants new individual skills and behaviours through their owning plugins | `devantler-tech/agent-plugins` |
 | AI assistant plugin bundles | Bundling skills into installable plugins / marketplace entries for VS Code, Copilot CLI, Claude Code | `devantler-tech/agent-plugins` |
-| Application template | The starter template new applications are created from: a Go, .NET or own stack, optionally a platform tenant | `devantler-tech/platform-tenant-template` |
+| Application template | The starter template new applications are created from: a Go, .NET, SvelteKit or own stack, optionally a platform tenant | `devantler-tech/application-template` |
 | Platform template | The starter template new platform repositories are created from | `devantler-tech/platform-template` |
 | UniFi home network | Changing THIS suite's deployed UniFi network — SSIDs, VLANs, firewall rules, device and VPN config | `devantler-tech/unifi` |
 | Managed devices (FleetDM) | Changing how THIS suite's enrolled Macs and other devices are configured and checked — the policies, queries and enrolment settings its FleetDM GitOps repo defines (not device management in general) | `devantler-tech/fleet-gitops` |
