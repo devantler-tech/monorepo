@@ -12381,6 +12381,18 @@ dh_rc "dispatch exit: a healthy count is exit 0"                   0 "$FIX/dh-se
 dh_rc "dispatch exit: an entry reading zero is a known reading"   0 "$FIX/dh-set-one"     3650 CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant,agentic-engineer-2
 dh_rc "dispatch exit: a real absence of the role is exit 0"        0 "$FIX/dh-onlyother"   3650
 dh_rc "dispatch exit: a window of only older runs is exit 0"       0 "$FIX/dh-recwin-stale" 1
+# #5126 review: an unreadable root may be an in-window dispatch, so a zero the
+# stale-window branch explains is still unknown beside one — with and without the
+# session-file cap that can leave that root out of every other coverage check.
+mkdir -p "$FIX/dh-recwin-stale-unreadable"
+cp "$FIX/dh-recwin-stale/s.jsonl" "$FIX/dh-recwin-stale-unreadable/s.jsonl"
+sleep 1 # the unreadable root must be the NEWEST file, so the cap below keeps it
+: > "$FIX/dh-recwin-stale-unreadable/z.jsonl"
+dh_rc "dispatch exit: older runs beside an unreadable root is exit 2" 2 "$FIX/dh-recwin-stale-unreadable" 1
+OUT=$(env CLAUDE_PROJECTS_DIR="$FIX/dh-recwin-stale-unreadable" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      DISPATCH_HEALTH=on bash "$TARGET" --since-days 1 --max-files 1 --section dispatch 2>&1); rc=$?
+check   "dispatch: an unreadable root is UNKNOWN under the file cap" "$OUT" 'root transcript(s) could not be read'
+if [ "$rc" -eq 2 ]; then ok "dispatch: an unreadable root under the file cap exits 2"; else bad "dispatch: an unreadable root under the file cap exits 2" "exit $rc"; fi
 dh_rc "dispatch exit: the section switched off is exit 0"          0 "$FIX/dhrec-prose"    3650 DISPATCH_HEALTH=off
 
 # ── monorepo#4146: a settled scheduled Codex run lives in `archived_sessions/` ─
