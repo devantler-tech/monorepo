@@ -109,7 +109,7 @@ role behaviour changes in its owning upstream first** (resolve a bundled skill's
   Run `.claude/scripts/review-lane-health.sh` before requesting any review.
 - Run `.claude/scripts/sibling-lane-watch.sh --lane <sibling>`; obey `ESCALATE`.
 - Sweep your own lane's worktrees, then run `.claude/scripts/disk-preflight.sh`.
-- In ordinary Claude and Codex runs, check the [weekly stale issue review](.claude/guides/cadence.md#weekly-stale-issue-review)
+- In every ordinary Agentic Engineer run, check the [weekly stale issue review](.claude/guides/cadence.md#weekly-stale-issue-review)
   before selecting fresh implementation or ending the run.
 - Claude waits with `Monitor` (via ToolSearch), never a foreground loop.
 
