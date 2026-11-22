@@ -124,6 +124,21 @@ page 1 "[$(wait_issue monorepo 70 3 '[]')]" >"${tmp}/asks.json"
 has 'STALE       o/r#60  last checked 20d ago'
 has 'STALE       o/r#62  last checked 20d ago'
 if grep -q 'o/r#59\|o/r#61\|o/monorepo#70' "${tmp}/out"; then fail "a freshly checked wait was reported stale"; fi
+
+# A stale ask is a re-verification alarm, never a reason to contact the maintainer again
+# (maintainer direction 2026-11-13), and its row says so. An ask whose title also starts
+# "Wait for:" is reported once, as an ask; a wait row never carries the ask's text.
+ask_row=' (ask: re-verify the blocker and keep working routes, never re-ask)'
+page 3 "[$(wait_issue r 60 20 '[]'),$(wait_issue r 63 20 '[]'),$(wait_issue r 64 20 '[]' 'Wait for: y')]" >"${tmp}/waits.json"
+page 3 "[$(wait_issue monorepo 71 20 '[]' 'Approve the spend'),$(wait_issue monorepo 72 20 "[$(checked devantler "${D}"$'\n\nChecked: still his.' 1)]" 'Rotate it'),$(wait_issue r 64 20 '[]' 'Wait for: y')]" >"${tmp}/asks.json"
+[ "$(run)" = 1 ] || fail "a stale ask must exit 1"
+has "STALE       o/monorepo#71  last checked 20d ago${ask_row}"
+has "STALE       o/r#64  last checked 20d ago${ask_row}"
+has 'STALE       o/r#60  last checked 20d ago'
+has 'STALE       o/r#63  last checked 20d ago'
+[ "$(grep -c 'o/r#64' "${tmp}/out")" = 1 ] || fail "an issue that is both a wait and an ask must be reported once"
+if grep -q 'o/monorepo#72' "${tmp}/out"; then fail "an ask whose check comment was edited a day ago was reported stale"; fi
+if grep -Eq 'o/r#6[03] .*ask:' "${tmp}/out"; then fail "a wait row carries the ask text"; fi
 rm -f "${tmp}/waits.json" "${tmp}/asks.json"
 
 # A PR cannot be parked on the issue it closes, and the route is read from the record comment itself.

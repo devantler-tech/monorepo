@@ -2219,6 +2219,18 @@ for ask_filing_rule in \
   'Exit `1` can be another ask'"'"'s finding; exit `2` is UNKNOWN, never clean.'; do
   assert_maintainer_channels_prose "${ask_filing_rule}" "the filer of an ask no longer previews it (monorepo#4535)"
 done
+# An ask's 7-day STALE clock once read as a timer to ask again, against the maintainer's 2026-11-13
+# direction that no timer makes contacting him the outcome. The clock re-verifies the blocker, the
+# ask keeps its stated default and the routes continue; blocked-check.test.sh pins the row text.
+for ask_clock_rule in \
+  "An ask is one direction question with a stated default" \
+  "It is never a handoff" \
+  "That clock means re-verify the blocker, never contact him again" \
+  "keep taking every route around it" \
+  "An ask's age never makes you renew, repeat or escalate it, answered or not" \
+  "only the reviewed digest delivers an open ask"; do
+  assert_maintainer_channels_prose "${ask_clock_rule}" "an ask's STALE clock reads as a timer to re-ask again"
+done
 # A push notification delivered an ask that the blocker check then read as never-asked, because
 # the ask-record vocabulary excluded "push" without saying which push it meant (monorepo#3243).
 # The channels section must settle it where an escalating agent reads — the exclusion, a reason
