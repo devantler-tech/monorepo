@@ -216,8 +216,50 @@ verify_reviewed_checkout() {
 # left 3 of 4 surveyor dispatches refused after the first fallback shipped
 # (monorepo#4974). The session worktree holds the pinned bytes, so it is the second
 # fallback, held to exactly the same checks.
+#
+# A project-scope record is a snapshot: the runtime writes it when a worktree session
+# first starts and no refresh rewrites it. A session resumed in an older worktree
+# therefore decides on a months-old install while the user-scope record already
+# holds the pinned bytes. Four surveyor dispatches from 2026-11-13 to 2026-11-22 were
+# refused that way, each from a worktree whose own record named 7.2.0 (monorepo#4993).
+# So when the deciding record is a project or local one, the single user-scope record
+# is the first fallback, held to exactly the same digests.
 if ! verify_install "${install_path}"; then
   installed_failure="${asset_failure}"
+  user_failure=''
+  # Read only when needed, and never mistake a failed read for "no user record": a
+  # failed or unparsable registry is UNKNOWN, so it must not reach a checkout fallback.
+  # The answer is a positive token, `none` or `user:<path>`, because jq exits 0 with
+  # no output on an empty input: an empty or any other answer is a failed read too.
+  user_lookup="$(jq -r --arg id "${PLUGIN_ID}" '
+    # user-scope fallback lookup
+    [.plugins[$id][]?
+      | select(type == "object" and (.installPath | type) == "string"
+          and (.installPath | length) > 0
+          and (.scope == null or .scope == "user"))
+      | .installPath] | unique
+    | if length == 1 then "user:" + .[0] else "none" end
+  ' "${registry}" 2>/dev/null)" ||
+    die "cannot read runtime plugin registry for the user-scope fallback: ${registry}"
+  case "${user_lookup}" in
+    none) user_install_path='' ;;
+    user:?*) user_install_path="${user_lookup#user:}" ;;
+    *) die "cannot read runtime plugin registry for the user-scope fallback: ${registry}" ;;
+  esac
+  if [ -n "${user_install_path}" ] && [ "${user_install_path}" != "${install_path}" ]; then
+    if [ -d "${user_install_path}" ] && verify_install "${user_install_path}"; then
+      install_path="${user_install_path}"
+      installed_failure=''
+    elif [ -d "${user_install_path}" ]; then
+      user_failure="${asset_failure}"
+    else
+      user_failure="registered plugin install path does not exist"
+    fi
+    [ -z "${user_failure}" ] ||
+      installed_failure="${installed_failure}; user-scope record fallback (${user_install_path}): ${user_failure}"
+  fi
+fi
+if [ -n "${installed_failure:-}" ]; then
   if verify_reviewed_checkout "${REPO_ROOT}"; then
     install_path="${REPO_ROOT}/libraries/agent-plugins/plugins/agentic-engineering"
   else

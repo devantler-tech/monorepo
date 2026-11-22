@@ -2113,11 +2113,35 @@ for session_case in '' "${session_other}"; do
     *) fail "cwd '${session_case}' was refused without the shared record's digest reason: ${session_scope_refusal}" ;;
   esac
 done
-# A session record that is itself drifted is still refused: the session decides which
-# install is checked, never whether it is checked.
+# A session record is a snapshot taken when the worktree session first started, so a
+# resumed old worktree names a stale install while the user record holds the pinned
+# bytes (monorepo#4993). The user record is then the first fallback, held to the same
+# digests: the read is admitted, and the reviewed guard, never the drifted one, runs.
 jq -n --arg session "${session_wt}" --arg drifted "${admit_all_plugin}" --arg reviewed "${plugin_root}" '
   {version: 2, plugins: {"agentic-engineering@devantler-plugins": [
     {scope: "user", installPath: $reviewed},
+    {scope: "project", projectPath: $session, installPath: $drifted}]}}' > "${hook_registry}"
+run_surveyor_hook "$(session_payload "${session_wt}" 'gh pr list --repo devantler-tech/monorepo --state open')" >/dev/null ||
+  fail "surveyor hook refused a read although the user-scope record holds the pinned bytes (monorepo#4993)"
+set +e
+user_fallback_write="$(run_surveyor_hook "$(session_payload "${session_wt}" 'gh pr merge 1 --repo devantler-tech/monorepo')" 2>&1)"
+user_fallback_write_status=$?
+set -e
+[ "${user_fallback_write_status}" -eq 2 ] ||
+  fail "user-scope fallback ran the drifted session install instead of the reviewed guard (exit ${user_fallback_write_status})"
+case "${user_fallback_write}" in
+  *'gh pr merge is not a read verb'*) ;;
+  *) fail "user-scope fallback blocked a write without the reviewed guard's reason: ${user_fallback_write}" ;;
+esac
+# The fallback decides which install is checked, never whether it is checked: when the
+# user record is drifted too, the read is refused and the refusal names both failures.
+drifted_user_plugin="${hook_tmp}/drifted-user-plugin"
+rm -rf "${drifted_user_plugin}"
+cp -R "${plugin_root}" "${drifted_user_plugin}"
+printf '\n# unreviewed drift\n' >> "${drifted_user_plugin}/scripts/forge-readonly-guard.sh"
+jq -n --arg session "${session_wt}" --arg drifted "${admit_all_plugin}" --arg user "${drifted_user_plugin}" '
+  {version: 2, plugins: {"agentic-engineering@devantler-plugins": [
+    {scope: "user", installPath: $user},
     {scope: "project", projectPath: $session, installPath: $drifted}]}}' > "${hook_registry}"
 set +e
 session_scope_drift="$(run_surveyor_hook "$(session_payload "${session_wt}" 'gh pr list --repo devantler-tech/monorepo --state open')" 2>&1)"
@@ -2126,9 +2150,39 @@ set -e
 [ "${session_scope_drift_status}" -eq 2 ] ||
   fail "surveyor hook accepted a drifted install named by the session's own record (exit ${session_scope_drift_status})"
 case "${session_scope_drift}" in
-  *'surveyor-forge-readonly.sh sha256 does not match desired state'*) ;;
-  *) fail "drifted session record was refused for the wrong reason: ${session_scope_drift}" ;;
+  *"surveyor-forge-readonly.sh sha256 does not match desired state; user-scope record fallback (${drifted_user_plugin}): runtime asset scripts/forge-readonly-guard.sh sha256 does not match desired state"*) ;;
+  *) fail "drifted session and user records were refused for the wrong reason: ${session_scope_drift}" ;;
 esac
+rm -rf "${drifted_user_plugin}"
+# A failed second read is UNKNOWN, never "no user record": jq exits 0 with no output on
+# an empty input, so a shim that answers the fallback lookup with nothing must stop the
+# hook before any checkout fallback (CodeRabbit on monorepo#5139).
+jq -n --arg session "${session_wt}" --arg drifted "${admit_all_plugin}" --arg reviewed "${plugin_root}" '
+  {version: 2, plugins: {"agentic-engineering@devantler-plugins": [
+    {scope: "user", installPath: $reviewed},
+    {scope: "project", projectPath: $session, installPath: $drifted}]}}' > "${hook_registry}"
+jq_shim_dir="${hook_tmp}/jq-shim"
+mkdir -p "${jq_shim_dir}"
+real_jq="$(command -v jq)"
+cat > "${jq_shim_dir}/jq" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  *'user-scope fallback lookup'*) exit 0 ;;
+esac
+exec "${real_jq}" "\$@"
+EOF
+chmod +x "${jq_shim_dir}/jq"
+set +e
+empty_lookup_output="$(PATH="${jq_shim_dir}:${PATH}" run_surveyor_hook "$(session_payload "${session_wt}" 'gh pr list --repo devantler-tech/monorepo --state open')" 2>&1)"
+empty_lookup_status=$?
+set -e
+[ "${empty_lookup_status}" -eq 2 ] ||
+  fail "surveyor hook read an empty user-scope lookup as a successful read (exit ${empty_lookup_status})"
+case "${empty_lookup_output}" in
+  *'cannot read runtime plugin registry for the user-scope fallback'*) ;;
+  *) fail "empty user-scope lookup was refused for the wrong reason: ${empty_lookup_output}" ;;
+esac
+rm -rf "${jq_shim_dir}"
 surveyor_hook_resolver="${real_surveyor_hook_resolver}"
 write_hook_registry "${plugin_root}"
 
