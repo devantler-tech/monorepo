@@ -32,7 +32,10 @@ merge-queue deploy runs on. Never approve a run nobody chose, a run from any oth
 run an open incident hold still holds. A
 temporary hold never rests on a maintainer click: name its owner and lift criteria on the incident
 issue, and the owner lifts it once they hold. On 2026-11-21 a chosen outage fix waited 6.5 hours for
-such a click because each run read the gate as his.
+such a click because each run read the gate as his. Never make a hold an environment approval at all:
+on the platform every production job takes the shared deploy lock before it waits, so one unapproved
+job wedges the whole lane (16 to 22 November, platform#6433). Use the fail-fast hold in the
+platform's production recovery runbook.
 
 This preserves the maintainer's 2026-07-12 direction, superseding the same-day "standing ping duties":
 contact him only for a genuine blocker, never status messages. The accepted GitHub cutover changes
