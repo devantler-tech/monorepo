@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -131,6 +132,38 @@ func readFirstLine(p string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSuffix(line, "\n"), nil
+}
+
+// maxProvenanceRecords bounds how many leading provenance records readTranscriptHeader skips.
+const maxProvenanceRecords = 4
+
+// readTranscriptHeader is the transcript's first line after any leading `derived-from`
+// provenance records. The runtime began writing such a record ahead of the queued prompt in
+// November 2026; it carries no task marker and no timestamp, so reading it as the header made
+// every new scheduled session unattributable and its dispatch look dead (monorepo#5124). Only
+// that exact record type is skipped, and only a few of them: any other first line is returned
+// as before, so a changed marker still surfaces as unattributable rather than being searched for.
+func readTranscriptHeader(p string) (string, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	r := bufio.NewReader(f)
+	for i := 0; ; i++ {
+		line, err := r.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", err
+		}
+		line = strings.TrimSuffix(line, "\n")
+		var rec struct {
+			Type string `json:"type"`
+		}
+		if i >= maxProvenanceRecords || errors.Is(err, io.EOF) ||
+			json.Unmarshal([]byte(line), &rec) != nil || rec.Type != "derived-from" {
+			return line, nil
+		}
+	}
 }
 
 // readFirstLines is `head -n n`.
