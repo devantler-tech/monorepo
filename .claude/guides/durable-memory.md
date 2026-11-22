@@ -53,6 +53,11 @@ step:
    not a lane outage. If it recurs once both entries run, it is evidence about the Codex cadence
    for the maintainer, never a reason to skip the guard.
 
+   For the [stale issue review](cadence.md#weekly-stale-issue-review), the two host Engineers may
+   read only `last_stale_issue_review` records from each other's existing native Engineer stores.
+   Keep Claude's record in `stale-issue-review.md` in its native project memory and Codex's in its
+   shared Engineer automation memory. Each Engineer writes only to its own store.
+
    **The host stores have a local-only git history** (monorepo#5050). The Claude project memory and
    the Codex automation stores each have a repository whose git directory sits outside the store,
    under `~/.local/state/agent-memory-history/` (`claude-monorepo.git`, `codex-automations.git`),

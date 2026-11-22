@@ -364,14 +364,20 @@ quietly defaulting to another easy artifact.
 
 ### Weekly stale issue review
 
-The scheduled **Codex Engineer** owns the [stale issue review](issues-and-board.md#stale-issue-review)
-portfolio-wide. Either existing engineer entry can run it during issue triage when seven days have
-elapsed since the last complete review, or when no completion is recorded. Live breakage and due
-delivery work take precedence. Check for a due review before selecting fresh implementation or
-ending a run, so a busy backlog cannot defer it indefinitely.
+Every Agentic Engineer instance follows the [stale issue review](issues-and-board.md#stale-issue-review)
+during ordinary issue triage, regardless of runtime or dispatch cadence. Live breakage, due delivery
+work, and applicable pacing take precedence. Check whether the review is due before selecting fresh
+implementation or ending an ordinary run, so a busy backlog cannot defer it indefinitely.
 
-Use `last_stale_issue_review` in the [shared Codex engineer memory](durable-memory.md#durable-memory--your-native-memory--the-run-report).
-Re-read it before starting a due pass and immediately before adding protection. If an overlapping
-run has recorded completion, end this pass. Record the completion time only after discovery,
-decisions, and label readbacks are complete. Incomplete reads, unresolved decisions, and unverified
-writes leave the review due. Report what remains so the next eligible run can finish it.
+Read `last_stale_issue_review` from your [native Engineer memory](durable-memory.md#durable-memory--your-native-memory--the-run-report).
+The review is due seven days after the newest verified completion, or when no completion is verified.
+Only a valid UTC timestamp at or before the current time establishes a completion. Count a peer's
+completion when an authorized read-only path to its record already exists. A runner can use its own
+memory when peer records are unavailable. Keep the records private and write only to your own store.
+
+Re-read available completion records before starting a due pass and immediately before adding
+protection. If a record now proves a completion within seven days, stop the pass. After complete
+discovery, decisions, and label readbacks, append `last_stale_issue_review: YYYY-MM-DDTHH:MM:SSZ`
+with the actual UTC completion time in your native store. Report unresolved candidates, incomplete
+discovery, and unverified writes without advancing the completion time, so the next eligible run
+can finish. Use the normal issue triage permissions to add `keep-open` and report any capability gap.
