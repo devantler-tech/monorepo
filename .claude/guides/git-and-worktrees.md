@@ -162,6 +162,18 @@ isolation*): start every scratch file's name with a token unique to your worker,
 number plus a worker tag when two workers share one item, then a purpose word (`4263-ci.yaml`, never
 `ci.yaml`), and give every worker you dispatch its own token in its brief.
 
+**Register each product checkout as a session folder before you open or adopt its PR**
+(agent-plugins#732). The Claude desktop app matches a PR to a session by comparing the PR's
+repository with the origin of each session folder: the session worktree and any directory added to
+the session. The session worktree's origin is `devantler-tech/monorepo`, so a product PR matches
+nothing, even when its checkout is a submodule or product worktree inside the session worktree. The
+app then refuses Auto-fix for the PR, and the PR never counts as the session's work, so the session
+is not archived when it merges. After `submodule-init.sh <path>`, call `request_directory` with
+`<session worktree>/<path>`, the submodule checkout's absolute path. Matching is by repository, not
+branch, so the checkout can stay detached at its pin, and it covers every product worktree and
+branch made from it. A clone in the scratchpad does not work: measured on 2026-11-22, it stayed
+unmatched even after `request_directory`, while the submodule checkout matched at once.
+
 **Interrupted populates.** `submodule-init.sh <path>` finishes what an interrupted run left in this
 worktree's own module directory, and refuses what it cannot judge. A module directory with no `HEAD`
 under a linked worktree (a SIGTERM leaves it empty) is cleared and populated again. The main checkout's
