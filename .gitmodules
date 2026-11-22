@@ -1,7 +1,3 @@
-[submodule "templates/dotnet-template"]
-	path = templates/dotnet-template
-	url = git@github.com:devantler-tech/dotnet-template.git
-	branch = main
 [submodule "github/devantler-tech/.github-public"]
 	path = github/devantler-tech/.github-public
 	url = git@github.com:devantler-tech/.github.git
@@ -21,10 +17,6 @@
 [submodule "homebrew-tap"]
 	path = homebrew-tap
 	url = git@github.com:devantler-tech/homebrew-tap.git
-	branch = main
-[submodule "templates/go-template"]
-	path = templates/go-template
-	url = git@github.com:devantler-tech/go-template.git
 	branch = main
 [submodule "applications/ksail"]
 	path = applications/ksail
