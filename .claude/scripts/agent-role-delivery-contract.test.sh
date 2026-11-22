@@ -2154,6 +2154,35 @@ case "${session_scope_drift}" in
   *) fail "drifted session and user records were refused for the wrong reason: ${session_scope_drift}" ;;
 esac
 rm -rf "${drifted_user_plugin}"
+# A failed second read is UNKNOWN, never "no user record": jq exits 0 with no output on
+# an empty input, so a shim that answers the fallback lookup with nothing must stop the
+# hook before any checkout fallback (CodeRabbit on monorepo#5139).
+jq -n --arg session "${session_wt}" --arg drifted "${admit_all_plugin}" --arg reviewed "${plugin_root}" '
+  {version: 2, plugins: {"agentic-engineering@devantler-plugins": [
+    {scope: "user", installPath: $reviewed},
+    {scope: "project", projectPath: $session, installPath: $drifted}]}}' > "${hook_registry}"
+jq_shim_dir="${hook_tmp}/jq-shim"
+mkdir -p "${jq_shim_dir}"
+real_jq="$(command -v jq)"
+cat > "${jq_shim_dir}/jq" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  *'user-scope fallback lookup'*) exit 0 ;;
+esac
+exec "${real_jq}" "\$@"
+EOF
+chmod +x "${jq_shim_dir}/jq"
+set +e
+empty_lookup_output="$(PATH="${jq_shim_dir}:${PATH}" run_surveyor_hook "$(session_payload "${session_wt}" 'gh pr list --repo devantler-tech/monorepo --state open')" 2>&1)"
+empty_lookup_status=$?
+set -e
+[ "${empty_lookup_status}" -eq 2 ] ||
+  fail "surveyor hook read an empty user-scope lookup as a successful read (exit ${empty_lookup_status})"
+case "${empty_lookup_output}" in
+  *'cannot read runtime plugin registry for the user-scope fallback'*) ;;
+  *) fail "empty user-scope lookup was refused for the wrong reason: ${empty_lookup_output}" ;;
+esac
+rm -rf "${jq_shim_dir}"
 surveyor_hook_resolver="${real_surveyor_hook_resolver}"
 write_hook_registry "${plugin_root}"
 

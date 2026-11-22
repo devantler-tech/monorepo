@@ -229,16 +229,23 @@ if ! verify_install "${install_path}"; then
   user_failure=''
   # Read only when needed, and never mistake a failed read for "no user record": a
   # failed or unparsable registry is UNKNOWN, so it must not reach a checkout fallback.
-  # A successful read without exactly one user record prints an empty line.
-  user_install_path="$(jq -r --arg id "${PLUGIN_ID}" '
+  # The answer is a positive token, `none` or `user:<path>`, because jq exits 0 with
+  # no output on an empty input: an empty or any other answer is a failed read too.
+  user_lookup="$(jq -r --arg id "${PLUGIN_ID}" '
+    # user-scope fallback lookup
     [.plugins[$id][]?
       | select(type == "object" and (.installPath | type) == "string"
           and (.installPath | length) > 0
           and (.scope == null or .scope == "user"))
       | .installPath] | unique
-    | if length == 1 then .[0] else "" end
+    | if length == 1 then "user:" + .[0] else "none" end
   ' "${registry}" 2>/dev/null)" ||
     die "cannot read runtime plugin registry for the user-scope fallback: ${registry}"
+  case "${user_lookup}" in
+    none) user_install_path='' ;;
+    user:?*) user_install_path="${user_lookup#user:}" ;;
+    *) die "cannot read runtime plugin registry for the user-scope fallback: ${registry}" ;;
+  esac
   if [ -n "${user_install_path}" ] && [ "${user_install_path}" != "${install_path}" ]; then
     if [ -d "${user_install_path}" ] && verify_install "${user_install_path}"; then
       install_path="${user_install_path}"
