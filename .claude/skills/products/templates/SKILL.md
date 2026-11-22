@@ -1,6 +1,6 @@
 ---
 name: maintain-templates
-description: Maintenance task menu for the devantler-tech application template (platform-tenant-template, becoming application-template), whose scaffold lays a Go, .NET, SvelteKit or own stack over it with optional platform tenancy, and for the retiring go-template and dotnet-template. Keep the scaffold clean, current and buildable: triage, dependency/toolchain hygiene, CI health, scaffold freshness. Use when the daily maintainer selects templates.
+description: Maintenance task menu for the devantler-tech application template (application-template), whose scaffold lays a Go, .NET, SvelteKit or own stack over it with optional platform tenancy, and for the retiring go-template and dotnet-template. Keep the scaffold clean, current and buildable: triage, dependency/toolchain hygiene, CI health, scaffold freshness. Use when the daily maintainer selects templates.
 ---
 
 # Maintain: Templates (application template; go-template and dotnet-template retiring)
@@ -18,7 +18,7 @@ description: Maintenance task menu for the devantler-tech application template (
 
 The canonical maintenance task menu lives in the template's own repo — read the
 **`## Maintenance`** section of `templates/platform-tenant-template/AGENTS.md` (on the submodule's
-latest `main`): <https://github.com/devantler-tech/platform-tenant-template/blob/main/AGENTS.md>.
+latest `main`): <https://github.com/devantler-tech/application-template/blob/main/AGENTS.md>.
 
 The target state is that every application, infrastructure-configuration repository and library
 syncs from the template, which owns the cross-cutting files (linting, CodeQL, CodeRabbit,
