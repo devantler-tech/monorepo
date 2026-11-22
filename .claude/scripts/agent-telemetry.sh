@@ -4332,6 +4332,19 @@ DH_UNKNOWN_IDS
       echo "    changed dispatch-record format looks like, and it is indistinguishable"
       echo "    from a fleet that never ran unless you check the record itself."
     fi
+    # A POSITIVE count is partial too when part of the population could not be
+    # read or placed in time (#5126 review). The zero cases above already claim
+    # it; a non-zero count printed beside excluded dispatches must not exit 0.
+    # A multi-entry list names its undated entries above, so only a single role
+    # is claimed here.
+    if [ "$DH_TOTAL" -gt 0 ] && [ "$DH_UNDATED" -gt 0 ] && [ "$DH_ROLE_COUNT" -le 1 ]; then
+      printf '  UNKNOWN: %s dispatch(es) of role "%s" carry no usable record timestamp, so the count below may be short.\n' "$DH_UNDATED" "$DH_ROLE"
+      main_rc=2
+    fi
+    if [ "$DH_TOTAL" -gt 0 ] && [ "$DH_UNREADABLE" -gt 0 ]; then
+      printf '  UNKNOWN: %s root transcript(s) could not be read, so the count below may be short.\n' "$DH_UNREADABLE"
+      main_rc=2
+    fi
     printf '  claude dispatches classified: %s   (root transcripts only; subagents excluded)\n' "$DH_TOTAL"
     printf '    live ......... %s   <- complete evidence (ended its turn normally)\n' "$DH_LIVE"
     printf '    truncated .... %s   (work started, then a provider refusal ended it: partial evidence)\n' "$DH_TRUNC"

@@ -12304,6 +12304,25 @@ nocheck "dispatch set: an undated entry is never printed as 0"  "$OUT" 'agentic-
 nocheck "dispatch set: an undated entry is not called silent"   "$OUT" 'entry "agentic-engineer-2" has no dispatch inside this window'
 check   "dispatch set: the undated run is still counted undated" "$OUT" 'same role, no usable record timestamp ....: 1 '
 # Control: with no undated run the same entry reads a plain 0 (dh-set-one above).
+# (a2) #5126 review: a POSITIVE count is partial too. One role with one dated and
+#      one undated run, and a classified set beside an unreadable root, each
+#      printed a clean count and exited 0.
+mkdir -p "$FIX/dh-set-mixed" "$FIX/dh-set-unreadable"
+dhset_live agentic-engineer-2 10 "$FIX/dh-set-mixed/a.jsonl"
+cp "$FIX/dh-set-undated/u.jsonl" "$FIX/dh-set-mixed/u.jsonl"
+OUT=$(dhset_run "$FIX/dh-set-mixed" DH_ROLE=agentic-engineer-2); rc=$?
+check   "dispatch: a partly undated single role is UNKNOWN"       "$OUT" 'UNKNOWN: 1 dispatch(es) of role "agentic-engineer-2" carry no usable record timestamp'
+if [ "$rc" -eq 2 ]; then ok "dispatch: a partly undated single role exits 2"; else bad "dispatch: a partly undated single role exits 2" "exit $rc"; fi
+OUT=$(dhset_run "$FIX/dh-set-undated" CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant,agentic-engineer-2)
+nocheck "dispatch: a multi-entry list names undated runs only per entry" "$OUT" 'carry no usable record timestamp, so the count below'
+cp "$FIX/dh-set/a.jsonl" "$FIX/dh-set/b.jsonl" "$FIX/dh-set-unreadable/"
+: > "$FIX/dh-set-unreadable/z.jsonl"
+OUT=$(dhset_run "$FIX/dh-set-unreadable"); rc=$?
+check   "dispatch: an unreadable root beside a count is UNKNOWN"  "$OUT" 'UNKNOWN: 1 root transcript(s) could not be read'
+if [ "$rc" -eq 2 ]; then ok "dispatch: an unreadable root beside a count exits 2"; else bad "dispatch: an unreadable root beside a count exits 2" "exit $rc"; fi
+OUT=$(dhset_run "$FIX/dh-set"); rc=$?
+nocheck "dispatch: a fully read, dated set prints no partial UNKNOWN" "$OUT" 'so the count below may be short'
+if [ "$rc" -eq 0 ]; then ok "dispatch: a fully read, dated set exits 0"; else bad "dispatch: a fully read, dated set exits 0" "exit $rc"; fi
 # (b) An unreadable list is exit 2, and it is read before the empty-corpus
 #     shortcut, so "no sessions" is never the answer to a malformed list.
 dhset_run "$FIX/dh-set" CLAUDE_ENGINEER_ENTRIES='daily-ai-assistant,Bad' >/dev/null; rc=$?
