@@ -364,14 +364,21 @@ quietly defaulting to another easy artifact.
 
 ### Weekly stale issue review
 
-The scheduled **Codex Engineer** owns the [stale issue review](issues-and-board.md#stale-issue-review)
-portfolio-wide. Either existing engineer entry can run it during issue triage when seven days have
-elapsed since the last complete review, or when no completion is recorded. Live breakage and due
-delivery work take precedence. Check for a due review before selecting fresh implementation or
-ending a run, so a busy backlog cannot defer it indefinitely.
+Any existing **Claude or Codex Engineer** entry that reaches ordinary issue triage can run the
+[stale issue review](issues-and-board.md#stale-issue-review). Live breakage, due delivery work, and
+weekly pacing take precedence. Check whether the review is due before selecting fresh
+implementation or ending an ordinary run, so a busy backlog cannot defer it indefinitely.
 
-Use `last_stale_issue_review` in the [shared Codex engineer memory](durable-memory.md#durable-memory--your-native-memory--the-run-report).
-Re-read it before starting a due pass and immediately before adding protection. If an overlapping
-run has recorded completion, end this pass. Record the completion time only after discovery,
-decisions, and label readbacks are complete. Incomplete reads, unresolved decisions, and unverified
-writes leave the review due. Report what remains so the next eligible run can finish it.
+Use the newest verified completion across both lanes. The review is due seven days after that
+completion, or when neither lane has a verified completion. Read only `last_stale_issue_review`
+records in the [Engineer memory stores](durable-memory.md#durable-memory--your-native-memory--the-run-report).
+Claude uses `stale-issue-review.md` in its native project memory. Codex uses the automation memory
+shared by its two Engineer entries. Treat the sibling store as read-only and keep its contents
+private. Only a valid UTC timestamp at or before the current time establishes a completion.
+If the sibling's record is unreadable, report the gap and use the newest completion you can verify.
+
+Re-read both records before starting a due pass and immediately before adding protection. If either
+store now proves a completion within seven days, stop the pass. After complete discovery,
+decisions, and label readbacks, append `last_stale_issue_review: YYYY-MM-DDTHH:MM:SSZ` with the actual
+UTC completion time in your own store. Report unresolved candidates, incomplete discovery, and
+unverified writes without advancing the completion time, so the next eligible run can finish.
