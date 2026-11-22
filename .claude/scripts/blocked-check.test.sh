@@ -138,7 +138,7 @@ has 'STALE       o/r#60  last checked 20d ago'
 has 'STALE       o/r#63  last checked 20d ago'
 [ "$(grep -c 'o/r#64' "${tmp}/out")" = 1 ] || fail "an issue that is both a wait and an ask must be reported once"
 if grep -q 'o/monorepo#72' "${tmp}/out"; then fail "an ask whose check comment was edited a day ago was reported stale"; fi
-if grep 'o/r#6[03] ' "${tmp}/out" | grep -q 'ask:'; then fail "a wait row carries the ask text"; fi
+if grep -Eq 'o/r#6[03] .*ask:' "${tmp}/out"; then fail "a wait row carries the ask text"; fi
 rm -f "${tmp}/waits.json" "${tmp}/asks.json"
 
 # A PR cannot be parked on the issue it closes, and the route is read from the record comment itself.
