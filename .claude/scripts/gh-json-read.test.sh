@@ -129,6 +129,14 @@ check "no arguments is a usage error" '[ "$RC" -eq 2 ] && [ -z "$OUT" ]'
 # 10. The contract names this helper where the vocabulary rule lives, so the rule has a tool.
 check "the merge-policy guide names the helper" 'grep -Fq ".claude/scripts/gh-json-read.sh" "$CONSTITUTION"'
 
+# 11. The merge-confirmation rule accepts "in the merge queue" as success, so the read that answers
+#     it must sit beside the rule (monorepo#5143): with only `--json state,mergedAt` there, runs added
+#     the GraphQL-only `isInMergeQueue` to it and voided the whole read (23 sessions, 11-08..11-22).
+#     The paragraph runs from the exit-0 rule to the `merged`-field warning; an empty cut fails.
+confirm_paragraph=$(awk '/A merge command.s exit `0` is not a merge/{on=1} on{print} on&&/there is NO `merged` field/{exit}' "$CONSTITUTION")
+check "the merge-confirmation paragraph is found" '[ -n "$confirm_paragraph" ] && printf "%s\n" "$confirm_paragraph" | grep -Fq "there is NO \`merged\` field"'
+check "the merge-confirmation paragraph names the merge-queue GraphQL read" 'printf "%s\n" "$confirm_paragraph" | grep -Fq "mergeQueueEntry{state position}" && printf "%s\n" "$confirm_paragraph" | grep -Fq "gh api graphql"'
+
 echo "gh-json-read: $pass passed, $fail failed"
 test_run_completed=1
 [ "$fail" -eq 0 ]
