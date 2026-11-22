@@ -224,18 +224,21 @@ verify_reviewed_checkout() {
 # refused that way, each from a worktree whose own record named 7.2.0 (monorepo#4993).
 # So when the deciding record is a project or local one, the single user-scope record
 # is the first fallback, held to exactly the same digests.
-user_install_path="$(jq -er --arg id "${PLUGIN_ID}" '
-  [.plugins[$id][]?
-    | select(type == "object" and (.installPath | type) == "string"
-        and (.installPath | length) > 0
-        and (.scope == null or .scope == "user"))
-    | .installPath] | unique
-  | select(length == 1)
-  | .[0]
-' "${registry}" 2>/dev/null || true)"
 if ! verify_install "${install_path}"; then
   installed_failure="${asset_failure}"
   user_failure=''
+  # Read only when needed, and never mistake a failed read for "no user record": a
+  # failed or unparsable registry is UNKNOWN, so it must not reach a checkout fallback.
+  # A successful read without exactly one user record prints an empty line.
+  user_install_path="$(jq -r --arg id "${PLUGIN_ID}" '
+    [.plugins[$id][]?
+      | select(type == "object" and (.installPath | type) == "string"
+          and (.installPath | length) > 0
+          and (.scope == null or .scope == "user"))
+      | .installPath] | unique
+    | if length == 1 then .[0] else "" end
+  ' "${registry}" 2>/dev/null)" ||
+    die "cannot read runtime plugin registry for the user-scope fallback: ${registry}"
   if [ -n "${user_install_path}" ] && [ "${user_install_path}" != "${install_path}" ]; then
     if [ -d "${user_install_path}" ] && verify_install "${user_install_path}"; then
       install_path="${user_install_path}"
