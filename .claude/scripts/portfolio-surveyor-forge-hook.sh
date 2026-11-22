@@ -216,8 +216,40 @@ verify_reviewed_checkout() {
 # left 3 of 4 surveyor dispatches refused after the first fallback shipped
 # (monorepo#4974). The session worktree holds the pinned bytes, so it is the second
 # fallback, held to exactly the same checks.
+#
+# A project-scope record is a snapshot: the runtime writes it when a worktree session
+# first starts and no refresh rewrites it. A session resumed in an older worktree
+# therefore decides on a months-old install while the user-scope record already
+# holds the pinned bytes. Four surveyor dispatches from 2026-11-13 to 2026-11-22 were
+# refused that way, each from a worktree whose own record named 7.2.0 (monorepo#4993).
+# So when the deciding record is a project or local one, the single user-scope record
+# is the first fallback, held to exactly the same digests.
+user_install_path="$(jq -er --arg id "${PLUGIN_ID}" '
+  [.plugins[$id][]?
+    | select(type == "object" and (.installPath | type) == "string"
+        and (.installPath | length) > 0
+        and (.scope == null or .scope == "user"))
+    | .installPath] | unique
+  | select(length == 1)
+  | .[0]
+' "${registry}" 2>/dev/null || true)"
 if ! verify_install "${install_path}"; then
   installed_failure="${asset_failure}"
+  user_failure=''
+  if [ -n "${user_install_path}" ] && [ "${user_install_path}" != "${install_path}" ]; then
+    if [ -d "${user_install_path}" ] && verify_install "${user_install_path}"; then
+      install_path="${user_install_path}"
+      installed_failure=''
+    elif [ -d "${user_install_path}" ]; then
+      user_failure="${asset_failure}"
+    else
+      user_failure="registered plugin install path does not exist"
+    fi
+    [ -z "${user_failure}" ] ||
+      installed_failure="${installed_failure}; user-scope record fallback (${user_install_path}): ${user_failure}"
+  fi
+fi
+if [ -n "${installed_failure:-}" ]; then
   if verify_reviewed_checkout "${REPO_ROOT}"; then
     install_path="${REPO_ROOT}/libraries/agent-plugins/plugins/agentic-engineering"
   else
