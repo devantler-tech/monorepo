@@ -459,8 +459,8 @@ doing, held to the contract's **two-sided test** (*Security hardening without a 
 ## Per-product notes (where "advance" means different things)
 - **ksail** (Go CLI): features/UX, coverage on command/reconcile paths, `-bench` on hot loops; weekly
   E2E + reliability and the Monthly Strategy are its heavy cadence (see its card/`AGENTS.md`).
-- **go-template / dotnet-template**: keep the scaffold minimal, idiomatic, current — advance = better
-  defaults, toolchain currency, exemplary tests/CI; **don't add product features**.
+- **application template** (`platform-tenant-template`): keep each stack's scaffold minimal, idiomatic,
+  current — advance = better defaults, toolchain currency, exemplary tests/CI; **don't add product features**.
 - **platform** (GitOps): two surfaces (see the [platform card](../products/platform/SKILL.md)). **Repo** —
   **static validation, never spin up a cluster to test a diff**; advance = manifest/Helm/Flux structure &
   quality, policy/security posture, Kustomize hygiene ("tests" are validation, not unit tests). **Live** —

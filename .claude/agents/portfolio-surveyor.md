@@ -1505,7 +1505,7 @@ dropping any repo. (A live repo absent from the portfolio map is *not* drift —
 names only products; flag map drift only when a product row's repo is missing or renamed in the live
 set, and a product row the map itself marks **archived** is an
 intentional tombstone, never drift.) The list:
-`ksail`, `khoist`, `platform`, `monorepo`, `.github`, `go-template`, `dotnet-template`,
+`ksail`, `khoist`, `platform`, `monorepo`, `.github`,
 `application-template`, `platform-template`, `homebrew-tap`,
 `agent-plugins`, `provider-upjet-unifi`, `kyverno-policies`, `fleet-gitops`, `aws`,
 `cloudflare`, `world-at-ruin`, `wedding-app`, `ascoachingogvaner`, `unifi`, `business-site`,

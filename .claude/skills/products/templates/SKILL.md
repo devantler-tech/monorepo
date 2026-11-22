@@ -1,9 +1,9 @@
 ---
 name: maintain-templates
-description: Maintenance task menu for the devantler-tech application template (application-template), whose scaffold lays a Go, .NET, SvelteKit or own stack over it with optional platform tenancy, and for the retiring go-template and dotnet-template. Keep the scaffold clean, current and buildable: triage, dependency/toolchain hygiene, CI health, scaffold freshness. Use when the daily maintainer selects templates.
+description: Maintenance task menu for the devantler-tech application template (application-template), whose scaffold lays a Go, .NET, SvelteKit or own stack over it with optional platform tenancy. Keep the scaffold clean, current and buildable: triage, dependency/toolchain hygiene, CI health, scaffold freshness. Use when the daily maintainer selects templates.
 ---
 
-# Maintain: Templates (application template; go-template and dotnet-template retiring)
+# Maintain: Templates (application template)
 
 - **Serves:** developers starting a new devantler-tech application · **Outcome:** one command,
   `scripts/scaffold.sh <go|dotnet|svelte|none> [--tenancy]`, gives `go`, `dotnet` and `svelte` a
@@ -26,9 +26,8 @@ Renovate) while each keeps its own overlays; onboarding is tracked on #5062
 ([ADR 0018, 2026-11-15 amendment](../../../../docs/adr/0018-one-application-template.md#amendments)).
 A concern several applications share belongs in the template, generically, not in each copy.
 
-`go-template` and `dotnet-template` take only dependency and CI upkeep until KHoist and Bookkeeper
-move their template-sync source and both repositories are archived. File new Go or .NET template
-work on the application template.
+`go-template` and `dotnet-template` are archived (ADR 0018): KHoist and Bookkeeper sync from the
+application template, which now carries the Go and .NET stacks. File Go or .NET template work there.
 
 Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md). This card is a
 pointer by design.

@@ -32,8 +32,6 @@ Populate a submodule with `.claude/scripts/submodule-init.sh <path>` — never a
 | devantler.tech site | `devantler-tech/business-site` | `applications/business-site` | `AGENTS.md` and [product card](.claude/skills/products/business-site/SKILL.md) |
 | Shared automation and organization defaults | `devantler-tech/.github` | `github/devantler-tech/.github-public` | `AGENTS.md` |
 | Application template (Go, .NET, SvelteKit, optional tenancy) | `devantler-tech/application-template` | `templates/platform-tenant-template` | `AGENTS.md` |
-| Go template (retiring) | `devantler-tech/go-template` | `templates/go-template` | `AGENTS.md` |
-| .NET template (retiring) | `devantler-tech/dotnet-template` | `templates/dotnet-template` | `AGENTS.md` |
 | Platform template | `devantler-tech/platform-template` | `templates/platform-template` | `AGENTS.md` |
 | Homebrew tap | `devantler-tech/homebrew-tap` | `homebrew-tap` | `AGENTS.md` |
 | Agent plugins (shared lib) | `devantler-tech/agent-plugins` | `libraries/agent-plugins` | `AGENTS.md` |
