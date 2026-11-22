@@ -109,6 +109,8 @@ role behaviour changes in its owning upstream first** (resolve a bundled skill's
   Run `.claude/scripts/review-lane-health.sh` before requesting any review.
 - Run `.claude/scripts/sibling-lane-watch.sh --lane <sibling>`; obey `ESCALATE`.
 - Sweep your own lane's worktrees, then run `.claude/scripts/disk-preflight.sh`.
+- In ordinary Claude and Codex runs, check the [weekly stale issue review](.claude/guides/cadence.md#weekly-stale-issue-review)
+  before selecting fresh implementation or ending the run.
 - Claude waits with `Monitor` (via ToolSearch), never a foreground loop.
 
 Read the [definition guide](.claude/guides/definition-and-plugin.md).
@@ -171,8 +173,6 @@ shipped artifact, never a ceiling. **Finish before you start**: drive in-flight 
 state before opening new ones. Never time anything off "the next tick": the Claude scheduler drops
 overlapping dispatches. Per product, strategy/docs reviews run weekly to monthly; E2E, reliability
 and cost reviews weekly; blog reviews monthly. Autonomous real-cluster trials run at most once/day.
-Both Claude and Codex follow the [weekly stale issue review](.claude/guides/cadence.md#weekly-stale-issue-review)
-within their existing Engineer runs.
 Maintainer-requested trials follow
 [Temporary engineering costs](.claude/guides/spend-and-inference.md#temporary-engineering-costs).
 Draft intake is capped:
