@@ -57,9 +57,16 @@ Never reopen or relabel an answered ask to bypass suppression.
 number, open state and label, link it as the native *blocked by* issue of the work it holds
 (work-selection guide, *Every blocker is an issue*). The link is an intake receipt, never a claim
 that a notification arrived. Never record an ask that was not delivered to its stated surface, so never link one as a blocker.
-`blocked-check.sh` reports an ask that has gone 7 days without a check as `STALE`: read replies and
-verify the need, and record the check by editing one check comment in place, because a new comment
-notifies the maintainer. Never renew an answered ask or manufacture another notification.
+An ask is one direction question with a stated default: its `### If unanswered` section is what you
+will do if no answer comes, and the work's routes continue meanwhile. It is never a handoff
+(maintainer direction 2026-11-13: *"You own the code, I do not. … I prefer no contact."*).
+`blocked-check.sh` reports an ask that has gone 7 days without a check as `STALE`. That clock means
+re-verify the blocker, never contact him again: read replies, confirm the act is still one only he
+can perform, and keep taking every route around it. Record the check by editing one check comment in
+place, because a new comment notifies the maintainer. When the work no longer needs him, record why
+on the original work, close the ask and work the item. An ask's age never makes you renew, repeat or
+escalate it, answered or not: only the reviewed digest delivers an open ask. Never manufacture
+another notification.
 
 **Preview a filed ask before the next send.** Run
 `.claude/scripts/maintainer-digest.sh needs-you --repo devantler-tech/monorepo` and find your ask by
