@@ -39,7 +39,7 @@ func run(args []string, stdout, stderr io.Writer, loc *time.Location, now int64)
 		home:       os.Getenv("HOME"),
 		loc:        loc,
 		wallNow:    now,
-		readHeader: readFirstLine,
+		readHeader: readTranscriptHeader,
 		lookPath:   exec.LookPath,
 	}
 	switch args[0] {
@@ -58,7 +58,7 @@ type environment struct {
 	storePath, storeRoot, projects, home string
 	loc                                  *time.Location
 	wallNow                              int64
-	// readHeader reads a transcript's first line. It is a seam only so a test can make one header
+	// readHeader reads a transcript's header line (readTranscriptHeader). It is a seam only so a test can make one header
 	// unreadable, which the shell suite did by shimming `head` on PATH.
 	readHeader func(path string) (string, error)
 	// lookPath finds a program on PATH; nil (in tests) means every program is present.

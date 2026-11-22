@@ -138,3 +138,66 @@ func TestNoJQIsUnknown(t *testing.T) {
 		t.Errorf("dispatch-rate without jq: exit %d: %s", code, errOut.String())
 	}
 }
+
+// The runtime now writes a `derived-from` provenance record ahead of the queued prompt. Read as
+// the header, it hid every new session's task marker, so a working dispatch read as dead
+// (monorepo#5124). The header read must look past it, and only past it.
+func TestProvenanceRecordDoesNotHideTheTaskMarker(t *testing.T) {
+	store, projects, alpha := twoTaskFixture(t)
+	body, err := os.ReadFile(alpha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provenance := `{"type":"derived-from","v":1,"sessionId":"s","sessions":[{"type":"unknown","id":null,"via":"launch","started":"s"}]}` + "\n"
+	if err := os.WriteFile(alpha, append([]byte(provenance), body...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mt := time.Unix(fixtureNow-3599+1200, 0)
+	if err := os.Chtimes(alpha, mt, mt); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--store", store, "--projects", projects, "--now-epoch", fmt.Sprint(fixtureNow), "--quiet"}
+	t.Run("a provenance first line still attributes the session", func(t *testing.T) {
+		code, _, stderr := runLiveness(t, environment{readHeader: readTranscriptHeader}, args...)
+		if code != 0 {
+			t.Fatalf("exit %d, want 0: %s", code, stderr)
+		}
+	})
+	t.Run("negative control: reading only the first line reports the working task as dead", func(t *testing.T) {
+		code, stdout, stderr := runLiveness(t, environment{readHeader: readFirstLine}, args[:len(args)-1]...)
+		if code != 1 {
+			t.Fatalf("exit %d, want 1: %s", code, stderr)
+		}
+		for _, want := range []string{"NOT-PRODUCING  alpha", "OK  beta"} {
+			if !strings.Contains(stdout, want) {
+				t.Errorf("stdout lacks %q: %s", want, stdout)
+			}
+		}
+	})
+}
+
+func TestReadTranscriptHeaderSkipsOnlyBoundedProvenance(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	prov := `{"type":"derived-from"}` + "\n"
+	cases := []struct{ name, content, want string }{
+		{"no provenance", `{"type":"user"}` + "\n" + `{"type":"x"}` + "\n", `{"type":"user"}`},
+		{"one provenance", prov + `{"type":"queue-operation"}` + "\n", `{"type":"queue-operation"}`},
+		{"other first record is not skipped", `{"type":"summary"}` + "\n" + `{"type":"user"}` + "\n", `{"type":"summary"}`},
+		{"unparsable first line is returned as is", "not json\n" + `{"type":"user"}` + "\n", "not json"},
+		{"skipping is bounded", strings.Repeat(prov, maxProvenanceRecords+1) + `{"type":"user"}` + "\n", `{"type":"derived-from"}`},
+		{"only provenance", prov, ""},
+	}
+	for _, c := range cases {
+		got, err := readTranscriptHeader(write(strings.ReplaceAll(c.name, " ", "-")+".jsonl", c.content))
+		if err != nil || got != c.want {
+			t.Errorf("%s: got %q, %v; want %q", c.name, got, err, c.want)
+		}
+	}
+}
