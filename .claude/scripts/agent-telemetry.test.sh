@@ -5786,7 +5786,10 @@ exec "$SAFETY_TEST_RMDIR" "$@"
 EOF
 chmod +x "$FIX/safety-controller-cleanup-shim/rmdir"
 # A zero-exit cleanup control needs a complete corpus. Malformed candidate-scan
-# fixtures deliberately make the independent A2A observation UNKNOWN.
+# fixtures deliberately make the independent A2A observation UNKNOWN. This corpus
+# holds no scheduled dispatch, which DISPATCH HEALTH (default-on since #5116)
+# correctly reads as an unattributable zero, exit 2; that section is not what this
+# control measures, so it is switched off here rather than given a fake dispatch.
 mkdir -p "$FIX/safety-controller-clean-corpus"
 printf '%s\n' '{"type":"user","message":{"content":[{"type":"text","text":"ordinary controller cleanup record"}]}}' \
   > "$FIX/safety-controller-clean-corpus/s.jsonl"
@@ -5797,7 +5800,7 @@ rm -f "$FIX/safety-controller-cleanup-started"
 safety_test_rmdir=$(command -v rmdir)
 controller_cleanup_start=$(date +%s)
 CONTROLLER_CLEANUP_BOUNDED=$(PATH="$FIX/safety-controller-cleanup-shim:$PATH" \
-  SAFETY_TEST_RMDIR="$safety_test_rmdir" \
+  DISPATCH_HEALTH=off SAFETY_TEST_RMDIR="$safety_test_rmdir" \
   SAFETY_CONTROLLER_CLEANUP_STARTED="$FIX/safety-controller-cleanup-started" \
   CLAUDE_PROJECTS_DIR="$FIX/safety-controller-clean-corpus" CODEX_HOME="$FIX/nocodex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
@@ -8562,21 +8565,25 @@ check "the population mismatch is stated when other roles are present" "$ROUT2" 
 check "the mismatch names both populations"                            "$ROUT2" "cover only the 1 dispatches of role"
 check "the mismatch names the independent cap"                         "$ROUT2" "SEPARATELY capped set"
 
-# CONTROL V pins the FEATURE GATE in BOTH states, which is what the flag rule
-# requires and what makes activation a separate, reversible step. This classifier
-# is new capability whose denominator advice another agent consumes as evidence,
-# and this PR's own review history is the argument FOR the gate rather than
-# against it: the advice and the incident model were each wrong in ways that read
-# as authoritative, across several rounds.
+# CONTROL V pins the FEATURE GATE in ALL THREE states, which is what the flag rule
+# requires and what keeps activation reversible. The classifier shipped latent
+# (#2612) and was switched on by default (#5116) only after its counts matched the
+# runtime scheduler's own records over the 2026-11-16 → 11-21 outage. Left off,
+# that outage read as an empty corpus and lowered every per-session rate (#2610),
+# so a silent return to default-off is the regression this pins.
+GATE_DEFAULT=$(env -u DISPATCH_HEALTH CLAUDE_PROJECTS_DIR="$FIX/dispatch" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+               bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check   "ON by default: the classification appears"    "$GATE_DEFAULT" "dispatches classified"
+nocheck "ON by default: no disabled notice"            "$GATE_DEFAULT" "(disabled"
 GATE_OFF=$(CLAUDE_PROJECTS_DIR="$FIX/dispatch" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-           bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
-check   "OFF by default: the section says so"          "$GATE_OFF" "(disabled — set DISPATCH_HEALTH=on to activate)"
-nocheck "OFF by default: nothing is classified"        "$GATE_OFF" "dispatches classified"
-nocheck "OFF by default: no denominator advice"        "$GATE_OFF" "Re-base a rate"
+           DISPATCH_HEALTH=off bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check   "OFF when asked: the section says so"          "$GATE_OFF" "(disabled — DISPATCH_HEALTH is not 'on'"
+nocheck "OFF when asked: nothing is classified"        "$GATE_OFF" "dispatches classified"
+nocheck "OFF when asked: no denominator advice"        "$GATE_OFF" "Re-base a rate"
 GATE_ON=$(CLAUDE_PROJECTS_DIR="$FIX/dispatch" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
           DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check   "ON: the classification appears"               "$GATE_ON" "dispatches classified"
-nocheck "ON: the disabled notice is gone"              "$GATE_ON" "set DISPATCH_HEALTH=on to activate"
+nocheck "ON: the disabled notice is gone"              "$GATE_ON" "(disabled"
 # An explicit --section request must NOT activate the capability by itself, or the
 # gate is decorative: which sections run and whether a new capability is live are
 # deliberately different knobs.

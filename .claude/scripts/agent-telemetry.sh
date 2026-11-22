@@ -3893,19 +3893,16 @@ fi
 if want dispatch; then
   echo
   echo "── DISPATCH HEALTH (did the run actually run?) ──────────────────"
-  # DEFAULT-OFF. This is a substantive new capability whose output another agent
-  # consumes as evidence, so it ships latent and is activated as a separate,
-  # reversible step once its numbers have been checked against a known window.
+  # DEFAULT-ON since monorepo#5116. It shipped latent (#2612) and was activated
+  # as a separate, reversible step only after its numbers matched a known window:
+  # the 2026-11-16 → 11-21 weekly-limit outage, where every live/dead count per
+  # entry equalled the runtime scheduler's own run records. Left off, that outage
+  # read as an empty corpus and LOWERED every per-session rate (#2610).
+  # `DISPATCH_HEALTH=off` remains the explicit way to switch it off.
   # `--section dispatch` chooses WHICH sections run; this chooses whether the
   # capability is active at all, and the two are deliberately not the same knob.
-  #
-  # The review history is the argument for the gate rather than against it: the
-  # classifier's denominator advice and incident model were each wrong in ways
-  # that read as authoritative, and a wrong recommendation consumed by the Agent
-  # Improver is worse than no recommendation.
-  if [ "${DISPATCH_HEALTH:-off}" != "on" ]; then
-    echo "  (disabled — set DISPATCH_HEALTH=on to activate)"
-    echo "  New capability, default-off pending validation against a known window."
+  if [ "${DISPATCH_HEALTH:-on}" != "on" ]; then
+    echo "  (disabled — DISPATCH_HEALTH is not 'on'; unset it or set it to 'on' to activate)"
   elif [ -z "$WINDOW_SINCE" ]; then
     # FAIL CLOSED, exactly as RELIABILITY does with the same cutoff. Scoring on
     # an empty cutoff would compare every timestamp against "" — always true —
