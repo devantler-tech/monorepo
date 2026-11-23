@@ -3819,6 +3819,8 @@ _shape_clauses=(
   'Emit exactly one forge command per call'
   'reduce it in-band with `--paginate` and `--jq`'
   'a pipe into the allowlisted read-only'
+  'pipes `--paginate --slurp` into the allowlisted `jq` instead'
+  '`gh` refuses `--slurp`'
   'never a `for` loop'
   'Select with `--jq` rather than `grep -oE` or `xargs`'
   'mark the affected evidence `QUERY-UNKNOWN` and reissue in the'
