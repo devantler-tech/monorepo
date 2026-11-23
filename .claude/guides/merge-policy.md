@@ -690,6 +690,9 @@ nothing and did nothing, because required checks were missing (#2730). So the co
 is part of every merge. Unless `state` reads `MERGED`, or the PR is in the merge queue on a
 merge-queue repository, the merge failed: run the completeness check above and diagnose it. Never
 record it as merged.
+**On a merge-queue repository, confirm with the one GraphQL read that answers both outcomes —
+`gh api graphql -f query='{repository(owner:"devantler-tech",name:"<repo>"){pullRequest(number:<n>){state mergedAt isInMergeQueue mergeQueueEntry{state position}}}}'`
+— never by adding `isInMergeQueue` to a `--json` list (#5143).**
 **Confirming the merge landed: `gh pr view <n> --repo devantler-tech/<repo> --json state,mergedAt` —
 there is NO `merged` field.** This read was unprescribed territory, and the improvisation it invited
 costs more than one value: `gh` rejects the **whole** `--json` request when any single field is unknown,
