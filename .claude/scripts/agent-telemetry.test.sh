@@ -12803,6 +12803,35 @@ check "sidecar: a nested launch confirmed by its launcher is inventoried" "$OUT"
   "0 of 2 delegated transcripts — 0 named by no parent agentId record or confirmed sidecar"
 check "sidecar: both launches are counted" "$OUT" \
   "(from sidecars confirmed by the launching tool_use): 2 background or nested launches"
+nocheck "sidecar: confirmed launches raise no unknown" "$OUT" "sidecar or launcher could not be read"
+# A sidecar that exists but cannot be parsed is UNKNOWN (exit 2, transcript
+# named), never a quiet "not inventoried" (review of #5162).
+mkdir -p "$FIX/deleg-sc/proj/p/subagents"
+cp "$FIX/deleg-bg/proj/p.jsonl" "$FIX/deleg-sc/proj/p.jsonl"
+cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-sc/proj/p/subagents/agent-abad.jsonl"
+printf '%s\n' '{"toolUseId":"t1"' > "$FIX/deleg-sc/proj/p/subagents/agent-abad.meta.json"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-sc/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+check "sidecar: an unparseable sidecar is unknown" "$OUT" \
+  "UNKNOWN: 1 delegated transcript(s) whose sidecar or launcher could not be read or parsed"
+check "sidecar: the unknown transcript is named" "$OUT" "p/subagents/agent-abad.jsonl"
+if [ "$rc" -eq 2 ]; then ok "sidecar: an unparseable sidecar exits 2"; else bad "sidecar: an unparseable sidecar exits 2" "exit $rc"; fi
+# A confirmed sidecar does not vouch for the transcript itself: one that does
+# not parse is unknown, as on the agentId path (review of #5162).
+printf '%s\n' '{"toolUseId":"t1"}' > "$FIX/deleg-sc/proj/p/subagents/agent-abad.meta.json"
+printf '%s\n' 'not json at all' > "$FIX/deleg-sc/proj/p/subagents/agent-abad.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-sc/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+check "sidecar: an unreadable attributed transcript is unknown" "$OUT" \
+  "UNKNOWN: 1 sidecar-attributed delegated transcript(s) could not be read"
+if [ "$rc" -eq 2 ]; then ok "sidecar: an unreadable attributed transcript exits 2"; else bad "sidecar: an unreadable attributed transcript exits 2" "exit $rc"; fi
+# CONTROL: a readable transcript with a confirmed sidecar is a clean reading.
+cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-sc/proj/p/subagents/agent-abad.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-sc/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+nocheck "sidecar control: no unknown line" "$OUT" "UNKNOWN: 1 sidecar"
+check "sidecar control: attributed" "$OUT" "(from sidecars confirmed by the launching tool_use): 1 background or nested launches"
+if [ "$rc" -eq 0 ]; then ok "sidecar control: exit 0"; else bad "sidecar control: exit 0" "exit $rc"; fi
 # A malformed record carrying an agentId key is not silently skipped (review of
 # #4326): the parent's inventory could not be built, so it is unknown and exit 2.
 mkdir -p "$FIX/deleg-bad/proj"
