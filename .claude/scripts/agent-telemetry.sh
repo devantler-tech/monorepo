@@ -3634,6 +3634,9 @@ claude_sidecar_launch_confirmed() {
   meta="${f%.jsonl}.meta.json"
   [ -e "$meta" ] || return 1
   [ -f "$meta" ] && [ -r "$meta" ] || return 2
+  # An empty or whitespace-only sidecar parses to nothing, which jq reports as
+  # success: require exactly one metadata object before reading its fields.
+  jq -e -s 'length == 1 and (.[0] | type) == "object"' "$meta" >/dev/null 2>&1 || return 2
   tid=$(jq -r 'if type == "object" and (.toolUseId | type) == "string"
                  and (.toolUseId | test("^[A-Za-z0-9_-]+$")) then .toolUseId else "" end' "$meta" 2>/dev/null) || return 2
   [ -n "$tid" ] || return 1
@@ -3646,6 +3649,11 @@ claude_sidecar_launch_confirmed() {
   fi
   [ -e "$launcher" ] || return 1
   [ -f "$launcher" ] && [ -r "$launcher" ] || return 2
+  # The id filter below discards every line that does not mention the id, so a
+  # truncated or malformed launcher would still confirm. The session parent was
+  # parsed whole by the caller; a nested launcher (another subagent, possibly
+  # outside the walk) is parsed whole here before its call is trusted.
+  if [ -n "$pid" ] && ! transcript_has_records "$launcher"; then return 2; fi
   lines=$(LC_ALL=C grep -F -- "\"${tid}\"" "$launcher" 2>/dev/null) || rc=$?
   [ "$rc" -le 1 ] || return 2
   [ "$rc" -eq 0 ] || return 1

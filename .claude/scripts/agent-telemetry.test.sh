@@ -12832,6 +12832,25 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-sc/proj" CODEX_HOME="$FIX/deleg-nocodex" M
 nocheck "sidecar control: no unknown line" "$OUT" "UNKNOWN: 1 sidecar"
 check "sidecar control: attributed" "$OUT" "(from sidecars confirmed by the launching tool_use): 1 background or nested launches"
 if [ "$rc" -eq 0 ]; then ok "sidecar control: exit 0"; else bad "sidecar control: exit 0" "exit $rc"; fi
+# An empty sidecar parses to nothing, which jq reports as success: it is
+# UNKNOWN, never "no launch id" (review of #5162).
+printf '  \n' > "$FIX/deleg-sc/proj/p/subagents/agent-abad.meta.json"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-sc/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+check "sidecar: an empty sidecar is unknown" "$OUT" \
+  "UNKNOWN: 1 delegated transcript(s) whose sidecar or launcher could not be read or parsed"
+if [ "$rc" -eq 2 ]; then ok "sidecar: an empty sidecar exits 2"; else bad "sidecar: an empty sidecar exits 2" "exit $rc"; fi
+printf '%s\n' '{"toolUseId":"t1"}' > "$FIX/deleg-sc/proj/p/subagents/agent-abad.meta.json"
+# A nested launcher that holds the matching call but is cut short elsewhere is
+# a partial read: the child is UNKNOWN, not confirmed (review of #5162).
+cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-sc/proj/p/subagents/agent-akid.jsonl"
+printf '%s\n' '{"toolUseId":"t9","parentAgentId":"abad"}' > "$FIX/deleg-sc/proj/p/subagents/agent-akid.meta.json"
+{ printf '%s\n' '{"type":"assistant","timestamp":"2026-08-01T10:00:30.000Z","message":{"content":[{"type":"tool_use","id":"t9","name":"Agent","input":{}}]}}'
+  printf '%s' '{"type":"user","message":{"content":[{"type":"te'; } >> "$FIX/deleg-sc/proj/p/subagents/agent-abad.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-sc/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+check "sidecar: a truncated nested launcher leaves its child unknown" "$OUT" "p/subagents/agent-akid.jsonl"
+if [ "$rc" -eq 2 ]; then ok "sidecar: a truncated nested launcher exits 2"; else bad "sidecar: a truncated nested launcher exits 2" "exit $rc"; fi
 # A malformed record carrying an agentId key is not silently skipped (review of
 # #4326): the parent's inventory could not be built, so it is unknown and exit 2.
 mkdir -p "$FIX/deleg-bad/proj"
