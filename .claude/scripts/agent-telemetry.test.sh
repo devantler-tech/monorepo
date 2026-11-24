@@ -12851,6 +12851,17 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-sc/proj" CODEX_HOME="$FIX/deleg-nocodex" M
       bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
 check "sidecar: a truncated nested launcher leaves its child unknown" "$OUT" "p/subagents/agent-akid.jsonl"
 if [ "$rc" -eq 2 ]; then ok "sidecar: a truncated nested launcher exits 2"; else bad "sidecar: a truncated nested launcher exits 2" "exit $rc"; fi
+# A nested launcher that is gone leaves the claim unchecked: UNKNOWN, not a
+# quiet "not inventoried" (review of #5162). The truncated launcher is restored
+# first so only the missing one is unknown.
+cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-sc/proj/p/subagents/agent-abad.jsonl"
+printf '%s\n' '{"toolUseId":"t9","parentAgentId":"agone"}' > "$FIX/deleg-sc/proj/p/subagents/agent-akid.meta.json"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-sc/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+check "sidecar: a missing nested launcher is unknown" "$OUT" \
+  "UNKNOWN: 1 delegated transcript(s) whose sidecar or launcher could not be read or parsed"
+check "sidecar: the child of a missing launcher is named" "$OUT" "p/subagents/agent-akid.jsonl"
+if [ "$rc" -eq 2 ]; then ok "sidecar: a missing nested launcher exits 2"; else bad "sidecar: a missing nested launcher exits 2" "exit $rc"; fi
 # A malformed record carrying an agentId key is not silently skipped (review of
 # #4326): the parent's inventory could not be built, so it is unknown and exit 2.
 mkdir -p "$FIX/deleg-bad/proj"

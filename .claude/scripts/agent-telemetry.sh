@@ -3627,7 +3627,7 @@ transcript_has_records() {
 # part of the delegated set.
 # Returns 0 when the launch is confirmed, 1 when there is no sidecar or the
 # launcher made no such call (the transcript stays not inventoried), and 2 when
-# an input that exists could not be read or parsed: that is UNKNOWN, never a
+# the launcher is missing, or a sidecar or launcher cannot be read or parsed: UNKNOWN, never a
 # quiet "not inventoried".
 claude_sidecar_launch_confirmed() {
   local f="$1" meta tid pid launcher lines rc=0
@@ -3647,7 +3647,8 @@ claude_sidecar_launch_confirmed() {
   else
     launcher="${f%/subagents/*}.jsonl"
   fi
-  [ -e "$launcher" ] || return 1
+  # A launcher that is gone leaves the sidecar's claim unchecked, not disproved.
+  [ -e "$launcher" ] || return 2
   [ -f "$launcher" ] && [ -r "$launcher" ] || return 2
   # The id filter below discards every line that does not mention the id, so a
   # truncated or malformed launcher would still confirm. The session parent was
