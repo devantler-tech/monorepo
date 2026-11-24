@@ -514,7 +514,7 @@ tip_is 'a branch tip in the history of a merged pull request is merged-ancestor'
 check 'the closing line counts it apart from merged' out_has '	tips_merged=0	tips_merged_ancestor=1	tips_github_bot=0	tips_pushed_ref=1	tips_unsettled=2	'
 commit_fix "$side" "$(node 41 MERGED "$side")"; rm -f "$FIX/cmp-$side-$H1.json"
 # The same tip, when a bot made it on GitHub and no pull request holds it any more.
-printf '{"data":{"repository":{"defaultBranchRef":{"name":"main"},"object":{"__typename":"Commit","author":{"user":{"login":"ksail-bot[bot]"}},"authors":{"totalCount":1},"signature":{"isValid":true,"wasSignedByGitHub":true},"associatedPullRequests":{"totalCount":0,"nodes":[]}}}}}\n' > "$FIX/$side.json"
+printf '{"data":{"repository":{"defaultBranchRef":{"name":"main"},"object":{"__typename":"Commit","author":{"user":{"login":"botantler-1[bot]"}},"authors":{"totalCount":1},"signature":{"isValid":true,"wasSignedByGitHub":true},"associatedPullRequests":{"totalCount":0,"nodes":[]}}}}}\n' > "$FIX/$side.json"
 tips_run
 tip_is 'a branch tip a bot made on GitHub is github-bot' "$side" 'github-bot kind=branch pr=-'
 check 'the closing line counts it apart from merged and unsettled' out_has '	tips_merged=0	tips_merged_ancestor=0	tips_github_bot=1	tips_pushed_ref=1	tips_unsettled=2	'

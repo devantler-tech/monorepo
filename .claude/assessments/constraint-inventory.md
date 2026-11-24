@@ -274,7 +274,7 @@ and says what cannot both be true.
 | `x-privacy-4` | `s12-099` `s12-147` | A blocker's cause class must always be published; an unattended run with no private destination fails closed and records only a private blocker. |
 | `x-privacy-5` | `s07-128` `s15-177` `s01-066` | Cost-pass steps 1-4 need explicit spend enablement (disabled now), yet finops says do steps 1-4 and ship measurement PRs while the channel is unresolved. |
 | `x-review-1` | `s25-076` `s03-119` `s17-037` | Surveyor recognises self-review only on maintainer-login PRs, never trusted-bot rows; the others say our bots' PRs qualify for the local round on the same terms. |
-| `x-review-2` | `s14-017` `s14-166` `s20-009` | Auto-merge is allowed only for github-actions and ksail-bot, never on self-merges, yet programmed agent-skill updater PRs merge by auto-merge after the classifier exits 0. |
+| `x-review-2` | `s14-017` `s14-166` `s20-009` | Auto-merge is allowed only for github-actions, botantler-1 and botantler-2, never on self-merges, yet programmed agent-skill updater PRs merge by auto-merge after the classifier exits 0. |
 | `x-review-3` | `s21-027` `s22-006` `s22-114` `s03-006` `s13-081` | Plugin rules make green pre-merge checks a readiness item; deployment rules say CodeRabbit pre-merge output never blocks promotion and adds no gate. |
 | `x-review-4` | `s21-027` `s03-010` | Plugin keeps drafts waiting for an approving review at head; the deployment says APPROVED is sufficient but not required for a CodeRabbit green. |
 | `x-spend-1` | `s01-013` `s05-015` | s01-013 says a paced run still does rung 0 (live breakage); s05-015 says a paced run writes one line and ends with no survey or work. |

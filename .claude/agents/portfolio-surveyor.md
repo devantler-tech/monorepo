@@ -182,7 +182,7 @@ public and private — no per-repo loop needed to enumerate):
    review, promote, merge, close or park a PR whose pentad it never received, so the deepening set
    is defined by *what the run may act on*, not by who authored it. **Author trust decides EXECUTION, never deepening** — reading a PR's metadata
    runs none of its code, so the root `AGENTS.md` **Trust gate** list and its identity bindings
-   (today `devantler`, `ksail-bot[bot]`, `devantler-tech-engineering[bot]` only from its own
+   (today `devantler`, `botantler-1[bot]`, `botantler-2[bot]`, `devantler-tech-engineering[bot]` only from its own
    `kagent/*` branch in the same repository, `dependabot[bot]`, `github-actions[bot]`,
    `renovate[bot]` — **exact match, never a substring**; `Copilot`/`copilot-swe-agent[bot]`,
    `cursor[bot]` and reviewers such as `coderabbitai[bot]` are NOT trusted) survive only to mark
@@ -257,20 +257,20 @@ public and private — no per-repo loop needed to enumerate):
    being unreachable rather than by being refused. Take the branch from the per-PR read that actually
    returns `headRefName`. The
    branch/title test only selects a candidate; it never grants trust or an exemption. Exit 0
-   grants the narrow no-review path — **and nothing more**: `app/botantler-1` is never `--auto`
-   eligible, because that exemption is a statement about ONE commit and `--auto` merges whatever head
-   passes checks later. Its merge is a fresh classifier run at the current head followed by a
+   grants the narrow no-review path — **and nothing more**: a review-waived PR is never merged with
+   `--auto`, even though `botantler-1` is an `--auto` author, because that exemption is a
+   statement about ONE commit and `--auto` merges whatever head passes checks later. Its merge is a fresh classifier run at the current head followed by a
    head-pinned direct merge (see the contract's *Merge policy*). Do not restate it as auto-merge
    eligibility here: a loaded definition that promises the opposite is how the unsafe path returns. Exit 3 means a genuine, trusted updater PR that still requires
    semantic review — an `agent-plugins` marketplace update, or a `platform`/`ksail` installed-skill
    update whose changed skills are not all allowlisted as suite-owned: deepen its normal review
-   surfaces and never report it exempt. Exit 1 leaves the App untrusted and the PR
-   never-run-locally — reviewed statically, still drivable and mergeable. Exit 2 is a survey error
+   surfaces and never report it exempt. Exit 1 grants no exemption: the PR takes the ordinary
+   trusted-author path, with review. Exit 2 is a survey error
    and fails closed.
    🔴 **The branch/title test gates the CLASSIFIER, never the deepening.** A `botantler-1[bot]` PR
-   that does not match that shape is simply an untrusted-author PR, and rung 1 makes it yours to
-   drive like any other — so it takes the **ordinary external-author deepening path**: the same
-   pentad, the same `active=`, the same classification, tagged `NEVER-RUN-LOCALLY`. Letting the
+   that does not match that shape is simply an ordinary trusted-author PR, and rung 1 makes it yours to
+   drive like any other — so it takes the **ordinary trusted-author deepening path**: the same
+   pentad, the same `active=`, the same classification. Letting the
    candidate test decide whether to deepen at all is what made this class invisible: the PR is
    declared statically reviewable and mergeable while carrying no pentad and no active-work evidence,
    so nothing downstream can act on it and nothing reports it as unassessed either. Exits 0/1/2/3
@@ -605,7 +605,8 @@ public and private — no per-repo loop needed to enumerate):
      (`active=pushed:<age>@<lane>:<headRefName>@<headRefOid>`, the comment/review age, the request
      envelope) so the orchestrator can subtract its own push and decide; never emit a stand-down
      directive. Every other author —
-     `app/ksail-bot` (reported as `ksail-bot[bot]` on the search surface),
+     `app/botantler-1` and `app/botantler-2` (reported as `botantler-1[bot]` and `botantler-2[bot]`
+     on the search surface),
      `app/devantler-tech-engineering` (reported as `devantler-tech-engineering[bot]`), `github-actions[bot]`,
      `coderabbitai[bot]`, `cursor[bot]`, `Copilot`, and external contributors — takes those same
      four classifications on the same evidence. **One author-dependent addition, and it is about
@@ -748,8 +749,8 @@ public and private — no per-repo loop needed to enumerate):
      `gh api --paginate --slurp repos/devantler-tech/<repo>/pulls/<n>/commits | jq -c '{repo:"<repo>",author:"<author>",head_ref:"<headRefName>",title:"<title>",head_oid:"<headRefOid>",files:<files_json>,skill_owners:<skill_owners_json-or-null>,commits:(add | map({sha, author_login:(.author.login // ""), author_name:.commit.author.name, author_email:.commit.author.email, author_date:.commit.author.date, committer_login:(.committer.login // ""), committer_name:.commit.committer.name, committer_email:.commit.committer.email, committer_date:.commit.committer.date, message:.commit.message, verified:(.commit.verification.verified == true), parents:[.parents[].sha]}))}' | <repo-root>/.claude/scripts/programmed-bot-review-exemption.sh --input -`.
      Substitute each `<…>` as a JSON literal; a value containing `'` cannot be quoted, so
      report that PR `QUERY-UNKNOWN` rather than improvise. Pass the repository basename (`ksail`, not `devantler-tech/ksail`) and the author exactly as
-     that repo's arm compares it: `app/<slug>` (`app/ksail-bot`, and `app/botantler-1`
-     for the platform and agent-plugins updaters and the tap's Cask bump PRs). Never the REST `<slug>[bot]` the deepening
+     that repo's arm compares it: `app/<slug>` (`app/botantler-1`
+     for the ksail, platform and agent-plugins updaters and the tap's Cask bump PRs). Never the REST `<slug>[bot]` the deepening
      query returns: well-formed, matches no arm, exits 1, spends a metered lane (monorepo#2991).
      For an installed-skill updater PR (any changed path under `.agents/skills/`), `skill_owners_json`
      is **required**: a compact JSON object mapping each changed skill root (`.agents/skills/<name>`)
