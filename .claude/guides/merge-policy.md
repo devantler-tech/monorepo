@@ -22,12 +22,14 @@ gets driven to merge:
 resolve findings, root-cause-fix failing required checks, set a
 Conventional-Commit title, then **merge with the command that matches the author** —
 - an actionable **single-author App** uses pre-CLEAN auto-merge only after the review/current-head
-  parts of that pentad are clear. 🔴 **The `--auto`-eligible authors are exactly two, and every one
-  of them is eligible unconditionally:** `github-actions` and `ksail-bot`. Eligibility
+  parts of that pentad are clear. 🔴 **The `--auto`-eligible authors are exactly three, and every one
+  of them is eligible unconditionally:** `github-actions`, `botantler-1` and `botantler-2` (the
+  organisation Apps replaced the deleted `ksail-bot`, maintainer 2026-11-24). Eligibility
   there is a property of the **author**, which a later head cannot change — which is exactly what
   `--auto` needs, because it merges whatever head passes checks later and re-evaluates nothing.
-  🔴 **`app/botantler-1` is NEVER `--auto`-eligible — not even on exit 0 — because its permission
-  comes from a CLASSIFIER RESULT about one specific commit, and `--auto` cannot carry a condition.**
+  🔴 **A review-waived (exit-0) programmed PR is NEVER merged with `--auto`, even though `botantler-1`
+  is an `--auto` author — because its waiver comes from a CLASSIFIER RESULT about one specific
+  commit, and `--auto` cannot carry a condition.**
   Exit 0 waives the **review** requirement for that head; it never waives the requirement to merge
   **directly, at the head you evaluated**. Arming `--auto` on it lets an updater push during the
   wait land a replacement head the classifier never ran on — a head that might return exit 1 or 3,
@@ -36,11 +38,11 @@ Conventional-Commit title, then **merge with the command that matches the author
   detects the violation only after it has reached `main`. So: wait for the checks, **re-run the
   classifier at the current head immediately before merging** — a result from an earlier head is a
   statement about a commit that is no longer being merged — and merge with
-  `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>`. Reserving
-  `--auto` for the two unconditional authors is what keeps that exemption tied to the commit it was
-  granted for. State the matrix as this two-plus-one split and **never as a flat three-name list**:
-  appending the updater to the two author-scoped names puts a commit-scoped permission in an
-  author-scoped list, which is what made the unsafe arming look prescribed.
+  `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>`. Merging every
+  review-waived PR directly is what keeps that waiver tied to the commit it was granted for. State
+  it as an exception to the author list, **never as a property of the author**: the waiver is
+  commit-scoped and the `--auto` list is author-scoped, and conflating the two is what made the
+  unsafe arming look prescribed.
   For an unconditional author, use
   `gh pr merge <n> --repo devantler-tech/<repo> --auto --squash --match-head-commit <sha>`; for **trusted programmed bot PRs** (exit-0 agent-skills updater PRs,
   and the tap's Cask bump PRs — the carve-out below) the review parts are intentionally absent and
@@ -361,11 +363,11 @@ Some repos gate `main` behind a **GitHub merge queue** (a `Require merge queue` 
 `gh pr merge --auto` *enqueues* rather than merges, `autoMergeRequest` stays `null` even while queued,
 and the strategy is set by the queue, so **drop `--squash` and keep the head pin**.
 🔴 **A merge queue does NOT widen who may use `--auto`.** The author matrix above is a closed list of
-two — `github-actions` and `ksail-bot` — and prescribing `--auto` here unconditionally
+three — `github-actions`, `botantler-1` and `botantler-2` — and prescribing `--auto` here unconditionally
 would put `devantler`, an external contributor and the classifier-conditioned updater through exactly
 the deferred path their author policy forbids. It is also unnecessary: on a queue-gated branch, a PR
 whose checks have passed is **added to the queue by a plain merge**, so the enqueue happens either way.
-So the two `--auto` authors use
+So the three `--auto` authors use
 `gh pr merge <n> --repo devantler-tech/<repo> --auto --match-head-commit <sha>`, and **every other
 author enqueues with `gh pr merge <n> --repo devantler-tech/<repo> --match-head-commit <sha>`** once
 the gates are clear. **Record per-repo
@@ -873,7 +875,7 @@ buys nothing: CodeQL **default setup** does not re-analyse on `pull_request: reo
 workflows and zero new `dynamic/github-code-scanning/codeql` runs; monorepo#3137). For a stalled bot PR
 whose head carries a stale failed analysis, comment `@dependabot recreate`, which produces a genuinely
 fresh head. Recreate discards every commit on the branch, so it is the wrong lever only when the branch
-carries an agent-authored adaptation commit that must survive. A CI-generated `ksail-bot` sync commit is
+carries an agent-authored adaptation commit that must survive. A CI-generated bot sync commit (then `ksail-bot`, now `botantler-1`) is
 not such a commit: it is a reproducible pipeline artifact that the pipeline writes again on the new
 head (on 2026-09-01, 4 of the last 12 merged ksail Dependabot PRs carried one and merged normally). Close a Dependabot
 PR only when that release is genuinely unwanted, and record the reason on the PR.
@@ -962,7 +964,7 @@ published release, and `brew bump-cask-pr` takes every `sha256` from that releas
 (monorepo#2992, monorepo#4980) guarded the product pipelines' cask PRs and are retired with them.
 The workflow arms the PR's auto-merge itself, so a qualifying bump PR merges once the tap's required
 checks pass, with no agent action. 🔴 **Never arm or re-arm that auto-merge yourself:
-`app/botantler-1` is not `--auto`-eligible** (above). A bump PR that stalls, with a failed check or
+a review-waived bump PR is never merged with `--auto`** (above). A bump PR that stalls, with a failed check or
 an auto-merge that does not fire, is rung-one work: an adaptation commit restores the review gate as
 above, and otherwise re-run the classifier at the current head and merge directly, pinned with
 `--match-head-commit` to the head it judged. Closing a bump PR is not neutral: the workflow skips a

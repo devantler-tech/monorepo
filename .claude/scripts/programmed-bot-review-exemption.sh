@@ -5,7 +5,7 @@
 #   programmed-bot-review-exemption.sh --input -   # stdin: {repo, author, head_ref, title, head_oid, files, commits[, skill_owners]}
 #
 #   repo              bare name (`homebrew-tap`) or `devantler-tech/<name>`
-#   author            login as the repo's arm compares it (`app/ksail-bot`, `app/botantler-1`)
+#   author            login as the repo's arm compares it (`app/botantler-1`)
 #   head-ref, title   the PR's head branch and title
 #   head-oid          full 40-hex head SHA
 #   files-json        JSON array of changed paths
@@ -326,13 +326,9 @@ matches_suite_owned_skills() {
 matches_agent_skills_provenance() {
   local app_login="" app_id=""
   case "${repo}" in
-  platform)
+  platform | ksail)
     app_login="botantler-1[bot]"
     app_id="185060876"
-    ;;
-  ksail)
-    app_login="ksail-bot[bot]"
-    app_id="262010955"
     ;;
   esac
   jq -e --arg app_login "${app_login}" --arg app_id "${app_id}" '
@@ -482,8 +478,7 @@ updater_verdict() {
 # mints its token from the same org App (`vars.APP_CLIENT_ID`) as the agent-plugins updater.
 updater_app() {
   case "$1" in
-  agent-plugins | homebrew-tap | platform) printf '%s %s\n' "botantler-1[bot]" "185060876" ;;
-  ksail) printf '%s %s\n' "ksail-bot[bot]" "262010955" ;;
+  agent-plugins | homebrew-tap | ksail | platform) printf '%s %s\n' "botantler-1[bot]" "185060876" ;;
   esac
 }
 
@@ -526,11 +521,8 @@ if [[ "${branch}" == "deps/agent-skills-update" &&
   "${title}" == "chore(deps): update agent skills" ]]; then
   expected_author=""
   case "${repo}" in
-  agent-plugins | platform)
+  agent-plugins | ksail | platform)
     expected_author="app/botantler-1"
-    ;;
-  ksail)
-    expected_author="app/ksail-bot"
     ;;
   esac
 

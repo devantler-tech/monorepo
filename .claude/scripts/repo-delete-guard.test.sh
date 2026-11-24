@@ -356,7 +356,7 @@ done
 # Every trusted author from the AGENTS.md trust gate is accepted, so the list is read, not guessed.
 scenario
 fixture "repos/devantler-tech/stray/commits?sha=${SHA_MAIN}&per_page=100" \
-  '[{"sha":"a1","author":{"login":"ksail-bot[bot]"},"committer":{"login":"web-flow"}},{"sha":"a2","author":{"login":"renovate[bot]"},"committer":{"login":"renovate[bot]"}},{"sha":"a3","author":{"login":"github-actions[bot]"},"committer":{"login":"devantler"}}]'
+  '[{"sha":"a1","author":{"login":"botantler-1[bot]"},"committer":{"login":"web-flow"}},{"sha":"a2","author":{"login":"renovate[bot]"},"committer":{"login":"renovate[bot]"}},{"sha":"a3","author":{"login":"github-actions[bot]"},"committer":{"login":"devantler"}}]'
 expect "commits by every trusted author accepted" 0 '^WOULD-DELETE devantler-tech/stray \(private, created [^,]+, 3 commit' --repo stray --issue 4289
 # More history than one page could hold is refused, never judged on the rows that were read.
 scenario

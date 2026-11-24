@@ -6,10 +6,10 @@
 # extraction finds that states no rule; it is reported apart.
 id	section	quote	kind	control	evidence
 MP-001	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	⚠️ **The `non-draft` scoping below bounds the merge COMMAND, never the SWEEP**	none	-	-
-MP-002	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	🔴 **`app/botantler-1` is NEVER `--auto`-eligible	none	-	-
+MP-002	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	🔴 **A review-waived (exit-0) programmed PR is NEVER merged with `--auto`	none	-	-
 MP-003	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	Exit 0 waives the **review** requirement for that	none	-	-
 MP-004	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	Arming `--auto` on it lets an updater push during	narrative	-	-
-MP-005	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	State the matrix as this two-plus-one split and **never	none	-	-
+MP-005	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	it as an exception to the author list, **never as a property of the author**	none	-	-
 MP-006	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	For an unconditional author, use `gh pr merge <n>	none	-	-
 MP-007	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	`gh pr merge --help` defines `--match-head-commit`	narrative	-	-
 MP-008	merge-policy--drive-every-actionable-pr-to-merge-incl-majors	**So the arming is never the completion.**	none	-	-

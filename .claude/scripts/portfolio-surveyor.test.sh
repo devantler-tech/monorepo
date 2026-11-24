@@ -57,18 +57,23 @@ fail() {
   exit 1
 }
 
-# Execution trust must use the verified bot account, not a similarly named user.
+# Execution trust must use the verified bot accounts, not similarly named users. The org Apps
+# botantler-1 and botantler-2 replaced the deleted ksail-bot (maintainer 2026-11-24).
 # shellcheck disable=SC2016
-grep -Fq '**Trusted authors, exact login match only:** `devantler`, `ksail-bot[bot]`' "${repo_root}/AGENTS.md" ||
-  fail "root execution trust does not name the exact KSail bot login (monorepo#3845)"
+grep -Fq '**Trusted authors, exact login match only:** `devantler`, `botantler-1[bot]`, `botantler-2[bot]`' "${repo_root}/AGENTS.md" ||
+  fail "root execution trust does not name the exact botantler bot logins"
 # shellcheck disable=SC2016
-for identity in 'GitHub App ID `2880167`' 'bot account ID `262010955`' 'GraphQL alias `app/ksail-bot`'; do
+for identity in 'GitHub App ID `1025824`' 'bot account ID `185060876`' 'GraphQL alias `app/botantler-1`' \
+  'GitHub App ID `4126012`' 'bot account ID `296234498`' 'GraphQL alias `app/botantler-2`'; do
   grep -Fq "${identity}" "${repo_root}/.claude/guides/trust-and-input.md" ||
-    fail "KSail execution trust is missing the verified ${identity} binding (monorepo#3845)"
+    fail "botantler execution trust is missing the verified ${identity} binding"
 done
 # shellcheck disable=SC2016
-grep -Fq 'The bare login `ksail-bot` and lookalikes are not trusted.' "${repo_root}/.claude/guides/trust-and-input.md" ||
-  fail "KSail execution trust can admit a lookalike account (monorepo#3845)"
+grep -Fq 'The bare logins `botantler-1` and `botantler-2` and lookalikes are not trusted.' "${repo_root}/.claude/guides/trust-and-input.md" ||
+  fail "botantler execution trust can admit a lookalike account"
+# shellcheck disable=SC2016
+! grep -Fq '`ksail-bot[bot]`' "${repo_root}/AGENTS.md" ||
+  fail "root execution trust still names the deleted ksail-bot App"
 
 if ! portfolio_surveyor_filter="$(\
   awk '
@@ -267,8 +272,8 @@ grep -Fq 'agent-plugins` updater PRs require semantic review' "${constitution}" 
   fail "constitution can still send marketplace instruction updates through the no-review path"
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
-grep -Fq '`app/botantler-1` is narrowly trusted only for programmed agent-skills updater PRs' "${constitution}" ||
-  fail "constitution either misses botantler updater PRs or trusts the App globally"
+grep -Fq '`app/botantler-1` is a trusted author, and its review waiver stays narrow: it covers only programmed agent-skills updater PRs' "${constitution}" ||
+  fail "constitution either misses botantler updater PRs or widens the App's review waiver"
 # The AGENTS.md trust gate trusts the App for every classifier-qualified programmed PR, so the
 # trust guide must grant the tap's Cask bump too, or the two give conflicting execution trust.
 # Literal Markdown code spans; command substitution is intentionally disabled.
@@ -278,9 +283,9 @@ grep -Fq 'updater PRs and the tap'"'"'s own Cask bump PRs.**' "${repo_root}/.cla
 grep -Fq 'green_review=exempt-programmed-bot' "${surveyor}" ||
   fail "surveyor cannot report a programmed bot review exemption"
 
-# The classifier's arms compare the author against the GraphQL App spelling (`app/ksail-bot`,
-# `app/botantler-1`), but the deepening query the surveyor runs is REST, which reports the same
-# identity as `ksail-bot[bot]`. Passing the REST spelling is a WELL-FORMED payload that simply
+# The classifier's arms compare the author against the GraphQL App spelling (`app/botantler-1`),
+# but the deepening query the surveyor runs is REST, which reports the same
+# identity as `botantler-1[bot]`. Passing the REST spelling is a WELL-FORMED payload that simply
 # fails to match, so the classifier exits 1 — "external/static-only candidate" — and the surveyor
 # reports a trusted release bump as review-bearing. That spends a metered review lane (CodeRabbit,
 # Codex weekly, Bugbot monthly) on a PR the carve-out exists to keep off them. A malformed payload
@@ -300,7 +305,7 @@ grep -Fq 'matches no arm' "${surveyor}" ||
 # cask PRs are gone. A surveyor still told to pass `devantler` for the tap would read every bump PR
 # exit 1 and spend the metered lanes the carve-out protects, so pin both the new spelling and the
 # absence of the old instruction.
-grep -Fq "for the platform and agent-plugins updaters and the tap's Cask bump PRs" "${surveyor}" ||
+grep -Fq "for the ksail, platform and agent-plugins updaters and the tap's Cask bump PRs" "${surveyor}" ||
   fail "surveyor does not tell the caller to pass app/botantler-1 for the tap's Cask bump PRs (homebrew-tap#2568)"
 if grep -Fq 'for the homebrew-tap cask arms' "${surveyor}"; then
   fail "surveyor still prescribes a plain devantler login for the retired homebrew-tap cask arms (homebrew-tap#2568)"
@@ -380,10 +385,10 @@ grep -Fq '`botantler-1[bot]` is a candidate only for the programmed agent-skills
 # while carrying no pentad and no active-work evidence — invisible rather than assessed.
 grep -Fq 'The branch/title test gates the CLASSIFIER, never the deepening' "${surveyor}" ||
   fail "surveyor can skip deepening a non-updater botantler PR instead of treating it as external"
-grep -Fq 'ordinary external-author deepening path' "${surveyor}" ||
-  fail "surveyor does not route a non-candidate botantler PR through the external deepening path"
-grep -Fq 'ksail-bot[bot]' "${surveyor}" ||
-  fail "surveyor does not recognize the exact KSail App identity returned by search"
+grep -Fq 'ordinary trusted-author deepening path' "${surveyor}" ||
+  fail "surveyor does not route a non-candidate botantler PR through the ordinary deepening path"
+grep -Fq 'botantler-1[bot]' "${surveyor}" ||
+  fail "surveyor does not recognize the exact botantler App identity returned by search"
 # The activity endpoint returns one page across EVERY ref, so a client-side ref filter is outrun by
 # unrelated traffic: the branch's push falls off the page and `pushed:` reads unknown — likeliest
 # exactly when a live ownership window would have parked the PR.
@@ -1022,9 +1027,9 @@ ksail_head="db7284e781375d8c68a20824977aad788b6a7fa2"
 ksail_files='[".claude-plugin/marketplace.json",".github/plugin/marketplace.json","copilot-plugin/.claude-plugin/plugin.json","copilot-plugin/plugin.json"]'
 ksail_commits="$(jq -cn --arg head "${ksail_head}" '[{
   sha: $head,
-  author_login: "ksail-bot[bot]",
-  author_name: "ksail-bot[bot]",
-  author_email: "262010955+ksail-bot[bot]@users.noreply.github.com",
+  author_login: "botantler-1[bot]",
+  author_name: "botantler-1[bot]",
+  author_email: "185060876+botantler-1[bot]@users.noreply.github.com",
   author_date: "2026-09-24T03:08:12Z",
   committer_login: "web-flow",
   committer_name: "GitHub",
@@ -1187,13 +1192,13 @@ adapted_ksail_commits="$(jq -c --arg head "${adapted_ksail_head}" '. + [{
   message: "fix: adapt generated release"
 }]' <<<"${ksail_commits}" | with_commit_dates)"
 
-ksail_args=("ksail" "app/ksail-bot" "chore/copilot-plugin-v7.192.11"
+ksail_args=("ksail" "app/botantler-1" "chore/copilot-plugin-v7.192.11"
   "chore(copilot-plugin): release v7.192.11" "${ksail_head}" "${ksail_files}")
 
 expect_not_release_exempt \
   "retired KSail programmed plugin release remains untrusted" \
   "ksail" \
-  "app/ksail-bot" \
+  "app/botantler-1" \
   "chore/copilot-plugin-v7.192.11" \
   "chore(copilot-plugin): release v7.192.11" \
   "${ksail_head}" \
@@ -1506,7 +1511,7 @@ expect_review_gated "agent-plugins per-skill update with a repeated follow-up co
   "${per_skill_args[@]}" "${per_skill_files}" \
   "$(printf '%s\n' "${per_skill_sync}" "${per_skill_bump}" "${per_skill_bump}" | per_skill_commits)"
 expect_review_gated "agent-plugins per-skill update from another author" \
-  agent-plugins app/ksail-bot "${per_skill_branch}" "${per_skill_title}" "${per_skill_head}" \
+  agent-plugins app/botantler-2 "${per_skill_branch}" "${per_skill_title}" "${per_skill_head}" \
   "${per_skill_files}" "${per_skill_commits_json}"
 
 # An installed skill root holds copies from many upstreams, and the copied frontmatter naming the
@@ -1562,7 +1567,7 @@ signed_skills_commit() {
   } + (if $verified == "absent" then {} else {verified: ($verified == "true")} end)]' | with_commit_dates
 }
 platform_signed_commits="$(signed_skills_commit "${platform_skills_head}" "botantler-1[bot]" "185060876")"
-ksail_signed_commits="$(signed_skills_commit "${ksail_skills_head}" "ksail-bot[bot]" "262010955")"
+ksail_signed_commits="$(signed_skills_commit "${ksail_skills_head}" "botantler-1[bot]" "185060876")"
 
 expect_exempt \
   "Platform App-signed update touching only an allowlisted suite-owned skill" \
@@ -1676,15 +1681,15 @@ expect_exempt "owner-qualified repo" "devantler-tech/platform" "${updater_args[@
 
 expect_review_required \
   "KSail App-signed update touching a third-party skill" \
-  "ksail" "app/ksail-bot" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "ksail" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
   "${ksail_skills_head}" "${ksail_skills_files}" "${ksail_signed_commits}" \
   "${ksail_skills_owners}"
 
 expect_review_gated \
-  "Platform update signed as the KSail App" \
+  "Platform update signed as another App" \
   "platform" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
   "${platform_skills_head}" "${allowed_skills_files}" \
-  "$(signed_skills_commit "${platform_skills_head}" "ksail-bot[bot]" "262010955")" \
+  "$(signed_skills_commit "${platform_skills_head}" "botantler-2[bot]" "296234498")" \
   "${allowed_skills_owners}"
 
 expect_review_gated \
@@ -1844,18 +1849,20 @@ expect_exempt "platform updater PR refreshed from main keeps its exemption" \
     "$(refresh_merge "${refresh_head}" "${platform_skills_head}" "deps/agent-skills-update")")" \
   "${allowed_skills_owners}"
 expect_review_required "ksail updater PR refreshed by its own App keeps its review path" \
-  "ksail" "app/ksail-bot" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "ksail" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
   "${refresh_head}" "${ksail_skills_files}" \
   "$(refreshed "${ksail_signed_commits}" \
     "$(refresh_merge "${refresh_head}" "${ksail_skills_head}" "deps/agent-skills-update" \
-      '.author_login = "ksail-bot[bot]" | .author_name = "ksail-bot[bot]"
-       | .author_email = "262010955+ksail-bot[bot]@users.noreply.github.com"')")" \
+      '.author_login = "botantler-1[bot]" | .author_name = "botantler-1[bot]"
+       | .author_email = "185060876+botantler-1[bot]@users.noreply.github.com"')")" \
   "${ksail_skills_owners}"
 expect_review_gated "ksail updater PR refreshed by another App" \
-  "ksail" "app/ksail-bot" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "ksail" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
   "${refresh_head}" "${ksail_skills_files}" \
   "$(refreshed "${ksail_signed_commits}" \
-    "$(refresh_merge "${refresh_head}" "${ksail_skills_head}" "deps/agent-skills-update")")" \
+    "$(refresh_merge "${refresh_head}" "${ksail_skills_head}" "deps/agent-skills-update" \
+      '.author_login = "botantler-2[bot]" | .author_name = "botantler-2[bot]"
+       | .author_email = "296234498+botantler-2[bot]@users.noreply.github.com"')")" \
   "${ksail_skills_owners}"
 expect_error_reason "parents not an array" \
   "commit[0].parents is not an array of 40-character lowercase hex SHAs" "" "${updater_args[@]}" \
@@ -1869,7 +1876,7 @@ expect_error_reason "short parent" \
 expect_review_required \
   "an allowlisted skill with the corroborating map omitted entirely" \
   "ksail" \
-  "app/ksail-bot" \
+  "app/botantler-1" \
   "deps/agent-skills-update" \
   "chore(deps): update agent skills" \
   "${ksail_skills_head}" \
@@ -1879,7 +1886,7 @@ expect_review_required \
 expect_review_required \
   "KSail update touching a third-party skill" \
   "ksail" \
-  "app/ksail-bot" \
+  "app/botantler-1" \
   "deps/agent-skills-update" \
   "chore(deps): update agent skills" \
   "${ksail_skills_head}" \
@@ -1890,7 +1897,7 @@ expect_review_required \
 expect_review_required \
   "a third-party skill FORGING the suite upstream in its own frontmatter" \
   "ksail" \
-  "app/ksail-bot" \
+  "app/botantler-1" \
   "deps/agent-skills-update" \
   "chore(deps): update agent skills" \
   "${ksail_skills_head}" \
@@ -1923,7 +1930,7 @@ expect_review_required \
 expect_review_required \
   "a batch mixing an allowlisted skill with a third-party one" \
   "ksail" \
-  "app/ksail-bot" \
+  "app/botantler-1" \
   "deps/agent-skills-update" \
   "chore(deps): update agent skills" \
   "${ksail_skills_head}" \
@@ -2084,7 +2091,7 @@ expect_tap_bump "refreshed from main by the App" 0 \
   "${refresh_head}" "${ksail_cask}" "$(refreshed "${ksail_bump_commits}" "${tap_refresh_merge}")"
 
 # Wrong author: the same PR from anyone but the App is not a bump PR at all.
-for tap_author in devantler app/ksail-bot botantler-1 "botantler-1[bot]"; do
+for tap_author in devantler app/botantler-2 botantler-1 "botantler-1[bot]"; do
   expect_tap_bump "from ${tap_author}" 1 "" \
     homebrew-tap "${tap_author}" "${ksail_bump_args[@]:2}" "${ksail_cask}" "${ksail_bump_commits}"
 done
@@ -2176,7 +2183,7 @@ for ksail_field in author_login author_name author_email committer_login committ
 done
 expect_review_gated "KSail plugin release from an unprefixed noreply address" "devantler-tech/ksail" \
   "${ksail_args[@]:1}" \
-  "$(jq -c 'map(.author_email = "ksail-bot[bot]@users.noreply.github.com")' <<<"${ksail_commits}")"
+  "$(jq -c 'map(.author_email = "botantler-1[bot]@users.noreply.github.com")' <<<"${ksail_commits}")"
 expect_review_gated "KSail plugin release the bot committed itself" "devantler-tech/ksail" "${ksail_args[@]:1}" \
   "$(jq -c 'map(.committer_login = .author_login | .committer_name = .author_name
     | .committer_email = .author_email)' <<<"${ksail_commits}")"
@@ -2280,9 +2287,9 @@ expect_not_release_exempt \
   "${ksail_commits}"
 
 expect_review_gated \
-  "bare KSail bot alias is not an API identity" \
+  "bare botantler-1 alias is not an API identity" \
   "ksail" \
-  "ksail-bot" \
+  "botantler-1" \
   "chore/copilot-plugin-v7.192.11" \
   "chore(copilot-plugin): release v7.192.11" \
   "${ksail_head}" \
@@ -2292,7 +2299,7 @@ expect_review_gated \
 expect_review_gated \
   "KSail release with a human adaptation commit" \
   "ksail" \
-  "app/ksail-bot" \
+  "app/botantler-1" \
   "chore/copilot-plugin-v7.192.11" \
   "chore(copilot-plugin): release v7.192.11" \
   "${adapted_ksail_head}" \
@@ -2302,7 +2309,7 @@ expect_review_gated \
 expect_classifier_error \
   "stale commit list does not reach the supplied head" \
   "ksail" \
-  "app/ksail-bot" \
+  "app/botantler-1" \
   "chore/copilot-plugin-v7.192.11" \
   "chore(copilot-plugin): release v7.192.11" \
   "4444444444444444444444444444444444444444" \
@@ -2312,7 +2319,7 @@ expect_classifier_error \
 expect_classifier_error \
   "malformed commit provenance" \
   "ksail" \
-  "app/ksail-bot" \
+  "app/botantler-1" \
   "chore/copilot-plugin-v7.192.11" \
   "chore(copilot-plugin): release v7.192.11" \
   "${ksail_head}" \
@@ -3625,8 +3632,9 @@ case "${constitution_flat}" in
   *) fail "the contract does not require carrying an unconfirmed arming forward past the open-PR enumeration" ;;
 esac
 
-# (10) `app/botantler-1` is NEVER `--auto`-eligible — not on any classifier result, exit 0 included.
-#      Its permission comes from what the classifier returned for a SPECIFIC COMMIT, and `--auto`
+# (10) A review-waived (exit-0) programmed PR is NEVER merged with `--auto`, even though botantler-1
+#      is an `--auto` author since 2026-11-24 (it replaced the deleted ksail-bot).
+#      Its waiver comes from what the classifier returned for a SPECIFIC COMMIT, and `--auto`
 #      carries no condition forward: it defers the merge and re-evaluates nothing, so an updater push
 #      during that window lands a head the classifier never ran on, possibly one that needs the very
 #      review the exit-0 path waives. The head pin does not help: it gates the arming, not the later
@@ -3641,7 +3649,7 @@ esac
 #      overlay went on authorising the arming. The exclusion is the property; the merge command is
 #      its consequence and is pinned separately below.
 case "${constitution_flat}" in
-  *'is NEVER `--auto`-eligible — not even on exit 0'*) ;;
+  *'A review-waived (exit-0) programmed PR is NEVER merged with `--auto`'*) ;;
   *) fail "a conditional classifier exemption may still be armed with --auto and inherited by an unevaluated head" ;;
 esac
 case "${constitution_flat}" in
@@ -3719,7 +3727,7 @@ case "${external_row}" in
   *) fail "the external/Copilot row omits rd=, so a human CHANGES_REQUESTED is lost once the activity window expires" ;;
 esac
 
-# A merge queue changes the strategy, never the closed two-author `--auto` list.
+# A merge queue changes the strategy, never the closed three-author `--auto` list.
 case "${constitution_flat}" in
   *'A merge queue does NOT widen who may use `--auto`'*) ;;
   *) fail "the merge-queue path can still push a non-App author through auto-merge" ;;
@@ -3727,7 +3735,7 @@ esac
 
 # The surveyor must not re-promise the updater auto-merge eligibility the contract withdrew.
 case "${surveyor_flat}" in
-  *'`app/botantler-1` is never `--auto` eligible'*) ;;
+  *'a review-waived PR is never merged with `--auto`'*) ;;
   *) fail "the surveyor does not record that the exit-0 updater exemption excludes auto-merge" ;;
 esac
 

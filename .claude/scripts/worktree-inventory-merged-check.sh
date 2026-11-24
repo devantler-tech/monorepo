@@ -284,7 +284,7 @@ lookup() {
          | ($c.signature.isValid == true) and ($c.signature.wasSignedByGitHub == true)
            and ($c.authors.totalCount == 1)
            and (($c.author.user.login // "") as $l
-                | ["dependabot[bot]", "github-actions[bot]", "ksail-bot[bot]", "renovate[bot]"] | index($l) != null)) as $bot
+                | ["botantler-1[bot]", "botantler-2[bot]", "dependabot[bot]", "github-actions[bot]", "renovate[bot]"] | index($l) != null)) as $bot
       | .data.repository.object.associatedPullRequests as $p
       | if ($p.totalCount | type) != "number" or ($p.nodes | type) != "array"
            or $p.totalCount != ($p.nodes | length) then empty
