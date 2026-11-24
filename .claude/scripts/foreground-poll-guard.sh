@@ -87,8 +87,7 @@ verdict=$(printf '%s\n' "${cmd}" | awk '
     # A runtime task output file named anywhere in the call (before quotes are dropped, so a
     # quoted path still counts) makes a sleeping loop a wait on a background task (#5087).
     # The directory may also be held in a variable (`F=.../tasks; ... $F/<id>.output`, #5164).
-    taskf = (text ~ /\/tasks\/[A-Za-z0-9_-]+\.output/ ||
-             (text ~ /\/tasks["\047]?([;&|[:space:]]|$)/ && text ~ /\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\/[A-Za-z0-9_-]+\.output/))
+    taskf = (text ~ /\/tasks\/[A-Za-z0-9_-]+\.output/ || taskvar(text))
     text = unquote(text)
     gsub(/&&|\|\||[;|(){}`]/, " ; ", text)
     n = split(text, t, /[[:space:]]+/)
@@ -178,6 +177,18 @@ verdict=$(printf '%s\n' "${cmd}" | awk '
     if (w !~ /^[0-9][0-9.]*[smhd]?$/) return 0
     u = substr(w, length(w))
     return (w + 0) * (u == "m" ? 60 : u == "h" ? 3600 : u == "d" ? 86400 : 1)
+  }
+  # A variable assigned a tasks directory (`F=.../tasks` or `.../tasks/`, quoted or not) whose
+  # own `$F/<name>.output` or `${F}/<name>.output` the call names (#5164). An `.output` file in
+  # another variable is not a task output.
+  function taskvar(s,   r, nm) {
+    r = s
+    while (match(r, /[A-Za-z_][A-Za-z0-9_]*=["\047]?[^[:space:];&|"\047]*\/tasks\/?["\047]?([;&|[:space:]]|$)/)) {
+      nm = substr(r, RSTART, RLENGTH); sub(/=.*/, "", nm)
+      if (s ~ ("[$][{]?" nm "[}]?/[A-Za-z0-9_-]+[.]output")) return 1
+      r = substr(r, RSTART + RLENGTH)
+    }
+    return 0
   }
   function counted(i,   j) {
     for (j = i + 1; j <= n && t[j] != "do"; j++)

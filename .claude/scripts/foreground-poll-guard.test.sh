@@ -166,6 +166,7 @@ until gh pr checks 1; do sleep 30; done'
   # directory held in a variable, and `sleep` called by its path.
   expect_deny_task task-dir-var 'F=/private/tmp/claude-501/p/s/tasks; for i in $(seq 1 25); do grep -q CODEX $F/buugpxu5d.output 2>/dev/null && break; sleep 20; done; tail -2 $F/buugpxu5d.output'
   expect_deny_task task-dir-var-braced 'T="/private/tmp/claude-501/p/s/tasks"; until [ -s "${T}/b61krf491.output" ]; do sleep 10; done'
+  expect_deny_task task-dir-var-slash 'F=/private/tmp/claude-501/p/s/tasks/; until [ -s "$F/b61krf491.output" ]; do sleep 10; done'
   expect_deny_task task-bin-sleep 'O=/private/tmp/claude-501/p/s/tasks/bom0eju6p.output; until grep -q "^exit" $O 2>/dev/null; do /bin/sleep 15; done; cat $O'
 }
 
@@ -203,6 +204,7 @@ chmod +x /tmp/w.sh'
   expect_allow other-tasks-dir 'until [ -s /tmp/tasks/list.txt ]; do sleep 5; done'
   # A variable-held `.output` file with no tasks directory in the call is a local wait (#5164).
   expect_allow output-var-no-tasks-dir 'D=/tmp/build; until [ -s $D/run.output ]; do sleep 5; done'
+  expect_allow output-other-var 'F=/private/tmp/claude-501/p/s/tasks; D=/tmp/build; until [ -s $D/run.output ]; do sleep 5; done; ls $F'
   expect_allow bin-sleep-sampling 'until grep -q Ready /private/tmp/claude-501/p/s/tasks/b61krf491.output; do /bin/sleep 1; done'
   expect_allow no-loop 'gh pr checks 1'
   # A control word inside an argument is not a command position.
