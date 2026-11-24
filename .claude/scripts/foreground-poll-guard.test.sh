@@ -129,6 +129,7 @@ done'
   expect_deny quoted-sleep-suffix 'until gh pr checks 1; do sleep "0.5m"; done'
   expect_deny quoted-sleep-redirect 'until gh pr checks 1; do sleep "30">/dev/null; done'
   expect_deny sleep-redirect 'until gh pr checks 1; do sleep 30>/dev/null; done'
+  expect_deny bin-sleep 'until gh pr checks 1; do /bin/sleep 30; done'
   expect_deny quoted-sleep-single 'until gh pr checks 1; do sleep '"'"'30'"'"'; done'
   # A here-string is not a heredoc: the poll loop on the next line must still be judged.
   expect_deny here-string 'read -r state <<<pending
@@ -161,6 +162,11 @@ until gh pr checks 1; do sleep 30; done'
   expect_deny_task task-quoted-var 'F="/private/tmp/claude-501/p/s/tasks/b61krf491.output"; n=0; until grep -q "^EXIT " "$F" || [ $n -ge 34 ]; do sleep 5; n=$((n+1)); done; wc -c < "$F"'
   # A remote read after the loop does not make it a remote poll: the wait is still on the file.
   expect_deny_task task-then-read 'f=/private/tmp/claude-501/p/s/tasks/b61krf491.output; for i in $(seq 1 34); do grep -q done- $f && break; sleep 5; done; gh pr checks 1'
+  # Shapes that slipped past the first version, measured 2026-11-23/24 (#5164): the tasks
+  # directory held in a variable, and `sleep` called by its path.
+  expect_deny_task task-dir-var 'F=/private/tmp/claude-501/p/s/tasks; for i in $(seq 1 25); do grep -q CODEX $F/buugpxu5d.output 2>/dev/null && break; sleep 20; done; tail -2 $F/buugpxu5d.output'
+  expect_deny_task task-dir-var-braced 'T="/private/tmp/claude-501/p/s/tasks"; until [ -s "${T}/b61krf491.output" ]; do sleep 10; done'
+  expect_deny_task task-bin-sleep 'O=/private/tmp/claude-501/p/s/tasks/bom0eju6p.output; until grep -q "^exit" $O 2>/dev/null; do /bin/sleep 15; done; cat $O'
 }
 
 # --- Admitted: what the guard must leave alone -----------------------------------------------
@@ -195,6 +201,9 @@ until grep -q done /private/tmp/claude-501/p/s/tasks/b61krf491.output; do sleep 
 EOF
 chmod +x /tmp/w.sh'
   expect_allow other-tasks-dir 'until [ -s /tmp/tasks/list.txt ]; do sleep 5; done'
+  # A variable-held `.output` file with no tasks directory in the call is a local wait (#5164).
+  expect_allow output-var-no-tasks-dir 'D=/tmp/build; until [ -s $D/run.output ]; do sleep 5; done'
+  expect_allow bin-sleep-sampling 'until grep -q Ready /private/tmp/claude-501/p/s/tasks/b61krf491.output; do /bin/sleep 1; done'
   expect_allow no-loop 'gh pr checks 1'
   # A control word inside an argument is not a command position.
   expect_allow quoted-if 'for i in {1..3}; do echo "check if gh is available"; sleep 5; done'
