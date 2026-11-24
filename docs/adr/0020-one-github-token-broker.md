@@ -8,15 +8,11 @@ Issue: the epic [#5166](https://github.com/devantler-tech/monorepo/issues/5166)
 
 ## Context
 
-Automation reaches GitHub through the organization's two GitHub Apps, botantler-1 and botantler-2.
-Their private keys are organization Actions secrets (`APP_PRIVATE_KEY`, `APP_PRIVATE_KEY_2`), so every
-workflow that can read them, on any branch, can mint a token with the App's full permissions,
-organization administration included. On 2026-11-24, 59 workflow files read the key, 20 of them
-`devantler-tech/.github`'s shared workflows, and 27 call `actions/create-github-app-token`.
-
-The platform holds App credentials too. Crossplane's GitHub provider reads them from OpenBao
-(`infrastructure/github/app`). The agents' External Secrets `GithubAccessToken` generator needs the
-devantler-tech-engineering App key copied into its namespace.
+Automation reaches GitHub through the organization's GitHub Apps, botantler-1 and botantler-2. Today
+each caller, whether a workflow or a platform workload, mints its own tokens from App credentials it
+holds itself. So the credentials are spread across many callers, each one can mint more than its
+job needs, and no single place shows who may obtain which access. Most workflow callers are
+`devantler-tech/.github`'s shared workflows.
 
 On 2026-11-24 the maintainer asked for one hosted service to handle all programmatic GitHub access:
 workflows and platform workloads prove who they are with workload identity instead of stored
@@ -61,7 +57,7 @@ hosting it on the platform creates a chicken-and-egg problem.
 | octo-sts on the platform | Yes, OIDC | Yes, service-account tokens | OpenBao only | Chosen |
 | octo-sts on Cloud Run or AWS Lambda | Yes | Only with the cluster issuer published | A cloud secret store | Rejected: adds a vendor, moves the keys out of OpenBao, and removes no dependency that recovery needs |
 | OpenBao with a GitHub secrets plugin | Only if GitHub's runners can reach OpenBao | Yes | OpenBao | Rejected: exposes the secret store to the internet, and the plugin's OpenBao compatibility is unverified |
-| External Secrets `GithubAccessToken` generator | No | Yes | Copied into every consumer namespace | Rejected as the broker; it is what the agents use today |
+| External Secrets `GithubAccessToken` generator | No | Yes | Copied into every consumer namespace | Rejected: serves platform callers only |
 | GitHub's own OIDC exchange (`create-github-app-token` v3.4.0-beta) | Yes | No | None for callers | Watched: beta, Actions only, controls not yet documented. If it becomes generally available, Actions callers may use it directly |
 | Organization secrets (today) | Yes | No | Every workflow | Replaced |
 
