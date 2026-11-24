@@ -1065,7 +1065,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/board-add-go/go.mod
           cache: false
@@ -1229,7 +1229,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go for the shell-syntax census
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/cleanup-trap-census-go/go.mod
           cache: false
@@ -1327,7 +1327,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go for the native process-holder fixture
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/cleanup-trap-census-go/go.mod
           cache: false
@@ -1539,7 +1539,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/forge-read-go/go.mod
           cache: false
@@ -1568,7 +1568,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/unsigned-commit-report-go/go.mod
           cache: false
@@ -1619,7 +1619,7 @@ jobs:
       # port still runs its Bash reporter. The toolchain version comes from the trusted copy.
       - name: Set up Go for the trusted reporter
         if: hashFiles('trusted-base/.claude/scripts/unsigned-commit-report-go/go.mod') != ''
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: trusted-base/.claude/scripts/unsigned-commit-report-go/go.mod
           cache: false
@@ -1672,7 +1672,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/pipefail-grep-guard-go/go.mod
           cache: false
@@ -1702,7 +1702,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/python-ban-guard-go/go.mod
           cache-dependency-path: .claude/scripts/python-ban-guard-go/go.sum
@@ -1731,7 +1731,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/renovate-dashboard-drift-go/go.mod
           cache: false
@@ -1784,7 +1784,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/comment-disclosure-drift-go/go.mod
           cache: false
@@ -1872,7 +1872,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/pr-ownership-disclosure-go/go.mod
           cache: false
@@ -1896,7 +1896,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/pr-ownership-disclosure-go/go.mod
           cache: false
@@ -1977,7 +1977,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/memory-hygiene-go/go.mod
           cache: false
@@ -2000,7 +2000,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/memory-hygiene-go/go.mod
           cache: false
@@ -2022,7 +2022,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/memory-backup-go/go.mod
           cache: false
@@ -2097,7 +2097,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/memory-backup-go/go.mod
           cache: false
@@ -2251,7 +2251,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/plugin-definition-currency-go/go.mod
           cache: false
@@ -2328,7 +2328,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/claude-lane-go/go.mod
           cache: false
@@ -2400,7 +2400,7 @@ jobs:
       # The suite drives the real Claude liveness check, whose entrypoint builds Go (monorepo#3592),
       # so this job has its own macOS leg rather than a macOS batch slot, which sets up no Go.
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/claude-lane-go/go.mod
           cache: false
@@ -2427,7 +2427,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/claude-lane-go/go.mod
           cache: false
@@ -2535,7 +2535,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go for body-reference parsing
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/issue-body-references-go/go.mod
           cache: false
@@ -2601,7 +2601,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/plugin-definition-currency-go/go.mod
           cache: false
@@ -2745,7 +2745,7 @@ jobs:
           git -c 'url.https://github.com/.insteadOf=git@github.com:' \
             submodule update --init libraries/agent-plugins
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/merge-confirmation-read-go/go.mod
           cache: false
@@ -3154,7 +3154,7 @@ jobs:
       actions: read
     steps:
       - name: Inspect workflow startup metadata
-        uses: devantler-tech/.github/actions/aggregate-job-checks@722d9bd7bd8636a0da9c7a9e63f2e7259e46ede2 # v21.12.8
+        uses: devantler-tech/.github/actions/aggregate-job-checks@946fff9cb37042f4c26c3342665727e28bd66c01 # v22.3.0
         with:
           check-name: Workflow startup snapshot
           check-workflow-startup: "true"
@@ -3183,7 +3183,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .claude/scripts/memory-hygiene-go/go.mod
           cache: false
@@ -3329,7 +3329,7 @@ jobs:
     permissions: {}
     steps:
       - name: Check job results
-        uses: devantler-tech/.github/actions/aggregate-job-checks@722d9bd7bd8636a0da9c7a9e63f2e7259e46ede2 # v21.12.8
+        uses: devantler-tech/.github/actions/aggregate-job-checks@946fff9cb37042f4c26c3342665727e28bd66c01 # v22.3.0
         with:
           job-results: >-
             ${{ needs.workflow-startup.result }}
