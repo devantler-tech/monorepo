@@ -3615,13 +3615,61 @@ transcript_has_records() {
 # is no inventory to check against, so it says UNKNOWN instead.
 # The record covers foreground launches only: a background or nested launch
 # names its subagent in tool-result TEXT, which a quoted transcript reproduces,
-# so it cannot be told from an echo. Delegated transcripts no parent record
+# so it cannot be told from an echo. Those launches are attributed through the
+# runtime's own sidecar instead (RC-17): `agent-<id>.meta.json` beside the
+# transcript names the launching `toolUseId` and, for a nested launch, the
+# `parentAgentId`. A sidecar counts only when the launcher's transcript holds
+# a structured `Agent`/`Task` tool_use with that id — a quoted id in text is
+# never a tool_use block — so the runtime's claim is checked, not trusted.
+# Delegated transcripts neither a parent record nor a confirmed sidecar
 # names are counted as not inventoried — split by whether their own parent was
 # in the walk — so the inventory never reads as complete when it covered only
 # part of the delegated set.
+# Returns 0 when the launch is confirmed, 1 when there is no sidecar or the
+# launcher made no such call (the transcript stays not inventoried), and 2 when
+# the launcher is missing, or a sidecar or launcher cannot be read or parsed: UNKNOWN, never a
+# quiet "not inventoried".
+claude_sidecar_launch_confirmed() {
+  local f="$1" meta tid pid launcher lines rc=0
+  meta="${f%.jsonl}.meta.json"
+  [ -e "$meta" ] || return 1
+  [ -f "$meta" ] && [ -r "$meta" ] || return 2
+  # An empty or whitespace-only sidecar parses to nothing, which jq reports as
+  # success: require exactly one metadata object before reading its fields.
+  jq -e -s 'length == 1 and (.[0] | type) == "object"' "$meta" >/dev/null 2>&1 || return 2
+  tid=$(jq -r 'if type == "object" and (.toolUseId | type) == "string"
+                 and (.toolUseId | test("^[A-Za-z0-9_-]+$")) then .toolUseId else "" end' "$meta" 2>/dev/null) || return 2
+  [ -n "$tid" ] || return 1
+  pid=$(jq -r 'if (.parentAgentId | type) == "string" then .parentAgentId else "" end' "$meta" 2>/dev/null) || return 2
+  if [ -n "$pid" ]; then
+    case "$pid" in *[!A-Za-z0-9_-]*) return 1 ;; esac
+    launcher="${f%/*}/agent-${pid}.jsonl"
+  else
+    launcher="${f%/subagents/*}.jsonl"
+  fi
+  # A launcher that is gone leaves the sidecar's claim unchecked, not disproved.
+  [ -e "$launcher" ] || return 2
+  [ -f "$launcher" ] && [ -r "$launcher" ] || return 2
+  # The id filter below discards every line that does not mention the id, so a
+  # truncated or malformed launcher would still confirm. The session parent was
+  # parsed whole by the caller; a nested launcher (another subagent, possibly
+  # outside the walk) is parsed whole here before its call is trusted.
+  if [ -n "$pid" ] && ! transcript_has_records "$launcher"; then return 2; fi
+  lines=$(LC_ALL=C grep -F -- "\"${tid}\"" "$launcher" 2>/dev/null) || rc=$?
+  [ "$rc" -le 1 ] || return 2
+  [ "$rc" -eq 0 ] || return 1
+  rc=0
+  printf '%s\n' "$lines" | jq -e --arg t "$tid" -n '[inputs | select(type == "object" and .type == "assistant")
+        | .message.content? | arrays | .[] | objects
+        | select(.type == "tool_use" and .id == $t and (.name == "Agent" or .name == "Task"))]
+        | length > 0' >/dev/null 2>&1 || rc=$?
+  case "$rc" in 0) return 0 ;; 1) return 1 ;; *) return 2 ;; esac
+}
+
 claude_delegated_coverage() {
   local f id p lines ids rc parents=0 delegated=0 named=0 in_walk=0 outside=0 missing=0
   local unreadable=0 unreadable_named=0 expected='' unnamed=0 parent_outside=0 parent_gone=0
+  local sidecar_named=0 sidecar_unknown=0 sidecar_unreadable=0 sidecar_unknown_paths=''
   local failed_parents='' parent_unknown=0 presence=0
   # A projects store that exists but cannot be listed leaves the walk empty,
   # which would print as a known "0 parent + 0 delegated".
@@ -3688,7 +3736,18 @@ claude_delegated_coverage() {
         if grep -qxF -- "${f%/subagents/*}.jsonl" <<<"$failed_parents"; then
           parent_unknown=$((parent_unknown + 1))
         elif grep -qxF -- "${f%/subagents/*}.jsonl" <<<"$SF_CACHE"; then
-          unnamed=$((unnamed + 1))
+          rc=0
+          claude_sidecar_launch_confirmed "$f" || rc=$?
+          case "$rc" in
+            0)
+              sidecar_named=$((sidecar_named + 1))
+              # Attributed is not the same as read: an empty or unparseable
+              # transcript is as unknown here as on the agentId path.
+              if ! transcript_has_records "$f"; then sidecar_unreadable=$((sidecar_unreadable + 1)); fi
+              ;;
+            1) unnamed=$((unnamed + 1)) ;;
+            *) sidecar_unknown=$((sidecar_unknown + 1)); sidecar_unknown_paths="${sidecar_unknown_paths}${f}"$'\n'; unnamed=$((unnamed + 1)) ;;
+          esac
         elif [ -f "${f%/subagents/*}.jsonl" ]; then
           parent_outside=$((parent_outside + 1))
         else
@@ -3697,7 +3756,8 @@ claude_delegated_coverage() {
         ;;
     esac
   done <<<"$SF_CACHE"
-  echo " claude delegated not inventoried: $((unnamed + parent_unknown + parent_outside + parent_gone)) of ${delegated} delegated transcripts — ${unnamed} named by no parent agentId record (background or nested launches), ${parent_unknown} whose parent could not be read, ${parent_outside} whose parent is outside the window or file cap, ${parent_gone} whose parent is missing on disk"
+  echo " claude delegated inventory (from sidecars confirmed by the launching tool_use): ${sidecar_named} background or nested launches"
+  echo " claude delegated not inventoried: $((unnamed + parent_unknown + parent_outside + parent_gone)) of ${delegated} delegated transcripts — ${unnamed} named by no parent agentId record or confirmed sidecar, ${parent_unknown} whose parent could not be read, ${parent_outside} whose parent is outside the window or file cap, ${parent_gone} whose parent is missing on disk"
   local status=0
   if [ "$parent_gone" -gt 0 ]; then
     echo " UNKNOWN: ${parent_gone} delegated transcript(s) have no parent transcript on disk —"
@@ -3711,6 +3771,17 @@ claude_delegated_coverage() {
   fi
   if [ "$unreadable_named" -gt 0 ]; then
     echo " UNKNOWN: ${unreadable_named} named delegated transcript(s) in this walk could not be read —"
+    echo "          delegated coverage is incomplete, not zero."
+    status=2
+  fi
+  if [ "$sidecar_unknown" -gt 0 ]; then
+    echo " UNKNOWN: ${sidecar_unknown} delegated transcript(s) whose sidecar or launcher could not be read or parsed —"
+    echo "          delegated coverage is incomplete, not zero:"
+    printf '%s' "$sidecar_unknown_paths" | while IFS= read -r p; do echo "            ${p#"$CLAUDE_PROJECTS"/}"; done
+    status=2
+  fi
+  if [ "$sidecar_unreadable" -gt 0 ]; then
+    echo " UNKNOWN: ${sidecar_unreadable} sidecar-attributed delegated transcript(s) could not be read —"
     echo "          delegated coverage is incomplete, not zero."
     status=2
   fi

@@ -12691,7 +12691,7 @@ check "delegated coverage control: the share counts the new transcript" "$OUT" \
   "claude coverage: 2 parent + 2 delegated (subagents/) transcripts; delegated share 50%"
 check "delegated coverage control: nothing missing" "$OUT" "3 named — 2 in this walk (0 of them unreadable), 1 outside the window or file cap, 0 missing on disk"
 check "delegated coverage control: every delegated transcript is inventoried" "$OUT" \
-  "claude delegated not inventoried: 0 of 2 delegated transcripts — 0 named by no parent agentId record (background or nested launches), 0 whose parent could not be read, 0 whose parent is outside the window or file cap, 0 whose parent is missing on disk"
+  "claude delegated not inventoried: 0 of 2 delegated transcripts — 0 named by no parent agentId record or confirmed sidecar, 0 whose parent could not be read, 0 whose parent is outside the window or file cap, 0 whose parent is missing on disk"
 nocheck "delegated coverage control: no unknown line" "$OUT" "named by a parent are missing on disk"
 if [ "$rc" -eq 0 ]; then ok "delegated coverage control: exit 0"; else bad "delegated coverage control: exit 0" "exit $rc"; fi
 # A parent that cannot be read gives no inventory: unknown and exit 2.
@@ -12761,8 +12761,107 @@ cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-bg/proj/p/subagents
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-bg/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1)
 check "delegated coverage: a background launch is reported as not inventoried" "$OUT" \
-  "claude delegated not inventoried: 1 of 1 delegated transcripts — 1 named by no parent agentId record (background or nested launches), 0 whose parent could not be read, 0 whose parent is outside the window or file cap, 0 whose parent is missing on disk"
+  "claude delegated not inventoried: 1 of 1 delegated transcripts — 1 named by no parent agentId record or confirmed sidecar, 0 whose parent could not be read, 0 whose parent is outside the window or file cap, 0 whose parent is missing on disk"
 check "delegated coverage: text naming is not read as a record" "$OUT" "0 named — 0 in this walk"
+check "delegated coverage: no sidecar attributes nothing" "$OUT" \
+  "claude delegated inventory (from sidecars confirmed by the launching tool_use): 0 background or nested launches"
+# RC-17: the runtime's `agent-<id>.meta.json` sidecar names the launching
+# tool_use. It attributes a background launch only when the parent holds a
+# structured Agent/Task tool_use with that id; an id in tool-result text, or on
+# a tool_use of another tool, leaves the transcript not inventoried.
+printf '%s\n' '{"agentType":"x","toolUseId":"t1","spawnDepth":1,"requestShape":"background"}' \
+  > "$FIX/deleg-bg/proj/p/subagents/agent-abg.meta.json"
+printf '%s\n' '{"type":"assistant","timestamp":"2026-08-01T09:59:00.000Z","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}]}}' \
+  >> "$FIX/deleg-bg/proj/p.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-bg/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1)
+check "sidecar: an id on text or another tool's tool_use is not a launch" "$OUT" \
+  "1 of 1 delegated transcripts — 1 named by no parent agentId record or confirmed sidecar"
+check "sidecar: an unconfirmed sidecar attributes nothing" "$OUT" \
+  "(from sidecars confirmed by the launching tool_use): 0 background or nested launches"
+printf '%s\n' '{"type":"assistant","timestamp":"2026-08-01T09:59:30.000Z","message":{"content":[{"type":"tool_use","id":"t1","name":"Agent","input":{}}]}}' \
+  >> "$FIX/deleg-bg/proj/p.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-bg/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1)
+check "sidecar: a confirmed background launch is inventoried" "$OUT" \
+  "claude delegated not inventoried: 0 of 1 delegated transcripts — 0 named by no parent agentId record or confirmed sidecar"
+check "sidecar: the confirmed launch is counted" "$OUT" \
+  "(from sidecars confirmed by the launching tool_use): 1 background or nested launches"
+# A nested launch is confirmed against the launching subagent's own transcript.
+cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-bg/proj/p/subagents/agent-anest.jsonl"
+printf '%s\n' '{"agentType":"y","toolUseId":"t2","parentAgentId":"abg","spawnDepth":2,"requestShape":"foreground"}' \
+  > "$FIX/deleg-bg/proj/p/subagents/agent-anest.meta.json"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-bg/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1)
+check "sidecar: a nested launch its launcher never made is not inventoried" "$OUT" \
+  "1 of 2 delegated transcripts — 1 named by no parent agentId record or confirmed sidecar"
+printf '%s\n' '{"type":"assistant","timestamp":"2026-08-01T10:00:30.000Z","message":{"content":[{"type":"tool_use","id":"t2","name":"Agent","input":{}}]}}' \
+  >> "$FIX/deleg-bg/proj/p/subagents/agent-abg.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-bg/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1)
+check "sidecar: a nested launch confirmed by its launcher is inventoried" "$OUT" \
+  "0 of 2 delegated transcripts — 0 named by no parent agentId record or confirmed sidecar"
+check "sidecar: both launches are counted" "$OUT" \
+  "(from sidecars confirmed by the launching tool_use): 2 background or nested launches"
+nocheck "sidecar: confirmed launches raise no unknown" "$OUT" "sidecar or launcher could not be read"
+# A sidecar that exists but cannot be parsed is UNKNOWN (exit 2, transcript
+# named), never a quiet "not inventoried" (review of #5162).
+mkdir -p "$FIX/deleg-sc/proj/p/subagents"
+cp "$FIX/deleg-bg/proj/p.jsonl" "$FIX/deleg-sc/proj/p.jsonl"
+cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-sc/proj/p/subagents/agent-abad.jsonl"
+printf '%s\n' '{"toolUseId":"t1"' > "$FIX/deleg-sc/proj/p/subagents/agent-abad.meta.json"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-sc/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+check "sidecar: an unparseable sidecar is unknown" "$OUT" \
+  "UNKNOWN: 1 delegated transcript(s) whose sidecar or launcher could not be read or parsed"
+check "sidecar: the unknown transcript is named" "$OUT" "p/subagents/agent-abad.jsonl"
+if [ "$rc" -eq 2 ]; then ok "sidecar: an unparseable sidecar exits 2"; else bad "sidecar: an unparseable sidecar exits 2" "exit $rc"; fi
+# A confirmed sidecar does not vouch for the transcript itself: one that does
+# not parse is unknown, as on the agentId path (review of #5162).
+printf '%s\n' '{"toolUseId":"t1"}' > "$FIX/deleg-sc/proj/p/subagents/agent-abad.meta.json"
+printf '%s\n' 'not json at all' > "$FIX/deleg-sc/proj/p/subagents/agent-abad.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-sc/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+check "sidecar: an unreadable attributed transcript is unknown" "$OUT" \
+  "UNKNOWN: 1 sidecar-attributed delegated transcript(s) could not be read"
+if [ "$rc" -eq 2 ]; then ok "sidecar: an unreadable attributed transcript exits 2"; else bad "sidecar: an unreadable attributed transcript exits 2" "exit $rc"; fi
+# CONTROL: a readable transcript with a confirmed sidecar is a clean reading.
+cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-sc/proj/p/subagents/agent-abad.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-sc/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+nocheck "sidecar control: no unknown line" "$OUT" "UNKNOWN: 1 sidecar"
+check "sidecar control: attributed" "$OUT" "(from sidecars confirmed by the launching tool_use): 1 background or nested launches"
+if [ "$rc" -eq 0 ]; then ok "sidecar control: exit 0"; else bad "sidecar control: exit 0" "exit $rc"; fi
+# An empty sidecar parses to nothing, which jq reports as success: it is
+# UNKNOWN, never "no launch id" (review of #5162).
+printf '  \n' > "$FIX/deleg-sc/proj/p/subagents/agent-abad.meta.json"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-sc/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+check "sidecar: an empty sidecar is unknown" "$OUT" \
+  "UNKNOWN: 1 delegated transcript(s) whose sidecar or launcher could not be read or parsed"
+if [ "$rc" -eq 2 ]; then ok "sidecar: an empty sidecar exits 2"; else bad "sidecar: an empty sidecar exits 2" "exit $rc"; fi
+printf '%s\n' '{"toolUseId":"t1"}' > "$FIX/deleg-sc/proj/p/subagents/agent-abad.meta.json"
+# A nested launcher that holds the matching call but is cut short elsewhere is
+# a partial read: the child is UNKNOWN, not confirmed (review of #5162).
+cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-sc/proj/p/subagents/agent-akid.jsonl"
+printf '%s\n' '{"toolUseId":"t9","parentAgentId":"abad"}' > "$FIX/deleg-sc/proj/p/subagents/agent-akid.meta.json"
+{ printf '%s\n' '{"type":"assistant","timestamp":"2026-08-01T10:00:30.000Z","message":{"content":[{"type":"tool_use","id":"t9","name":"Agent","input":{}}]}}'
+  printf '%s' '{"type":"user","message":{"content":[{"type":"te'; } >> "$FIX/deleg-sc/proj/p/subagents/agent-abad.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-sc/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+check "sidecar: a truncated nested launcher leaves its child unknown" "$OUT" "p/subagents/agent-akid.jsonl"
+if [ "$rc" -eq 2 ]; then ok "sidecar: a truncated nested launcher exits 2"; else bad "sidecar: a truncated nested launcher exits 2" "exit $rc"; fi
+# A nested launcher that is gone leaves the claim unchecked: UNKNOWN, not a
+# quiet "not inventoried" (review of #5162). The truncated launcher is restored
+# first so only the missing one is unknown.
+cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-sc/proj/p/subagents/agent-abad.jsonl"
+printf '%s\n' '{"toolUseId":"t9","parentAgentId":"agone"}' > "$FIX/deleg-sc/proj/p/subagents/agent-akid.meta.json"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-sc/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1); rc=$?
+check "sidecar: a missing nested launcher is unknown" "$OUT" \
+  "UNKNOWN: 1 delegated transcript(s) whose sidecar or launcher could not be read or parsed"
+check "sidecar: the child of a missing launcher is named" "$OUT" "p/subagents/agent-akid.jsonl"
+if [ "$rc" -eq 2 ]; then ok "sidecar: a missing nested launcher exits 2"; else bad "sidecar: a missing nested launcher exits 2" "exit $rc"; fi
 # A malformed record carrying an agentId key is not silently skipped (review of
 # #4326): the parent's inventory could not be built, so it is unknown and exit 2.
 mkdir -p "$FIX/deleg-bad/proj"
@@ -12804,7 +12903,7 @@ touch -t 202201010000 "$FIX/deleg-cap/proj/old/subagents/agent-c1.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-cap/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 2 --section a2a 2>&1)
 check "delegated coverage: a helper whose parent the cap left out is reported apart" "$OUT" \
-  "1 of 1 delegated transcripts — 0 named by no parent agentId record (background or nested launches), 0 whose parent could not be read, 1 whose parent is outside the window or file cap, 0 whose parent is missing on disk"
+  "1 of 1 delegated transcripts — 0 named by no parent agentId record or confirmed sidecar, 0 whose parent could not be read, 1 whose parent is outside the window or file cap, 0 whose parent is missing on disk"
 # A named helper in the walk that is empty or not JSON is not covered (review
 # of #4326): filesystem readability is not a successful read.
 mkdir -p "$FIX/deleg-emptyhelper/proj/p/subagents"
@@ -12873,7 +12972,7 @@ cp "$FIX/deleg/proj/p1/subagents/agent-a1.jsonl" "$FIX/deleg-badparent/proj/p/su
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deleg-badparent/proj" CODEX_HOME="$FIX/deleg-nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1)
 check "delegated coverage: a helper of an unreadable parent is reported apart" "$OUT" \
-  "1 of 1 delegated transcripts — 0 named by no parent agentId record (background or nested launches), 1 whose parent could not be read"
+  "1 of 1 delegated transcripts — 0 named by no parent agentId record or confirmed sidecar, 1 whose parent could not be read"
 # A projects store that exists but cannot be listed is unknown, never "0 + 0".
 if [ "$(id -u)" -ne 0 ]; then
   mkdir -p "$FIX/deleg-locked/proj"
