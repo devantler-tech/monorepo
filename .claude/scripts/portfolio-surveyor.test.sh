@@ -305,7 +305,7 @@ grep -Fq 'matches no arm' "${surveyor}" ||
 # cask PRs are gone. A surveyor still told to pass `devantler` for the tap would read every bump PR
 # exit 1 and spend the metered lanes the carve-out protects, so pin both the new spelling and the
 # absence of the old instruction.
-grep -Fq "for the platform and agent-plugins updaters and the tap's Cask bump PRs" "${surveyor}" ||
+grep -Fq "for the ksail, platform and agent-plugins updaters and the tap's Cask bump PRs" "${surveyor}" ||
   fail "surveyor does not tell the caller to pass app/botantler-1 for the tap's Cask bump PRs (homebrew-tap#2568)"
 if grep -Fq 'for the homebrew-tap cask arms' "${surveyor}"; then
   fail "surveyor still prescribes a plain devantler login for the retired homebrew-tap cask arms (homebrew-tap#2568)"
@@ -1511,7 +1511,7 @@ expect_review_gated "agent-plugins per-skill update with a repeated follow-up co
   "${per_skill_args[@]}" "${per_skill_files}" \
   "$(printf '%s\n' "${per_skill_sync}" "${per_skill_bump}" "${per_skill_bump}" | per_skill_commits)"
 expect_review_gated "agent-plugins per-skill update from another author" \
-  agent-plugins app/botantler-1 "${per_skill_branch}" "${per_skill_title}" "${per_skill_head}" \
+  agent-plugins app/botantler-2 "${per_skill_branch}" "${per_skill_title}" "${per_skill_head}" \
   "${per_skill_files}" "${per_skill_commits_json}"
 
 # An installed skill root holds copies from many upstreams, and the copied frontmatter naming the
