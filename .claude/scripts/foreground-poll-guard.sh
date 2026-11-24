@@ -28,7 +28,10 @@
 # file (`.../tasks/<id>.output`). The runtime announces when a backgrounded task finishes, and
 # the guide already says never to poll that file, but such a loop reads only a local file, so it
 # passed as a local wait. In the 7 days to 2026-11-16 scheduled runs made 112 such calls and
-# blocked 18,956 s, the Agent Improver 43 of them (monorepo#5087).
+# blocked 18,956 s, the Agent Improver 43 of them (monorepo#5087). The file also counts when the
+# tasks directory sits in a variable (`$F/<id>.output`), and `sleep` called by its path
+# (`/bin/sleep`) counts as `sleep` for every reason: 4 such calls slipped past in 2026-11-23/24
+# (monorepo#5164).
 #
 # Everything else exits 0: a loop that waits on a local process (the clock may be its deadline),
 # a short sampling loop (sleep under 5 s), a `for` over a list of repositories, a settle `sleep`
@@ -83,7 +86,8 @@ verdict=$(printf '%s\n' "${cmd}" | awk '
   END {
     # A runtime task output file named anywhere in the call (before quotes are dropped, so a
     # quoted path still counts) makes a sleeping loop a wait on a background task (#5087).
-    taskf = (text ~ /\/tasks\/[A-Za-z0-9_-]+\.output/)
+    # The directory may also be held in a variable (`F=.../tasks; ... $F/<id>.output`, #5164).
+    taskf = (text ~ /\/tasks\/[A-Za-z0-9_-]+\.output/ || taskvar(text))
     text = unquote(text)
     gsub(/&&|\|\||[;|(){}`]/, " ; ", text)
     n = split(text, t, /[[:space:]]+/)
@@ -107,7 +111,8 @@ verdict=$(printf '%s\n' "${cmd}" | awk '
           }
           if (depth == 0 && x ~ /^-[A-Za-z]$/ && (prev == "[" || prev == "[[" || prev == "test" || prev == "!")) o = 1
           prev = x
-          if (cp && x == "sleep" && seconds(t[j + 1]) >= 5) s = 1
+          # `sleep` called by its path (`/bin/sleep 15`) is the same wait (#5164).
+          if (cp && (x == "sleep" || x ~ /^\/([A-Za-z0-9_.-]+\/)*sleep$/) && seconds(t[j + 1]) >= 5) s = 1
           if (cp && (x == "gh" || x == "kubectl" || x == "flux" || x == "talosctl" || x == "curl")) r = 1
           if (cp && x == "git") {
             k = j + 1; if (t[k] == "-C") k += 2
@@ -172,6 +177,18 @@ verdict=$(printf '%s\n' "${cmd}" | awk '
     if (w !~ /^[0-9][0-9.]*[smhd]?$/) return 0
     u = substr(w, length(w))
     return (w + 0) * (u == "m" ? 60 : u == "h" ? 3600 : u == "d" ? 86400 : 1)
+  }
+  # A variable assigned a tasks directory (`F=.../tasks` or `.../tasks/`, quoted or not) whose
+  # own `$F/<name>.output` or `${F}/<name>.output` the call names (#5164). An `.output` file in
+  # another variable is not a task output.
+  function taskvar(s,   r, nm) {
+    r = s
+    while (match(r, /[A-Za-z_][A-Za-z0-9_]*=["\047]?[^[:space:];&|"\047]*\/tasks\/?["\047]?([;&|[:space:]]|$)/)) {
+      nm = substr(r, RSTART, RLENGTH); sub(/=.*/, "", nm)
+      if (s ~ ("[$][{]?" nm "[}]?/[A-Za-z0-9_-]+[.]output")) return 1
+      r = substr(r, RSTART + RLENGTH)
+    }
+    return 0
   }
   function counted(i,   j) {
     for (j = i + 1; j <= n && t[j] != "do"; j++)
