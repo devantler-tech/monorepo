@@ -3615,13 +3615,42 @@ transcript_has_records() {
 # is no inventory to check against, so it says UNKNOWN instead.
 # The record covers foreground launches only: a background or nested launch
 # names its subagent in tool-result TEXT, which a quoted transcript reproduces,
-# so it cannot be told from an echo. Delegated transcripts no parent record
+# so it cannot be told from an echo. Those launches are attributed through the
+# runtime's own sidecar instead (RC-17): `agent-<id>.meta.json` beside the
+# transcript names the launching `toolUseId` and, for a nested launch, the
+# `parentAgentId`. A sidecar counts only when the launcher's transcript holds
+# a structured `Agent`/`Task` tool_use with that id — a quoted id in text is
+# never a tool_use block — so the runtime's claim is checked, not trusted.
+# Delegated transcripts neither a parent record nor a confirmed sidecar
 # names are counted as not inventoried — split by whether their own parent was
 # in the walk — so the inventory never reads as complete when it covered only
 # part of the delegated set.
+claude_sidecar_launch_confirmed() {
+  local f="$1" meta tid pid launcher
+  meta="${f%.jsonl}.meta.json"
+  [ -f "$meta" ] && [ -r "$meta" ] || return 1
+  tid=$(jq -r 'if type == "object" and (.toolUseId | type) == "string"
+                 and (.toolUseId | test("^[A-Za-z0-9_-]+$")) then .toolUseId else empty end' "$meta" 2>/dev/null) || return 1
+  [ -n "$tid" ] || return 1
+  pid=$(jq -r 'if (.parentAgentId | type) == "string" then .parentAgentId else "" end' "$meta" 2>/dev/null) || return 1
+  if [ -n "$pid" ]; then
+    case "$pid" in *[!A-Za-z0-9_-]*) return 1 ;; esac
+    launcher="${f%/*}/agent-${pid}.jsonl"
+  else
+    launcher="${f%/subagents/*}.jsonl"
+  fi
+  [ -f "$launcher" ] && [ -r "$launcher" ] || return 1
+  LC_ALL=C grep -F -- "\"${tid}\"" "$launcher" 2>/dev/null \
+    | jq -e --arg t "$tid" -n '[inputs | select(type == "object" and .type == "assistant")
+          | .message.content? | arrays | .[] | objects
+          | select(.type == "tool_use" and .id == $t and (.name == "Agent" or .name == "Task"))]
+          | length > 0' >/dev/null 2>&1
+}
+
 claude_delegated_coverage() {
   local f id p lines ids rc parents=0 delegated=0 named=0 in_walk=0 outside=0 missing=0
   local unreadable=0 unreadable_named=0 expected='' unnamed=0 parent_outside=0 parent_gone=0
+  local sidecar_named=0
   local failed_parents='' parent_unknown=0 presence=0
   # A projects store that exists but cannot be listed leaves the walk empty,
   # which would print as a known "0 parent + 0 delegated".
@@ -3688,7 +3717,11 @@ claude_delegated_coverage() {
         if grep -qxF -- "${f%/subagents/*}.jsonl" <<<"$failed_parents"; then
           parent_unknown=$((parent_unknown + 1))
         elif grep -qxF -- "${f%/subagents/*}.jsonl" <<<"$SF_CACHE"; then
-          unnamed=$((unnamed + 1))
+          if claude_sidecar_launch_confirmed "$f"; then
+            sidecar_named=$((sidecar_named + 1))
+          else
+            unnamed=$((unnamed + 1))
+          fi
         elif [ -f "${f%/subagents/*}.jsonl" ]; then
           parent_outside=$((parent_outside + 1))
         else
@@ -3697,7 +3730,8 @@ claude_delegated_coverage() {
         ;;
     esac
   done <<<"$SF_CACHE"
-  echo " claude delegated not inventoried: $((unnamed + parent_unknown + parent_outside + parent_gone)) of ${delegated} delegated transcripts — ${unnamed} named by no parent agentId record (background or nested launches), ${parent_unknown} whose parent could not be read, ${parent_outside} whose parent is outside the window or file cap, ${parent_gone} whose parent is missing on disk"
+  echo " claude delegated inventory (from sidecars confirmed by the launching tool_use): ${sidecar_named} background or nested launches"
+  echo " claude delegated not inventoried: $((unnamed + parent_unknown + parent_outside + parent_gone)) of ${delegated} delegated transcripts — ${unnamed} named by no parent agentId record or confirmed sidecar, ${parent_unknown} whose parent could not be read, ${parent_outside} whose parent is outside the window or file cap, ${parent_gone} whose parent is missing on disk"
   local status=0
   if [ "$parent_gone" -gt 0 ]; then
     echo " UNKNOWN: ${parent_gone} delegated transcript(s) have no parent transcript on disk —"
