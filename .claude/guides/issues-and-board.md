@@ -303,6 +303,9 @@ invalid binding; exit 2/UNKNOWN means the response cannot prove the bindings. Ne
 planning write or fallback copy.
 Read select options from the organization issue field, not the attachment's empty `options` list.
 Write native values on the issue so they remain consistent across projects.
+**Read them from the issue too.** A project item's `fieldValues` lists only project-local fields, so
+every card there looks as if its Priority, Effort and dates are unset. Read `issueFieldValues` on the
+`Issue` instead; a value missing from `fieldValues` is not evidence that it is unset.
 
 Keep the distinct project-local **Service class** (Expedite, Fixed date, Standard, Risk reduction),
 **Ready since**, **Blocked since** and **First started** fields. Record a brief issue
