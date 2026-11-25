@@ -89,8 +89,11 @@ any token with `contents: write` create a release tag.
    - **Release tags:** both Apps may create them (the release-tag ruleset's bypass). So any token
      with `contents: write`, from any policy, can cut a release. The maintainer chose that for one
      pool of Apps that every caller can draw on.
-   - **Permissions:** both Apps hold the same permissions. While only botantler-1 holds custom
-     properties, the one policy that manages them pins it.
+   - **Pins:** a policy pins an App only while just one App can serve it. Only botantler-1 holds
+     custom properties, so the one policy that manages them pins it. Neither App holds the checks
+     permission today. A policy that writes check runs would pin one App, because only the App that
+     created a check run can update it. octo-sts keeps an unpinned exchange on one App only with a
+     sticky store, which this deployment does not run.
    - **Administration:** the permission Crossplane needs is allowed in Crossplane's policy only.
 5. **Only the maintainer's systems request tokens.** Customers never call either broker, not even
    for their own repositories, and work for them runs from his systems. The broker serves the
@@ -158,8 +161,8 @@ organization admin, so it does not.
   and review rules that trust the botantler Apps must tell agent work apart from programmed
   automation by its branch namespace, not by its author.
 - octo-sts is pre-1.0 and releases often. Its image is pinned by digest and updated by reviewed
-  pull requests. It keeps a checks-writing exchange on one App by its route key, so check runs
-  stay with the App that created them.
+  pull requests. Without a sticky store (Firestore or DynamoDB), it keeps an unpinned exchange on
+  no particular App, so a policy that writes check runs pins one (decision 4).
 - The cluster's service-account discovery endpoints become readable without authentication. They
   hold public keys only. The broker trusts the API server's CA.
 - The migration runs in order under #5166:
