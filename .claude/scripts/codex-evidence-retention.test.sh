@@ -199,7 +199,7 @@ fixture eng d1 d2 d3 d4 d5 d6
 age "$home"
 out=$(CODEX_EVIDENCE_RETENTION_LOOKUPS=1 run apply)
 rc=$?
-if [ "$rc" -eq 0 ] && [ ! -e "$(ev eng d1)" ] && [ -d "$(ev eng d6)" ] && grep -q 'deferred=1 ' <<<"$out" &&
+if [ "$rc" -eq 0 ] && [ ! -e "$(ev eng d1)" ] && [ -d "$(ev eng d6)" ] && grep -q 'deferred=1)' <<<"$out" &&
   grep -q 'lookups=1 ' <<<"$out"; then
   ok 'folders past the lookup budget are deferred, oldest removed first'
 else
