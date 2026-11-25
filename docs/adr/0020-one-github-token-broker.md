@@ -90,8 +90,8 @@ any token with `contents: write` create a release tag.
      with `contents: write`, from any policy, can cut a release. The maintainer chose that for one
      pool of Apps that every caller can draw on.
    - **Pins:** a policy pins one App, listed in the required policy check, in exactly two cases:
-     - **A permission only one App holds.** Only botantler-1 holds custom properties, so the one
-       policy that manages them pins it until botantler-2 holds them too.
+     - **A permission only one App holds.** None does today: botantler-2 gained custom properties
+       on 2026-11-25, so both Apps hold the same permissions and no policy pins an App.
      - **Writing check runs, even when both Apps hold the permission.** Only the App that created a
        check run can update it. octo-sts keeps an unpinned exchange on one App only with a sticky
        store, which this deployment does not run. Neither App holds the checks permission today.
