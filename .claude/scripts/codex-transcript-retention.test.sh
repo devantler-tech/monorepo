@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/codex-evidence-retention.sh .claude/scripts/codex-evidence-retention.test.sh
 # test-inputs: .claude/scripts/build-cache-reclaim.sh .claude/scripts/build-cache-reclaim.test.sh
 # test-inputs: .claude/scripts/cleanup-trap-census-go/go.mod
 # test-inputs: .claude/scripts/codex-worktree-retention.sh

@@ -282,6 +282,8 @@ jobs:
               - '.claude/scripts/codex-transcript-retention.test.sh'
               - '.claude/scripts/codex-worktree-retention.sh'
               - '.claude/scripts/codex-worktree-retention.test.sh'
+              - '.claude/scripts/codex-evidence-retention.sh'
+              - '.claude/scripts/codex-evidence-retention.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -1349,6 +1351,11 @@ jobs:
       # removable one in exactly one dimension.
       - name: Self-test Codex worktree retention
         run: bash .claude/scripts/codex-worktree-retention.test.sh
+      # The Codex evidence step (monorepo#5189) has its own helper as well; each kept fixture
+      # (recent, in use, linked from an open issue, a linked folder, an unsafe name, an
+      # unreadable answer) differs from a removable one in exactly one dimension.
+      - name: Self-test Codex evidence retention
+        run: bash .claude/scripts/codex-evidence-retention.test.sh
 
   test-disk-preflight:
     name: Test disk pre-flight
