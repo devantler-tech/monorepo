@@ -638,13 +638,15 @@ icebox_clauses=(
   'Icebox defers new starts, never a checkpoint that has come due'
   'At rung 1, run the [Kata census](improvement-katas.md#checkpoints-finish-existing-work)'
   'read each result with `kata-measure-date.sh`'
-  'before pulling new work'
+  'Read back every `DUE` Kata you own, and record its decision on the issue, before pulling new work.'
 )
 contract "rung 1 reads back a due Kata wherever its card sits" "${icebox_flat}" "${icebox_clauses[@]}"
 control "a rule that leaves a due Kata deferred in Icebox is rejected" "${icebox_flat}" \
   "${icebox_flat//, Icebox included./, Icebox excepted.}" 'Icebox included.' "${icebox_clauses[@]}"
 control "a rule that finds due Katas only through the survey is rejected" "${icebox_flat}" \
   "${icebox_flat//run the \[Kata census\]/read the survey}" 'Kata census' "${icebox_clauses[@]}"
+control "a rule that reads a due Kata back without recording its decision is rejected" "${icebox_flat}" \
+  "${icebox_flat//, and record its decision on the issue,/}" 'record its decision on the issue' "${icebox_clauses[@]}"
 
 # The overlay's own projection, applied to issue objects shaped like the forge's, must give the
 # helper a payload it accepts and the verdict the rule promises. A far-future date keeps it stable.
