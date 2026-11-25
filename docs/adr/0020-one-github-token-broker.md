@@ -2,7 +2,8 @@
 
 Status: Accepted. The maintainer delegated the design on 2026-11-24, and on 2026-11-25 chose one
 broker and the botantler Apps for every caller, behind a caller gate. Later that day he limited the
-brokers to his own systems and set work outside his organization apart, on a broker of its own.
+brokers to his own systems, set work outside his organization apart on a broker of its own, and
+made the two botantler Apps interchangeable.
 
 Date: 2026-11-24. Amended 2026-11-25.
 
@@ -37,6 +38,9 @@ Later on 2026-11-25 he added two points:
 - Only his own systems may request tokens, on both brokers. The brokers are part of his offering,
   not a service others can rely on to reach his customers or his systems. This replaces named
   customer repositories as callers.
+
+He then asked that every policy be able to mint from either botantler App. He accepted that this lets
+any token with `contents: write` create a release tag.
 
 ## Decision
 
@@ -79,14 +83,14 @@ Later on 2026-11-25 he added two points:
    - When octo-sts can refuse repository-level policies
      ([octo-sts/app#1919](https://github.com/octo-sts/app/pull/1919)), every grant moves to
      `devantler-tech/.github`.
-4. **botantler-1 and botantler-2 serve every caller,** and the broker routes each exchange by
-   rate limit left. The agents' App and Crossplane's App retire once their callers move. One pair of
-   Apps stays safe because each policy pins the App that its access needs:
-   - **Release tags:** only botantler-1 may create them (the release-tag ruleset's bypass), and only
-     release workflows' policies pin it.
-   - **Other write access:** any other policy that grants write access pins botantler-2, so an
-     agent's token can never cut a release.
-   - **Read-only:** a read-only policy may use either App.
+4. **botantler-1 and botantler-2 serve every caller, interchangeably.** The broker routes each
+   exchange to the App with more rate limit left, so a policy names no App. The agents' App and
+   Crossplane's App retire once their callers move.
+   - **Release tags:** both Apps may create them (the release-tag ruleset's bypass). So any token
+     with `contents: write`, from any policy, can cut a release. The maintainer chose that for one
+     pool of Apps that every caller can draw on.
+   - **Permissions:** both Apps hold the same permissions. While only botantler-1 holds custom
+     properties, the one policy that manages them pins it.
    - **Administration:** the permission Crossplane needs is allowed in Crossplane's policy only.
 5. **Only the maintainer's systems request tokens.** Customers never call either broker, not even
    for their own repositories, and work for them runs from his systems. The broker serves the
@@ -122,8 +126,8 @@ Later on 2026-11-25 he added two points:
 |---|---|---|---|---|
 | octo-sts on the platform, behind a caller gate | Yes, OIDC | Yes, service-account tokens | OpenBao only | Chosen |
 | The same without a gate | Yes | Yes | OpenBao only | Rejected: anyone can spend the Apps' quota, and one loose policy admits outsiders |
-| Two brokers: a public one, and an internal one for the agents' and Crossplane's Apps | Yes | Yes | OpenBao only | Rejected by the maintainer for one broker and one pair of Apps. The gate and the App pins give the same boundary |
-| One broker for internal and external work, with botantler-1 and botantler-2 made public | Yes | Yes | OpenBao only | Rejected: any account could install the Apps, so only configuration would stop the release App's broker from minting outside the organization |
+| Two brokers: a public one, and an internal one for the agents' and Crossplane's Apps | Yes | Yes | OpenBao only | Rejected by the maintainer for one broker and one pair of Apps. The gate gives the same caller boundary |
+| One broker for internal and external work, with botantler-1 and botantler-2 made public | Yes | Yes | OpenBao only | Rejected: any account could install the Apps, so only configuration would stop the broker from minting a release-capable token outside the organization |
 | Customers call the brokers for their own repositories | Yes | No | OpenBao only | Rejected by the maintainer: the brokers serve his systems only, so no one else can rely on them to reach his customers or his systems |
 | octo-sts on Cloud Run or AWS Lambda | Yes | Only with the cluster issuer published | A cloud secret store | Rejected: adds a vendor, moves the keys out of OpenBao, and removes no dependency that recovery needs |
 | OpenBao with a GitHub secrets plugin | Only if GitHub's runners can reach OpenBao | Yes | OpenBao | Rejected: exposes the secret store to the internet, and the plugin's OpenBao compatibility is unverified |
@@ -148,12 +152,12 @@ organization admin, so it does not.
   gate and the required policy check hold no caller entries for customers.
 - A platform outage pauses automation that needs an App token, such as release tags, auto-merge
   arming, template sync, skill updates and the agents. It never blocks the platform's own repair.
-- The agents' pull requests come from botantler-2 instead of devantler-tech-engineering. The merge
+- The agents' pull requests come from botantler-1 or botantler-2 instead of devantler-tech-engineering. The merge
   and review rules that trust the botantler Apps must tell agent work apart from programmed
   automation by its branch namespace, not by its author.
 - octo-sts is pre-1.0 and releases often. Its image is pinned by digest and updated by reviewed
-  pull requests. A policy that writes checks pins one App, because octo-sts needs Firestore or
-  DynamoDB to keep checks on one App across several.
+  pull requests. It keeps a checks-writing exchange on one App by its route key, so check runs
+  stay with the App that created them.
 - The cluster's service-account discovery endpoints become readable without authentication. They
   hold public keys only. The broker trusts the API server's CA.
 - The migration runs in order under #5166:
