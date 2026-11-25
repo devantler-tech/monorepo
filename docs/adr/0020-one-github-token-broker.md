@@ -107,8 +107,10 @@ any token with `contents: write` create a release tag.
      App gains no way to request a token.
    - Its gate also refuses an exchange whose scope is not a named customer account. The list lives
      in the platform repository and a test pins it, so an installation by anyone else is never used.
-   - The trust policy lives in the customer's repository, because octo-sts reads it from the
-     token's target. So the customer reviews every grant there.
+   - The trust policy lives in the customer's account, because octo-sts reads it from the token's
+     target. A grant for one repository lives in that repository. An organization-wide grant lives
+     in the customer's `.github` repository and can reach every repository the App is installed
+     on. Either way, the customer reviews every grant in their own repository.
 7. **The brokers run on the platform.** They run in prod only, because they are third-party apps
    ([ADR 0016](0016-dev-and-prod-deployments.md)), behind the public Gateway and Cloudflare. The
    App credentials live only in OpenBao and reach each broker through External Secrets.
