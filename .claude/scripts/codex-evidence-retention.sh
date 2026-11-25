@@ -21,7 +21,9 @@
 #   CODEX_EVIDENCE_RETENTION_HOME     the Codex home; default ${CODEX_HOME:-$HOME/.codex}
 #   CODEX_EVIDENCE_RETENTION_LSOF     the open-file lister; default lsof from PATH, then
 #                                     /usr/sbin, /usr/bin, /bin
-#   CODEX_EVIDENCE_RETENTION_GH       the GitHub CLI used for the link lookup; default gh from PATH
+#   CODEX_EVIDENCE_RETENTION_GH       the GitHub CLI used for the link lookup; default gh from PATH, then
+#                                     /opt/homebrew/bin and /usr/local/bin (a LaunchAgent's PATH
+#                                     holds neither, and the clean-up runs from one)
 #   CODEX_EVIDENCE_RETENTION_OWNER    the GitHub organisation searched; default devantler-tech
 #   CODEX_EVIDENCE_RETENTION_LOOKUPS  most GitHub searches one run makes; default 40. Folders past
 #                                     it are deferred to a later run (kept, counted, not UNKNOWN).
@@ -198,8 +200,19 @@ linked() {
 }
 
 LSOF=$(resolve_lsof) || LSOF=''
-GH=${CODEX_EVIDENCE_RETENTION_GH:-$(command -v gh 2>/dev/null || true)}
-[ -z "$GH" ] || [ -x "$GH" ] || GH=''
+resolve_gh() {
+  local candidate
+  if [ -n "${CODEX_EVIDENCE_RETENTION_GH:-}" ]; then
+    [ -x "$CODEX_EVIDENCE_RETENTION_GH" ] && { printf '%s' "$CODEX_EVIDENCE_RETENTION_GH"; return 0; }
+    return 1
+  fi
+  candidate=$(command -v gh 2>/dev/null) && [ -x "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+  for candidate in /opt/homebrew/bin/gh /usr/local/bin/gh; do
+    [ -x "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+  done
+  return 1
+}
+GH=$(resolve_gh) || GH=''
 
 if ! open_snapshot "$work/open"; then
   log "UNKNOWN: the open-file list could not be read; nothing under ${ROOT} is removed"
