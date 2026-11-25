@@ -296,6 +296,7 @@ printf '%s' '[{"id":1,"body":"@codex review\n\nextra"}]'
 STUB
 chmod +x "$stubdir/gh"
 expect_exit 2 "record without a user key fails closed" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --issue 1
+expect_stderr "is not an array of author-attributed comments" "record without a user key fails on the author check"
 
 # The `author` string shape is an equally valid attribution.
 cat >"$stubdir/gh" <<'STUB'
