@@ -1,7 +1,9 @@
 # ADR 0020: One GitHub token broker for every caller
 
 Status: Accepted. The maintainer delegated the design on 2026-11-24, and on 2026-11-25 chose one
-broker and the botantler Apps for every caller, behind a caller gate.
+broker and the botantler Apps for every caller, behind a caller gate. Later that day he limited the
+brokers to his own systems, set work outside his organization apart on a broker of its own, and
+made the two botantler Apps interchangeable.
 
 Date: 2026-11-24. Amended 2026-11-25.
 
@@ -29,6 +31,17 @@ On 2026-11-25 he set the boundary: only devantler-tech repositories, devantler-t
 named customer repositories may ever get a token from his Apps. He chose one broker, with
 botantler-1 and botantler-2 as the Apps for every caller, and asked for protection against floods.
 
+Later on 2026-11-25 he added two points:
+- A token for a repository outside his organization needs a public GitHub App, because only a public
+  App can be installed by other accounts. So internal and external work need separate brokers. Both
+  may be public, behind Envoy gates.
+- Only his own systems may request tokens, on both brokers. The brokers are part of his offering,
+  not a service others can rely on to reach his customers or his systems. This replaces named
+  customer repositories as callers.
+
+He then asked that every policy be able to mint from either botantler App. He accepted that this lets
+any token with `contents: write` create a release tag.
+
 ## Decision
 
 1. **[octo-sts](https://github.com/octo-sts/app) is the broker.** A caller presents an OIDC token. The
@@ -50,7 +63,6 @@ botantler-1 and botantler-2 as the Apps for every caller, and asked for protecti
    - It admits only these callers:
      - a GitHub Actions token from the devantler-tech organization, matched by its numeric ID
        (`repository_owner_id`), which survives renames and cannot be re-registered;
-     - a named customer repository, by `repository_id`;
      - a named platform workload, by its exact service-account subject.
    - It gives admitted callers a per-pod request budget.
    - It forwards only the exchange endpoint, with the token, so octo-sts still verifies it and
@@ -64,31 +76,55 @@ botantler-1 and botantler-2 as the Apps for every caller, and asked for protecti
    - It matches exact claims (repository, ref, workflow file, service account), never broad
      patterns. It pins its callers by the same IDs the gate uses. A required check from
      `devantler-tech/.github` enforces that on every repository.
+   - A repository issues one of two OIDC subject forms, set by its `use_immutable_subject` setting:
+     `repo:devantler-tech/<name>:…`, or `repo:devantler-tech@<owner ID>/<name>@<repository ID>:…`.
+     A policy for one repository names the form that repository issues. A pattern that spans
+     repositories admits both.
    - When octo-sts can refuse repository-level policies
      ([octo-sts/app#1919](https://github.com/octo-sts/app/pull/1919)), every grant moves to
      `devantler-tech/.github`.
-4. **botantler-1 and botantler-2 serve every caller,** and the broker routes each exchange by
-   rate limit left. The agents' App and Crossplane's App retire once their callers move. One pair of
-   Apps stays safe because each policy pins the App that its access needs:
-   - **Release tags:** only botantler-1 may create them (the release-tag ruleset's bypass), and only
-     release workflows' policies pin it.
-   - **Other write access:** any other policy that grants write access pins botantler-2, so an agent
-     or customer token can never cut a release.
-   - **Read-only:** a read-only policy may use either App.
+4. **botantler-1 and botantler-2 serve every caller, interchangeably.** The broker routes each
+   exchange to the App with more rate limit left, so a policy names no App, with the two
+   exceptions under **Pins**. The agents' App and Crossplane's App retire once their callers move.
+   - **Release tags:** both Apps may create them (the release-tag ruleset's bypass). So any token
+     with `contents: write`, from any policy, can cut a release. The maintainer chose that for one
+     pool of Apps that every caller can draw on.
+   - **Pins:** a policy pins one App, listed in the required policy check, in exactly two cases:
+     - **A permission only one App holds.** Only botantler-1 holds custom properties, so the one
+       policy that manages them pins it until botantler-2 holds them too.
+     - **Writing check runs, even when both Apps hold the permission.** Only the App that created a
+       check run can update it. octo-sts keeps an unpinned exchange on one App only with a sticky
+       store, which this deployment does not run. Neither App holds the checks permission today.
    - **Administration:** the permission Crossplane needs is allowed in Crossplane's policy only.
-5. **Customer repositories only call in.** The broker serves the devantler-tech organization only,
-   so every token is for a devantler-tech repository. A customer's organization is never a target,
-   because octo-sts would then read that organization's own policies.
-6. **The broker runs on the platform.** It runs in prod only, because it is a third-party app
+5. **Only the maintainer's systems request tokens.** Customers never call either broker, not even
+   for their own repositories, and work for them runs from his systems. The broker serves the
+   devantler-tech organization only, so every token it mints is for a devantler-tech repository.
+6. **Work in another account's repositories uses a separate external broker.** botantler-1 and
+   botantler-2 stay private Apps, installed on devantler-tech only, so the broker above cannot
+   mint a token outside the organization, however a policy or route is written. When work outside
+   the organization first needs a token:
+   - It gets a public App of its own, with the fewest permissions that work needs. The customer
+     installs it on the repositories in scope.
+   - A second octo-sts serves it, with its own pod, caller gate, host and App credentials. It
+     shares nothing with the internal broker but the platform.
+   - Its gate admits exactly the internal gate's callers, so an account that installs the public
+     App gains no way to request a token.
+   - Its gate also refuses an exchange whose scope is not a named customer account. The list lives
+     in the platform repository and a test pins it, so an installation by anyone else is never used.
+   - The trust policy lives in the customer's account, because octo-sts reads it from the token's
+     target. A grant for one repository lives in that repository. An organization-wide grant lives
+     in the customer's `.github` repository and can reach every repository the App is installed
+     on. Either way, the customer reviews every grant in their own repository.
+7. **The brokers run on the platform.** They run in prod only, because they are third-party apps
    ([ADR 0016](0016-dev-and-prod-deployments.md)), behind the public Gateway and Cloudflare. The
-   App credentials live only in OpenBao and reach the broker through External Secrets.
-7. **The platform's own recovery never depends on the broker.**
+   App credentials live only in OpenBao and reach each broker through External Secrets.
+8. **The platform's own recovery never depends on a broker.**
    - Flux pulls every source anonymously from public registries.
    - The platform deploys with each workflow's own built-in token.
-   - A check keeps the platform's deploy and recovery workflows off the broker.
+   - A check keeps the platform's deploy and recovery workflows off the brokers.
    - Break-glass needs no service: an organization admin can cut a release by hand (the release-tag
      ruleset's admin bypass), and the App private keys are also kept offline by the maintainer.
-8. **The organization App secrets are deleted** once nothing reads them.
+9. **The organization App secrets are deleted** once nothing reads them.
 
 ## Options compared
 
@@ -96,7 +132,9 @@ botantler-1 and botantler-2 as the Apps for every caller, and asked for protecti
 |---|---|---|---|---|
 | octo-sts on the platform, behind a caller gate | Yes, OIDC | Yes, service-account tokens | OpenBao only | Chosen |
 | The same without a gate | Yes | Yes | OpenBao only | Rejected: anyone can spend the Apps' quota, and one loose policy admits outsiders |
-| Two brokers: a public one, and an internal one for the agents' and Crossplane's Apps | Yes | Yes | OpenBao only | Rejected by the maintainer for one broker and one pair of Apps. The gate and the App pins give the same boundary |
+| Two brokers: a public one, and an internal one for the agents' and Crossplane's Apps | Yes | Yes | OpenBao only | Rejected by the maintainer for one broker and one pair of Apps. The gate gives the same caller boundary |
+| One broker for internal and external work, with botantler-1 and botantler-2 made public | Yes | Yes | OpenBao only | Rejected: any account could install the Apps, so only configuration would stop the broker from minting a release-capable token outside the organization |
+| Customers call the brokers for their own repositories | Yes | No | OpenBao only | Rejected by the maintainer: the brokers serve his systems only, so no one else can rely on them to reach his customers or his systems |
 | octo-sts on Cloud Run or AWS Lambda | Yes | Only with the cluster issuer published | A cloud secret store | Rejected: adds a vendor, moves the keys out of OpenBao, and removes no dependency that recovery needs |
 | OpenBao with a GitHub secrets plugin | Only if GitHub's runners can reach OpenBao | Yes | OpenBao | Rejected: exposes the secret store to the internet, and the plugin's OpenBao compatibility is unverified |
 | External Secrets `GithubAccessToken` generator | No | Yes | Copied into every consumer namespace | Rejected: serves platform callers only |
@@ -116,14 +154,16 @@ organization admin, so it does not.
 - Only allowed callers reach octo-sts. Everyone else is refused by a signature check, without a
   GitHub call. Cloudflare absorbs floods in front of the cluster, and the per-pod budget stops an
   allowed caller in a loop.
+- No one but the maintainer's systems can get a token from either broker, customers included. The
+  gate and the required policy check hold no caller entries for customers.
 - A platform outage pauses automation that needs an App token, such as release tags, auto-merge
   arming, template sync, skill updates and the agents. It never blocks the platform's own repair.
-- The agents' pull requests come from botantler-2 instead of devantler-tech-engineering. The merge
+- The agents' pull requests come from botantler-1 or botantler-2 instead of devantler-tech-engineering. The merge
   and review rules that trust the botantler Apps must tell agent work apart from programmed
   automation by its branch namespace, not by its author.
 - octo-sts is pre-1.0 and releases often. Its image is pinned by digest and updated by reviewed
-  pull requests. A policy that writes checks pins one App, because octo-sts needs Firestore or
-  DynamoDB to keep checks on one App across several.
+  pull requests. Without a sticky store (Firestore or DynamoDB), it keeps an unpinned exchange on
+  no particular App, so a policy that writes check runs pins one (decision 4).
 - The cluster's service-account discovery endpoints become readable without authentication. They
   hold public keys only. The broker trusts the API server's CA.
 - The migration runs in order under #5166:
@@ -132,5 +172,6 @@ organization admin, so it does not.
      move to the broker, with organization policies.
   3. The remaining repository workflows move.
   4. Platform callers move: the agents and Crossplane's GitHub provider. Then their Apps retire.
-  5. Named customer repositories join, one allowlist entry and one policy each.
-  6. The organization App secrets are deleted.
+  5. The organization App secrets are deleted.
+  6. When work outside the organization first needs a token, the external broker joins with its
+     public App, its gate and its list of named customer accounts.
