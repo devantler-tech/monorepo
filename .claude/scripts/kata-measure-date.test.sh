@@ -638,7 +638,7 @@ icebox_clauses=(
   'Icebox defers new starts, never a checkpoint that has come due'
   'At rung 1, run the [Kata census](improvement-katas.md#checkpoints-finish-existing-work)'
   'read each result with `kata-measure-date.sh`'
-  'Read back every `DUE` Kata you own, and record its decision on the issue, before pulling new work.'
+  'Read back every `DUE` Kata whose body begins with the Agentic Engineer disclosure line, and record its decision on the issue, before pulling new work.'
 )
 contract "rung 1 reads back a due Kata wherever its card sits" "${icebox_flat}" "${icebox_clauses[@]}"
 control "a rule that leaves a due Kata deferred in Icebox is rejected" "${icebox_flat}" \
