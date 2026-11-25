@@ -629,6 +629,7 @@ control "a selection rule that counts closed sub-issues is rejected" "${selectio
 # ── A due Kata in Icebox is still due verification (monorepo#3407) ─────────────────────────────────
 # The value-pull join never nominates an Icebox card, so a Kata whose checkpoint came due while
 # deferred went unread past its date. Rung 1 must find it by the census, not by the survey.
+# shellcheck disable=SC2016 # backticks are literal Markdown in the address, not a substitution
 icebox_flat="$(sed -n '/^\*\*A `DUE` Kata is due verification wherever its card sits/,/^$/p' \
   "${repo_root}/.claude/guides/work-selection.md" | flat)"
 # shellcheck disable=SC2016 # backticks are literal Markdown in the clauses, not substitutions
