@@ -433,6 +433,14 @@ confirm Verifying has room, move the card there, then run the check and record e
 against actual. Never open a second implementation for it, and never
 close it or tick a criterion because the card moved or the date passed.
 
+**A `DUE` Kata is due verification wherever its card sits, Icebox included.** Icebox defers new
+starts, never a checkpoint that has come due, and the value-pull join never nominates an Icebox
+card, so the survey cannot be what finds it (monorepo#3407 sat unread in Icebox five days past its
+`**Measure on:**` date). At rung 1, run the [Kata census](improvement-katas.md#checkpoints-finish-existing-work)
+and read each result with `kata-measure-date.sh`. Read back every `DUE` Kata whose body begins with
+the Agentic Engineer disclosure line, and record its decision on the issue, before pulling new work.
+That line, not a judgement of who owns the Kata, decides it: the Agent Improver reads back its own.
+
 Compare native issue Priority (Urgent, High, Medium, Low) first, then current product outcomes,
 audience impact, deadline/cost of waiting, risk reduction and prerequisites unlocked relative to
 **end-to-end** effort, including CI,

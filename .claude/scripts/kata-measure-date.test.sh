@@ -626,6 +626,28 @@ control "a selection rule that skips an undelivered experiment is rejected" "${s
 control "a selection rule that counts closed sub-issues is rejected" "${selection_flat}" \
   "${selection_flat//at least one \*\*open\*\* sub-issue/at least one sub-issue}" '**open** sub-issue' "${selection_clauses[@]}"
 
+# ── A due Kata in Icebox is still due verification (monorepo#3407) ─────────────────────────────────
+# The value-pull join never nominates an Icebox card, so a Kata whose checkpoint came due while
+# deferred went unread past its date. Rung 1 must find it by the census, not by the survey.
+# shellcheck disable=SC2016 # backticks are literal Markdown in the address, not a substitution
+icebox_flat="$(sed -n '/^\*\*A `DUE` Kata is due verification wherever its card sits/,/^$/p' \
+  "${repo_root}/.claude/guides/work-selection.md" | flat)"
+# shellcheck disable=SC2016 # backticks are literal Markdown in the clauses, not substitutions
+icebox_clauses=(
+  '**A `DUE` Kata is due verification wherever its card sits, Icebox included.**'
+  'Icebox defers new starts, never a checkpoint that has come due'
+  'At rung 1, run the [Kata census](improvement-katas.md#checkpoints-finish-existing-work)'
+  'read each result with `kata-measure-date.sh`'
+  'Read back every `DUE` Kata whose body begins with the Agentic Engineer disclosure line, and record its decision on the issue, before pulling new work.'
+)
+contract "rung 1 reads back a due Kata wherever its card sits" "${icebox_flat}" "${icebox_clauses[@]}"
+control "a rule that leaves a due Kata deferred in Icebox is rejected" "${icebox_flat}" \
+  "${icebox_flat//, Icebox included./, Icebox excepted.}" 'Icebox included.' "${icebox_clauses[@]}"
+control "a rule that finds due Katas only through the survey is rejected" "${icebox_flat}" \
+  "${icebox_flat//run the \[Kata census\]/read the survey}" 'Kata census' "${icebox_clauses[@]}"
+control "a rule that reads a due Kata back without recording its decision is rejected" "${icebox_flat}" \
+  "${icebox_flat//, and record its decision on the issue,/}" 'record its decision on the issue' "${icebox_clauses[@]}"
+
 # The overlay's own projection, applied to issue objects shaped like the forge's, must give the
 # helper a payload it accepts and the verdict the rule promises. A far-future date keeps it stable.
 projection="$(grep -o -- "--jq '{body:[^']*}' | <repo-root>/.claude/scripts/kata-measure-date.sh --input -" "${overlay}" |
