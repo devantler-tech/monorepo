@@ -281,6 +281,22 @@ STUB
 chmod +x "$stubdir/gh"
 expect_exit 2 "author-less record fails closed" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --issue 1
 
+# A deleted account comes back as an explicit `"user": null` (monorepo#5184). It is
+# attributed to `ghost`, so the repository still gets a verdict, while a record with
+# no `user` key at all keeps failing closed.
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s' '[{"id":1,"body":"@codex review\n\nextra","user":null}]'
+STUB
+chmod +x "$stubdir/gh"
+expect_exit 0 "deleted-account record is attributed to ghost" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --issue 1
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s' '[{"id":1,"body":"@codex review\n\nextra"}]'
+STUB
+chmod +x "$stubdir/gh"
+expect_exit 2 "record without a user key fails closed" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --issue 1
+
 # The `author` string shape is an equally valid attribution.
 cat >"$stubdir/gh" <<'STUB'
 #!/usr/bin/env bash

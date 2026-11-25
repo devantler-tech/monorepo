@@ -284,7 +284,15 @@ fetch_payload() {
   # discussions. `jq -s` slurps the pages into an array of arrays; flatten(1) makes
   # it the single array the guard expects. (`--slurp` cannot be combined with
   # `--jq`, which is why this is a separate jq pass rather than a gh flag.)
-  if ! jq -s 'flatten(1)' "$raw_pages" >"$out" 2>/dev/null; then
+  # A deleted account is returned as an explicit `"user": null` (monorepo#5184). It
+  # cannot be the maintainer, so it is attributed to GitHub's `ghost` login and then
+  # classified like any other author. Only the explicit null is mapped: a record with
+  # no `user` key, or a user object without a login, still fails the check below.
+  if ! jq -s 'flatten(1)
+        | map(if type == "object" and has("user") and .user == null
+                 and ((.author? // "") | length == 0)
+              then .user = {"login": "ghost"} else . end)' \
+        "$raw_pages" >"$out" 2>/dev/null; then
     rm -f -- "$raw_pages"
     die "could not flatten the paginated response for ${label}"
   fi
