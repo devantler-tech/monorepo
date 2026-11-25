@@ -84,16 +84,17 @@ any token with `contents: write` create a release tag.
      ([octo-sts/app#1919](https://github.com/octo-sts/app/pull/1919)), every grant moves to
      `devantler-tech/.github`.
 4. **botantler-1 and botantler-2 serve every caller, interchangeably.** The broker routes each
-   exchange to the App with more rate limit left, so a policy names no App. The agents' App and
-   Crossplane's App retire once their callers move.
+   exchange to the App with more rate limit left, so a policy names no App, with the two
+   exceptions under **Pins**. The agents' App and Crossplane's App retire once their callers move.
    - **Release tags:** both Apps may create them (the release-tag ruleset's bypass). So any token
      with `contents: write`, from any policy, can cut a release. The maintainer chose that for one
      pool of Apps that every caller can draw on.
-   - **Pins:** a policy pins an App only while just one App can serve it. Only botantler-1 holds
-     custom properties, so the one policy that manages them pins it. Neither App holds the checks
-     permission today. A policy that writes check runs would pin one App, because only the App that
-     created a check run can update it. octo-sts keeps an unpinned exchange on one App only with a
-     sticky store, which this deployment does not run.
+   - **Pins:** a policy pins one App, listed in the required policy check, in exactly two cases:
+     - **A permission only one App holds.** Only botantler-1 holds custom properties, so the one
+       policy that manages them pins it until botantler-2 holds them too.
+     - **Writing check runs, even when both Apps hold the permission.** Only the App that created a
+       check run can update it. octo-sts keeps an unpinned exchange on one App only with a sticky
+       store, which this deployment does not run. Neither App holds the checks permission today.
    - **Administration:** the permission Crossplane needs is allowed in Crossplane's policy only.
 5. **Only the maintainer's systems request tokens.** Customers never call either broker, not even
    for their own repositories, and work for them runs from his systems. The broker serves the
