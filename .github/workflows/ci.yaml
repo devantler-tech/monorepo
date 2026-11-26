@@ -282,6 +282,8 @@ jobs:
               - '.claude/scripts/codex-transcript-retention.test.sh'
               - '.claude/scripts/codex-worktree-retention.sh'
               - '.claude/scripts/codex-worktree-retention.test.sh'
+              - '.claude/scripts/codex-evidence-retention.sh'
+              - '.claude/scripts/codex-evidence-retention.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -1349,6 +1351,11 @@ jobs:
       # removable one in exactly one dimension.
       - name: Self-test Codex worktree retention
         run: bash .claude/scripts/codex-worktree-retention.test.sh
+      # The Codex evidence step (monorepo#5189) has its own helper as well; each kept fixture
+      # (recent, in use, linked from an open issue, a linked folder, an unsafe name, an
+      # unreadable answer) differs from a removable one in exactly one dimension.
+      - name: Self-test Codex evidence retention
+        run: bash .claude/scripts/codex-evidence-retention.test.sh
 
   test-disk-preflight:
     name: Test disk pre-flight
@@ -3154,7 +3161,7 @@ jobs:
       actions: read
     steps:
       - name: Inspect workflow startup metadata
-        uses: devantler-tech/.github/actions/aggregate-job-checks@946fff9cb37042f4c26c3342665727e28bd66c01 # v22.3.0
+        uses: devantler-tech/.github/actions/aggregate-job-checks@0e02148c251bcd65cfddc1cc7bec49ccce2eea42 # v22.7.0
         with:
           check-name: Workflow startup snapshot
           check-workflow-startup: "true"
@@ -3329,7 +3336,7 @@ jobs:
     permissions: {}
     steps:
       - name: Check job results
-        uses: devantler-tech/.github/actions/aggregate-job-checks@946fff9cb37042f4c26c3342665727e28bd66c01 # v22.3.0
+        uses: devantler-tech/.github/actions/aggregate-job-checks@0e02148c251bcd65cfddc1cc7bec49ccce2eea42 # v22.7.0
         with:
           job-results: >-
             ${{ needs.workflow-startup.result }}

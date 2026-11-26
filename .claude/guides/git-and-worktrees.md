@@ -368,6 +368,10 @@ clones that are not linked worktrees — is removed after 7 untouched days by
 [`build-cache-reclaim.sh`](../scripts/build-cache-reclaim.sh) through
 [`codex-worktree-retention.sh`](../scripts/codex-worktree-retention.sh), which keeps the same kinds of
 work (maintainer decision on [#4329](https://github.com/devantler-tech/monorepo/issues/4329)).
+The same helper removes a Codex automation's per-run evidence folder once it is more than 14 days
+old, no process uses it and no open issue or pull request links to it, through
+[`codex-evidence-retention.sh`](../scripts/codex-evidence-retention.sh) (maintainer decision on
+[#5193](https://github.com/devantler-tech/monorepo/issues/5193)).
 In both lanes, before each worktree root it sweeps, it also sweeps the worktrees **nested in the
 populated submodules of that root's session worktrees** (`<session>/<sub>/.claude/worktrees/*`), with
 salvage off because their repository dies with the parent, and never inside a session worktree a live

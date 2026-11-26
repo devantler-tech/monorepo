@@ -67,6 +67,9 @@
 #   5c. The Codex app's task worktrees nobody touched for 7 days, approved on 2026-10-19
 #      (monorepo#4329), through codex-worktree-retention.sh, which owns the rules: in use,
 #      uncommitted, unpushed or open-pull-request work is always kept.
+#   5d. The Codex automations' per-run evidence folders older than 14 days that no open issue or
+#      pull request links to, approved on 2026-11-25 (monorepo#5193, #5189), through
+#      codex-evidence-retention.sh, which owns the rules.
 #   6. A report, removing nothing: the free space the volume itself shows before and after,
 #      and, while that is still below the low-space threshold, the largest entries under
 #      the temp and cache dirs (monorepo#3883).
@@ -104,6 +107,8 @@
 #   BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPT_DAYS retention for (5b); default 7, at least 7
 #   BUILD_CACHE_RECLAIM_CODEX_WORKTREES_RETENTION `off` skips (5c); default on
 #   BUILD_CACHE_RECLAIM_CODEX_WORKTREE_DAYS   retention for (5c); default 7, at least 7
+#   BUILD_CACHE_RECLAIM_CODEX_EVIDENCE_RETENTION `off` skips (5d); default on
+#   BUILD_CACHE_RECLAIM_CODEX_EVIDENCE_DAYS   retention for (5d); default 14, at least 14
 #   BUILD_CACHE_RECLAIM_LOW_FREE_GB           free space below which (6) names the largest
 #                                             entries; default $DISK_PREFLIGHT_MIN_FREE_GB, else 20
 #   BUILD_CACHE_RECLAIM_CONSUMER_ROOTS        colon-separated dirs (6) measures; default the
@@ -3184,7 +3189,8 @@ reclaim_container_images
 
 # ---------------------------------------------------------------------------
 # 5b. Codex's saved transcripts past the agreed retention (monorepo#4136), and
-# 5c. the Codex app's task worktrees past theirs (monorepo#4329).
+# 5c. the Codex app's task worktrees past theirs (monorepo#4329), and
+# 5d. the Codex automations' evidence folders past theirs (monorepo#5189).
 #
 # The maintainer chose, on 2026-10-15, to let this helper apply a retention to Codex's
 # transcripts, which held ~26 GB with none, and on 2026-10-19 shortened it to 7 days and
@@ -3193,6 +3199,10 @@ reclaim_container_images
 # uncommitted, unpushed and open-pull-request work kept; both refuse below 7 days); this step
 # only runs each in the same mode and carries an UNKNOWN from it into this sweep's exit.
 # BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPTS=off and BUILD_CACHE_RECLAIM_CODEX_WORKTREES_RETENTION=off
+# On 2026-11-25 the maintainer chose to delete a Codex run's evidence folder after 14 days when no
+# open issue or pull request links to it (~56 GB, none ever removed); codex-evidence-retention.sh
+# owns that rule and refuses below 14 days. BUILD_CACHE_RECLAIM_CODEX_EVIDENCE_RETENTION=off skips
+# it and ..._EVIDENCE_DAYS sets its age.
 # skip them; ..._TRANSCRIPT_DAYS and ..._WORKTREE_DAYS set the ages.
 # ---------------------------------------------------------------------------
 # run_codex_retention <label> <switch> <helper name> <days> <removed-key> <no-op line>
@@ -3211,6 +3221,7 @@ run_codex_retention() {
   # Hand over the lsof this sweep already resolved, unless the caller named one.
   line=$(CODEX_TRANSCRIPT_RETENTION_LSOF="${CODEX_TRANSCRIPT_RETENTION_LSOF:-${LSOF_BIN:-}}" \
     CODEX_WORKTREE_RETENTION_LSOF="${CODEX_WORKTREE_RETENTION_LSOF:-${LSOF_BIN:-}}" \
+    CODEX_EVIDENCE_RETENTION_LSOF="${CODEX_EVIDENCE_RETENTION_LSOF:-${LSOF_BIN:-}}" \
     bash "$helper" "$MODE" "$days" 2>&1)
   rc=$?
   printf '%s\n' "$line" | sed "s/^${name}: /build-cache-reclaim: ${label}: /"
@@ -3245,6 +3256,9 @@ run_codex_retention 'codex transcripts' "${BUILD_CACHE_RECLAIM_CODEX_TRANSCRIPTS
 run_codex_retention 'codex worktrees' "${BUILD_CACHE_RECLAIM_CODEX_WORKTREES_RETENTION:-on}" \
   codex-worktree-retention "${BUILD_CACHE_RECLAIM_CODEX_WORKTREE_DAYS:-7}" 'removed?' \
   'no Codex worktrees at '
+run_codex_retention 'codex evidence' "${BUILD_CACHE_RECLAIM_CODEX_EVIDENCE_RETENTION:-on}" \
+  codex-evidence-retention "${BUILD_CACHE_RECLAIM_CODEX_EVIDENCE_DAYS:-14}" 'removed?' \
+  'no Codex automations at '
 
 # Report in the mode's own vocabulary. The counters are shared between the two modes, so
 # a dry-run summary phrased as apply ("reaped=N, reclaimed=~N MB") states that trees were
