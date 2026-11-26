@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# test-inputs: .claude/scripts/codex-evidence-retention.sh .claude/scripts/codex-evidence-retention.test.sh
 # test-inputs: .claude/scripts/cleanup-trap-census-go/go.mod
 # test-inputs: .claude/scripts/codex-transcript-retention.sh
 # test-inputs: .claude/scripts/codex-transcript-retention.test.sh
@@ -27,6 +28,9 @@ export BUILD_CACHE_RECLAIM_CODEX_WORKTREES=off
 # Every case but 25b keeps the Codex worktree retention off, so no run can delete a real task
 # worktree of the machine running the suite.
 export BUILD_CACHE_RECLAIM_CODEX_WORKTREES_RETENTION=off
+# Every case keeps the Codex evidence retention off: its own suite proves it against a fixture
+# home, so no run here can delete a real evidence folder or search GitHub.
+export BUILD_CACHE_RECLAIM_CODEX_EVIDENCE_RETENTION=off
 
 failures=0
 fail() {
