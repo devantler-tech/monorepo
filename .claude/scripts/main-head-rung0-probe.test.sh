@@ -342,7 +342,7 @@ for needle in '`agentic-engineer-2` is ahead when `percentUsed` is more than 5 p
 done
 cases=$((cases + 1))
 # shellcheck disable=SC2016 # the backticks are literal guide text, not expansions
-summary=$(grep -F 'reads `get_usage` first' "${here}/../../AGENTS.md")
+summary=$(grep -F 'read `get_usage` first' "${here}/../../AGENTS.md" || true)
 if grep -Fq 'agentic-engineer-2' <<<"${summary}" && grep -Fq 'daily-ai-assistant' <<<"${summary}" &&
   ! grep -Fq 'never reads it' <<<"${summary}"; then pass "contract: the AGENTS.md summary paces both entries"
 else flunk "contract: the AGENTS.md summary does not pace both entries: ${summary}"; fi
