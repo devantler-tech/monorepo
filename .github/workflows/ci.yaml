@@ -598,6 +598,8 @@ jobs:
               - '.claude/scripts/repo-delete-guard.test.sh'
               - '.github/workflows/ci.yaml'
             main-head-rung0-probe:
+              - 'AGENTS.md'
+              - '.claude/guides/cadence.md'
               - '.claude/scripts/main-head-rung0-probe.sh'
               - '.claude/scripts/main-head-rung0-probe.test.sh'
               - '.github/workflows/ci.yaml'

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-inputs: .github/workflows/ci.yaml
+# test-inputs: AGENTS.md .claude/guides/cadence.md .github/workflows/ci.yaml
 # Tests for main-head-rung0-probe.sh (monorepo#3623, monorepo#4518).
 #
 # A stub `gh` on PATH serves one fixture directory per case: head.json for `commits/<branch>`,
@@ -324,6 +324,28 @@ for args in "" "--repo" "--repo someone-else/monorepo" "--repo devantler-tech/..
   if [ "${rc}" = 2 ] && [ ! -s "${log}" ]; then pass "usage error: '${args}'"
   else flunk "usage error '${args}': rc=${rc}, forge reads: $(wc -l <"${log}")"; fi
 done
+
+# Contract: both Claude engineer entries are paced, each with its own margin (monorepo#5225). The
+# section is cut out first and must be non-empty, because an empty cut passes every substring check.
+# Line breaks are folded to spaces, because the guide wraps a sentence wherever it likes.
+pacing=$(awk '/^### Weekly pacing \(Claude lane\)/ { on = 1; next } on && /^### / { exit } on' "${here}/../guides/cadence.md" |
+  tr '\n' ' ' | tr -s ' ')
+cases=$((cases + 1))
+if [ -n "${pacing}" ]; then pass "contract: the weekly pacing section was found"
+else flunk "contract: the weekly pacing section was not found in the cadence guide"; fi
+# shellcheck disable=SC2016 # the backticks are literal guide text, not expansions
+for needle in '`agentic-engineer-2` is ahead when `percentUsed` is more than 5 points' \
+  '`daily-ai-assistant` is ahead when `percentUsed` is more than 15 points'; do
+  cases=$((cases + 1))
+  if [ -n "${pacing}" ] && grep -Fq -- "${needle}" <<<"${pacing}"; then pass "contract: pacing states ${needle}"
+  else flunk "contract: the pacing section lacks: ${needle}"; fi
+done
+cases=$((cases + 1))
+# shellcheck disable=SC2016 # the backticks are literal guide text, not expansions
+summary=$(grep -F 'read `get_usage` first' "${here}/../../AGENTS.md" || true)
+if grep -Fq 'agentic-engineer-2' <<<"${summary}" && grep -Fq 'daily-ai-assistant' <<<"${summary}" &&
+  ! grep -Fq 'never reads it' <<<"${summary}"; then pass "contract: the AGENTS.md summary paces both entries"
+else flunk "contract: the AGENTS.md summary does not pace both entries: ${summary}"; fi
 
 rm -rf "${tmp}"
 if [ "${failures}" -gt 0 ]; then
