@@ -5,7 +5,7 @@
 #   programmed-bot-review-exemption.sh --input -   # stdin: {repo, author, head_ref, title, head_oid, files, commits[, skill_owners]}
 #
 #   repo              bare name (`homebrew-tap`) or `devantler-tech/<name>`
-#   author            login as the repo's arm compares it (`app/botantler-1`)
+#   author            login as the repo's arm compares it (`app/botantler-1` or `app/botantler-2`)
 #   head-ref, title   the PR's head branch and title
 #   head-oid          full 40-hex head SHA
 #   files-json        JSON array of changed paths
@@ -111,6 +111,28 @@ repo="${repo#devantler-tech/}"
 # content already reviewed here, so any other value is a malformed row rather than another owner.
 allowlist_file="$(cd "$(dirname "$0")/.." && pwd)/skill-ownership-allowlist.tsv"
 suite_skill_owner="https://github.com/devantler-tech/agent-plugins"
+
+# The two interchangeable org Apps. The GitHub token broker (ADR 0020, devantler-tech/.github#1001)
+# mints each token from whichever App has more rate limit left, so a programmed PR may be opened,
+# and each of its commits written, by either one. An App is its exact REST login, its numeric user
+# ID and its GraphQL PR-author spelling together, so a look-alike login or another App's ID matches
+# neither.
+updater_apps_json='[
+  {"login": "botantler-1[bot]", "id": "185060876", "pr_author": "app/botantler-1"},
+  {"login": "botantler-2[bot]", "id": "296234498", "pr_author": "app/botantler-2"}
+]'
+
+# jq: the App of $apps that a commit's author fields name exactly (its login as both login and
+# name, and its `<id>+<login>` noreply email), or null when they name none.
+# shellcheck disable=SC2016 # `$apps` and `$c` are jq variables, not shell expansions.
+author_app_jq='def author_app($apps): . as $c | [$apps[] | select(
+  $c.author_login == .login and $c.author_name == .login and
+  $c.author_email == "\(.id)+\(.login)@users.noreply.github.com")] | first;'
+
+# is_updater_app_author <author> succeeds only for one of those Apps' exact PR-author spelling.
+is_updater_app_author() {
+  jq -e --arg author "$1" 'any(.[]; .pr_author == $author)' <<<"${updater_apps_json}" >/dev/null
+}
 
 commit_schema='type == "array" and length > 0 and all(.[];
   type == "object" and
@@ -317,27 +339,24 @@ matches_suite_owned_skills() {
 
 # The updater signs its commit by creating it through the GitHub API (`sign-commits: true`,
 # devantler-tech/.github#142), so an unadapted head is authored by the updater App itself and
-# committed by GitHub's `web-flow` identity (#3126). The App login and its numeric user ID are exact
-# per repository, so this arm is as specific as the two below it rather than a loosened match.
+# committed by GitHub's `web-flow` identity (#3126). The App is one of the two org Apps, each an
+# exact login and numeric user ID pair per repository, so this arm is as specific as the two below
+# it rather than a loosened match.
 # Those identities are only what the commit CLAIMS: anyone who can push can write the App's public
 # email and `GitHub <noreply@github.com>` into a commit, and REST maps them back to the same logins.
 # So this arm also requires GitHub's own signature verdict (`verified: true`), which only a commit
 # GitHub signed can carry. A caller that omits `verified` never reaches this arm.
 matches_agent_skills_provenance() {
-  local app_login="" app_id=""
+  local apps='[]'
   case "${repo}" in
   platform | ksail)
-    app_login="botantler-1[bot]"
-    app_id="185060876"
+    apps="${updater_apps_json}"
     ;;
   esac
-  jq -e --arg app_login "${app_login}" --arg app_id "${app_id}" '
+  jq -e --argjson apps "${apps}" "${author_app_jq}"'
     def signed_app_authored:
-      $app_login != "" and
+      author_app($apps) != null and
       .verified == true and
-      .author_login == $app_login and
-      .author_name == $app_login and
-      .author_email == "\($app_id)+\($app_login)@users.noreply.github.com" and
       .committer_login == "web-flow" and
       .committer_name == "GitHub" and
       .committer_email == "noreply@github.com" and
@@ -365,10 +384,11 @@ matches_agent_skills_provenance() {
 # GitHub's own signature verdict, as in the consumer arm above. After it, the caller's follow-up jobs
 # may add a digest refresh and a version bump, each at most once and in the order its job writes them
 # (refresh first, then bump). The corrected producer instead uses one combined follow-up,
-# signed by that same App. Mixing the two histories is never programmed output.
+# signed the same way. Its job mints its own token, so either org App may sign either commit.
+# Mixing the two histories is never programmed output.
 matches_agent_plugins_review_provenance() {
   local sync_message="$1"
-  jq -e --arg sync_message "${sync_message}" '
+  jq -e --arg sync_message "${sync_message}" --argjson apps "${updater_apps_json}" "${author_app_jq}"'
     def actions_bot_authored:
       .author_login == "github-actions[bot]" and
       .author_name == "github-actions[bot]" and
@@ -384,9 +404,7 @@ matches_agent_plugins_review_provenance() {
       actions_bot_committed;
     def signed_skill_update:
       .verified == true and
-      .author_login == "botantler-1[bot]" and
-      .author_name == "botantler-1[bot]" and
-      .author_email == "185060876+botantler-1[bot]@users.noreply.github.com" and
+      author_app($apps) != null and
       .committer_login == "web-flow" and
       .committer_name == "GitHub" and
       .committer_email == "noreply@github.com";
@@ -421,11 +439,12 @@ matches_agent_plugins_review_provenance() {
 # turned a genuine updater PR into exit 1, so merging one updater PR made its open sibling
 # "untrusted".
 #
-# strip_base_refresh_merges <app-login> <app-id> rewrites commits_json without its trailing
+# strip_base_refresh_merges <apps-json> rewrites commits_json without its trailing
 # base-refresh merges, so the arms below judge the programmed head the refresh sat on. A commit
 # is a base-refresh merge only when every one of these holds:
-#   - GitHub's own signature verdict is `verified: true`, the author is exactly this repository's
-#     updater App and the committer is exactly `web-flow`, as on the signed sync commit;
+#   - GitHub's own signature verdict is `verified: true`, the author is exactly one of this
+#     repository's updater Apps and the committer is exactly `web-flow`, as on the signed sync
+#     commit. The refresh is requested with its own token, so either App may have written it;
 #   - its message is exactly `Merge branch 'main' into <head-ref>` for this PR's head ref;
 #   - it has exactly two parents, the first being the commit before it in the list;
 #   - its second parent is not one of the PR's own commits. The list is every commit reachable
@@ -435,17 +454,15 @@ matches_agent_plugins_review_provenance() {
 # The changed-files list is the PR's own diff against the refreshed base, so a merge that also
 # brings a file the updater never writes still fails the file arms. The residual: a change inside
 # the allowed skill paths made in the merge itself is indistinguishable here from the sync commit's
-# own content. Only a token of that same App can author a GitHub-signed commit as the App, which is
-# the trust the signed sync commit already rests on.
+# own content. Only a token of one of those Apps can author a GitHub-signed commit as that App,
+# which is the trust the signed sync commit already rests on.
 strip_base_refresh_merges() {
-  local app_login="$1" app_id="$2" stripped before
-  [[ -n "${app_login}" && -n "${app_id}" ]] || return 0
-  stripped="$(jq -c --arg login "${app_login}" --arg id "${app_id}" --arg ref "${branch}" '
+  local apps="$1" stripped before
+  jq -e 'length > 0' <<<"${apps}" >/dev/null 2>&1 || return 0
+  stripped="$(jq -c --argjson apps "${apps}" --arg ref "${branch}" "${author_app_jq}"'
     def refresh_merge($prev; $shas):
       .verified == true and
-      .author_login == $login and
-      .author_name == $login and
-      .author_email == "\($id)+\($login)@users.noreply.github.com" and
+      author_app($apps) != null and
       .committer_login == "web-flow" and
       .committer_name == "GitHub" and
       .committer_email == "noreply@github.com" and
@@ -473,12 +490,13 @@ updater_verdict() {
   exit "$1"
 }
 
-# updater_app <repo> prints the login and numeric user ID of the App that writes this repository's
-# signed programmed commits, or nothing for a repository with none. The tap's Cask bump workflow
-# mints its token from the same org App (`vars.APP_CLIENT_ID`) as the agent-plugins updater.
-updater_app() {
+# updater_apps <repo> prints the JSON list of Apps that write this repository's signed programmed
+# commits, or `[]` for a repository with none. The tap's Cask bump workflow mints its token from the
+# same broker as the agent-plugins updater, so either org App may write its commit too.
+updater_apps() {
   case "$1" in
-  agent-plugins | homebrew-tap | ksail | platform) printf '%s %s\n' "botantler-1[bot]" "185060876" ;;
+  agent-plugins | homebrew-tap | ksail | platform) printf '%s\n' "${updater_apps_json}" ;;
+  *) printf '[]\n' ;;
   esac
 }
 
@@ -490,45 +508,41 @@ updater_app() {
 # prerelease, so the release a bump PR names is published by construction.
 #
 # The identities are only what the commit claims, as on the updater's signed sync commit above, so
-# GitHub's own signature verdict (`verified: true`) is required: only a token of this App can make
-# GitHub sign a commit authored as the App. Every App-signed commit measured in this org is
+# GitHub's own signature verdict (`verified: true`) is required: only a token of an App can make
+# GitHub sign a commit authored as that App. Every App-signed commit measured in this org is
 # committed by `web-flow`; the App itself as committer is accepted too, because GitHub's API
 # default names the authenticated App there and only GitHub's signature can verify either form.
+# One API call writes the commit with one token, so that committer must be the App that authored it.
 # The list must hold that one commit. A second one, even a re-run of the workflow after `main`
 # changed the Cask under an open PR, sends the PR to review.
 matches_cask_bump_provenance() {
-  local app_login="$1" app_id="$2"
-  jq -e --arg app_login "${app_login}" --arg app_id "${app_id}" --arg title "${title}" '
-    "\($app_id)+\($app_login)@users.noreply.github.com" as $app_email |
-    $app_login != "" and
+  local apps="$1"
+  jq -e --argjson apps "${apps}" --arg title "${title}" "${author_app_jq}"'
     length == 1 and
-    (.[0] |
+    (.[0] | author_app($apps) as $app |
+      $app != null and
       .verified == true and
-      .author_login == $app_login and
-      .author_name == $app_login and
-      .author_email == $app_email and
       ((.committer_login == "web-flow" and
         .committer_name == "GitHub" and
         .committer_email == "noreply@github.com") or
-       (.committer_login == $app_login and
-        .committer_name == $app_login and
-        .committer_email == $app_email)) and
+       (.committer_login == $app.login and
+        .committer_name == $app.login and
+        .committer_email == "\($app.id)+\($app.login)@users.noreply.github.com")) and
       .message == $title)
   ' <<<"${commits_json}" >/dev/null
 }
 
 if [[ "${branch}" == "deps/agent-skills-update" &&
   "${title}" == "chore(deps): update agent skills" ]]; then
-  expected_author=""
+  updater_repo=false
   case "${repo}" in
   agent-plugins | ksail | platform)
-    expected_author="app/botantler-1"
+    updater_repo=true
     ;;
   esac
 
-  if [[ -n "${expected_author}" && "${author}" == "${expected_author}" ]]; then
-    read -r app_login app_id <<<"$(updater_app "${repo}")" || true
-    strip_base_refresh_merges "${app_login-}" "${app_id-}"
+  if [[ "${updater_repo}" == true ]] && is_updater_app_author "${author}"; then
+    strip_base_refresh_merges "$(updater_apps "${repo}")"
     if [[ "${repo}" == "agent-plugins" ]] &&
       matches_agent_plugins_review_files &&
       matches_agent_plugins_review_provenance "chore(deps): update agent skills" &&
@@ -557,16 +571,15 @@ fi
 # match. A genuine one still needs semantic review (3), never the exemption.
 per_skill_title_prefix="chore(deps): update agent skills ("
 if [[ "${repo}" == "agent-plugins" &&
-  "${author}" == "app/botantler-1" &&
-  "${title}" == "${per_skill_title_prefix}"*")" ]]; then
+  "${title}" == "${per_skill_title_prefix}"*")" ]] &&
+  is_updater_app_author "${author}"; then
   skill_path="${title#"${per_skill_title_prefix}"}"
   skill_path="${skill_path%")"}"
   if [[ "${skill_path}" =~ ^plugins/[a-z0-9][a-z0-9-]*/skills/[a-z0-9][a-z0-9-]*$ ]]; then
     skill_slug="${skill_path#plugins/}"
     skill_slug="${skill_slug//\//-}"
     if [[ "${branch}" == "deps/agent-skills-update-${skill_slug}" ]]; then
-      read -r app_login app_id <<<"$(updater_app "${repo}")" || true
-      strip_base_refresh_merges "${app_login-}" "${app_id-}"
+      strip_base_refresh_merges "$(updater_apps "${repo}")"
       if matches_agent_plugins_review_files "${skill_path}" &&
         matches_agent_plugins_review_provenance "${title}" &&
         matches_changelog_bump &&
@@ -585,16 +598,17 @@ fi
 # file. The version is digits and dots, the only shape the workflow accepts. The workflow arms
 # auto-merge itself, so exit 0 here waives only the review.
 cask_bump_branch_re='^bump-(ksail|ksail-desktop|world-at-ruin)-([0-9]+(\.[0-9]+)*)$'
-if [[ "${repo}" == "homebrew-tap" && "${author}" == "app/botantler-1" &&
-  ("${branch}" == bump-* || "${title}" == "chore(cask): update "*) ]]; then
+if [[ "${repo}" == "homebrew-tap" &&
+  ("${branch}" == bump-* || "${title}" == "chore(cask): update "*) ]] &&
+  is_updater_app_author "${author}"; then
   if [[ "${branch}" =~ ${cask_bump_branch_re} ]]; then
     cask="${BASH_REMATCH[1]}"
     version="${BASH_REMATCH[2]}"
-    read -r app_login app_id <<<"$(updater_app "${repo}")" || true
-    strip_base_refresh_merges "${app_login-}" "${app_id-}"
+    tap_apps="$(updater_apps "${repo}")"
+    strip_base_refresh_merges "${tap_apps}"
     if [[ "${title}" == "chore(cask): update ${cask} to v${version}" ]] &&
       matches_exact_files "Casks/${cask}.rb" &&
-      matches_cask_bump_provenance "${app_login-}" "${app_id-}"; then
+      matches_cask_bump_provenance "${tap_apps}"; then
       updater_verdict 0
     fi
     # Since homebrew-tap#2575 the workflow bumps the KSail CLI and desktop Casks together: one PR
@@ -603,7 +617,7 @@ if [[ "${repo}" == "homebrew-tap" && "${author}" == "app/botantler-1" &&
     if [[ "${cask}" == "ksail" &&
       "${title}" == "chore(cask): update KSail CLI and desktop to v${version}" ]] &&
       matches_exact_files "Casks/ksail.rb" "Casks/ksail-desktop.rb" &&
-      matches_cask_bump_provenance "${app_login-}" "${app_id-}"; then
+      matches_cask_bump_provenance "${tap_apps}"; then
       updater_verdict 0
     fi
   fi

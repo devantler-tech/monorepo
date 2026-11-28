@@ -1510,9 +1510,37 @@ expect_review_gated "agent-plugins per-skill update with an adaptation commit" \
 expect_review_gated "agent-plugins per-skill update with a repeated follow-up commit" \
   "${per_skill_args[@]}" "${per_skill_files}" \
   "$(printf '%s\n' "${per_skill_sync}" "${per_skill_bump}" "${per_skill_bump}" | per_skill_commits)"
-expect_review_gated "agent-plugins per-skill update from another author" \
+# The token broker (ADR 0020) mints each token from either org App, so the second App may open the
+# PR and sign its commits; the two follow-up jobs mint their own tokens, so they may also differ.
+expect_review_required "agent-plugins per-skill update opened by the second App" \
   agent-plugins app/botantler-2 "${per_skill_branch}" "${per_skill_title}" "${per_skill_head}" \
   "${per_skill_files}" "${per_skill_commits_json}"
+botantler_2_identity='.author_login = "botantler-2[bot]" | .author_name = "botantler-2[bot]"
+  | .author_email = "296234498+botantler-2[bot]@users.noreply.github.com"'
+expect_review_required "agent-plugins per-skill update whose sync commit the second App signed" \
+  "${per_skill_args[@]}" "${per_skill_files}" \
+  "$(printf '%s\n' "$(jq -c "${botantler_2_identity}" <<<"${per_skill_sync}")" \
+    "${per_skill_digest}" "${per_skill_bump}" | per_skill_commits)"
+expect_review_required "App-signed combined metadata whose follow-up the other App signed" \
+  "${per_skill_args[@]}" "$signed_metadata_files" \
+  "$(jq -c ".[1] |= (${botantler_2_identity})" <<<"$signed_metadata_commits")"
+# Exactly those two Apps: an App outside the pair, a look-alike login, the REST spelling or the
+# other App's numeric ID is not the updater.
+for other_author in app/botantler-3 app/botantler app/Botantler-2 "botantler-2[bot]" botantler-2 devantler; do
+  expect_review_gated "agent-plugins per-skill update from ${other_author}" \
+    agent-plugins "${other_author}" "${per_skill_branch}" "${per_skill_title}" "${per_skill_head}" \
+    "${per_skill_files}" "${per_skill_commits_json}"
+done
+for other_identity in \
+  '.author_login = "botantler-3[bot]" | .author_name = "botantler-3[bot]" | .author_email = "296234499+botantler-3[bot]@users.noreply.github.com"' \
+  '.author_login = "botantler-2[bot]" | .author_name = "botantler-2[bot]" | .author_email = "185060876+botantler-2[bot]@users.noreply.github.com"' \
+  '.author_login = "botantler-2" | .author_name = "botantler-2" | .author_email = "296234498+botantler-2@users.noreply.github.com"' \
+  '.author_name = "botantler-2[bot]"'; do
+  expect_review_gated "agent-plugins per-skill sync commit signed as ${other_identity}" \
+    "${per_skill_args[@]}" "${per_skill_files}" \
+    "$(printf '%s\n' "$(jq -c "${other_identity}" <<<"${per_skill_sync}")" \
+      "${per_skill_digest}" "${per_skill_bump}" | per_skill_commits)"
+done
 
 # An installed skill root holds copies from many upstreams, and the copied frontmatter naming the
 # upstream is written by that upstream. So authorization comes from the reviewed allowlist beside the
@@ -1685,12 +1713,52 @@ expect_review_required \
   "${ksail_skills_head}" "${ksail_skills_files}" "${ksail_signed_commits}" \
   "${ksail_skills_owners}"
 
+# Either org App may open the PR and sign its commit (ADR 0020), in any pairing.
+for platform_author in app/botantler-1 app/botantler-2; do
+  expect_exempt \
+    "Platform update opened by ${platform_author} and signed by the second App" \
+    "platform" "${platform_author}" "deps/agent-skills-update" "chore(deps): update agent skills" \
+    "${platform_skills_head}" "${allowed_skills_files}" \
+    "$(signed_skills_commit "${platform_skills_head}" "botantler-2[bot]" "296234498")" \
+    "${allowed_skills_owners}"
+done
+expect_exempt \
+  "Platform update opened by the second App and signed by the first" \
+  "platform" "app/botantler-2" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" "${platform_signed_commits}" \
+  "${allowed_skills_owners}"
+expect_review_required \
+  "KSail update opened and signed by the second App touching a third-party skill" \
+  "ksail" "app/botantler-2" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${ksail_skills_head}" "${ksail_skills_files}" \
+  "$(signed_skills_commit "${ksail_skills_head}" "botantler-2[bot]" "296234498")" \
+  "${ksail_skills_owners}"
+
 expect_review_gated \
-  "Platform update signed as another App" \
+  "Platform update signed as an App outside the pair" \
   "platform" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
   "${platform_skills_head}" "${allowed_skills_files}" \
-  "$(signed_skills_commit "${platform_skills_head}" "botantler-2[bot]" "296234498")" \
+  "$(signed_skills_commit "${platform_skills_head}" "botantler-3[bot]" "296234499")" \
   "${allowed_skills_owners}"
+expect_review_gated \
+  "Platform update signed as the second App with the first App's numeric ID" \
+  "platform" "app/botantler-2" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" \
+  "$(signed_skills_commit "${platform_skills_head}" "botantler-2[bot]" "185060876")" \
+  "${allowed_skills_owners}"
+expect_review_gated \
+  "Platform update signed as the bare second App login" \
+  "platform" "app/botantler-2" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" \
+  "$(signed_skills_commit "${platform_skills_head}" "botantler-2" "296234498")" \
+  "${allowed_skills_owners}"
+for platform_author in app/botantler-3 app/botantler "botantler-2[bot]" botantler-2; do
+  expect_review_gated \
+    "Platform update opened by ${platform_author}" \
+    "platform" "${platform_author}" "deps/agent-skills-update" "chore(deps): update agent skills" \
+    "${platform_skills_head}" "${allowed_skills_files}" "${platform_signed_commits}" \
+    "${allowed_skills_owners}"
+done
 
 expect_review_gated \
   "Platform App-authored update with a numeric ID that is not the App's" \
@@ -1840,8 +1908,9 @@ expect_review_gated "refresh merge followed by another commit" \
 expect_review_gated "a refresh merge alone" \
   "${refreshed_args[@]}" "${signed_metadata_files}" "$(refreshed '[]' "$(per_skill_refresh)")"
 
-# The single-commit consumer arms: platform keeps its exemption (0) and ksail rejects a merge that
-# the wrong App wrote.
+# The single-commit consumer arms: platform keeps its exemption (0), and ksail keeps its review path
+# for a merge either org App wrote (the refresh mints its own token, ADR 0020) but rejects a merge
+# that any other App wrote.
 expect_exempt "platform updater PR refreshed from main keeps its exemption" \
   "platform" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
   "${refresh_head}" "${allowed_skills_files}" \
@@ -1856,13 +1925,29 @@ expect_review_required "ksail updater PR refreshed by its own App keeps its revi
       '.author_login = "botantler-1[bot]" | .author_name = "botantler-1[bot]"
        | .author_email = "185060876+botantler-1[bot]@users.noreply.github.com"')")" \
   "${ksail_skills_owners}"
-expect_review_gated "ksail updater PR refreshed by another App" \
+expect_review_required "ksail updater PR refreshed by the other org App keeps its review path" \
   "ksail" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
   "${refresh_head}" "${ksail_skills_files}" \
   "$(refreshed "${ksail_signed_commits}" \
     "$(refresh_merge "${refresh_head}" "${ksail_skills_head}" "deps/agent-skills-update" \
       '.author_login = "botantler-2[bot]" | .author_name = "botantler-2[bot]"
        | .author_email = "296234498+botantler-2[bot]@users.noreply.github.com"')")" \
+  "${ksail_skills_owners}"
+expect_review_gated "ksail updater PR refreshed by an App outside the pair" \
+  "ksail" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${refresh_head}" "${ksail_skills_files}" \
+  "$(refreshed "${ksail_signed_commits}" \
+    "$(refresh_merge "${refresh_head}" "${ksail_skills_head}" "deps/agent-skills-update" \
+      '.author_login = "botantler-3[bot]" | .author_name = "botantler-3[bot]"
+       | .author_email = "296234499+botantler-3[bot]@users.noreply.github.com"')")" \
+  "${ksail_skills_owners}"
+expect_review_gated "ksail updater PR refreshed as the second App with the first App's numeric ID" \
+  "ksail" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${refresh_head}" "${ksail_skills_files}" \
+  "$(refreshed "${ksail_signed_commits}" \
+    "$(refresh_merge "${refresh_head}" "${ksail_skills_head}" "deps/agent-skills-update" \
+      '.author_login = "botantler-2[bot]" | .author_name = "botantler-2[bot]"
+       | .author_email = "185060876+botantler-2[bot]@users.noreply.github.com"')")" \
   "${ksail_skills_owners}"
 expect_error_reason "parents not an array" \
   "commit[0].parents is not an array of 40-character lowercase hex SHAs" "" "${updater_args[@]}" \
@@ -2090,8 +2175,44 @@ expect_tap_bump "refreshed from main by the App" 0 \
   homebrew-tap app/botantler-1 bump-ksail-7.213.44 "chore(cask): update ksail to v7.213.44" \
   "${refresh_head}" "${ksail_cask}" "$(refreshed "${ksail_bump_commits}" "${tap_refresh_merge}")"
 
-# Wrong author: the same PR from anyone but the App is not a bump PR at all.
-for tap_author in devantler app/botantler-2 botantler-1 "botantler-1[bot]"; do
+# The workflow's broker token comes from either org App (ADR 0020), and a re-run may write the
+# commit with the other App than the one that opened the PR.
+tap_bump_by_second_app="$(jq -c '.[0].author_login = "botantler-2[bot]" | .[0].author_name = "botantler-2[bot]"
+  | .[0].author_email = "296234498+botantler-2[bot]@users.noreply.github.com"' <<<"${ksail_bump_commits}")"
+expect_tap_bump "opened and signed by the second App" 0 "" \
+  homebrew-tap app/botantler-2 "${ksail_bump_args[@]:2}" "${ksail_cask}" "${tap_bump_by_second_app}"
+expect_tap_bump "opened by the first App, signed by the second" 0 "" \
+  "${ksail_bump_args[@]}" "${ksail_cask}" "${tap_bump_by_second_app}"
+expect_tap_bump "opened by the second App, signed by the first" 0 "" \
+  homebrew-tap app/botantler-2 "${ksail_bump_args[@]:2}" "${ksail_cask}" "${ksail_bump_commits}"
+expect_tap_bump "KSail CLI and desktop together from the second App" 0 "" \
+  homebrew-tap app/botantler-2 bump-ksail-7.213.44 "${combined_title}" \
+  "${tap_bump_head}" "${combined_casks}" \
+  "$(jq -c --arg m "${combined_title}" '.[0].message = $m' <<<"${tap_bump_by_second_app}")"
+expect_tap_bump "commit the second App itself committed" 0 "" "${ksail_bump_args[@]}" "${ksail_cask}" \
+  "$(jq -c '.[0].committer_login = .[0].author_login | .[0].committer_name = .[0].author_name
+    | .[0].committer_email = .[0].author_email' <<<"${tap_bump_by_second_app}")"
+expect_tap_bump "refreshed from main by the second App" 0 \
+  "programmed-bot-review-exemption: homebrew-tap updater PR judged below 1 trailing base-refresh merge(s) from main" \
+  homebrew-tap app/botantler-1 bump-ksail-7.213.44 "chore(cask): update ksail to v7.213.44" \
+  "${refresh_head}" "${ksail_cask}" \
+  "$(refreshed "${ksail_bump_commits}" "$(refresh_merge "${refresh_head}" "${tap_bump_head}" bump-ksail-7.213.44 \
+    '.author_login = "botantler-2[bot]" | .author_name = "botantler-2[bot]" | .author_email = "296234498+botantler-2[bot]@users.noreply.github.com"')")"
+# One API call writes the commit with one token, so its committer cannot be the other App.
+expect_tap_bump "a commit the second App authored and the first committed" 1 "${tap_bump_note}" \
+  "${ksail_bump_args[@]}" "${ksail_cask}" \
+  "$(jq -c '.[0].committer_login = "botantler-1[bot]" | .[0].committer_name = "botantler-1[bot]"
+    | .[0].committer_email = "185060876+botantler-1[bot]@users.noreply.github.com"' <<<"${tap_bump_by_second_app}")"
+expect_tap_bump "a commit from the second App's login with the first App's numeric ID" 1 "${tap_bump_note}" \
+  "${ksail_bump_args[@]}" "${ksail_cask}" \
+  "$(jq -c '.[0].author_email = "185060876+botantler-2[bot]@users.noreply.github.com"' <<<"${tap_bump_by_second_app}")"
+expect_tap_bump "a commit from an App outside the pair" 1 "${tap_bump_note}" \
+  "${ksail_bump_args[@]}" "${ksail_cask}" \
+  "$(jq -c '.[0].author_login = "botantler-3[bot]" | .[0].author_name = "botantler-3[bot]"
+    | .[0].author_email = "296234499+botantler-3[bot]@users.noreply.github.com"' <<<"${ksail_bump_commits}")"
+# Wrong author: the same PR from anyone but the two Apps is not a bump PR at all.
+for tap_author in devantler app/botantler-3 app/botantler app/Botantler-2 botantler-1 "botantler-1[bot]" \
+  botantler-2 "botantler-2[bot]"; do
   expect_tap_bump "from ${tap_author}" 1 "" \
     homebrew-tap "${tap_author}" "${ksail_bump_args[@]:2}" "${ksail_cask}" "${ksail_bump_commits}"
 done
